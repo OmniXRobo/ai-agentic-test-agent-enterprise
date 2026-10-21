@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# AI Agentic Test Agent Enterprise runtime data (never commit)
+/data/
+/runtime/
+/dist_offline/
+*.gguf
+*.jtl
