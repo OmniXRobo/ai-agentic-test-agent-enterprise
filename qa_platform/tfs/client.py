@@ -70,12 +70,13 @@ class AzureDevOpsClient:
         json: Any = None,
         content_type: str | None = None,
         api_version: str | None = None,
+        content: bytes | None = None,
     ) -> Any:
         query = {"api-version": api_version or self.api_version, **(params or {})}
         headers = {"Content-Type": content_type} if content_type else None
         try:
             resp = self._http.request(method, self._url(path, project_scoped), params=query, json=json,
-                                      headers=headers)
+                                      content=content, headers=headers)
         except httpx.ConnectError as exc:
             raise QAError("TFS_UNREACHABLE", f"Cannot connect to {self.base_url}.", status=502,
                           details=str(exc)) from exc
@@ -134,8 +135,10 @@ class AzureDevOpsClient:
     def work_item_type_categories(self) -> list[dict[str, Any]]:
         return self.request("GET", "_apis/wit/workitemtypecategories").get("value", [])
 
-    def work_item_type_fields(self, type_name: str) -> list[dict[str, Any]]:
-        return self.request("GET", f"_apis/wit/workitemtypes/{quote(type_name, safe='')}/fields").get("value", [])
+    def work_item_type_fields(self, type_name: str, allowed_values: bool = False) -> list[dict[str, Any]]:
+        params = {"$expand": "allowedValues"} if allowed_values else None
+        return self.request("GET", f"_apis/wit/workitemtypes/{quote(type_name, safe='')}/fields",
+                            params=params).get("value", [])
 
     def iterations(self, depth: int = 10) -> dict[str, Any]:
         return self.request("GET", "_apis/wit/classificationnodes/iterations", params={"$depth": depth})
@@ -175,6 +178,11 @@ class AzureDevOpsClient:
     def update_work_item(self, item_id: int, patch: list[dict[str, Any]]) -> dict[str, Any]:
         return self.request("PATCH", f"_apis/wit/workitems/{int(item_id)}", project_scoped=False, json=patch,
                             content_type="application/json-patch+json")
+
+    def upload_attachment(self, file_name: str, data: bytes) -> dict[str, Any]:
+        """Returns {id, url}; link it to a work item with an AttachedFile relation."""
+        return self.request("POST", "_apis/wit/attachments", params={"fileName": file_name}, content=data,
+                            content_type="application/octet-stream")
 
     def add_comment(self, item_id: int, text: str) -> dict[str, Any]:
         return self.update_work_item(item_id, [{"op": "add", "path": "/fields/System.History", "value": text}])

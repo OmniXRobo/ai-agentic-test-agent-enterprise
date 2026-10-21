@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { subscribe } from "../store.js";
 import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
 import { lineChart, fmtDuration } from "../charts.js";
+import { analyzeRun } from "./defect-review.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
 const ROUTE_FOR_KIND = { load: "perf-load", stress: "perf-stress", spike: "perf-spike", soak: "perf-soak" };
@@ -279,6 +280,7 @@ async function runDetail(view, runId) {
       <span class="pill ${esc(run.status)}">${esc(run.status)}</span>
       ${sla ? `<span class="pill ${sla.status === "FAIL" ? "FAIL" : sla.status === "PASS" ? "PASS" : "WAITING"}">SLA ${esc(sla.status.replace("_", " "))}</span>` : ""}
       <span class="spacer"></span>
+      ${sla?.status === "FAIL" ? '<button class="btn" id="analyzeFailure">Analyze failure</button>' : ""}
       ${run.has_report ? `<a class="btn" href="${file("report/index.html")}" target="_blank" rel="noopener">JMeter HTML report</a>` : ""}
       <a class="btn" href="#/${ROUTE_FOR_KIND[run.kind]}?plan=${esc(run.plan_id)}">Open plan</a></div>
       <p class="muted">${esc(run.run_id)} · started ${esc(dateTimeOf(run.started_at))}${m ? ` · ${fmtDuration(Math.round(m.duration_s))} · peak ${m.peak_threads} users` : ""}${m?.stopped_by_user ? " · stopped by user" : ""}</p>
@@ -310,6 +312,10 @@ async function runDetail(view, runId) {
     </div>
     <div class="card" style="margin-top:12px"><div class="row"><h3 style="margin:0">AI performance analysis</h3><span class="spacer"></span>
       <button class="btn" id="analyze">${run.analysis ? "Analyze again" : "Analyze with On-Premise AI"}</button></div><div id="analysis">${analysisHtml(run.analysis)}</div></div>` : ""}`;
+  view.querySelector("#analyzeFailure")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await analyzeRun("performance", run.run_id); } catch (err) { toast(err.message, "error"); e.target.disabled = false; }
+  });
   if (!o) return;
   lineChart(view.querySelector("#cResp"), m.timeline, { key: "avg_ms", title: "Average response time (ms)", unit: "ms" });
   lineChart(view.querySelector("#cTput"), m.timeline, { key: "throughput", title: "Throughput (requests per second)", unit: "req/s" });

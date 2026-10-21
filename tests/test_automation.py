@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
-import threading
 import time
 from datetime import datetime
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -17,42 +13,17 @@ import pytest
 from qa_platform.automation import healing
 from qa_platform.automation.dsl import Script, Step, Target, ValueResolver, new_script_id, to_playwright_python
 from qa_platform.automation.recorder import merge_step
+from tests.site_server import SITE
 
-SITE = Path(__file__).parent / "site"
 
 try:
-    import playwright  # noqa: F401
+    import playwright  # noqa: F401  (availability check)
 
     HAVE_PLAYWRIGHT = True
 except ImportError:
     HAVE_PLAYWRIGHT = False
 
 needs_browser = pytest.mark.skipif(not HAVE_PLAYWRIGHT, reason="playwright is not installed")
-
-
-class _Handler(SimpleHTTPRequestHandler):
-    def log_message(self, *args):  # keep test output quiet
-        pass
-
-    def do_GET(self):
-        m = re.search(r"/api/items/(\d+)$", self.path)
-        if m:
-            body = json.dumps({"id": int(m.group(1)), "name": f"Item {m.group(1)}"}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        super().do_GET()
-
-
-@pytest.fixture(scope="module")
-def site():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Handler, directory=str(SITE)))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_address[1]}"
-    server.shutdown()
 
 
 @pytest.fixture()

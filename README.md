@@ -110,3 +110,19 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   request and overall, and JMeter's own HTML dashboard.
 * **AI performance analysis** (On-Premise AI): observations and suspected bottlenecks that cite the measured values,
   and what cannot be determined from the results.
+
+## What works in Stage 6
+
+* When an automated test fails, or a performance run fails its SLAs, the **Failure & Quality Analysis Agent**
+  classifies what the run recorded (assertion, navigation, interaction, locator, test setup, error rate, latency,
+  throughput) and drafts a defect: title, severity, steps to reproduce, the error, the element, the environment and the
+  failure screenshot. It never states a root cause the evidence does not show.
+* The **Defect Intelligence Agent** compares each draft with the open defects in TFS (wording, the same element, the
+  same linked test case) and lists likely and possible duplicates. The same failure seen again adds an occurrence to the
+  existing draft and, once it is in TFS, a comment on that defect instead of a new one.
+* **Defect creation** mode on **Defect Review**: *Review Before Create* (default), *Automatic* (product failures with
+  no likely duplicate are created right away; locator and test setup failures still wait) or *Disabled*.
+* **Create in TFS** uses your process's defect type (Bug, Defect or Issue), maps severity to its allowed values, skips
+  fields the process does not have and lists them, attaches screenshots, and links the defect to the test case and
+  user story. You can also link a draft to an existing defect or dismiss it with a reason.
+* **Analyze failure** on a failed run in Execution History or Performance Results drafts a defect on demand.

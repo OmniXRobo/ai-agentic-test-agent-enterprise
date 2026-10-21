@@ -373,6 +373,28 @@ class TfsService:
         return self.meta_cache.get_or_set(
             key, lambda: self._with_client(lambda c: {f["referenceName"] for f in c.work_item_type_fields(type_name)}))
 
+    def allowed_values(self, type_name: str, ref: str) -> list[str]:
+        """Allowed values of one field (e.g. Severity), empty when the field is free text or missing."""
+        key = ("allowed", self.active_mode(), self.profile()["project"], type_name)
+        fields = self.meta_cache.get_or_set(key, lambda: self._with_client(
+            lambda c: {f["referenceName"]: [str(v) for v in f.get("allowedValues") or []]
+                       for f in c.work_item_type_fields(type_name, allowed_values=True)}))
+        return fields.get(ref, [])
+
+    def upload_attachment(self, file_name: str, data: bytes) -> dict[str, Any]:
+        return self._with_client(lambda c: c.upload_attachment(file_name, data))
+
+    def add_links(self, item_id: int, relations: list[dict[str, Any]], comment: str | None = None) -> dict[str, Any]:
+        patch = [{"op": "add", "path": "/relations/-", "value": r} for r in relations]
+        if comment:
+            patch.append({"op": "add", "path": "/fields/System.History", "value": comment})
+        updated = self._with_client(lambda c: c.update_work_item(item_id, patch))
+        self.invalidate()
+        return simplify(updated)
+
+    def work_item_url(self, item_id: int) -> str:
+        return f"{self.profile()['url'].rstrip('/')}/_apis/wit/workItems/{int(item_id)}"
+
     # ---- queries --------------------------------------------------------------
 
     def query(

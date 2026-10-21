@@ -164,6 +164,33 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_perf_runs_plan ON perf_runs(plan_id);
     """,
+    # 6: defect drafts (Review Before Create) and their link to TFS defects
+    """
+    CREATE TABLE IF NOT EXISTS defect_drafts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source TEXT NOT NULL,
+        source_run_id TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        status TEXT NOT NULL,
+        category TEXT NOT NULL,
+        product_defect INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        severity INTEGER NOT NULL,
+        priority INTEGER NOT NULL,
+        repro_steps TEXT NOT NULL,
+        facts TEXT NOT NULL,
+        evidence TEXT NOT NULL,
+        duplicates TEXT,
+        occurrences TEXT NOT NULL,
+        test_case_id TEXT,
+        user_story_id TEXT,
+        tfs_id INTEGER,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_drafts_sig ON defect_drafts(signature, status);
+    """,
 ]
 
 

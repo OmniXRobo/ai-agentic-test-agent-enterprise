@@ -85,6 +85,24 @@ class Script(BaseModel):
     notes: str | None = None
 
 
+def describe(step: Step) -> str:
+    """Plain-language description used when a step has none (shown in runs, history and defects)."""
+    if step.description:
+        return step.description
+    t = step.target
+    what = (t.description or t.name or t.text or t.label or t.selector) if t else ""
+    v = step.value or ""
+    return {
+        "goto": f"Open {v}", "click": f"Click {what}", "dblclick": f"Double-click {what}", "fill": f"Enter value in {what}",
+        "type": f"Type into {what}", "select": f"Select '{v}' in {what}", "check": f"Check {what}",
+        "uncheck": f"Uncheck {what}", "press": f"Press {v or 'Enter'}" + (f" in {what}" if what else ""),
+        "hover": f"Hover over {what}", "wait": f"Wait {v or 1000} ms", "expect_visible": f"Verify {what} is visible",
+        "expect_hidden": f"Verify {what} is hidden", "expect_text": f"Verify {what} shows '{v}'",
+        "expect_value": f"Verify {what} has value '{v}'", "expect_url": f"Verify the URL contains '{v}'",
+        "screenshot": "Take a screenshot",
+    }.get(step.action, step.action)
+
+
 def new_script_id() -> str:
     return "SCR-" + uuid.uuid4().hex[:10].upper()
 
