@@ -37,6 +37,18 @@ REPLIES = {
         ]
     },
     "diagnostics probe": {"status": "ok", "count": 3},
+    "Playwright automation engineer": {
+        "steps": [
+            {"action": "goto", "value": "login.html", "description": "Open the sign-in page"},
+            {"action": "fill", "selector": "#username", "value": "{{CRED:admin.username}}", "description": "Enter user name"},
+            {"action": "fill", "selector": "#password", "value": "{{CRED:admin.password}}", "description": "Enter password"},
+            {"action": "click", "selector": "#login-btn", "description": "Click Sign in"},
+            {"action": "expect_text", "selector": "#welcome", "value": "Welcome alice", "description": "Welcome shown"},
+            {"action": "click", "selector": "#made-up-button", "description": "Invented element"},
+            {"action": "teleport", "description": "Unsupported action"},
+        ],
+        "notes": [],
+    },
 }
 
 

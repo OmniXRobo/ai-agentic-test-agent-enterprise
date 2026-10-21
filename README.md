@@ -70,3 +70,27 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   story, and optionally adds them to a test plan suite
 * **Test Data** page: datasets linked to their TFS test cases, editable
 * If the AI server is unavailable the agents fail with the reason; nothing is generated without it
+
+## What works in Stage 4
+
+* **Automation Studio** with four ways to create Playwright automation, all producing the same versioned script
+  format and running through one runner:
+  * **AI-Driven Automation**: the Automation Engineering Agent reads a TFS test case's steps and maps them to
+    elements actually discovered on your application. Selectors it cannot verify are listed on the script for review.
+  * **Guided Browser Automation**: a browser opens on your PC and records clicks, typing, selections and checks.
+    Typed passwords are never stored; they become `{{CRED:role.password}}`.
+  * **Application Discovery & Update**: crawls same-site pages (logout links skipped), inventories elements, forms
+    and the XHR/fetch API endpoints the pages call, and shows what changed since the previous discovery. Build a
+    script from selected elements.
+  * **Hybrid Test Automation**: record extra steps into any script at any position.
+* **Script editor**: steps table, runtime values (`{{TODAY+3d:%d/%m/%Y}}`, `{{DATA:field}}`, `{{CRED:role.username}}`),
+  readable Playwright Python export, version history with restore, and archive instead of delete.
+* **Execution** with visual playback: a cursor, element highlight and click ripple are injected into the browser at
+  run time (never into the application's code), plus screenshots per failure and at the end, optional video, and
+  steps with timings in Execution History.
+* **Self-healing**: only after the recorded locator and its alternates fail, candidates from the live page are scored
+  against the recorded fingerprint. A match is used only above 0.62 confidence and clearly ahead of the runner-up.
+  Every attempt is stored with candidates and a screenshot. The script changes only when you apply a healing whose
+  run then passed, and the previous version is kept.
+* **Application Credentials**: role-based logins per application. Passwords are kept in the Windows Credential
+  Manager, separate from the TFS PAT, resolved only at run time and masked in logs and evidence.

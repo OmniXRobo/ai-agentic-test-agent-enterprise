@@ -13,6 +13,8 @@ import { workItemPage } from "./pages/workitems.js";
 import * as aiSettings from "./pages/ai-settings.js";
 import * as testDesign from "./pages/test-design.js";
 import * as testData from "./pages/test-data.js";
+import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
+import * as appCredentials from "./pages/app-credentials.js";
 
 // route -> { title, page, stage? }. A `stage` marks a section delivered by a later build stage.
 const NAV = [
@@ -33,10 +35,10 @@ const NAV = [
     ["test-data", "Test Data", testData],
   ]],
   ["Automation Studio", [
-    ["ai-automation", "AI-Driven Automation", null, 4],
-    ["guided-automation", "Guided Browser Automation", null, 4],
-    ["discovery", "Application Discovery & Update", null, 4],
-    ["hybrid-automation", "Hybrid Test Automation", null, 4],
+    ["ai-automation", "AI-Driven Automation", aiAutomation],
+    ["guided-automation", "Guided Browser Automation", guidedAutomation],
+    ["discovery", "Application Discovery & Update", discovery],
+    ["hybrid-automation", "Hybrid Test Automation", hybridAutomation],
   ]],
   ["Performance Testing", [
     ["perf-plans", "Performance Test Plans", null, 5],
@@ -56,6 +58,7 @@ const NAV = [
     ["settings", "Preferences", settings],
     ["tfs-settings", "TFS Connection", tfsSettings],
     ["ai-settings", "On-Premise AI", aiSettings],
+    ["app-credentials", "Application Credentials", appCredentials],
     ["voice", "Voice Commands", null, 7],
   ]],
 ];

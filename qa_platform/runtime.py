@@ -7,6 +7,7 @@ from typing import Any
 
 from .agents.orchestration import OrchestrationAgent
 from .ai.gateway import AIGateway
+from .automation.service import AutomationService
 from .config import Paths, Settings
 from .credentials import SecretBackend, SecretStore
 from .design.service import DesignService
@@ -35,6 +36,7 @@ class Runtime:
     tfs: TfsService
     ai: AIGateway
     design: DesignService
+    automation: AutomationService
 
     def close(self) -> None:
         self.db.close()
@@ -68,4 +70,6 @@ def build_runtime(
     tfs = TfsService(settings, secrets, bus, transport=tfs_transport)
     ai = AIGateway(settings, bus, transport=ai_transport)
     design = DesignService(bus, db, runs, tfs, ai)
-    return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design)
+    automation = AutomationService(paths, settings, bus, db, runs, secrets, tfs, ai)
+    return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
+                   automation)
