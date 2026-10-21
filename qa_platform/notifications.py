@@ -22,6 +22,8 @@ RULES: dict[str, tuple[str, str, str]] = {
     names.DEFECT_FAILED: ("defect", "error", "Defect creation failed"),
     names.AUTOMATION_GENERATION_COMPLETED: ("automation", "success", "Automation generation completed"),
     names.SELFHEALING_COMPLETED: ("selfhealing", "warning", "Self-healing occurred"),
+    names.REPORT_COMPLETED: ("report", "success", "Report ready"),
+    names.REPORT_FAILED: ("report", "error", "Report failed"),
     names.AI_UNAVAILABLE: ("system", "error", "On-Premise AI unavailable"),
     names.TFS_UNAVAILABLE: ("system", "error", "TFS connection unavailable"),
     names.SYSTEM_DIAGNOSTICS_COMPLETED: ("system", "info", "System diagnostics finished"),

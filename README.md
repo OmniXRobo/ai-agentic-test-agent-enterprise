@@ -147,3 +147,44 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   Sentences outside the fixed phrases are mapped by the On-Premise AI when it is available; it can only choose a
   supported command and never adds an ID you did not say.
 * **Spoken replies** use voices installed on the PC only, so they work without Internet.
+
+## What works in Stage 8
+
+* **Dashboard KPIs** now all come from real data: User Stories, Acceptance Criteria (counted from the criteria written
+  on your user stories), Test Cases and Open Defects live from TFS; Test Data, Automated, Not Automated and Automation
+  Coverage from saved data sets, automated tests and the TFS test case count; Passed, Failed and Functional Pass Rate
+  from the latest result of each automated test; Performance Tests, Performance Failures and Performance SLA Pass Rate
+  from finished JMeter runs. A figure that cannot be measured shows "—" with the reason.
+* **Analytics** (Quality → Analytics): automation coverage, pass and failure rate, not automated, executions per day,
+  defects drafted per day, flaky tests (tests that both passed and failed, with how often the result flipped), and
+  self-healing per day and per test. Performance: P95, P99, throughput and error rate per run, SLA pass and fail,
+  maximum tested concurrency, and, for one plan, each request's P95 in the latest run against the previous run.
+  Periods are 7, 14, 30 or 90 days of the PC's local calendar.
+* **Reports** (Quality → Reports): choose functional, performance or both, the period, optionally a user story and up
+  to five performance runs. The Reporting & Analytics Agent builds an HTML report and prints the same page to PDF with
+  the bundled Chromium (offline). Functional sections: executive summary, coverage, trends, user story, acceptance
+  criteria, test cases with automation and test data, execution results (passed, failed, not run), defects,
+  self-healing and failure screenshots. Performance sections: summary, load profile, response times with P90/P95/P99,
+  throughput, error rate, graphs, transaction results, SLA compliance, performance defects and the AI analysis when one
+  was requested. Reports are listed with View, HTML, PDF and Delete; a notification says when one is ready.
+
+## What works in Stage 9
+
+* **Offline portable Windows package.** On a 64-bit Windows PC with Internet, run
+  `py -3 packaging\build_offline_package.py [--zip] [--ai-dir <folder with a Qwen GGUF model>]`. It writes
+  `dist_offline\AIAgenticTestAgent-Offline-<version>\` with `INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`,
+  `README_OFFLINE.txt` and `payload\` (the application, `runtime\python`, `runtime\jre`, `runtime\apache-jmeter-5.6.3`,
+  `runtime\ms-playwright`, optional `runtime\ai`, `MANIFEST.json` with the SHA-256 of every file and `DEPENDENCIES.md`).
+  Python 3.12.8, Temurin JRE 17.0.13 and JMeter 5.6.3 are pinned with checksums in `packaging/offline-lock.json`;
+  Python packages come from `packaging/requirements-offline-win.txt` with `--require-hashes`. Models are never
+  downloaded: `--ai-dir` copies the folder you give it.
+* **VALIDATE_OFFLINE.cmd** checks Windows, administrator rights (not needed), every package file against the manifest,
+  the bundled Python and packages, Java, JMeter, a headless Chromium launch, Windows Credential Manager, the data
+  folder, the dashboard port and the On-Premise AI files, all with outbound network connections blocked. The report is
+  saved to a text file and contains no secrets.
+* **INSTALL_OFFLINE.cmd** installs for the current Windows user (default `%LOCALAPPDATA%\Programs\AIAgenticTestAgent`,
+  `--target` for another folder) without administrator rights. It verifies the package, copies the new version beside
+  the current one, switches over, runs the full validation and switches back automatically if anything fails. The
+  data folder is shared between versions and never touched; credentials stay in Windows Credential Manager. Logs go to
+  `logs\`. `ROLLBACK_OFFLINE.cmd` in the install folder returns to the previous version.
+* CI builds the package on Windows, validates it, installs it to a temporary folder and validates the installed copy.

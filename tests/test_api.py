@@ -50,12 +50,15 @@ def test_diagnostics_run_produces_real_events_and_history(client):
     r = client.post("/api/diagnostics/run")
     assert r.status_code == 202
     run_id = r.json()["run_id"]
-    for _ in range(100):
+    # Diagnostics start the real Java and JMeter, which can take well over 10 s on a cold Windows runner.
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
         run = client.get(f"/api/runs/{run_id}")
         if run.status_code == 200 and run.json()["run"]["status"] != "RUNNING":
             break
-        time.sleep(0.1)
+        time.sleep(0.2)
     detail = run.json()
+    assert detail["run"]["status"] != "RUNNING", "diagnostics did not finish within 90 s"
     names = [c["name"] for c in detail["run"]["summary"]["checks"]]
     assert "Python runtime" in names and "Database" in names
     events = [e["name"] for e in detail["events"]]

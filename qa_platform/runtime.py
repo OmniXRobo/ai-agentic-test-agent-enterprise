@@ -17,6 +17,8 @@ from .events.bus import EventBus
 from .events.state import AgentStateManager
 from .notifications import NotificationService
 from .performance.service import PerformanceService
+from .reports.analytics import AnalyticsService
+from .reports.service import ReportService
 from .runs import RunStore
 from .storage.db import Database
 from .voice.service import VoiceService
@@ -43,6 +45,8 @@ class Runtime:
     performance: PerformanceService
     defects: DefectService
     voice: VoiceService
+    analytics: AnalyticsService
+    reports: ReportService
 
     def close(self) -> None:
         self.db.close()
@@ -82,5 +86,7 @@ def build_runtime(
     defects = DefectService(settings, bus, db, tfs, automation, performance)
     voice = VoiceService(settings, bus, db, runs, state, tfs, ai, design, automation, performance, defects,
                          transport=stt_transport)
+    analytics = AnalyticsService(db, tfs, automation)
+    reports = ReportService(paths, bus, db, tfs, automation, performance, defects, design, analytics)
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation, performance, defects, voice)
+                   automation, performance, defects, voice, analytics, reports)
