@@ -140,7 +140,7 @@ Internal ids are what get persisted; only display text uses the mapping.
 6. Failure analysis and Defect Intelligence with duplicate detection.
 7. Voice Command Agent.
 8. Reports (HTML/PDF) and analytics.
-9. Portable offline Windows package (`INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`).
+9. Portable offline Windows package (`INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`, rollback).
 
 ## TFS / Azure DevOps integration (Stage 2)
 
@@ -295,3 +295,23 @@ microphone ─► speech recognition ─► intent analysis ─► validation �
 * Tests (`tests/test_reports.py`): empty install shows no figures, functional and performance analytics from recorded
   rows, a full report (HTML sections, escaping, PDF bytes, events, notification, delete), a report without TFS,
   validation, interrupted reports and the chart renderer.
+
+## Offline portable package (Stage 9)
+
+* `packaging/build_offline_package.py` (Windows x64 only) stages the app, extracts the pinned Python from the
+  NuGet `python` package (PSF), installs hash-locked wheels (`--require-hashes --only-binary=:all:`, pip removed afterwards), the
+  Temurin JRE and JMeter (checksums from `packaging/offline-lock.json`, archives extracted with path checks) and
+  Chromium via `playwright install chromium` into `runtime/ms-playwright`. It writes `DEPENDENCIES.md` and
+  `MANIFEST.json` (`qa_platform/offline/manifest.py`: version, build time, components, packages, SHA-256 per file).
+* `qa_platform/offline/validate.py`: every check runs inside `network_blocked()`, which allows loopback connections
+  only. Results are PASS/WARN/FAIL/INFO; any FAIL gives exit code 1. `--quick` skips JMeter and Chromium.
+* `qa_platform/offline/install.py`: install layout `<target>\app`, `app.previous`, `data`, `logs` and launchers.
+  Steps: verify the source manifest, refuse while the dashboard is running, copy to `app.new` and verify, quick
+  validation, rotate folders, full validation, roll back on failure. Targets inside the package, under Program Files
+  or not writable are refused. `ROLLBACK_OFFLINE.cmd` swaps `app` and `app.previous` with folder renames only, so it
+  works even though Python runs from those folders.
+* `START_QA_PLATFORM.cmd` uses `<target>\data` when installed (marked by `INSTALLED.json`) and `.\data` otherwise.
+* Tests (`tests/test_offline.py`) cover the manifest, the network guard, validation and its report, install with
+  upgrade and one kept previous version, automatic rollback, damaged packages, unsafe targets, the rollback swap,
+  the launch scripts, checksum enforcement and archive path checks. The `offline-package` CI job does a real build,
+  install and validation on Windows.

@@ -1,0 +1,30 @@
+{
+  "_comment": "Pinned downloads for the offline Windows package. Every file is checked against its SHA-256 before use. Update a version only together with its checksum from the publisher.",
+  "python": {
+    "name": "Python (CPython, NuGet package 'python')",
+    "version": "3.12.8",
+    "url": "https://api.nuget.org/v3-flatcontainer/python/3.12.8/python.3.12.8.nupkg",
+    "sha256": "406856be971d957e0bee7a5cefe20a5ec78d70a495e9e33cd0e53d31faec049d",
+    "publisher": "Python Software Foundation",
+    "checksum_source": "nuget.org catalog packageHash (SHA-512) for python 3.12.8",
+    "license": "PSF-2.0"
+  },
+  "jre": {
+    "name": "Eclipse Temurin JRE (Windows x64)",
+    "version": "17.0.13+11",
+    "url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.13%2B11/OpenJDK17U-jre_x64_windows_hotspot_17.0.13_11.zip",
+    "sha256": "11a61a94d383e755b08b4e5890a13d148bc9f95b7149cbbeec62efb8c75a4a67",
+    "publisher": "Eclipse Adoptium",
+    "checksum_source": "OpenJDK17U-jre_x64_windows_hotspot_17.0.13_11.zip.sha256.txt from the same release",
+    "license": "GPL-2.0-with-classpath-exception"
+  },
+  "jmeter": {
+    "name": "Apache JMeter",
+    "version": "5.6.3",
+    "url": "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz",
+    "sha256": "f68efc17fe060f698c48a6abe2599a933927486bda2924dbe14c74895318ddde",
+    "publisher": "Apache Software Foundation",
+    "checksum_source": "apache-jmeter-5.6.3.tgz.sha512 from archive.apache.org (SHA-512 verified, SHA-256 pinned here)",
+    "license": "Apache-2.0"
+  }
+}
