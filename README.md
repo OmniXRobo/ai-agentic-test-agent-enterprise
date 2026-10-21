@@ -170,7 +170,8 @@ git-ignored. Secrets are never written to `settings.json` or logs.
 
 ## What works in Stage 9
 
-* **Offline portable Windows package.** On a 64-bit Windows PC with Internet, run
+* **Offline portable Windows package.** On a 64-bit Windows PC with Internet and Python 3.10+, double-click
+  `BUILD_OFFLINE_PACKAGE.cmd`, or run
   `py -3 packaging\build_offline_package.py [--zip] [--ai-dir <folder with a Qwen GGUF model>]`. It writes
   `dist_offline\AIAgenticTestAgent-Offline-<version>\` with `INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`,
   `README_OFFLINE.txt` and `payload\` (the application, `runtime\python`, `runtime\jre`, `runtime\apache-jmeter-5.6.3`,
