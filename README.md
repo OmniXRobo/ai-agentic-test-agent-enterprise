@@ -57,3 +57,16 @@ git-ignored. Secrets are never written to `settings.json` or logs.
 * Work item types come from the project's process categories, so "Bug", "Defect" or "Issue" are detected rather
   than hard-coded; fields missing from a process template are skipped instead of failing the save
 * Dashboard KPIs (user stories, test cases, open defects) from the active project, cached for 60 seconds
+
+## What works in Stage 3
+
+* **On-Premise AI** settings (server URL, model, timeout, temperature, max tokens) with diagnostics:
+  Configuration, Server Reachability, Model Loaded, Completion, Structured JSON Output. Works with any
+  OpenAI-compatible local server (llama.cpp `llama-server` with a Qwen GGUF model, Ollama). No Internet, no downloads.
+* **AI Test Design** from a user story: Requirements Intelligence, Test Planning & Strategy, Test Case Design and
+  Test Data Intelligence agents run in turn and stream their progress to Agent Workflow
+* Review the generated requirements, ambiguities, strategy, test cases (steps and expected results) and datasets,
+  then the Test Suite Design Agent creates the selected test cases in TFS with steps, a "Tested By" link to the
+  story, and optionally adds them to a test plan suite
+* **Test Data** page: datasets linked to their TFS test cases, editable
+* If the AI server is unavailable the agents fail with the reason; nothing is generated without it

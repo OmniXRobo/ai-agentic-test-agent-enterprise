@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from .agents.orchestration import OrchestrationAgent
+from .ai.gateway import AIGateway
 from .config import Paths, Settings
 from .credentials import SecretBackend, SecretStore
+from .design.service import DesignService
 from .events import names
 from .events.bus import EventBus
 from .events.state import AgentStateManager
@@ -31,6 +33,8 @@ class Runtime:
     orchestration: OrchestrationAgent
     secrets: SecretStore
     tfs: TfsService
+    ai: AIGateway
+    design: DesignService
 
     def close(self) -> None:
         self.db.close()
@@ -41,6 +45,7 @@ def build_runtime(
     *,
     secret_backend: SecretBackend | None = None,
     tfs_transport: Any = None,
+    ai_transport: Any = None,
 ) -> Runtime:
     paths = (paths or Paths()).ensure()
     settings = Settings(paths.settings_file)
@@ -61,4 +66,6 @@ def build_runtime(
     orchestration = OrchestrationAgent(bus, db, settings, paths, runs)
     secrets = SecretStore(secret_backend)
     tfs = TfsService(settings, secrets, bus, transport=tfs_transport)
-    return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs)
+    ai = AIGateway(settings, bus, transport=ai_transport)
+    design = DesignService(bus, db, runs, tfs, ai)
+    return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design)

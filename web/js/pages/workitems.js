@@ -91,6 +91,7 @@ export function workItemPage(config) {
         <p class="muted">${esc(item.type)} · ${esc(item.state)} · ${esc(item.assigned_to || "Unassigned")} · ${esc(item.iteration_path || "")}</p>
         <div class="row" style="margin-bottom:8px">
           <button class="btn" id="editBtn">Edit</button>
+          ${(meta.categories.requirement?.types || []).includes(item.type) ? `<a class="btn primary" href="#/test-design?story=${item.id}">Generate test design</a>` : ""}
           ${item.web_url ? `<a class="btn" href="${esc(item.web_url)}" target="_blank" rel="noopener">Open in TFS</a>` : ""}
         </div>
         ${item.acceptance_criteria ? `<h3>Acceptance Criteria</h3><div class="rich">${safeHtml(item.acceptance_criteria)}</div>` : ""}
@@ -99,7 +100,7 @@ export function workItemPage(config) {
         <h3>Traceability</h3>
         ${SECTIONS.map(([k, label]) => `<div><strong>${label}</strong> <span class="muted">(${t[k].length})</span>
           ${t[k].length ? `<ul>${t[k].map(linkRow).join("")}</ul>` : '<p class="muted" style="margin:2px 0 8px">None linked.</p>'}</div>`).join("")}
-        <p class="muted">Test data, automation, latest result and performance links are added as those modules are delivered.</p>
+        <p class="muted">Automation, latest result and performance links are added as those modules are delivered.</p>
         ${item.created ? `<p class="muted">Created ${esc(dateTimeOf(item.created))}${item.created_by ? " by " + esc(item.created_by) : ""}${item.changed ? " · changed " + esc(dateTimeOf(item.changed)) : ""}</p>` : ""}`;
       panel.querySelectorAll("[data-open]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); openDetail(Number(a.dataset.open)); }));
       panel.querySelector("#editBtn").addEventListener("click", () => editForm(item));

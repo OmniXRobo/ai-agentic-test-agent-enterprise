@@ -73,6 +73,8 @@ class FakeAzureDevOps:
                     "System.IterationPath", "System.AreaPath", "Microsoft.VSTS.Common.Priority"]
             if m.group(1) == self.bug_type:
                 refs.append("Microsoft.VSTS.TCM.ReproSteps")
+            if m.group(1) == "Test Case":
+                refs.append("Microsoft.VSTS.TCM.Steps")
             return httpx.Response(200, json={"value": [{"referenceName": r} for r in refs]})
         if path == f"{proj}/_apis/wit/classificationnodes/iterations":
             return httpx.Response(200, json={"path": f"\\{self.project}\\Iteration", "children": [
@@ -104,12 +106,19 @@ class FakeAzureDevOps:
             self.next_id += 1
             self.items[i] = {"System.WorkItemType": m.group(1), "System.State": "New"}
             for op in json.loads(request.content):
+                if op["path"] == "/relations/-":
+                    target = int(op["value"]["url"].rsplit("/", 1)[1])
+                    self.relations.setdefault(i, []).append((op["value"]["rel"], target))
+                    continue
                 self.items[i][op["path"].split("/")[-1]] = op["value"]
             return httpx.Response(200, json=self._wi(i))
         if path == f"{proj}/_apis/testplan/plans":
             return httpx.Response(200, json={"value": [{"id": 7, "name": "Sprint 4 Plan", "state": "Active"}]})
         if path == f"{proj}/_apis/testplan/Plans/7/suites":
             return httpx.Response(200, json={"value": [{"id": 8, "name": "Checkout", "suiteType": "staticTestSuite"}]})
+        if path == f"{proj}/_apis/testplan/Plans/7/Suites/8/TestCase" and request.method == "POST":
+            self.suite_cases = [w["workItem"]["id"] for w in json.loads(request.content)]
+            return httpx.Response(200, json={"value": []})
         return httpx.Response(404, json={"message": f"no route {path}"})
 
     @staticmethod

@@ -72,3 +72,9 @@ export function debounce(fn, ms = 300) {
   let t;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
+
+// Domain events (e.g. testcase.completed) and the agent's own completion often carry the same text;
+// show such consecutive repeats once in activity feeds.
+export function isRepeat(prev, ev) {
+  return !!prev && prev.agent_id === ev.agent_id && prev.activity === ev.activity && prev.run_id === ev.run_id;
+}

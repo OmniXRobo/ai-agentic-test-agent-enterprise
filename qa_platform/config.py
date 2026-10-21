@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -76,14 +77,15 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return out
 
 
-SECRET_KEY_HINTS = ("pat", "token", "password", "secret", "api_key", "apikey")
+# Key names that hold secrets ("pat", "access_token", "db_password"...), but not "max_tokens".
+SECRET_KEY_PATTERN = re.compile(r"(^|[_-])(pat|token|password|passwd|secret|api[_-]?key|apikey)$", re.I)
 
 
 def _contains_secret_keys(data: Any) -> list[str]:
     found: list[str] = []
     if isinstance(data, dict):
         for k, v in data.items():
-            if any(h in k.lower() for h in SECRET_KEY_HINTS):
+            if SECRET_KEY_PATTERN.search(k):
                 found.append(k)
             found.extend(_contains_secret_keys(v))
     return found
