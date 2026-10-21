@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..agents.base import BaseAgent
 from ..ai.gateway import AIGateway
@@ -164,8 +164,10 @@ class PerformanceService:
     def running(self) -> list[str]:
         return list(self._procs)
 
-    def run(self, plan_id: str, run_id: str) -> dict[str, Any]:
-        plan = self.get_plan(plan_id)
+    def run(self, plan_id: str, run_id: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Run a saved plan. `overrides` (kind, users, duration_s) apply to this run only; the saved plan is
+        unchanged and the plan actually used is written to the run folder as plan.json and plan.jmx."""
+        plan = self.with_overrides(self.get_plan(plan_id), overrides)
         if not self._lock.acquire(blocking=False):
             raise QAError("PERF_ALREADY_RUNNING", "A performance test is already running.", status=409)
         folder = self.paths.performance / run_id
@@ -284,6 +286,21 @@ class PerformanceService:
                       link=f"#/perf-results?run={run_id}", sla=result["status"])
             act.complete(f"SLA evaluation: {text}")
         return result
+
+    @staticmethod
+    def with_overrides(plan: PerfPlan, overrides: dict[str, Any] | None) -> PerfPlan:
+        if not overrides:
+            return plan
+        profile = {k: overrides[k] for k in ("users", "duration_s") if overrides.get(k)}
+        data = plan.model_dump()
+        data["profile"].update(profile)
+        if overrides.get("kind"):
+            data["kind"] = overrides["kind"]
+        try:
+            return PerfPlan.model_validate(data)
+        except ValidationError as exc:
+            raise QAError("VALIDATION_FAILED", "Those load settings are outside the allowed range.", status=422,
+                          details=str(exc)) from exc
 
     def stop(self, run_id: str) -> bool:
         proc = self._procs.get(run_id)

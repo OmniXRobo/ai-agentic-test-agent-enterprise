@@ -237,3 +237,38 @@ Internal ids are what get persisted; only display text uses the mapping.
 * Tests (`tests/test_defects.py`) cover classification, signatures, scoring, review and automatic modes against the fake
   TFS server with real Playwright runs, linking to an existing defect, dismissal, recurrence comments, and a process
   with an Issue type and no Severity or Repro Steps fields.
+
+## Voice Command Agent (Stage 7)
+
+```
+microphone ─► speech recognition ─► intent analysis ─► validation ─► spoken acknowledgement
+              (local whisper server    (fixed grammar,     (IDs, plan,     │
+               or browser)              then On-Premise AI) running work)  ▼
+                                                            dashboard services (design, automation,
+                                                            performance, defects, TFS) ─► monitor ─► spoken result
+```
+
+* `voice/intents.py`: a fixed grammar maps a sentence to one of the supported commands and its parameters (number
+  words such as "a hundred" and "five minutes" are understood). Page names come from the same labels as the sidebar.
+* `voice/service.py`: `VoiceService.handle()` records each command in `voice_commands` (migration 7), emits
+  `voice.command.received`, then `accepted` (work started), `completed` or `failed`. Long work (test design,
+  automation generation, test runs, JMeter runs, TFS creation) runs in a background thread under the Voice Command
+  Agent card. Progress lines ("The load test has started.") and the final result are events whose `details.speak`
+  the dashboard speaks for that conversation.
+* Unmatched sentences go to the On-Premise AI with the list of commands. Its answer is validated: only a listed
+  command, and only IDs, numbers and names that appear in what the user said. With no AI the reply is the
+  unsupported-instruction message.
+* Context per conversation: the user story, test case, script, run and performance plan last referred to, plus the
+  page the user is on. Missing parameters are asked for and the next answer completes the command. TFS writes
+  ("create defects for failed tests") wait for a spoken confirm, which expires after two minutes.
+* Spoken performance runs pass `users`, `duration_s` and `kind` as overrides for that run only; the saved plan does
+  not change and the plan actually used is in the run folder (`plan.json`, `plan.jmx`).
+* After a failed run the agent waits for the automatic failure analysis (`DefectService.wait_for_automatic`) and
+  reports a new defect, an existing defect that received the new evidence, a likely duplicate, or a draft to review.
+* Speech recognition: `POST /api/voice/transcribe` takes 16 kHz mono WAV recorded in the browser and forwards it to the
+  configured server (`/inference` for whisper.cpp, `/audio/transcriptions` for OpenAI-compatible servers) without
+  proxies. Browser recognition is offered with a warning that Chrome and Edge use an online service. Replies use
+  `speechSynthesis` voices with `localService` only.
+* Tests (`tests/test_voice.py`) cover every example sentence from the requirements, follow-ups, asking for missing
+  details, the AI fallback and its ID guard, confirmations, a real Playwright failure reported with the new TFS defect
+  and its recurrence, a real JMeter run with spoken overrides, and the speech server API.

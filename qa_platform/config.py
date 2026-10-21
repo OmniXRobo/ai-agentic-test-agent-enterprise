@@ -64,6 +64,18 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "defects": {"creation_mode": "review"},  # review | automatic | disabled
     "performance": {"jmeter_home": "", "java_home": ""},
     "playback": {"visual_cursor": True, "highlight": True},
+    "voice": {
+        # local = a whisper.cpp / OpenAI-compatible speech server on this PC or network (works offline);
+        # browser = the browser's own recognition (Chrome/Edge use an online service); off = typed commands only
+        "stt_engine": "local",
+        "stt_url": "",
+        "stt_api": "whisper_cpp",  # whisper_cpp (/inference) | openai (/audio/transcriptions)
+        "stt_model": "",
+        "language": "en",
+        "speak_replies": True,
+        "tts_voice": "",
+        "tts_rate": 1.0,
+    },
 }
 
 

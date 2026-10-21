@@ -137,18 +137,22 @@ class AutomationService:
                          application: str | None = None, discovery_id: str | None = None,
                          headless: bool = True) -> str:
         run_id = new_run_id("GEN")
-
-        def work() -> None:
-            disc = self.discovery.get(discovery_id) if discovery_id else self.discovery.latest_for(base_url)
-            if disc is None:
-                disc = self.discovery.crawl(run_id, base_url, max_pages=5, max_depth=1, headless=headless)
-            script = self.generator.generate(run_id, test_case_id=test_case_id, base_url=base_url, discovery=disc,
-                                             credential_role=credential_role, application=application)
-            self.scripts.save(script, reason=f"AI-generated ({run_id})")
-            self.generated[run_id] = script.id
-
-        self._background(run_id, work)
+        self._background(run_id, lambda: self.generate(run_id, test_case_id, base_url, credential_role=credential_role,
+                                                       application=application, discovery_id=discovery_id,
+                                                       headless=headless))
         return run_id
+
+    def generate(self, run_id: str, test_case_id: int, base_url: str, *, credential_role: str | None = None,
+                 application: str | None = None, discovery_id: str | None = None, headless: bool = True) -> Script:
+        """AI-driven generation in the caller's thread; saves and returns the new script."""
+        disc = self.discovery.get(discovery_id) if discovery_id else self.discovery.latest_for(base_url)
+        if disc is None:
+            disc = self.discovery.crawl(run_id, base_url, max_pages=5, max_depth=1, headless=headless)
+        script = self.generator.generate(run_id, test_case_id=test_case_id, base_url=base_url, discovery=disc,
+                                         credential_role=credential_role, application=application)
+        saved = self.scripts.save(script, reason=f"AI-generated ({run_id})")
+        self.generated[run_id] = saved.id
+        return saved
 
     def create_from_discovery(self, discovery_id: str, page_url: str, selectors: list[str], name: str) -> Script:
         disc = self.discovery.get(discovery_id)

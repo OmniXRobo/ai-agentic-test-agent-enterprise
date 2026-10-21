@@ -47,7 +47,7 @@ async function detail(view, id) {
       ${d.product_defect ? "" : '<p class="pill WARN">This may not be a product defect. Check the evidence before creating it.</p>'}
       ${d.note ? `<p class="muted">${esc(d.note)}</p>` : ""}
     </div>
-    <div class="grid" style="grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);margin-top:12px;align-items:start">
+    <div class="grid split-2" style="margin-top:12px">
       <form class="card settings" id="form" style="max-width:none">
         <h3>Defect</h3>
         <label>Title <input name="title" value="${esc(d.title)}" ${editable ? "" : "disabled"} required></label>
