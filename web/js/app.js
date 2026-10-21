@@ -16,6 +16,7 @@ import * as testData from "./pages/test-data.js";
 import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
 import * as appCredentials from "./pages/app-credentials.js";
 import { perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
+import { defectReview, perfDefects } from "./pages/defect-review.js";
 
 // route -> { title, page, stage? }. A `stage` marks a section delivered by a later build stage.
 const NAV = [
@@ -48,10 +49,11 @@ const NAV = [
     ["perf-spike", "Spike Tests", perfSpike],
     ["perf-soak", "Soak Tests", perfSoak],
     ["perf-results", "Performance Results", perfResults],
-    ["perf-defects", "Performance Defects", null, 6],
+    ["perf-defects", "Performance Defects", perfDefects],
   ]],
   ["Quality", [
     ["defects", "Defects", workItemPage({ category: "bug", createLabel: "New defect" })],
+    ["defect-review", "Defect Review", defectReview],
     ["reports", "Reports", null, 8],
     ["analytics", "Analytics", null, 8],
   ]],

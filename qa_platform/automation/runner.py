@@ -18,7 +18,7 @@ from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from . import healing
 from .browser import default_headless, js, launch, start_playwright
-from .dsl import NEEDS_TARGET, Script, Step, ValueResolver
+from .dsl import describe, NEEDS_TARGET, Script, Step, ValueResolver
 from .store import CredentialProfiles, ScriptStore
 
 
@@ -169,7 +169,7 @@ class Runner:
             for index, step in enumerate(script.steps):
                 if stop.is_set():
                     raise StepFailed(index, "Stopped by the user.")
-                desc = resolver.mask(step.description) or f"{step.action} {step.target.description or _short(step.target.selector) if step.target else (step.value or '')}"
+                desc = resolver.mask(describe(step))
                 act.event(names.EXECUTION_STEP, f"Step {index + 1}/{total}: {desc}", progress=int(index * 100 / total),
                           step=index)
                 started = time.monotonic()

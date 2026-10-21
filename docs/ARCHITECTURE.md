@@ -217,3 +217,23 @@ Internal ids are what get persisted; only display text uses the mapping.
 * Results are stored in `perf_runs` and in Execution History (`kind = performance`).
 * Tests (`tests/test_performance.py`) cover profiles, JMX structure, JTL math, SLA, the API, and, when Java and
   JMeter are available (CI installs them), a real non-GUI run against a local site and a stop.
+
+## Failure analysis and Defect Intelligence (Stage 6)
+
+* `defects/analysis.py`: rule-based classification of the recorded failure (failed step and action, error text,
+  self-healing attempts, SLA checks). Each category has a plain-language finding, a default severity and whether it is
+  likely a product defect (`locator` and `test_setup` are not assumed to be). Repro steps always say the root cause
+  was not determined. A signature (script, step, category, selector; or plan, SLA, scope) identifies the same failure.
+* `defects/service.py`: listens on the event bus for `execution.failed` and `performance.failed` with a failed SLA and
+  analyzes the run shortly after. Drafts live in `defect_drafts` (migration 6) with status draft, needs_review, created,
+  linked or dismissed. A repeat signature appends an occurrence; if the draft is already in TFS a comment is added there.
+* Duplicates: open defects of the process's defect type are scored by title and body similarity, plus the same selector
+  and the same linked test case. 85% and above is a likely duplicate, 60% a possible one.
+* Creation mode is the `defects.creation_mode` setting: `review`, `automatic` or `disabled`. Automatic creation skips
+  likely duplicates and failures that may not be product defects, and records why on the draft.
+* Creation uses the TFS work item type for the `bug` category, reads Severity allowed values to map 1-4, falls back to
+  `System.Description` when the type has no Repro Steps field, uploads screenshots via `_apis/wit/attachments` and adds
+  `System.LinkTypes.Related` links to the test case and user story. Skipped fields are listed on the draft.
+* Tests (`tests/test_defects.py`) cover classification, signatures, scoring, review and automatic modes against the fake
+  TFS server with real Playwright runs, linking to an existing defect, dismissal, recurrence comments, and a process
+  with an Issue type and no Severity or Repro Steps fields.

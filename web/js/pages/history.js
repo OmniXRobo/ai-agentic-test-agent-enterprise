@@ -1,6 +1,7 @@
 import { api } from "../api.js";
-import { esc, dateTimeOf, elapsed, timeOf } from "../util.js";
+import { esc, dateTimeOf, elapsed, timeOf, toast } from "../util.js";
 import { executionStepsHtml } from "./automation.js";
+import { analyzeRun } from "./defect-review.js";
 
 function runIdFromHash() {
   const q = location.hash.split("?")[1] || "";
@@ -26,10 +27,15 @@ async function renderDetail(view, runId) {
       </tbody></table>` : ""}
     </div>
     ${execution ? `<div class="card" style="margin-top:14px"><div class="row"><h3 style="margin:0">Steps and evidence</h3><span class="spacer"></span>
+      ${execution.status === "FAILED" ? '<button class="btn" id="analyzeFailure">Analyze failure</button>' : ""}
       <a href="#/guided-automation?script=${esc(execution.script_id)}">Open script</a></div>${executionStepsHtml(execution)}</div>` : ""}
     <div class="card" style="margin-top:14px"><h3>Event log</h3>
       <div class="feed">${events.map((e) => `<div class="feed-item"><span class="feed-time">${esc(timeOf(e.timestamp))}</span><span>${esc((e.agent_name ? e.agent_name + " · " : "") + (e.activity || e.name))}</span></div>`).join("")}</div>
     </div>`;
+  view.querySelector("#analyzeFailure")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await analyzeRun("functional", runId); } catch (err) { toast(err.message, "error"); e.target.disabled = false; }
+  });
 }
 
 async function renderList(view) {

@@ -7,8 +7,6 @@ import io
 import threading
 import time
 import xml.etree.ElementTree as ET
-from functools import partial
-from http.server import ThreadingHTTPServer
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +17,6 @@ from qa_platform.performance import jtl, sla, tools
 from qa_platform.performance.jmx import build_jmx
 from qa_platform.performance.models import HttpRequest, LoadProfile, PerfPlan, Sla
 from tests.fake_llm import FakeLLM
-from tests.test_automation import SITE, _Handler
 
 HEADER = "timeStamp,elapsed,label,responseCode,responseMessage,threadName,dataType,success,failureMessage,bytes,sentBytes,grpThreads,allThreads,URL,Latency,IdleTime,Connect"
 
@@ -164,14 +161,6 @@ def _jmeter_available(rt) -> bool:
     return env["ready"]
 
 
-@pytest.fixture()
-def site():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_Handler, directory=str(SITE)))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_address[1]}"
-    server.shutdown()
-
-
 def test_real_jmeter_run_metrics_sla_report_and_analysis(client, site):
     rt = client.app.state.runtime
     if not _jmeter_available(rt):
@@ -197,6 +186,12 @@ def test_real_jmeter_run_metrics_sla_report_and_analysis(client, site):
     assert analysis["undetermined"] and rt.performance.get_run(run["run_id"])["analysis"]["summary"]
     hist = rt.runs.get(run["run_id"])
     assert hist["kind"] == "performance" and hist["status"] == "FAILED"
+    # The failed SLA becomes a performance defect draft (default mode: Review Before Create).
+    deadline = time.time() + 10
+    while time.time() < deadline and not rt.db.query("SELECT id FROM defect_drafts WHERE source_run_id = ?", (run["run_id"],)):
+        time.sleep(0.1)
+    draft = rt.defects.list(source="performance")[0]
+    assert draft["category"] == "performance_errors" and draft["status"] == "draft"
 
 
 def test_real_jmeter_stop(client, site):

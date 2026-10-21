@@ -12,10 +12,12 @@ PAT = "valid-pat"
 
 
 class FakeAzureDevOps:
-    def __init__(self, base="https://dev.azure.com/acme", project="Shop", bug_type="Bug"):
+    def __init__(self, base="https://dev.azure.com/acme", project="Shop", bug_type="Bug", severity=False):
         self.base = base
         self.project = project
         self.bug_type = bug_type
+        self.severity = severity
+        self.attachments: dict[str, bytes] = {}
         self.items = {
             118: {"System.Title": "Checkout with saved card", "System.WorkItemType": "User Story",
                   "System.State": "Active", "System.IterationPath": "Shop\\Sprint 4",
@@ -33,9 +35,18 @@ class FakeAzureDevOps:
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
 
-    def _wi(self, i):
-        return {"id": i, "rev": 1, "fields": {**self.items[i], "System.Id": i},
-                "url": f"{self.base}/_apis/wit/workItems/{i}"}
+    def _wi(self, i, relations=False):
+        fields = {k: v for k, v in self.items[i].items() if not k.startswith("_")}
+        wi = {"id": i, "rev": 1, "fields": {**fields, "System.Id": i}, "url": f"{self.base}/_apis/wit/workItems/{i}"}
+        if relations:
+            wi["relations"] = [{"rel": r, "url": t if isinstance(t, str) else f"{self.base}/_apis/wit/workItems/{t}"}
+                               for r, t in self.relations.get(i, [])]
+        return wi
+
+    def _relate(self, i, value):
+        url = value["url"]
+        target = int(url.rsplit("/", 1)[1]) if "/workItems/" in url else url
+        self.relations.setdefault(i, []).append((value["rel"], target))
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -73,9 +84,18 @@ class FakeAzureDevOps:
                     "System.IterationPath", "System.AreaPath", "Microsoft.VSTS.Common.Priority"]
             if m.group(1) == self.bug_type:
                 refs.append("Microsoft.VSTS.TCM.ReproSteps")
+                if self.severity:
+                    refs.append("Microsoft.VSTS.Common.Severity")
             if m.group(1) == "Test Case":
                 refs.append("Microsoft.VSTS.TCM.Steps")
-            return httpx.Response(200, json={"value": [{"referenceName": r} for r in refs]})
+            allowed = {"Microsoft.VSTS.Common.Severity": ["1 - Critical", "2 - High", "3 - Medium", "4 - Low"]}
+            expand = request.url.params.get("$expand") == "allowedValues"
+            return httpx.Response(200, json={"value": [
+                {"referenceName": r, **({"allowedValues": allowed.get(r, [])} if expand else {})} for r in refs]})
+        if path == f"{proj}/_apis/wit/attachments" and request.method == "POST":
+            aid = f"att-{len(self.attachments) + 1}"
+            self.attachments[request.url.params["fileName"]] = request.content
+            return httpx.Response(201, json={"id": aid, "url": f"{self.base}/_apis/wit/attachments/{aid}"})
         if path == f"{proj}/_apis/wit/classificationnodes/iterations":
             return httpx.Response(200, json={"path": f"\\{self.project}\\Iteration", "children": [
                 {"path": f"\\{self.project}\\Iteration\\Sprint 4"}]})
@@ -87,7 +107,8 @@ class FakeAzureDevOps:
             return httpx.Response(200, json={"workItems": [{"id": i} for i in ids]})
         if path == "/acme/_apis/wit/workitems":
             ids = [int(x) for x in request.url.params["ids"].split(",")]
-            return httpx.Response(200, json={"value": [self._wi(i) for i in ids if i in self.items]})
+            expand = request.url.params.get("$expand") == "relations"
+            return httpx.Response(200, json={"value": [self._wi(i, relations=expand) for i in ids if i in self.items]})
         m = re.match(r"/acme/_apis/wit/workitems/(\d+)$", path)
         if m:
             i = int(m.group(1))
@@ -95,10 +116,13 @@ class FakeAzureDevOps:
                 return httpx.Response(404, json={"message": "not found"})
             if request.method == "PATCH":
                 for op in json.loads(request.content):
-                    self.items[i][op["path"].split("/")[-1]] = op["value"]
-            wi = self._wi(i)
-            wi["relations"] = [{"rel": r, "url": f"{self.base}/_apis/wit/workItems/{t}"} for r, t in self.relations.get(i, [])]
-            return httpx.Response(200, json=wi)
+                    if op["path"] == "/relations/-":
+                        self._relate(i, op["value"])
+                    elif op["path"] == "/fields/System.History":
+                        self.items[i].setdefault("_comments", []).append(op["value"])
+                    else:
+                        self.items[i][op["path"].split("/")[-1]] = op["value"]
+            return httpx.Response(200, json=self._wi(i, relations=True))
         m = re.match(rf"{re.escape(proj)}/_apis/wit/workitems/\$(.+)$", path)
         if m and request.method == "POST":
             assert request.headers["content-type"] == "application/json-patch+json"
@@ -107,8 +131,7 @@ class FakeAzureDevOps:
             self.items[i] = {"System.WorkItemType": m.group(1), "System.State": "New"}
             for op in json.loads(request.content):
                 if op["path"] == "/relations/-":
-                    target = int(op["value"]["url"].rsplit("/", 1)[1])
-                    self.relations.setdefault(i, []).append((op["value"]["rel"], target))
+                    self._relate(i, op["value"])
                     continue
                 self.items[i][op["path"].split("/")[-1]] = op["value"]
             return httpx.Response(200, json=self._wi(i))

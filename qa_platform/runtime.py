@@ -10,6 +10,7 @@ from .ai.gateway import AIGateway
 from .automation.service import AutomationService
 from .config import Paths, Settings
 from .credentials import SecretBackend, SecretStore
+from .defects.service import DefectService
 from .design.service import DesignService
 from .events import names
 from .events.bus import EventBus
@@ -39,6 +40,7 @@ class Runtime:
     design: DesignService
     automation: AutomationService
     performance: PerformanceService
+    defects: DefectService
 
     def close(self) -> None:
         self.db.close()
@@ -74,5 +76,6 @@ def build_runtime(
     design = DesignService(bus, db, runs, tfs, ai)
     automation = AutomationService(paths, settings, bus, db, runs, secrets, tfs, ai)
     performance = PerformanceService(paths, settings, bus, db, runs, ai, automation.discovery)
+    defects = DefectService(settings, bus, db, tfs, automation, performance)
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation, performance)
+                   automation, performance, defects)
