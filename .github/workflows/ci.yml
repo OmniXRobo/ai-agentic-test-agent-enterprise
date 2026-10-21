@@ -61,3 +61,10 @@ jobs:
           call "%PKG%\INSTALL_OFFLINE.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
           call "%RUNNER_TEMP%\qa-install\VALIDATE_OFFLINE.cmd" || exit /b 1
           type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"
+      - name: Publish the package for download (Actions run page, Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIAgenticTestAgent-Offline-windows
+          path: dist_offline/AIAgenticTestAgent-Offline-*/
+          retention-days: 14
+          compression-level: 6

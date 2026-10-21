@@ -188,3 +188,5 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   data folder is shared between versions and never touched; credentials stay in Windows Credential Manager. Logs go to
   `logs\`. `ROLLBACK_OFFLINE.cmd` in the install folder returns to the previous version.
 * CI builds the package on Windows, validates it, installs it to a temporary folder and validates the installed copy.
+  The tested package is attached to each run as the artifact `AIAgenticTestAgent-Offline-windows` (kept 14 days):
+  GitHub → Actions → the latest CI run → Artifacts.
