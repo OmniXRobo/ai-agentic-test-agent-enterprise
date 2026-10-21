@@ -50,7 +50,7 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   The PAT is write-only and stored in the Windows Credential Manager.
 * Connection test with PASS/FAIL and the exact reason for: Server Reachability, Authentication,
   Organization/Collection, Project, Work Item API, Test Management API
-* TFS Explorer with Project, Sprint/Iteration, Work Item Type, State, Assigned To and ID/title filters, plus a detail
+* TFS Explorer (scoped to the active profile's project) with Sprint/Iteration, Work Item Type, State, Assigned To and ID/title filters, plus a detail
   panel with acceptance criteria and traceability (linked test cases, defects, other links)
 * User Stories, Acceptance Criteria, Test Cases, Defects, Test Plans and Test Suites pages on real TFS data, with
   create/edit written back to TFS
