@@ -35,3 +35,29 @@ jobs:
           tar -xzf jmeter.tgz -C "$dest"
           echo "JMETER_HOME=$RUNNER_TEMP/apache-jmeter-$v" >> "$GITHUB_ENV"
       - run: python -m pytest -q
+  offline-package:
+    # Builds the portable package exactly as a user would, validates it with the network blocked,
+    # installs it per-user (no administrator rights) and validates the installed copy.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: dist_offline/downloads
+          key: offline-downloads-${{ hashFiles('packaging/offline-lock.json') }}
+      - name: Build the offline package (validates it at the end)
+        env:
+          QA_NO_PAUSE: "1"
+        run: python packaging/build_offline_package.py --zip
+      - name: Install to a temporary folder and validate the installed copy
+        shell: cmd
+        env:
+          QA_NO_PAUSE: "1"
+        run: |
+          for /d %%P in (dist_offline\AIAgenticTestAgent-Offline-*) do set "PKG=%%P"
+          call "%PKG%\INSTALL_OFFLINE.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
+          call "%RUNNER_TEMP%\qa-install\VALIDATE_OFFLINE.cmd" || exit /b 1
+          type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"

@@ -167,3 +167,24 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   self-healing and failure screenshots. Performance sections: summary, load profile, response times with P90/P95/P99,
   throughput, error rate, graphs, transaction results, SLA compliance, performance defects and the AI analysis when one
   was requested. Reports are listed with View, HTML, PDF and Delete; a notification says when one is ready.
+
+## What works in Stage 9
+
+* **Offline portable Windows package.** On a 64-bit Windows PC with Internet, run
+  `py -3 packaging\build_offline_package.py [--zip] [--ai-dir <folder with a Qwen GGUF model>]`. It writes
+  `dist_offline\AIAgenticTestAgent-Offline-<version>\` with `INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`,
+  `README_OFFLINE.txt` and `payload\` (the application, `runtime\python`, `runtime\jre`, `runtime\apache-jmeter-5.6.3`,
+  `runtime\ms-playwright`, optional `runtime\ai`, `MANIFEST.json` with the SHA-256 of every file and `DEPENDENCIES.md`).
+  Python 3.12.8, Temurin JRE 17.0.13 and JMeter 5.6.3 are pinned with checksums in `packaging/offline-lock.json`;
+  Python packages come from `packaging/requirements-offline-win.txt` with `--require-hashes`. Models are never
+  downloaded: `--ai-dir` copies the folder you give it.
+* **VALIDATE_OFFLINE.cmd** checks Windows, administrator rights (not needed), every package file against the manifest,
+  the bundled Python and packages, Java, JMeter, a headless Chromium launch, Windows Credential Manager, the data
+  folder, the dashboard port and the On-Premise AI files, all with outbound network connections blocked. The report is
+  saved to a text file and contains no secrets.
+* **INSTALL_OFFLINE.cmd** installs for the current Windows user (default `%LOCALAPPDATA%\Programs\AIAgenticTestAgent`,
+  `--target` for another folder) without administrator rights. It verifies the package, copies the new version beside
+  the current one, switches over, runs the full validation and switches back automatically if anything fails. The
+  data folder is shared between versions and never touched; credentials stay in Windows Credential Manager. Logs go to
+  `logs\`. `ROLLBACK_OFFLINE.cmd` in the install folder returns to the previous version.
+* CI builds the package on Windows, validates it, installs it to a temporary folder and validates the installed copy.

@@ -17,7 +17,12 @@ if not defined PY (
 
 if exist "%~dp0runtime\ms-playwright" set "PLAYWRIGHT_BROWSERS_PATH=%~dp0runtime\ms-playwright"
 
-for /f "usebackq delims=" %%P in (`%PY% -c "import json,pathlib;p=pathlib.Path(r'%~dp0data\settings.json');print(json.loads(p.read_text())['server']['port'] if p.exists() else 8765)" 2^>nul`) do set "PORT=%%P"
+rem An installed copy keeps its data beside the app folder so it survives upgrades and rollback.
+set "DATA=%~dp0data"
+if exist "%~dp0INSTALLED.json" set "DATA=%~dp0..\data"
+if not defined QA_HOME set "QA_HOME=%DATA%"
+
+for /f "usebackq delims=" %%P in (`%PY% -c "import json,pathlib;p=pathlib.Path(r'%QA_HOME%\settings.json');print(json.loads(p.read_text())['server']['port'] if p.exists() else 8765)" 2^>nul`) do set "PORT=%%P"
 if not defined PORT set "PORT=8765"
 
 start "" /b cmd /c "timeout /t 3 /nobreak >nul & start http://127.0.0.1:%PORT%/"
