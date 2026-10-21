@@ -17,6 +17,8 @@ import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./p
 import * as appCredentials from "./pages/app-credentials.js";
 import { perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
 import { defectReview, perfDefects } from "./pages/defect-review.js";
+import * as voicePage from "./pages/voice.js";
+import { voice, onVoice, listen, loadSettings } from "./voice.js";
 
 // route -> { title, page, stage? }. A `stage` marks a section delivered by a later build stage.
 const NAV = [
@@ -62,7 +64,7 @@ const NAV = [
     ["tfs-settings", "TFS Connection", tfsSettings],
     ["ai-settings", "On-Premise AI", aiSettings],
     ["app-credentials", "Application Credentials", appCredentials],
-    ["voice", "Voice Commands", null, 7],
+    ["voice", "Voice Commands", voicePage],
   ]],
 ];
 
@@ -178,10 +180,40 @@ function initConnection() {
   });
 }
 
+// ---- header microphone: speak a command from any page ----
+function initVoice() {
+  const btn = document.getElementById("voiceBtn");
+  const pop = document.getElementById("voicePop");
+  let hideTimer = null;
+  const show = () => {
+    const last = voice.log.slice(-3);
+    const status = voice.status === "listening" ? "Listening… speak now" : voice.status === "thinking" ? "Working…" : voice.error || "";
+    pop.innerHTML = `${status ? `<div class="vstatus">${esc(status)}</div>` : ""}${last.map((m) => `<div class="vmsg ${m.who}"><span class="vwho">${m.who === "you" ? "You" : "Voice Agent"}</span><span class="vtext">${esc(m.text)}</span></div>`).join("")}
+      <a class="popover-foot" href="#/voice">Open Voice Commands</a>`;
+    btn.classList.toggle("listening", voice.status === "listening");
+    if (location.hash.startsWith("#/voice")) { pop.hidden = true; return; } // the page shows the conversation
+    pop.hidden = !status && !last.length;
+    clearTimeout(hideTimer);
+    if (voice.status === "idle") hideTimer = setTimeout(() => { pop.hidden = true; }, 9000);
+  };
+  onVoice(show);
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      const s = await loadSettings();
+      if (s.stt_engine === "off" || (s.stt_engine === "local" && !s.stt_url)) { location.hash = "#/voice"; toast("Set up speech recognition first, or type a command here.", "info"); return; }
+      await listen();
+    } catch (err) { show(); toast(err.message, "error"); }
+  });
+  document.addEventListener("click", (e) => { if (!pop.hidden && !pop.contains(e.target)) pop.hidden = true; });
+  window.addEventListener("hashchange", () => { if (location.hash.startsWith("#/voice")) pop.hidden = true; });
+}
+
 document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
 renderNav();
 initTheme();
 initBell();
 initConnection();
+initVoice();
 window.addEventListener("hashchange", navigate);
 start().then(navigate);

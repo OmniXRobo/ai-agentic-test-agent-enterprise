@@ -256,5 +256,32 @@ table.steps td { padding: 4px 6px; }
 .chart rect:focus-visible { outline: 2px solid var(--accent); }
 .chart-tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; }
 .chart-tip span { color: var(--muted); }
-[data-kind][hidden] { display: none; }
+[hidden] { display: none !important; }
 textarea[data-f] { width: 100%; min-width: 120px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+
+/* ---- Voice Commands ---- */
+.voice-card .row:first-child { gap: 14px; }
+.mic-btn {
+  width: 64px; height: 64px; border-radius: 50%; border: 0; cursor: pointer; flex: none;
+  background: var(--accent); color: #fff; display: grid; place-items: center;
+}
+.mic-btn:disabled { opacity: .5; cursor: not-allowed; }
+.mic-btn.on { background: var(--fail); animation: micpulse 1.2s ease-in-out infinite; }
+@keyframes micpulse { 0%, 100% { box-shadow: 0 0 0 0 var(--fail-soft); } 50% { box-shadow: 0 0 0 12px var(--fail-soft); } }
+@media (prefers-reduced-motion: reduce) { .mic-btn.on { animation: none; } }
+#voiceBtn.listening { color: var(--fail); border-color: var(--fail); }
+.vlog { max-height: 380px; overflow-y: auto; margin: 14px 0; display: flex; flex-direction: column; gap: 8px; }
+.vmsg { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); }
+.vmsg.you { align-self: flex-end; background: var(--accent-soft); max-width: 85%; }
+.vmsg.agent { align-self: flex-start; max-width: 95%; }
+.vwho { font-size: 12px; color: var(--muted); width: 100%; }
+.vtext { overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { border: 1px solid var(--border); background: var(--surface-2); color: inherit; border-radius: 999px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+.chip:hover { border-color: var(--accent); }
+.voice-pop { width: 340px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.voice-pop .vstatus { font-weight: 600; }
+.voice-pop .popover-foot { margin: 0 -10px -10px; }
+@media (max-width: 720px) { .voice-pop { position: fixed; left: 16px; right: 16px; top: 60px; width: auto; } }
+.split-2 { grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); align-items: start; }
+@media (max-width: 1100px) { .split-2 { grid-template-columns: 1fr; } }

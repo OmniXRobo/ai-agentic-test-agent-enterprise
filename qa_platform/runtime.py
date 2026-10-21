@@ -19,6 +19,7 @@ from .notifications import NotificationService
 from .performance.service import PerformanceService
 from .runs import RunStore
 from .storage.db import Database
+from .voice.service import VoiceService
 from .tfs.service import TfsService
 
 LIFECYCLE = (names.AGENT_STARTED, names.AGENT_COMPLETED, names.AGENT_FAILED)
@@ -41,6 +42,7 @@ class Runtime:
     automation: AutomationService
     performance: PerformanceService
     defects: DefectService
+    voice: VoiceService
 
     def close(self) -> None:
         self.db.close()
@@ -52,6 +54,7 @@ def build_runtime(
     secret_backend: SecretBackend | None = None,
     tfs_transport: Any = None,
     ai_transport: Any = None,
+    stt_transport: Any = None,
 ) -> Runtime:
     paths = (paths or Paths()).ensure()
     settings = Settings(paths.settings_file)
@@ -77,5 +80,7 @@ def build_runtime(
     automation = AutomationService(paths, settings, bus, db, runs, secrets, tfs, ai)
     performance = PerformanceService(paths, settings, bus, db, runs, ai, automation.discovery)
     defects = DefectService(settings, bus, db, tfs, automation, performance)
+    voice = VoiceService(settings, bus, db, runs, state, tfs, ai, design, automation, performance, defects,
+                         transport=stt_transport)
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation, performance, defects)
+                   automation, performance, defects, voice)

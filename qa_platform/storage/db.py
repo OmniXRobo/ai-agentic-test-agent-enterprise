@@ -191,6 +191,24 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_drafts_sig ON defect_drafts(signature, status);
     """,
+    # 7: voice commands (what was heard, how it was understood, what the agent answered)
+    """
+    CREATE TABLE IF NOT EXISTS voice_commands (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        source TEXT NOT NULL,
+        command TEXT,
+        params TEXT,
+        via TEXT,
+        status TEXT NOT NULL,
+        reply TEXT,
+        final_reply TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_voice_conv ON voice_commands(conversation_id, id);
+    """,
 ]
 
 

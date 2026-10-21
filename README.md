@@ -126,3 +126,24 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   fields the process does not have and lists them, attaches screenshots, and links the defect to the test case and
   user story. You can also link a draft to an existing defect or dismiss it with a reason.
 * **Analyze failure** on a failed run in Execution History or Performance Results drafts a defect on demand.
+
+## What works in Stage 7
+
+* **Voice Commands**: press the microphone (on the Voice Commands page or in the top bar on any page) and speak, or
+  type the command. The Voice Command Agent acknowledges by voice, runs the action through the same services the
+  pages use, follows it while it runs, and speaks the result, for example "The test execution failed at step 8. I found
+  a locator failure on the checkout button" or "The performance test completed successfully. P95 response time was
+  1.4 seconds and the error rate was 0.2 percent."
+* Supported commands: open any page, open a user story / test case / defect by number, generate test cases, generate
+  automation, run or play a test case or a named test, run all automated tests, start a browser recording, run a
+  performance test (with the users and duration you say, for that run only), stop the running test, show failed tests,
+  show the performance report, analyze the failure, create defects for failed tests, and status. Anything else gets
+  "I cannot perform that instruction because no supported QA action is mapped to it."
+* Follow-ups use the conversation's context and the page you are on: "open user story 118", then "generate test
+  cases"; "run test case 1280", then "run it again". A missing detail is asked for ("Which test case?").
+  Creating defects in TFS asks you to say confirm first.
+* **Speech recognition**: a local whisper.cpp server or any OpenAI-compatible speech server (works offline; nothing is
+  downloaded), or the browser's recognition (needs Internet in Chrome and Edge), or off (typed commands only).
+  Sentences outside the fixed phrases are mapped by the On-Premise AI when it is available; it can only choose a
+  supported command and never adds an ID you did not say.
+* **Spoken replies** use voices installed on the PC only, so they work without Internet.

@@ -91,6 +91,7 @@ class DefectService:
         self.analyst = FailureAnalysisAgent(bus)
         self.agent = DefectIntelligenceAgent(bus)
         self._lock = threading.Lock()
+        self._finished: dict[str, threading.Event] = {}  # run id -> automatic analysis (and creation) finished
         bus.add_listener(self._on_event)
 
     @property
@@ -98,6 +99,17 @@ class DefectService:
         return self.settings.section("defects").get("creation_mode", "review")
 
     # ---- automatic trigger ------------------------------------------------------------------
+
+    def _finished_event(self, run_id: str) -> threading.Event:
+        with self._lock:
+            if len(self._finished) > 500:
+                for key in [k for k, ev in self._finished.items() if ev.is_set()][:250]:
+                    del self._finished[key]
+            return self._finished.setdefault(run_id, threading.Event())
+
+    def wait_for_automatic(self, run_id: str, timeout: float) -> bool:
+        """Wait until the automatic analysis of a failed run (and any automatic creation) is done."""
+        return self._finished_event(run_id).wait(timeout)
 
     def _on_event(self, event: QAEvent) -> None:
         if self.mode == "disabled" or not event.run_id:
@@ -117,6 +129,8 @@ class DefectService:
                 log.info(f"Automatic failure analysis skipped: {exc.message}", extra={"run_id": run_id})
             except Exception:
                 log.exception("Automatic failure analysis failed")
+            finally:
+                self._finished_event(run_id).set()
 
         # Results are written right after the failure event; let the run finish first.
         timer = threading.Timer(1.5, work)

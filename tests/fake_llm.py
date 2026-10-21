@@ -44,6 +44,9 @@ REPLIES = {
         "recommendations": ["Repeat with more users to find the saturation point"],
         "undetermined": ["Server-side resource usage was not measured"],
     },
+    # Voice intent fallback: always the same answer, so tests can check that an ID the user
+    # did not say is dropped.
+    "spoken request to exactly one command": {"command": "run_test_case", "test_case_id": 1280},
     "Playwright automation engineer": {
         "steps": [
             {"action": "goto", "value": "login.html", "description": "Open the sign-in page"},

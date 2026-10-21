@@ -39,13 +39,15 @@ async function renderDetail(view, runId) {
 }
 
 async function renderList(view) {
-  const { runs } = await api("/api/runs?limit=200");
-  view.innerHTML = `<div class="card">${runs.length ? `
+  const status = new URLSearchParams(location.hash.split("?")[1] || "").get("status");
+  let { runs } = await api("/api/runs?limit=200");
+  if (status) runs = runs.filter((r) => r.status === status && (status !== "FAILED" || ["functional", "performance"].includes(r.kind)));
+  view.innerHTML = `${status ? `<p class="row"><span>Showing ${status === "FAILED" ? "failed tests" : esc(status.toLowerCase()) + " runs"}.</span><a href="#/history">Show all runs</a></p>` : ""}<div class="card">${runs.length ? `
     <table class="data"><thead><tr><th>Run ID</th><th>Type</th><th>Title</th><th>Status</th><th>Started</th><th>Duration</th></tr></thead><tbody>
     ${runs.map((r) => `<tr class="clickable" data-run="${esc(r.run_id)}"><td>${esc(r.run_id)}</td><td>${esc(r.kind)}</td><td>${esc(r.title || "")}</td>
       <td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td><td>${esc(dateTimeOf(r.started_at))}</td>
       <td>${r.finished_at ? esc(elapsed(r.started_at, r.finished_at)) : ""}</td></tr>`).join("")}
-    </tbody></table>` : `<p class="muted">No runs recorded yet.</p>`}</div>`;
+    </tbody></table>` : `<p class="muted">${status ? "No matching runs." : "No runs recorded yet."}</p>`}</div>`;
   view.querySelectorAll("tr[data-run]").forEach((tr) => tr.addEventListener("click", () => { location.hash = `#/history?run=${encodeURIComponent(tr.dataset.run)}`; }));
 }
 
