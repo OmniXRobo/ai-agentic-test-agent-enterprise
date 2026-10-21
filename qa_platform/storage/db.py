@@ -138,6 +138,32 @@ MIGRATIONS: list[str] = [
         result TEXT NOT NULL
     );
     """,
+    # 5: performance test plans and results
+    """
+    CREATE TABLE IF NOT EXISTS perf_plans (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        plan TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS perf_runs (
+        run_id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        folder TEXT NOT NULL,
+        metrics TEXT,
+        sla TEXT,
+        analysis TEXT,
+        error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_plan ON perf_runs(plan_id);
+    """,
 ]
 
 

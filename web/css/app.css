@@ -240,5 +240,20 @@ table.steps td { padding: 4px 6px; }
 .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-top: 10px; }
 .shots a { display: grid; gap: 4px; font-size: 11.5px; color: var(--muted); text-decoration: none; overflow-wrap: anywhere; }
 .shots img { width: 100%; border: 1px solid var(--border); border-radius: 6px; }
-.grid > label, form.grid label { display: grid; gap: 4px; font-size: 13px; }
-form.grid label input, form.grid label select { width: 100%; min-width: 0; box-sizing: border-box; }
+.grid > label, form.grid label, .card > .grid > label { display: grid; gap: 4px; font-size: 13px; }
+.grid label input:not([type=checkbox]):not([type=radio]), .grid label select { width: 100%; min-width: 0; }
+.grid > span > label { display: grid; gap: 4px; font-size: 13px; }
+
+/* Charts */
+.chart { position: relative; }
+.chart-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .axis { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.chart .hair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart rect:focus { outline: none; }
+.chart rect:focus-visible { outline: 2px solid var(--accent); }
+.chart-tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; }
+.chart-tip span { color: var(--muted); }
+[data-kind][hidden] { display: none; }
+textarea[data-f] { width: 100%; min-width: 120px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }

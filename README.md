@@ -94,3 +94,19 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   run then passed, and the previous version is kept.
 * **Application Credentials**: role-based logins per application. Passwords are kept in the Windows Credential
   Manager, separate from the TFS PAT, resolved only at run time and masked in logs and evidence.
+
+## What works in Stage 5
+
+* **Performance Test Plans** for Load, Stress, Spike and Soak tests: HTTP requests (method, URL, body, headers,
+  expected status code and text), users, ramp-up, duration, think time, stress steps or spike window, and SLAs
+  (average, 90th/95th/99th percentile, error rate, throughput).
+* Create a plan from an **Application Discovery** (its successful pages and observed GET API endpoints) or enter
+  requests manually. Download the generated JMX to open it in JMeter.
+* **Run with JMeter in non-GUI mode** with live progress on Agent Workflow, and stop a run at any time (results so far
+  are kept). Java and JMeter are found from Performance settings, the portable package's `runtime` folder,
+  `JAVA_HOME` / `JMETER_HOME`, or PATH.
+* **Performance Results**: samples, error rate, average and percentiles and throughput; charts of response time,
+  throughput, errors and active users over time; a per-request table with response codes and most frequent errors, SLA checks per
+  request and overall, and JMeter's own HTML dashboard.
+* **AI performance analysis** (On-Premise AI): observations and suspected bottlenecks that cite the measured values,
+  and what cannot be determined from the results.
