@@ -26,7 +26,7 @@ CONTEXT_FIELDS = (
     "defect_id",
 )
 
-_SECRET_KEY = re.compile(r"(pat|token|password|passwd|secret|api[_-]?key|authorization)", re.I)
+_SECRET_KEY = re.compile(r"(^|[_-])(pat|token|password|passwd|secret|api[_-]?key|apikey|authorization|credentials?)$", re.I)
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(authorization\s*[:=]\s*)(basic|bearer)\s+[A-Za-z0-9+/=._-]+"),
     re.compile(r"(?i)\b(basic|bearer)\s+[A-Za-z0-9+/=._-]{12,}"),

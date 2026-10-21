@@ -10,6 +10,9 @@ import * as upcoming from "./pages/upcoming.js";
 import * as tfsSettings from "./pages/tfs-settings.js";
 import * as testPlans from "./pages/testplans.js";
 import { workItemPage } from "./pages/workitems.js";
+import * as aiSettings from "./pages/ai-settings.js";
+import * as testDesign from "./pages/test-design.js";
+import * as testData from "./pages/test-data.js";
 
 // route -> { title, page, stage? }. A `stage` marks a section delivered by a later build stage.
 const NAV = [
@@ -22,11 +25,12 @@ const NAV = [
   ["Test Design", [
     ["tfs-explorer", "TFS Explorer", workItemPage({ category: null, explorer: true, createLabel: "New work item" })],
     ["user-stories", "User Stories", workItemPage({ category: "requirement", createLabel: "New user story" })],
+    ["test-design", "AI Test Design", testDesign],
     ["acceptance-criteria", "Acceptance Criteria", workItemPage({ category: "requirement", focus: "acceptance_criteria" })],
     ["test-plans", "Test Plans", testPlans],
     ["test-suites", "Test Suites", testPlans],
     ["test-cases", "Test Cases", workItemPage({ category: "testcase", createLabel: "New test case" })],
-    ["test-data", "Test Data", null, 3],
+    ["test-data", "Test Data", testData],
   ]],
   ["Automation Studio", [
     ["ai-automation", "AI-Driven Automation", null, 4],
@@ -51,7 +55,7 @@ const NAV = [
   ["Settings", [
     ["settings", "Preferences", settings],
     ["tfs-settings", "TFS Connection", tfsSettings],
-    ["ai-settings", "On-Premise AI", null, 3],
+    ["ai-settings", "On-Premise AI", aiSettings],
     ["voice", "Voice Commands", null, 7],
   ]],
 ];

@@ -208,6 +208,18 @@ class AzureDevOpsClient:
                                 api_version="5.0").get("value", [])
 
 
+    def add_test_cases_to_suite(self, plan_id: int, suite_id: int, ids: list[int]) -> Any:
+        try:
+            return self.request("POST", f"_apis/testplan/Plans/{int(plan_id)}/Suites/{int(suite_id)}/TestCase",
+                                json=[{"workItem": {"id": int(i)}} for i in ids])
+        except QAError as exc:
+            if exc.error_code != "TFS_NOT_FOUND":
+                raise
+            joined = ",".join(str(int(i)) for i in ids)
+            return self.request("POST", f"_apis/test/Plans/{int(plan_id)}/suites/{int(suite_id)}/testcases/{joined}",
+                                api_version="5.0")
+
+
 def _server_message(resp: httpx.Response) -> str | None:
     try:
         data = resp.json()

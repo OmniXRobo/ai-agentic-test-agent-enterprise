@@ -508,6 +508,16 @@ class TfsService:
         self.invalidate()
         return {"item": simplify(created), "skipped_fields": skipped}
 
+    def create_raw(self, type_name: str, patch: list[dict[str, Any]]) -> dict[str, Any]:
+        """Create from a prepared JSON patch (fields already checked with build_patch)."""
+        created = self._with_client(lambda c: c.create_work_item(type_name, patch))
+        self.invalidate()
+        return simplify(created)
+
+    def add_to_suite(self, plan_id: int, suite_id: int, ids: list[int]) -> None:
+        self._with_client(lambda c: c.add_test_cases_to_suite(plan_id, suite_id, ids))
+        self.invalidate()
+
     def update(self, item_id: int, values: dict[str, Any]) -> dict[str, Any]:
         current = self.detail(item_id)
         patch, skipped = self.build_patch(current["type"], values)

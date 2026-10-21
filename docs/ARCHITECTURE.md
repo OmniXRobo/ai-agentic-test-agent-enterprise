@@ -19,7 +19,7 @@ FastAPI backend (qa_platform/)  ──┘
   └─ terminology    central display-name mapping
         │
         ├─ TFS / Azure DevOps REST          (tfs/client.py, tfs/service.py)
-        ├─ AI gateway → On-Premise LLM      (Stage 3)
+        ├─ AI gateway → On-Premise LLM      (ai/gateway.py)
         ├─ Playwright Python                (Stage 4)
         └─ JMeter non-GUI + Java            (Stage 5)
 ```
@@ -157,3 +157,15 @@ Internal ids are what get persisted; only display text uses the mapping.
   once per reason every 5 minutes.
 * Limitation: Windows-integrated (NTLM/Kerberos) authentication for on-premise TFS is not supported yet; use a PAT
   (TFS 2017 or later).
+
+## On-Premise AI and test design (Stage 3)
+
+* `ai/gateway.py` calls `{base_url}/models` and `{base_url}/chat/completions` (OpenAI-compatible) with
+  `trust_env=False`, so no proxy or Internet route is used. Requests are serialized because one local model
+  serves them sequentially. `complete_json` sends the pydantic JSON schema, parses fenced or `<think>`-prefixed
+  replies, validates, and asks once for a repair before failing with `AI_OUTPUT_INVALID`.
+* `design/service.py` pipeline (one agent per step, all events carry the run id and user story id):
+  Requirements Intelligence (read story, acceptance criteria, extract requirements) → Test Planning & Strategy →
+  Test Case Design (coverage check against requirement ids) → Test Data Intelligence. Results are stored in
+  `design_results`. Publishing (Test Suite Design Agent) creates test cases with `Microsoft.VSTS.TCM.Steps`,
+  links them `TestedBy-Reverse` to the story, adds them to a suite, and stores datasets in `test_data`.

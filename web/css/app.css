@@ -145,6 +145,10 @@ textarea {
 }
 #filters select, #filters input { max-width: 220px; }
 
+details.tc { border-top: 1px solid var(--border); padding: 8px 0; }
+details.tc summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; overflow-wrap: anywhere; }
+
 /* Agent workflow */
 .workflow { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }

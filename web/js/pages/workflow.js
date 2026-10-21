@@ -3,7 +3,7 @@
 import { api } from "../api.js";
 import { state, subscribe } from "../store.js";
 import { robotSvg } from "../robots.js";
-import { esc, timeOf, elapsed, toast } from "../util.js";
+import { esc, timeOf, elapsed, toast, isRepeat } from "../util.js";
 
 let unsub = null;
 let ticker = null;
@@ -69,7 +69,7 @@ export async function mount(view) {
       <section class="agents-grid" id="agentsGrid">${agents.map(cardHtml).join("")}</section>
       <section class="card">
         <h2>Live Agent Activity</h2>
-        <div class="feed" id="feed">${state.events.slice(-200).map(feedItemHtml).join("") || '<p class="muted">No agent activity yet.</p>'}</div>
+        <div class="feed" id="feed">${state.events.slice(-200).filter((e, i, a) => !isRepeat(a[i - 1], e)).map(feedItemHtml).join("") || '<p class="muted">No agent activity yet.</p>'}</div>
       </section>
     </div>`;
   const feed = view.querySelector("#feed");
@@ -92,6 +92,8 @@ export async function mount(view) {
       view.querySelector("#agentsGrid").innerHTML = [...state.agents.values()].map(cardHtml).join("");
     } else if (c.type === "event") {
       if (c.agent) updateCard(c.agent);
+      const prev = state.events[state.events.length - 2];
+      if (isRepeat(prev, c.event)) return;
       const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
       if (feed.querySelector("p.muted")) feed.innerHTML = "";
       feed.insertAdjacentHTML("beforeend", feedItemHtml(c.event));

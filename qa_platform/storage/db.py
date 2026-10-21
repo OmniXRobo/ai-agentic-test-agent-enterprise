@@ -61,6 +61,29 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_runs_started ON runs(started_at);
     """,
+    # 3: AI test design results and test data
+    """
+    CREATE TABLE IF NOT EXISTS design_results (
+        run_id TEXT PRIMARY KEY,
+        user_story_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        result TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_design_story ON design_results(user_story_id);
+    CREATE TABLE IF NOT EXISTS test_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_story_id TEXT,
+        test_case_ref TEXT NOT NULL,
+        tfs_test_case_id INTEGER,
+        name TEXT NOT NULL,
+        kind TEXT,
+        dataset TEXT NOT NULL,
+        source_run_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_test_data_tc ON test_data(tfs_test_case_id);
+    """,
 ]
 
 
