@@ -48,6 +48,10 @@ VOICE_COMMAND_ACCEPTED = "voice.command.accepted"
 VOICE_COMMAND_COMPLETED = "voice.command.completed"
 VOICE_COMMAND_FAILED = "voice.command.failed"
 
+REPORT_STARTED = "report.started"
+REPORT_COMPLETED = "report.completed"
+REPORT_FAILED = "report.failed"
+
 SYSTEM_DIAGNOSTICS_STARTED = "system.diagnostics.started"
 SYSTEM_DIAGNOSTICS_COMPLETED = "system.diagnostics.completed"
 AI_UNAVAILABLE = "ai.unavailable"

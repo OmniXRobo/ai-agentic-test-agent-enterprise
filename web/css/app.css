@@ -15,6 +15,8 @@
   --warn: #f59e0b;
   --warn-soft: rgba(245, 158, 11, 0.14);
   --run: #38bdf8;
+  --cat-1: #3b82f6;
+  --cat-2: #ec4899;
   --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
   color-scheme: dark;
 }
@@ -35,6 +37,8 @@
   --warn: #d97706;
   --warn-soft: rgba(217, 119, 6, 0.12);
   --run: #0284c7;
+  --cat-1: #2563eb;
+  --cat-2: #db2777;
   --shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
   color-scheme: light;
 }
@@ -71,7 +75,6 @@ button { font: inherit; color: inherit; }
 }
 .nav-link:hover { background: var(--surface-2); }
 .nav-link.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.nav-link .soon { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 10px; padding: 0 6px; }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar {
@@ -256,6 +259,8 @@ table.steps td { padding: 4px 6px; }
 .chart rect:focus-visible { outline: 2px solid var(--accent); }
 .chart-tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; }
 .chart-tip span { color: var(--muted); }
+.chart .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.chart .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
 [hidden] { display: none !important; }
 textarea[data-f] { width: 100%; min-width: 120px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
 
@@ -276,6 +281,10 @@ textarea[data-f] { width: 100%; min-width: 120px; font-family: Consolas, "Cascad
 .vmsg.agent { align-self: flex-start; max-width: 95%; }
 .vwho { font-size: 12px; color: var(--muted); width: 100%; }
 .vtext { overflow-wrap: anywhere; }
+.form-row { align-items: flex-end; }
+.charts-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.form-row > label { display: grid; gap: 4px; font-size: 13px; }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { border: 1px solid var(--border); background: var(--surface-2); color: inherit; border-radius: 999px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
 .chip:hover { border-color: var(--accent); }

@@ -6,7 +6,6 @@ import * as workflow from "./pages/workflow.js";
 import * as notifications from "./pages/notifications.js";
 import * as history from "./pages/history.js";
 import * as settings from "./pages/settings.js";
-import * as upcoming from "./pages/upcoming.js";
 import * as tfsSettings from "./pages/tfs-settings.js";
 import * as testPlans from "./pages/testplans.js";
 import { workItemPage } from "./pages/workitems.js";
@@ -18,9 +17,11 @@ import * as appCredentials from "./pages/app-credentials.js";
 import { perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
 import { defectReview, perfDefects } from "./pages/defect-review.js";
 import * as voicePage from "./pages/voice.js";
+import * as reports from "./pages/reports.js";
+import * as analytics from "./pages/analytics.js";
 import { voice, onVoice, listen, loadSettings } from "./voice.js";
 
-// route -> { title, page, stage? }. A `stage` marks a section delivered by a later build stage.
+// route -> { title, page }
 const NAV = [
   ["Overview", [
     ["dashboard", "Dashboard", dashboard],
@@ -56,8 +57,8 @@ const NAV = [
   ["Quality", [
     ["defects", "Defects", workItemPage({ category: "bug", createLabel: "New defect" })],
     ["defect-review", "Defect Review", defectReview],
-    ["reports", "Reports", null, 8],
-    ["analytics", "Analytics", null, 8],
+    ["reports", "Reports", reports],
+    ["analytics", "Analytics", analytics],
   ]],
   ["Settings", [
     ["settings", "Preferences", settings],
@@ -70,17 +71,15 @@ const NAV = [
 
 const ROUTES = new Map();
 for (const [, items] of NAV) {
-  for (const [route, title, page, stage] of items) ROUTES.set(route, { route, title, page: page || upcoming, stage });
+  for (const [route, title, page] of items) ROUTES.set(route, { route, title, page });
 }
 
 function renderNav() {
   const nav = document.getElementById("nav");
   nav.innerHTML = NAV.map(([group, items]) => `
     <div class="nav-group">${esc(group)}</div>
-    ${items.map(([route, title, , stage]) => `
-      <a class="nav-link" href="#/${route}" data-route="${route}">
-        <span>${esc(title)}</span>${stage ? `<span class="soon" title="Delivered in build stage ${stage}">S${stage}</span>` : ""}
-      </a>`).join("")}
+    ${items.map(([route, title]) => `
+      <a class="nav-link" href="#/${route}" data-route="${route}"><span>${esc(title)}</span></a>`).join("")}
   `).join("");
 }
 

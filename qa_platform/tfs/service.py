@@ -447,6 +447,18 @@ class TfsService:
         return self.cache.get_or_set(("count", self.active_mode(), wiql),
                                      lambda: self._with_client(lambda c: len(c.wiql(wiql, top=20000))))
 
+    def field_values(self, category: str, field_ref: str) -> list[Any]:
+        """One field of every work item in a category (for example acceptance criteria of all user stories)."""
+        types = self.types_for(category)
+        wiql = ("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.WorkItemType] IN ("
+                + ", ".join(wiql_quote(t) for t in types) + ")")
+
+        def run(c: AzureDevOpsClient) -> list[Any]:
+            ids = c.wiql(wiql, top=20000)
+            return [(w.get("fields") or {}).get(field_ref) for w in c.work_items(ids, fields=[field_ref])] if ids else []
+
+        return self.cache.get_or_set(("field_values", self.active_mode(), wiql, field_ref), lambda: self._with_client(run))
+
     def detail(self, item_id: int) -> dict[str, Any]:
         def run(c: AzureDevOpsClient) -> dict[str, Any]:
             raw = c.work_item(item_id)

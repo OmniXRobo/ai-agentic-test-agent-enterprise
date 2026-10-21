@@ -272,3 +272,26 @@ microphone ─► speech recognition ─► intent analysis ─► validation �
 * Tests (`tests/test_voice.py`) cover every example sentence from the requirements, follow-ups, asking for missing
   details, the AI fallback and its ID guard, confirmations, a real Playwright failure reported with the new TFS defect
   and its recurrence, a real JMeter run with spoken overrides, and the speech server API.
+
+## Reports and analytics (Stage 8)
+
+* `reports/analytics.py`: `AnalyticsService` computes everything from stored rows: `execution_results`,
+  `healing_events`, `defect_drafts`, `perf_runs` and `test_data`, plus live TFS counts (`TfsService.kpis()` and
+  `field_values("requirement", AcceptanceCriteria)` split the way test design reads criteria). When TFS is not
+  reachable the TFS figures are absent with the reason, never estimated. Days are local dates of the system clock.
+  * Pass rate on the dashboard uses the latest finished result per automated test; the Analytics page uses every
+    execution in the period.
+  * Flaky: a test with both outcomes in the period; flip rate = result changes between consecutive runs.
+* `reports/service.py`: `ReportService.start()` stores a row in `reports` (migration 8) and generates in a background
+  thread under the Reporting & Analytics Agent (`report.started`, `report.completed`, `report.failed`; the last two
+  raise notifications). Files are `<data>/reports/<id>/report.html` and `report.pdf`. Reports still `running` when the
+  application starts are marked failed as interrupted.
+* The HTML is self-contained (inline CSS, server-side SVG charts from `reports/charts.py`, failure screenshots as data
+  URIs, at most eight, only from the evidence folder) and is served with a CSP that allows no scripts. The PDF is the
+  same page printed by Playwright Chromium (`page.pdf`, A4, page numbers); if printing fails the HTML is still kept and
+  the reason is shown.
+* API: `GET /api/analytics/summary|functional|performance`, `POST /api/reports` (202), `GET /api/reports`,
+  `GET /api/reports/{id}`, `GET /api/reports/{id}/html|pdf` (`?download=true` for a file), `DELETE /api/reports/{id}`.
+* Tests (`tests/test_reports.py`): empty install shows no figures, functional and performance analytics from recorded
+  rows, a full report (HTML sections, escaping, PDF bytes, events, notification, delete), a report without TFS,
+  validation, interrupted reports and the chart renderer.

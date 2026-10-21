@@ -147,3 +147,23 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   Sentences outside the fixed phrases are mapped by the On-Premise AI when it is available; it can only choose a
   supported command and never adds an ID you did not say.
 * **Spoken replies** use voices installed on the PC only, so they work without Internet.
+
+## What works in Stage 8
+
+* **Dashboard KPIs** now all come from real data: User Stories, Acceptance Criteria (counted from the criteria written
+  on your user stories), Test Cases and Open Defects live from TFS; Test Data, Automated, Not Automated and Automation
+  Coverage from saved data sets, automated tests and the TFS test case count; Passed, Failed and Functional Pass Rate
+  from the latest result of each automated test; Performance Tests, Performance Failures and Performance SLA Pass Rate
+  from finished JMeter runs. A figure that cannot be measured shows "—" with the reason.
+* **Analytics** (Quality → Analytics): automation coverage, pass and failure rate, not automated, executions per day,
+  defects drafted per day, flaky tests (tests that both passed and failed, with how often the result flipped), and
+  self-healing per day and per test. Performance: P95, P99, throughput and error rate per run, SLA pass and fail,
+  maximum tested concurrency, and, for one plan, each request's P95 in the latest run against the previous run.
+  Periods are 7, 14, 30 or 90 days of the PC's local calendar.
+* **Reports** (Quality → Reports): choose functional, performance or both, the period, optionally a user story and up
+  to five performance runs. The Reporting & Analytics Agent builds an HTML report and prints the same page to PDF with
+  the bundled Chromium (offline). Functional sections: executive summary, coverage, trends, user story, acceptance
+  criteria, test cases with automation and test data, execution results (passed, failed, not run), defects,
+  self-healing and failure screenshots. Performance sections: summary, load profile, response times with P90/P95/P99,
+  throughput, error rate, graphs, transaction results, SLA compliance, performance defects and the AI analysis when one
+  was requested. Reports are listed with View, HTML, PDF and Delete; a notification says when one is ready.

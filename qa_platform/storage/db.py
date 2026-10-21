@@ -209,6 +209,21 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_voice_conv ON voice_commands(conversation_id, id);
     """,
+    # 8: generated reports (files live under <data>/reports/<id>/)
+    """
+    CREATE TABLE IF NOT EXISTS reports (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        params TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        finished_at TEXT,
+        summary TEXT,
+        error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_reports_created ON reports(created_at);
+    """,
 ]
 
 
