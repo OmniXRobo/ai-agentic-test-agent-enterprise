@@ -446,7 +446,7 @@ def _functional_html(f: dict[str, Any]) -> str:
                    "<th class='num'>Confidence</th><th>Result</th><th>Applied</th></tr>"
                    + "".join(f"<tr><td>{e(_when(h['timestamp']))}</td><td>{e(h['script'])}</td><td class='num'>{h['step_index'] + 1}</td>"
                              f"<td class='code'>{e(h['original_selector'])}</td><td class='code'>{e(h['healed_selector'] or '—')}</td>"
-                             f"<td class='num'>{'' if h['confidence'] is None else f'{h['confidence'] * 100:.0f}%'}</td>"
+                             f"<td class='num'>{'' if h['confidence'] is None else format(h['confidence'] * 100, '.0f') + '%'}</td>"
                              f"<td>{e(h['result'])}</td><td>{'Yes' if h['applied'] else 'No'}</td></tr>" for h in f["healing"]) + "</table>")
     else:
         out.append('<p class="muted">No self-healing was needed in this period.</p>')
