@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from qa_platform.config import Paths
+from qa_platform.credentials import MemoryBackend
 from qa_platform.main import create_app
 
 
@@ -14,7 +15,7 @@ def paths(tmp_path):
 
 @pytest.fixture()
 def client(paths):
-    app = create_app(paths)
+    app = create_app(paths, secret_backend=MemoryBackend())
     with TestClient(app) as c:
         yield c
 

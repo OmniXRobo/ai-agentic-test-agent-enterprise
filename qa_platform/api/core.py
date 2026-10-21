@@ -17,7 +17,10 @@ from ..errors import QAError
 from ..events import names
 from ..runtime import Runtime
 from ..terminology import DISPLAY_NAMES
+from ..logging_setup import get_logger
 from .deps import runtime
+
+log = get_logger("api")
 
 router = APIRouter(prefix="/api")
 
@@ -177,15 +180,28 @@ def _diagnostics_safely(rt: Runtime, run_id: str) -> None:
 
 @router.get("/dashboard/summary")
 def dashboard_summary(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    """Only data the runtime actually has. TFS-backed KPIs arrive with the TFS integration."""
+    """Only data the runtime actually has; TFS figures come live from the active profile."""
     agents_state = rt.state.snapshot()
     return {
         "ok": True,
         "runs": rt.runs.counts(),
         "agents_running": sum(1 for s in agents_state if s["status"] == "RUNNING"),
         "unread_notifications": rt.notifications.unread_count(),
-        "tfs": {"connected": False, "reason": "TFS integration is not installed yet (Stage 2)."},
+        "tfs": _tfs_kpis(rt),
     }
+
+
+def _tfs_kpis(rt: Runtime) -> dict[str, Any]:
+    profile = rt.tfs.profile()
+    base = {"mode": profile["mode"], "label": profile["label"], "project": profile["project"]}
+    try:
+        return {**base, "connected": True, "kpis": rt.tfs.kpis()}
+    except QAError as exc:
+        return {**base, "connected": False, "error_code": exc.error_code, "reason": exc.message}
+    except Exception as exc:  # the dashboard must still render if TFS answers unexpectedly
+        log.exception("TFS KPI query failed")
+        return {**base, "connected": False, "error_code": "TFS_KPI_FAILED",
+                "reason": f"TFS figures could not be loaded ({type(exc).__name__})."}
 
 
 # ---- settings --------------------------------------------------------------------
