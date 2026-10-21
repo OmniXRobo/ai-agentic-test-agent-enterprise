@@ -7,6 +7,9 @@ import * as notifications from "./pages/notifications.js";
 import * as history from "./pages/history.js";
 import * as settings from "./pages/settings.js";
 import * as upcoming from "./pages/upcoming.js";
+import * as tfsSettings from "./pages/tfs-settings.js";
+import * as testPlans from "./pages/testplans.js";
+import { workItemPage } from "./pages/workitems.js";
 
 // route -> { title, page, stage? }. A `stage` marks a section delivered by a later build stage.
 const NAV = [
@@ -17,12 +20,12 @@ const NAV = [
     ["history", "Execution History", history],
   ]],
   ["Test Design", [
-    ["tfs-explorer", "TFS Explorer", null, 2],
-    ["user-stories", "User Stories", null, 2],
-    ["acceptance-criteria", "Acceptance Criteria", null, 2],
-    ["test-plans", "Test Plans", null, 2],
-    ["test-suites", "Test Suites", null, 2],
-    ["test-cases", "Test Cases", null, 2],
+    ["tfs-explorer", "TFS Explorer", workItemPage({ category: null, explorer: true, createLabel: "New work item" })],
+    ["user-stories", "User Stories", workItemPage({ category: "requirement", createLabel: "New user story" })],
+    ["acceptance-criteria", "Acceptance Criteria", workItemPage({ category: "requirement", focus: "acceptance_criteria" })],
+    ["test-plans", "Test Plans", testPlans],
+    ["test-suites", "Test Suites", testPlans],
+    ["test-cases", "Test Cases", workItemPage({ category: "testcase", createLabel: "New test case" })],
     ["test-data", "Test Data", null, 3],
   ]],
   ["Automation Studio", [
@@ -41,13 +44,13 @@ const NAV = [
     ["perf-defects", "Performance Defects", null, 6],
   ]],
   ["Quality", [
-    ["defects", "Defects", null, 6],
+    ["defects", "Defects", workItemPage({ category: "bug", createLabel: "New defect" })],
     ["reports", "Reports", null, 8],
     ["analytics", "Analytics", null, 8],
   ]],
   ["Settings", [
     ["settings", "Preferences", settings],
-    ["tfs-settings", "TFS Connection", null, 2],
+    ["tfs-settings", "TFS Connection", tfsSettings],
     ["ai-settings", "On-Premise AI", null, 3],
     ["voice", "Voice Commands", null, 7],
   ]],

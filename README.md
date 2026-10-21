@@ -43,3 +43,17 @@ git-ignored. Secrets are never written to `settings.json` or logs.
 * System diagnostics run by the QA Orchestration Agent (Python, data folder, database,
   Playwright, Java, JMeter, On-Premise AI server, TFS profile)
 * Structured JSON errors on every endpoint, JSON logs with secret redaction
+
+## What works in Stage 2
+
+* TFS Connection settings for **Azure DevOps Online** and **Local TFS / Azure DevOps Server**, with one active profile.
+  The PAT is write-only and stored in the Windows Credential Manager.
+* Connection test with PASS/FAIL and the exact reason for: Server Reachability, Authentication,
+  Organization/Collection, Project, Work Item API, Test Management API
+* TFS Explorer (scoped to the active profile's project) with Sprint/Iteration, Work Item Type, State, Assigned To and ID/title filters, plus a detail
+  panel with acceptance criteria and traceability (linked test cases, defects, other links)
+* User Stories, Acceptance Criteria, Test Cases, Defects, Test Plans and Test Suites pages on real TFS data, with
+  create/edit written back to TFS
+* Work item types come from the project's process categories, so "Bug", "Defect" or "Issue" are detected rather
+  than hard-coded; fields missing from a process template are skipped instead of failing the save
+* Dashboard KPIs (user stories, test cases, open defects) from the active project, cached for 60 seconds

@@ -140,8 +140,8 @@ class OrchestrationAgent(BaseAgent):
         label = "Azure DevOps Online" if mode == "online" else "Local TFS / Azure DevOps Server"
         if not url or not profile.get("project"):
             return _check("TFS profile", "WARN", f"Active profile ({label}) has no server URL or project yet.")
-        return _check("TFS profile", "PASS", f"Active profile: {label} at {url}, project {profile['project']}"
-                      " (full connection test arrives in Stage 2)")
+        return _check("TFS profile", "PASS", f"Active profile: {label} at {url}, project {profile['project']}."
+                      " Use TFS Connection > Test connection for the full server check.")
 
     # ---- run ---------------------------------------------------------------
 

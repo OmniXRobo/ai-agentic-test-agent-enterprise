@@ -18,7 +18,7 @@ FastAPI backend (qa_platform/)  ──┘
   ├─ logging_setup  JSON logs with secret redaction
   └─ terminology    central display-name mapping
         │
-        ├─ TFS / Azure DevOps REST          (Stage 2)
+        ├─ TFS / Azure DevOps REST          (tfs/client.py, tfs/service.py)
         ├─ AI gateway → On-Premise LLM      (Stage 3)
         ├─ Playwright Python                (Stage 4)
         └─ JMeter non-GUI + Java            (Stage 5)
@@ -141,3 +141,19 @@ Internal ids are what get persisted; only display text uses the mapping.
 7. Voice Command Agent.
 8. Reports (HTML/PDF) and analytics.
 9. Portable offline Windows package (`INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`).
+
+## TFS / Azure DevOps integration (Stage 2)
+
+* `tfs/client.py`: one REST client for both modes. Online uses `https://dev.azure.com/{org}`, Server uses
+  `https://server/tfs/{collection}`. Auth is a PAT (Basic, empty user). An HTML sign-in page (HTTP 203/302) is
+  reported as `TFS_AUTH_FAILED`, never parsed. The Test Plans API falls back to the legacy Test API on older servers.
+* `tfs/service.py`: profiles (non-secret parts in settings.json, PAT in Credential Manager under
+  `tfs:online` / `tfs:offline`), the 6-step connection test, WIQL queries, detail with relations, traceability
+  grouping, create/update through JSON Patch, test plans and suites, dashboard KPIs.
+* Work item types are resolved from process categories (`Microsoft.RequirementCategory`, `Microsoft.BugCategory`,
+  `Microsoft.TestCaseCategory`). Writes check the type's real field list and skip missing fields, reporting
+  them in `skipped_fields`.
+* Caching: query results 60 s, metadata 10 min; every write clears the caches. `tfs.unavailable` is published at most
+  once per reason every 5 minutes.
+* Limitation: Windows-integrated (NTLM/Kerberos) authentication for on-premise TFS is not supported yet; use a PAT
+  (TFS 2017 or later).

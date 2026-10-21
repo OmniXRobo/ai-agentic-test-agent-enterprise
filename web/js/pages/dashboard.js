@@ -9,8 +9,13 @@ function kpi(label, value, note = "") {
   return `<div class="card"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${esc(value)}</div><div class="kpi-note">${esc(note)}</div></div>`;
 }
 
-const TFS_KPIS = ["User Stories", "Acceptance Criteria", "Test Cases", "Test Data", "Automated", "Not Automated",
-  "Open Defects", "Automation Coverage", "Functional Pass Rate"];
+// [label, key in tfs.kpis, link]. Figures without a source yet stay "—" with the stage that delivers them.
+const TFS_KPIS = [
+  ["User Stories", "requirement", "#/user-stories"],
+  ["Test Cases", "testcase", "#/test-cases"],
+  ["Open Defects", "open_defects", "#/defects"],
+];
+const LATER_KPIS = [["Test Data", 3], ["Automated", 4], ["Not Automated", 4], ["Automation Coverage", 4], ["Functional Pass Rate", 4]];
 const PERF_KPIS = ["Performance Tests", "Performance Failures", "Performance SLA Pass Rate"];
 
 async function render(view) {
@@ -22,7 +27,11 @@ async function render(view) {
     return;
   }
   const exec = summary.runs.functional || {};
-  const tfsNote = summary.tfs.connected ? "" : "Not connected";
+  const tfs = summary.tfs;
+  const tfsCards = TFS_KPIS.map(([label, key, link]) => {
+    const value = tfs.connected && key in tfs.kpis ? tfs.kpis[key] : "—";
+    return `<a href="${link}" style="text-decoration:none;color:inherit">${kpi(label, value, tfs.connected ? tfs.project : "Not connected")}</a>`;
+  }).join("") + LATER_KPIS.map(([label, stage]) => kpi(label, "—", `Available from stage ${stage}`)).join("");
   view.innerHTML = `
     <div class="grid kpis">
       ${kpi("Agents Running", summary.agents_running, "Live from runtime events")}
@@ -30,9 +39,9 @@ async function render(view) {
       ${kpi("Passed", exec.PASSED ?? 0, "Functional runs")}
       ${kpi("Failed", exec.FAILED ?? 0, "Functional runs")}
     </div>
-    <h3 style="margin:22px 0 10px">TFS / Azure DevOps</h3>
-    ${summary.tfs.connected ? "" : `<p class="muted">${esc(summary.tfs.reason)} These figures will come from your configured TFS project; nothing is estimated.</p>`}
-    <div class="grid kpis">${TFS_KPIS.map((k) => kpi(k, "—", tfsNote)).join("")}</div>
+    <h3 style="margin:22px 0 10px">${esc(tfs.label)}${tfs.project ? " · " + esc(tfs.project) : ""}</h3>
+    ${tfs.connected ? "" : `<p class="muted">${esc(tfs.reason)} <a href="#/tfs-settings">TFS connection settings</a>. Figures come only from your configured project; nothing is estimated.</p>`}
+    <div class="grid kpis">${tfsCards}</div>
     <h3 style="margin:22px 0 10px">Performance</h3>
     <div class="grid kpis">${PERF_KPIS.map((k) => kpi(k, "—", "From JMeter runs (Stage 5)")).join("")}</div>
     <h3 style="margin:22px 0 10px">Recent runs</h3>
