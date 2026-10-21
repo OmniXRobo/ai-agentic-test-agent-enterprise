@@ -61,6 +61,83 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_runs_started ON runs(started_at);
     """,
+    # 3: AI test design results and test data
+    """
+    CREATE TABLE IF NOT EXISTS design_results (
+        run_id TEXT PRIMARY KEY,
+        user_story_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        result TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_design_story ON design_results(user_story_id);
+    CREATE TABLE IF NOT EXISTS test_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_story_id TEXT,
+        test_case_ref TEXT NOT NULL,
+        tfs_test_case_id INTEGER,
+        name TEXT NOT NULL,
+        kind TEXT,
+        dataset TEXT NOT NULL,
+        source_run_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_test_data_tc ON test_data(tfs_test_case_id);
+    """,
+    # 4: automation execution results, self-healing evidence, application credentials, discovery
+    """
+    CREATE TABLE IF NOT EXISTS execution_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        script_id TEXT NOT NULL,
+        test_case_id TEXT,
+        user_story_id TEXT,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        browser TEXT,
+        base_url TEXT,
+        failed_step INTEGER,
+        error TEXT,
+        steps TEXT,
+        evidence TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_exec_run ON execution_results(run_id);
+    CREATE INDEX IF NOT EXISTS ix_exec_tc ON execution_results(test_case_id);
+    CREATE TABLE IF NOT EXISTS healing_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        script_id TEXT NOT NULL,
+        test_case_id TEXT,
+        step_index INTEGER NOT NULL,
+        page_url TEXT,
+        original_selector TEXT NOT NULL,
+        healed_selector TEXT,
+        confidence REAL,
+        candidates TEXT,
+        screenshot TEXT,
+        result TEXT NOT NULL,
+        applied INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS ix_heal_script ON healing_events(script_id);
+    CREATE TABLE IF NOT EXISTS app_credentials (
+        id TEXT PRIMARY KEY,
+        application TEXT NOT NULL,
+        role TEXT NOT NULL,
+        username TEXT NOT NULL,
+        login_url TEXT,
+        updated_at TEXT NOT NULL,
+        UNIQUE (application, role)
+    );
+    CREATE TABLE IF NOT EXISTS discoveries (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        result TEXT NOT NULL
+    );
+    """,
 ]
 
 
@@ -86,9 +163,9 @@ class Database:
                     continue
                 self._conn.executescript("BEGIN;" + script + f"INSERT INTO schema_version VALUES ({index}); COMMIT;")
 
-    def execute(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
+    def execute(self, sql: str, params: Iterable[Any] | dict[str, Any] = ()) -> sqlite3.Cursor:
         with self._lock:
-            return self._conn.execute(sql, tuple(params))
+            return self._conn.execute(sql, params if isinstance(params, dict) else tuple(params))
 
     def query(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         with self._lock:

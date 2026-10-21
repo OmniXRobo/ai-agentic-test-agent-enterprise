@@ -1,5 +1,6 @@
 import { api } from "../api.js";
 import { esc, dateTimeOf, elapsed, timeOf } from "../util.js";
+import { executionStepsHtml } from "./automation.js";
 
 function runIdFromHash() {
   const q = location.hash.split("?")[1] || "";
@@ -9,6 +10,10 @@ function runIdFromHash() {
 async function renderDetail(view, runId) {
   const { run, events } = await api(`/api/runs/${encodeURIComponent(runId)}`);
   const checks = run.summary?.checks || [];
+  let execution = null;
+  if (run.kind === "functional") {
+    try { execution = (await api(`/api/automation/results?run_id=${encodeURIComponent(runId)}`)).items[0] || null; } catch { /* optional */ }
+  }
   view.innerHTML = `
     <p><a href="#/history">← Execution History</a></p>
     <div class="card">
@@ -19,6 +24,8 @@ async function renderDetail(view, runId) {
         ${checks.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="pill ${esc(c.status)}">${esc(c.status)}</span></td><td>${esc(c.detail)}</td></tr>`).join("")}
       </tbody></table>` : ""}
     </div>
+    ${execution ? `<div class="card" style="margin-top:14px"><div class="row"><h3 style="margin:0">Steps and evidence</h3><span class="spacer"></span>
+      <a href="#/guided-automation?script=${esc(execution.script_id)}">Open script</a></div>${executionStepsHtml(execution)}</div>` : ""}
     <div class="card" style="margin-top:14px"><h3>Event log</h3>
       <div class="feed">${events.map((e) => `<div class="feed-item"><span class="feed-time">${esc(timeOf(e.timestamp))}</span><span>${esc((e.agent_name ? e.agent_name + " · " : "") + (e.activity || e.name))}</span></div>`).join("")}</div>
     </div>`;

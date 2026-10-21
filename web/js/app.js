@@ -7,6 +7,14 @@ import * as notifications from "./pages/notifications.js";
 import * as history from "./pages/history.js";
 import * as settings from "./pages/settings.js";
 import * as upcoming from "./pages/upcoming.js";
+import * as tfsSettings from "./pages/tfs-settings.js";
+import * as testPlans from "./pages/testplans.js";
+import { workItemPage } from "./pages/workitems.js";
+import * as aiSettings from "./pages/ai-settings.js";
+import * as testDesign from "./pages/test-design.js";
+import * as testData from "./pages/test-data.js";
+import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
+import * as appCredentials from "./pages/app-credentials.js";
 
 // route -> { title, page, stage? }. A `stage` marks a section delivered by a later build stage.
 const NAV = [
@@ -17,19 +25,20 @@ const NAV = [
     ["history", "Execution History", history],
   ]],
   ["Test Design", [
-    ["tfs-explorer", "TFS Explorer", null, 2],
-    ["user-stories", "User Stories", null, 2],
-    ["acceptance-criteria", "Acceptance Criteria", null, 2],
-    ["test-plans", "Test Plans", null, 2],
-    ["test-suites", "Test Suites", null, 2],
-    ["test-cases", "Test Cases", null, 2],
-    ["test-data", "Test Data", null, 3],
+    ["tfs-explorer", "TFS Explorer", workItemPage({ category: null, explorer: true, createLabel: "New work item" })],
+    ["user-stories", "User Stories", workItemPage({ category: "requirement", createLabel: "New user story" })],
+    ["test-design", "AI Test Design", testDesign],
+    ["acceptance-criteria", "Acceptance Criteria", workItemPage({ category: "requirement", focus: "acceptance_criteria" })],
+    ["test-plans", "Test Plans", testPlans],
+    ["test-suites", "Test Suites", testPlans],
+    ["test-cases", "Test Cases", workItemPage({ category: "testcase", createLabel: "New test case" })],
+    ["test-data", "Test Data", testData],
   ]],
   ["Automation Studio", [
-    ["ai-automation", "AI-Driven Automation", null, 4],
-    ["guided-automation", "Guided Browser Automation", null, 4],
-    ["discovery", "Application Discovery & Update", null, 4],
-    ["hybrid-automation", "Hybrid Test Automation", null, 4],
+    ["ai-automation", "AI-Driven Automation", aiAutomation],
+    ["guided-automation", "Guided Browser Automation", guidedAutomation],
+    ["discovery", "Application Discovery & Update", discovery],
+    ["hybrid-automation", "Hybrid Test Automation", hybridAutomation],
   ]],
   ["Performance Testing", [
     ["perf-plans", "Performance Test Plans", null, 5],
@@ -41,14 +50,15 @@ const NAV = [
     ["perf-defects", "Performance Defects", null, 6],
   ]],
   ["Quality", [
-    ["defects", "Defects", null, 6],
+    ["defects", "Defects", workItemPage({ category: "bug", createLabel: "New defect" })],
     ["reports", "Reports", null, 8],
     ["analytics", "Analytics", null, 8],
   ]],
   ["Settings", [
     ["settings", "Preferences", settings],
-    ["tfs-settings", "TFS Connection", null, 2],
-    ["ai-settings", "On-Premise AI", null, 3],
+    ["tfs-settings", "TFS Connection", tfsSettings],
+    ["ai-settings", "On-Premise AI", aiSettings],
+    ["app-credentials", "Application Credentials", appCredentials],
     ["voice", "Voice Commands", null, 7],
   ]],
 ];

@@ -18,8 +18,8 @@ FastAPI backend (qa_platform/)  ──┘
   ├─ logging_setup  JSON logs with secret redaction
   └─ terminology    central display-name mapping
         │
-        ├─ TFS / Azure DevOps REST          (Stage 2)
-        ├─ AI gateway → On-Premise LLM      (Stage 3)
+        ├─ TFS / Azure DevOps REST          (tfs/client.py, tfs/service.py)
+        ├─ AI gateway → On-Premise LLM      (ai/gateway.py)
         ├─ Playwright Python                (Stage 4)
         └─ JMeter non-GUI + Java            (Stage 5)
 ```
@@ -127,7 +127,7 @@ Internal ids are what get persisted; only display text uses the mapping.
 
 ## Build stages
 
-1. Foundation (this stage): backend, event bus, agent registry, terminology,
+1. Foundation: backend, event bus, agent registry, terminology,
    structured errors, dashboard shell, Agent Workflow, notifications, theme,
    system diagnostics.
 2. TFS / Azure DevOps (Online and Server): connection diagnostics, Explorer,
@@ -141,3 +141,60 @@ Internal ids are what get persisted; only display text uses the mapping.
 7. Voice Command Agent.
 8. Reports (HTML/PDF) and analytics.
 9. Portable offline Windows package (`INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`).
+
+## TFS / Azure DevOps integration (Stage 2)
+
+* `tfs/client.py`: one REST client for both modes. Online uses `https://dev.azure.com/{org}`, Server uses
+  `https://server/tfs/{collection}`. Auth is a PAT (Basic, empty user). An HTML sign-in page (HTTP 203/302) is
+  reported as `TFS_AUTH_FAILED`, never parsed. The Test Plans API falls back to the legacy Test API on older servers.
+* `tfs/service.py`: profiles (non-secret parts in settings.json, PAT in Credential Manager under
+  `tfs:online` / `tfs:offline`), the 6-step connection test, WIQL queries, detail with relations, traceability
+  grouping, create/update through JSON Patch, test plans and suites, dashboard KPIs.
+* Work item types are resolved from process categories (`Microsoft.RequirementCategory`, `Microsoft.BugCategory`,
+  `Microsoft.TestCaseCategory`). Writes check the type's real field list and skip missing fields, reporting
+  them in `skipped_fields`.
+* Caching: query results 60 s, metadata 10 min; every write clears the caches. `tfs.unavailable` is published at most
+  once per reason every 5 minutes.
+* Limitation: Windows-integrated (NTLM/Kerberos) authentication for on-premise TFS is not supported yet; use a PAT
+  (TFS 2017 or later).
+
+## On-Premise AI and test design (Stage 3)
+
+* `ai/gateway.py` calls `{base_url}/models` and `{base_url}/chat/completions` (OpenAI-compatible) with
+  `trust_env=False`, so no proxy or Internet route is used. Requests are serialized because one local model
+  serves them sequentially. `complete_json` sends the pydantic JSON schema, parses fenced or `<think>`-prefixed
+  replies, validates, and asks once for a repair before failing with `AI_OUTPUT_INVALID`.
+* `design/service.py` pipeline (one agent per step, all events carry the run id and user story id):
+  Requirements Intelligence (read story, acceptance criteria, extract requirements) → Test Planning & Strategy →
+  Test Case Design (coverage check against requirement ids) → Test Data Intelligence. Results are stored in
+  `design_results`. Publishing (Test Suite Design Agent) creates test cases with `Microsoft.VSTS.TCM.Steps`,
+  links them `TestedBy-Reverse` to the story, adds them to a suite, and stores datasets in `test_data`.
+
+## Playwright automation (Stage 4)
+
+* `automation/dsl.py`: scripts are JSON steps (`goto`, `click`, `fill`, `select`, `check`, `expect_*`, ...), each
+  target carrying a selector, recorded alternates and an element fingerprint (role, accessible name, text, id,
+  test id, label, placeholder, classes). `ValueResolver` resolves runtime values from the Windows system clock and
+  the credential store and masks resolved passwords. `to_playwright_python` exports a readable script.
+* `automation/store.py`: `data/automation/SCR-*/script.json` with `versions/vNNNN.json` and `history.log` on every
+  save; delete moves the folder to `_archived`. `CredentialProfiles` keeps usernames in SQLite (`app_credentials`)
+  and passwords in Credential Manager under the `appcred` namespace (TFS uses `tfs`).
+* `automation/js/`: `fingerprint.js` (stable selectors and candidates), `overlay.js` (cursor and highlight inside a
+  closed shadow root), `recorder.js` (sends actions through an exposed binding). All are added with
+  `context.add_init_script`; nothing is written to the application under test.
+* `automation/runner.py`: one browser run at a time in a worker thread. Each run writes `execution_results`,
+  `data/evidence/{run_id}/` (screenshots, optional video, `execution.json`) and agent events. The Test Execution
+  Agent runs AI/discovery/hybrid scripts; the Manual Playback Agent runs recorded ones.
+* `automation/healing.py` + runner: weighted fingerprint similarity, threshold 0.62, minimum margin 0.08, and the
+  winning selector must match exactly one visible element. `healing_events` stores original/healed selectors,
+  confidence, top candidates and a screenshot; status moves `healed` → `validated` when the run passes. Applying
+  a validated healing saves a new script version with the old selector kept as an alternate.
+* `automation/discovery.py`: breadth-first same-origin crawl; endpoints normalized (`/items/42` → `/items/{id}`)
+  for JMeter generation in Stage 5; stored in `discoveries` with a diff against the previous run of the same URL.
+* `automation/generator.py`: prompt contains the TFS steps and the discovered element inventory only; generated
+  selectors are checked against it and anything else is reported in the script notes.
+* Browsers: `runtime/ms-playwright` is used when present (offline package); otherwise Playwright's per-user default.
+  Without a desktop session runs default to headless.
+* Tests (`tests/test_automation.py`) drive real headless Chromium against `tests/site/`: pass/fail with evidence,
+  self-healing of a renamed id, low-confidence refusal, recording, discovery with endpoints and diff, AI generation
+  with a scripted LLM, and checks that passwords never reach events, results or evidence.

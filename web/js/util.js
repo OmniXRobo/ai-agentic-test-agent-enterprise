@@ -38,3 +38,43 @@ export function h(html) {
   t.innerHTML = html.trim();
   return t.content.firstElementChild;
 }
+
+// TFS rich-text fields are HTML. Keep basic formatting only; drop scripts, styles, handlers and images.
+const SAFE_TAGS = new Set(["P", "BR", "UL", "OL", "LI", "B", "STRONG", "I", "EM", "U", "DIV", "SPAN", "TABLE", "THEAD",
+  "TBODY", "TR", "TD", "TH", "H1", "H2", "H3", "H4", "CODE", "PRE", "A", "BLOCKQUOTE"]);
+
+export function safeHtml(html) {
+  if (!html) return "";
+  const doc = new DOMParser().parseFromString(String(html), "text/html");
+  const walk = (node) => {
+    for (const child of [...node.children]) {
+      if (["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "IMG", "SVG", "TEMPLATE"].includes(child.tagName)) {
+        child.remove();
+        continue;
+      }
+      walk(child); // sanitize the subtree first, so unwrapping below only moves clean nodes
+      if (!SAFE_TAGS.has(child.tagName)) {
+        child.replaceWith(...child.childNodes);
+        continue;
+      }
+      for (const attr of [...child.attributes]) {
+        const keep = child.tagName === "A" && attr.name === "href" && /^https?:/i.test(attr.value);
+        if (!keep) child.removeAttribute(attr.name);
+      }
+      if (child.tagName === "A") { child.setAttribute("target", "_blank"); child.setAttribute("rel", "noopener noreferrer"); }
+    }
+  };
+  walk(doc.body);
+  return doc.body.innerHTML;
+}
+
+export function debounce(fn, ms = 300) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+// Domain events (e.g. testcase.completed) and the agent's own completion often carry the same text;
+// show such consecutive repeats once in activity feeds.
+export function isRepeat(prev, ev) {
+  return !!prev && prev.agent_id === ev.agent_id && prev.activity === ev.activity && prev.run_id === ev.run_id;
+}
