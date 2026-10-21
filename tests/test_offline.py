@@ -183,7 +183,7 @@ def test_rollback_swaps_versions_and_back(tmp_path):
 
 def test_start_script_uses_data_beside_installed_app():
     text = (APP_ROOT / "START_QA_PLATFORM.cmd").read_text()
-    assert 'if exist "%~dp0INSTALLED.json" set "DATA=%~dp0..\\data"' in text and "%QA_HOME%\\settings.json" in text
+    assert 'if exist "%HERE%INSTALLED.json" set "DATA=%HERE%..\\data"' in text and "%QA_HOME%\\settings.json" in text
     for name in ("INSTALL_OFFLINE.cmd", "VALIDATE_OFFLINE.cmd", "VALIDATE_OFFLINE_PACKAGE.cmd", "README_OFFLINE.txt"):
         assert (APP_ROOT / "packaging" / "templates" / name).exists()
     assert "Administrator" not in (APP_ROOT / "packaging" / "templates" / "INSTALL_OFFLINE.cmd").read_text().replace("administrator", "")
