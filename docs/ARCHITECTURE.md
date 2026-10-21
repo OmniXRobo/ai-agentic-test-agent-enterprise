@@ -198,3 +198,22 @@ Internal ids are what get persisted; only display text uses the mapping.
 * Tests (`tests/test_automation.py`) drive real headless Chromium against `tests/site/`: pass/fail with evidence,
   self-healing of a renamed id, low-confidence refusal, recording, discovery with endpoints and diff, AI generation
   with a scripted LLM, and checks that passwords never reach events, results or evidence.
+
+## JMeter performance testing (Stage 5)
+
+* `performance/models.py`: `PerfPlan` (requests, `LoadProfile`, `Sla`). `thread_groups()` turns each test type into
+  standard JMeter thread groups with scheduler delay/duration: load and soak = one group; stress = N groups
+  starting one step apart; spike = baseline plus a burst group. No JMeter plugins are needed.
+* `performance/jmx.py`: JMX with a cookie manager, HTTP samplers, header managers, response assertions and a
+  constant think-time timer per thread group.
+* `performance/service.py`: writes `data/performance/{run_id}/plan.jmx` and runs
+  `jmeter -n -t plan.jmx -l results.jtl -j jmeter.log -e -o report` with CSV output. A live tail of the JTL
+  publishes `performance.sample_summary` every 5 s. Stop sends `StopTestNow` to JMeter's non-GUI UDP port
+  (4445-4455) and kills the process tree after 30 s if needed. One performance run at a time.
+* `performance/jtl.py`: per-request and overall metrics (nearest-rank percentiles, as JMeter's aggregate report),
+  response codes, top errors, and a timeline of up to 300 points. `performance/sla.py` checks limits per request
+  and overall; a plan without limits reports `NOT_DEFINED`.
+* AI analysis sends only the computed metrics and SLA results and requires each statement to cite them.
+* Results are stored in `perf_runs` and in Execution History (`kind = performance`).
+* Tests (`tests/test_performance.py`) cover profiles, JMX structure, JTL math, SLA, the API, and, when Java and
+  JMeter are available (CI installs them), a real non-GUI run against a local site and a stop.

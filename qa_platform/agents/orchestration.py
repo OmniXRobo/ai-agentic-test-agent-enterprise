@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -18,6 +16,7 @@ import httpx
 
 from ..config import Paths, Settings
 from ..events import names
+from ..performance import tools as perf_tools
 from ..runs import RunStore
 from ..storage.db import Database
 from .base import Activity, BaseAgent, new_run_id
@@ -27,19 +26,6 @@ Check = dict[str, Any]
 
 def _check(name: str, status: str, detail: str, **extra: Any) -> Check:
     return {"name": name, "status": status, "detail": detail, **extra}
-
-
-def _which_in(home: str, *candidates: str) -> str | None:
-    if home:
-        for c in candidates:
-            p = Path(home) / "bin" / c
-            if p.exists():
-                return str(p)
-    for c in candidates:
-        found = shutil.which(c)
-        if found:
-            return found
-    return None
 
 
 class OrchestrationAgent(BaseAgent):
@@ -90,23 +76,18 @@ class OrchestrationAgent(BaseAgent):
         return _check("Playwright", "WARN", f"Package installed but no browser binaries found at {location}")
 
     def check_java(self) -> Check:
-        java_home = self.settings.section("performance").get("java_home") or os.environ.get("JAVA_HOME", "")
-        exe = _which_in(java_home, "java.exe", "java")
+        exe = perf_tools.find_java(self.settings)
         if not exe:
-            return _check("Java runtime", "WARN", "Java not found (required by JMeter from Stage 5).")
-        try:
-            out = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=15)
-            first = (out.stderr or out.stdout).strip().splitlines()
-            version = next((ln for ln in first if "version" in ln), first[0] if first else "unknown")
-            return _check("Java runtime", "PASS", f"{version} ({exe})")
-        except (OSError, subprocess.SubprocessError) as exc:
-            return _check("Java runtime", "FAIL", f"{exe} could not run: {exc}")
+            return _check("Java runtime", "WARN", "Java not found (required by JMeter). Set it under Performance settings.")
+        version = perf_tools.java_version(exe)
+        if version is None:
+            return _check("Java runtime", "FAIL", f"{exe} could not run.")
+        return _check("Java runtime", "PASS", f"{version} ({exe})")
 
     def check_jmeter(self) -> Check:
-        jmeter_home = self.settings.section("performance").get("jmeter_home") or os.environ.get("JMETER_HOME", "")
-        exe = _which_in(jmeter_home, "jmeter.bat", "jmeter")
+        exe = perf_tools.find_jmeter(self.settings)
         if not exe:
-            return _check("JMeter", "WARN", "JMeter not found (configure JMeter home; needed from Stage 5).")
+            return _check("JMeter", "WARN", "JMeter not found. Set the JMeter home under Performance settings.")
         return _check("JMeter", "PASS", f"Found {exe}")
 
     def check_ai(self) -> Check:

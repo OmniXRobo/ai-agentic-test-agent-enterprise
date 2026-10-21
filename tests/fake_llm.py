@@ -37,6 +37,13 @@ REPLIES = {
         ]
     },
     "diagnostics probe": {"status": "ok", "count": 3},
+    "performance engineer reviewing JMeter results": {
+        "summary": "All requests stayed fast under the tested load.",
+        "observations": ["p95 stayed below the SLA for every request"],
+        "suspected_bottlenecks": [],
+        "recommendations": ["Repeat with more users to find the saturation point"],
+        "undetermined": ["Server-side resource usage was not measured"],
+    },
     "Playwright automation engineer": {
         "steps": [
             {"action": "goto", "value": "login.html", "description": "Open the sign-in page"},

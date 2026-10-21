@@ -20,6 +20,7 @@ async function renderDetail(view, runId) {
       <div class="row"><h2 style="margin:0">${esc(run.title || run.run_id)}</h2><span class="pill ${esc(run.status)}">${esc(run.status)}</span></div>
       <p class="muted">${esc(run.run_id)} · ${esc(run.kind)} · started ${esc(dateTimeOf(run.started_at))}${run.finished_at ? " · took " + esc(elapsed(run.started_at, run.finished_at)) : ""}</p>
       ${run.summary?.error ? `<p class="pill FAIL">${esc(run.summary.error)}</p>` : ""}
+      ${run.kind === "performance" ? `<p><a class="btn" href="#/perf-results?run=${esc(run.run_id)}">Open performance results</a></p>` : ""}
       ${checks.length ? `<table class="data"><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>
         ${checks.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="pill ${esc(c.status)}">${esc(c.status)}</span></td><td>${esc(c.detail)}</td></tr>`).join("")}
       </tbody></table>` : ""}

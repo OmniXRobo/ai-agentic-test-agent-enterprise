@@ -15,6 +15,7 @@ import * as testDesign from "./pages/test-design.js";
 import * as testData from "./pages/test-data.js";
 import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
 import * as appCredentials from "./pages/app-credentials.js";
+import { perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
 
 // route -> { title, page, stage? }. A `stage` marks a section delivered by a later build stage.
 const NAV = [
@@ -41,12 +42,12 @@ const NAV = [
     ["hybrid-automation", "Hybrid Test Automation", hybridAutomation],
   ]],
   ["Performance Testing", [
-    ["perf-plans", "Performance Test Plans", null, 5],
-    ["perf-load", "Load Tests", null, 5],
-    ["perf-stress", "Stress Tests", null, 5],
-    ["perf-spike", "Spike Tests", null, 5],
-    ["perf-soak", "Soak Tests", null, 5],
-    ["perf-results", "Performance Results", null, 5],
+    ["perf-plans", "Performance Test Plans", perfPlans],
+    ["perf-load", "Load Tests", perfLoad],
+    ["perf-stress", "Stress Tests", perfStress],
+    ["perf-spike", "Spike Tests", perfSpike],
+    ["perf-soak", "Soak Tests", perfSoak],
+    ["perf-results", "Performance Results", perfResults],
     ["perf-defects", "Performance Defects", null, 6],
   ]],
   ["Quality", [

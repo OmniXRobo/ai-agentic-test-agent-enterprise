@@ -14,7 +14,6 @@ from urllib.parse import urldefrag, urljoin, urlparse
 from ..agents.base import BaseAgent
 from ..clock import now_iso
 from ..errors import QAError
-from ..events import names
 from ..storage.db import Database, dumps, loads
 from .browser import js, launch, start_playwright
 

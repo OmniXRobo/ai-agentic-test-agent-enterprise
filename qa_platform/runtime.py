@@ -15,6 +15,7 @@ from .events import names
 from .events.bus import EventBus
 from .events.state import AgentStateManager
 from .notifications import NotificationService
+from .performance.service import PerformanceService
 from .runs import RunStore
 from .storage.db import Database
 from .tfs.service import TfsService
@@ -37,6 +38,7 @@ class Runtime:
     ai: AIGateway
     design: DesignService
     automation: AutomationService
+    performance: PerformanceService
 
     def close(self) -> None:
         self.db.close()
@@ -71,5 +73,6 @@ def build_runtime(
     ai = AIGateway(settings, bus, transport=ai_transport)
     design = DesignService(bus, db, runs, tfs, ai)
     automation = AutomationService(paths, settings, bus, db, runs, secrets, tfs, ai)
+    performance = PerformanceService(paths, settings, bus, db, runs, ai, automation.discovery)
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation)
+                   automation, performance)

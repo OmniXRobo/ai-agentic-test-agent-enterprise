@@ -21,4 +21,17 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then python -m playwright install --with-deps chromium; else python -m playwright install chromium; fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install JMeter for performance tests (checksum verified)
+        shell: bash
+        run: |
+          v=5.6.3
+          curl -sSfL -o jmeter.tgz "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-$v.tgz"
+          echo "$(curl -sSfL "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-$v.tgz.sha512" | cut -d' ' -f1)  jmeter.tgz" | sha512sum -c -
+          dest="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || echo "$RUNNER_TEMP")"  # Git Bash tar reads "D:" as a remote host
+          tar -xzf jmeter.tgz -C "$dest"
+          echo "JMETER_HOME=$RUNNER_TEMP/apache-jmeter-$v" >> "$GITHUB_ENV"
       - run: python -m pytest -q
