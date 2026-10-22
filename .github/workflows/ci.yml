@@ -68,3 +68,24 @@ jobs:
           path: dist_offline/AIAgenticTestAgent-Offline-*/
           retention-days: 14
           compression-level: 6
+          # Bundled JMeter and Python packages contain dot-files that MANIFEST.json lists; without them the
+          # installer rightly reports the package as damaged.
+          include-hidden-files: true
+  offline-package-download:
+    # Proves the artifact people download installs: fetch it the way a user would, on a fresh runner, then
+    # validate and install it.
+    needs: offline-package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AIAgenticTestAgent-Offline-windows
+          path: downloaded
+      - name: Validate and install the downloaded package
+        shell: cmd
+        env:
+          QA_NO_PAUSE: "1"
+        run: |
+          call "%CD%\downloaded\VALIDATE_OFFLINE.cmd" || exit /b 1
+          call "%CD%\downloaded\INSTALL_OFFLINE.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
+          type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"
