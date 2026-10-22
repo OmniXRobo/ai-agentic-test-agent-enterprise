@@ -42,7 +42,8 @@ class TestCase(BaseModel):
     ref: str = Field(description="Short id such as TC1")
     title: str
     priority: int = Field(ge=1, le=4, default=2)
-    category: Literal["positive", "negative", "boundary", "edge", "smoke", "regression"] = "positive"
+    category: Literal["functional", "positive", "negative", "boundary", "edge", "end_to_end", "smoke",
+                      "regression"] = Field(default="functional", description="Type of testing; decides the TFS suite")
     requirement_ids: list[str] = []
     preconditions: str | None = None
     steps: list[TestStep] = Field(min_length=1)

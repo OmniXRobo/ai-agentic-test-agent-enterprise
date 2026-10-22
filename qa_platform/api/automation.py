@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
+from ..automation import pytest_export
 from ..automation.dsl import Script, Step, new_script_id, to_playwright_python
+from ..clock import now_iso
 from ..errors import QAError
 from ..runtime import Runtime
 from ..storage.db import loads
@@ -52,11 +54,18 @@ def create_script(body: ScriptIn, rt: Runtime = Depends(runtime)) -> dict[str, A
     return {"ok": True, "script": rt.automation.scripts.save(script, reason="created").model_dump()}
 
 
+def _datasets_for(rt: Runtime, script: Script) -> list[dict[str, Any]]:
+    if not script.test_case_id or not str(script.test_case_id).isdigit():
+        return []
+    rows = rt.design.list_test_data(tfs_test_case_id=int(script.test_case_id))
+    return [{"name": r["name"], "values": r["dataset"]} for r in reversed(rows) if isinstance(r["dataset"], dict)]
+
+
 @router.get("/scripts/{script_id}")
 def get_script(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     script = rt.automation.scripts.get(script_id)
-    return {"ok": True, "script": script.model_dump(), "python": to_playwright_python(script),
-            "versions": rt.automation.scripts.versions(script_id)}
+    return {"ok": True, "script": script.model_dump(), "python": pytest_export.to_pytest(script, _datasets_for(rt, script)),
+            "python_file": pytest_export.file_name(script), "versions": rt.automation.scripts.versions(script_id)}
 
 
 @router.put("/scripts/{script_id}")
@@ -79,10 +88,40 @@ def restore_script(script_id: str, version: int, rt: Runtime = Depends(runtime))
 
 
 @router.get("/scripts/{script_id}/export", response_class=PlainTextResponse)
-def export_script(script_id: str, rt: Runtime = Depends(runtime)) -> PlainTextResponse:
+def export_script(script_id: str, format: str = Query("pytest", pattern="^(pytest|playwright)$"),
+                  rt: Runtime = Depends(runtime)) -> PlainTextResponse:
+    """``pytest``: standalone pytest + Playwright test with the test data; ``playwright``: plain Playwright script."""
     script = rt.automation.scripts.get(script_id)
-    return PlainTextResponse(to_playwright_python(script), headers={
-        "Content-Disposition": f'attachment; filename="{script_id}.py"'})
+    if format == "playwright":
+        return PlainTextResponse(to_playwright_python(script), headers={
+            "Content-Disposition": f'attachment; filename="{script_id}.py"'})
+    return PlainTextResponse(pytest_export.to_pytest(script, _datasets_for(rt, script)), headers={
+        "Content-Disposition": f'attachment; filename="{pytest_export.file_name(script)}"'})
+
+
+class BundleIn(BaseModel):
+    script_ids: list[str] | None = Field(default=None, max_length=500)
+    user_story_id: str | None = None
+    test_case_ids: list[str] | None = Field(default=None, max_length=500)
+
+
+@router.post("/export-bundle")
+def export_bundle(body: BundleIn, rt: Runtime = Depends(runtime)) -> Response:
+    """A zip of pytest files (one per script) with pytest.ini, requirements.txt, README.txt and RUN_TESTS.cmd."""
+    if body.script_ids:
+        scripts = [rt.automation.scripts.get(sid) for sid in body.script_ids]
+    else:
+        wanted_tcs = {str(t) for t in body.test_case_ids or []}
+        scripts = []
+        for item in rt.automation.scripts.list():
+            if (body.user_story_id and str(item.get("user_story_id") or "") == str(body.user_story_id)) or \
+                    (wanted_tcs and str(item.get("test_case_id") or "") in wanted_tcs):
+                scripts.append(rt.automation.scripts.get(item["id"]))
+    if not scripts:
+        raise QAError("NO_SCRIPTS", "No automation scripts match. Create the automation first.", status=404)
+    data = pytest_export.bundle([(s, _datasets_for(rt, s)) for s in scripts], now_iso())
+    name = f"automated-tests-US{body.user_story_id}.zip" if body.user_story_id else "automated-tests.zip"
+    return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 # ---- execution ---------------------------------------------------------------------------
@@ -220,7 +259,8 @@ class FromDiscoveryIn(BaseModel):
 
 
 class GenerateIn(BaseModel):
-    test_case_id: int
+    test_case_id: int | None = None
+    user_story_id: int | None = Field(default=None, description="Create automation for every linked Test Case")
     base_url: str
     credential_role: str | None = None
     application: str | None = None
@@ -253,6 +293,13 @@ def script_from_discovery(discovery_id: str, body: FromDiscoveryIn, rt: Runtime 
 
 @router.post("/generate", status_code=202)
 def generate(body: GenerateIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    if (body.test_case_id is None) == (body.user_story_id is None):
+        raise QAError("GENERATE_TARGET", "Give a Test Case ID or a User Story ID.")
+    if body.user_story_id is not None:
+        run_id, ids = rt.automation.start_story_generation(
+            body.user_story_id, _url(body.base_url, "application URL"), credential_role=body.credential_role,
+            application=body.application, discovery_id=body.discovery_id, headless=body.headless)
+        return {"ok": True, "run_id": run_id, "test_case_ids": ids}
     run_id = rt.automation.start_generation(body.test_case_id, _url(body.base_url, "application URL"),
                                             credential_role=body.credential_role, application=body.application,
                                             discovery_id=body.discovery_id, headless=body.headless)
@@ -262,7 +309,8 @@ def generate(body: GenerateIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]
 @router.get("/generate/{run_id}")
 def generation_status(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     run = rt.runs.get(run_id)
-    return {"ok": True, "script_id": rt.automation.generated.get(run_id),
+    many = rt.automation.generated_many.get(run_id)
+    return {"ok": True, "script_id": rt.automation.generated.get(run_id), "script_ids": many,
             "status": run["status"] if run else None}
 
 

@@ -7,6 +7,8 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
+from ..design.service import DEFAULT_SUITES, plan_name
+from ..errors import QAError
 from ..runtime import Runtime
 from .deps import runtime
 
@@ -86,8 +88,6 @@ def work_item(item_id: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 def create_work_item(body: WorkItemIn, category: str | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     type_name = body.type or (rt.tfs.default_type(category) if category else None)
     if not type_name:
-        from ..errors import QAError
-
         raise QAError("TFS_TYPE_REQUIRED", "Give a work item type or a category.")
     return {"ok": True, **rt.tfs.create(type_name, body.fields)}
 
@@ -100,6 +100,29 @@ def update_work_item(item_id: int, body: WorkItemIn, rt: Runtime = Depends(runti
 @router.get("/test-plans")
 def test_plans(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "plans": rt.tfs.test_plans()}
+
+
+class TestPlanIn(BaseModel):
+    name: str | None = Field(default=None, max_length=256)
+    user_story_id: int | None = None
+    area_path: str | None = None
+    iteration: str | None = None
+    default_suites: bool = True
+
+
+@router.post("/test-plans", status_code=201)
+def create_test_plan(body: TestPlanIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Reuse or create a test plan (named after the sprint of the user story) with the default testing-type suites."""
+    area, iteration = body.area_path, body.iteration
+    if body.user_story_id:
+        story = rt.tfs.detail(body.user_story_id)
+        area, iteration = area or story.get("area_path"), iteration or story.get("iteration_path")
+    name = (body.name or "").strip() or plan_name(rt.tfs.profile()["project"], iteration)
+    if not name:
+        raise QAError("PLAN_NAME_REQUIRED", "Give the test plan a name or a User Story.")
+    plan = rt.tfs.ensure_test_plan(name, area_path=area, iteration=iteration)
+    suites = rt.tfs.ensure_suites(plan["id"], DEFAULT_SUITES, plan.get("root_suite_id")) if body.default_suites else []
+    return {"ok": True, "plan": plan, "suites": suites}
 
 
 @router.get("/test-plans/{plan_id}/suites")

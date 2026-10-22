@@ -569,15 +569,53 @@ class TfsService:
                 "id": p["id"], "name": p.get("name"), "state": p.get("state"),
                 "iteration": p.get("iteration"), "area_path": (p.get("area") or {}).get("name") or p.get("areaPath"),
                 "owner": _identity(p.get("owner")), "start_date": p.get("startDate"), "end_date": p.get("endDate"),
+                "root_suite_id": (p.get("rootSuite") or {}).get("id"),
             } for p in c.test_plans()]
 
         return self.cache.get_or_set(("plans", self.active_mode()), lambda: self._with_client(run))
+
+    def create_test_plan(self, name: str, *, area_path: str | None = None, iteration: str | None = None,
+                         description: str | None = None) -> dict[str, Any]:
+        created = self._with_client(lambda c: c.create_test_plan(name, area_path=area_path, iteration=iteration,
+                                                                 description=description))
+        self.invalidate()
+        return {"id": created["id"], "name": created.get("name") or name,
+                "root_suite_id": (created.get("rootSuite") or {}).get("id"), "created": True}
+
+    def ensure_test_plan(self, name: str, *, area_path: str | None = None, iteration: str | None = None,
+                         description: str | None = None) -> dict[str, Any]:
+        """Reuse the plan with this exact name, otherwise create it."""
+        existing = next((p for p in self.test_plans() if (p.get("name") or "").strip().lower() == name.strip().lower()), None)
+        if existing:
+            return {"id": existing["id"], "name": existing["name"], "root_suite_id": existing.get("root_suite_id"),
+                    "created": False}
+        return self.create_test_plan(name, area_path=area_path, iteration=iteration, description=description)
+
+    def ensure_suites(self, plan_id: int, names: list[str], root_suite_id: int | None = None) -> list[dict[str, Any]]:
+        """Make sure a static child suite exists under the root suite for every name; reuse ones that exist."""
+        suites = self.test_suites(plan_id)
+        if root_suite_id is None:
+            root = next((s for s in suites if not s.get("parent_id")), None)
+            if root is None:
+                raise QAError("TFS_ROOT_SUITE_MISSING", f"Test plan {plan_id} has no root suite.", status=409)
+            root_suite_id = root["id"]
+        by_name = {(s.get("name") or "").strip().lower(): s for s in suites if s.get("parent_id") == root_suite_id}
+        out = []
+        for name in names:
+            found = by_name.get(name.strip().lower())
+            if found:
+                out.append({"id": found["id"], "name": found["name"], "created": False})
+                continue
+            created = self._with_client(lambda c, n=name: c.create_test_suite(plan_id, root_suite_id, n))
+            out.append({"id": created["id"], "name": created.get("name") or name, "created": True})
+        self.invalidate()
+        return out
 
     def test_suites(self, plan_id: int) -> list[dict[str, Any]]:
         def run(c: AzureDevOpsClient) -> list[dict[str, Any]]:
             return [{
                 "id": s["id"], "name": s.get("name"), "suite_type": s.get("suiteType"),
-                "parent_id": (s.get("parentSuite") or {}).get("id"),
+                "parent_id": (s.get("parentSuite") or s.get("parent") or {}).get("id"),
                 "test_case_count": s.get("testCaseCount"),
             } for s in c.test_suites(plan_id)]
 

@@ -21,6 +21,23 @@ export function evidenceUrl(path) {
   return `/api/automation/evidence?path=${encodeURIComponent(path)}`;
 }
 
+// Download the pytest bundle (zip). api() only reads JSON, so this uses fetch directly.
+export async function downloadTests(body, fileName) {
+  try {
+    const resp = await fetch("/api/automation/export-bundle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.message || `Download failed (HTTP ${resp.status})`);
+    }
+    const url = URL.createObjectURL(await resp.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: fileName });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) { toast(err.message, "error"); }
+}
+
 function routeName() {
   return location.hash.replace(/^#\/?/, "").split("?")[0];
 }
@@ -62,8 +79,10 @@ async function renderScriptList(box, modes, emptyText) {
   const { items } = await api("/api/automation/scripts");
   const mine = modes ? items.filter((s) => modes.includes(s.mode)) : items;
   box.innerHTML = `<div class="row"><h3 style="margin:0">Scripts</h3><span class="spacer"></span>
-      ${mine.length ? `<button class="btn" id="runAll">Run all ${mine.length}</button>` : ""}</div>${scriptTable(mine, emptyText)}`;
+      ${mine.length ? `<button class="btn" id="zipAll" title="pytest + Playwright files, one per script">Download Python tests (.zip)</button>
+        <button class="btn" id="runAll">Run all ${mine.length}</button>` : ""}</div>${scriptTable(mine, emptyText)}`;
   bindScriptRows(box);
+  box.querySelector("#zipAll")?.addEventListener("click", () => downloadTests({ script_ids: mine.map((s) => s.id) }, "automated-tests.zip"));
   box.querySelector("#runAll")?.addEventListener("click", async () => {
     try {
       const r = await api("/api/automation/run-many", { method: "POST", body: { script_ids: mine.map((s) => s.id) } });
@@ -148,7 +167,7 @@ function healingHtml(items) {
 
 async function renderEditor(view, scriptId) {
   const sid = encodeURIComponent(scriptId);
-  const [{ script, python, versions }, { items: results }, { items: healing }, data] = await Promise.all([
+  const [{ script, python, python_file, versions }, { items: results }, { items: healing }, data] = await Promise.all([
     api(`/api/automation/scripts/${sid}`),
     api(`/api/automation/results?script_id=${sid}&limit=20`),
     api(`/api/automation/healing?script_id=${sid}`),
@@ -190,14 +209,18 @@ async function renderEditor(view, scriptId) {
       <div class="card"><h3>Self-healing</h3><div id="healing">${healingHtml(healing)}</div></div>
     </div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(360px,1fr));margin-top:12px">
-      <div class="card"><div class="row"><h3 style="margin:0">Playwright (Python)</h3><span class="spacer"></span>
-        <a class="btn" href="/api/automation/scripts/${esc(script.id)}/export">Download .py</a></div><pre class="code">${esc(python)}</pre></div>
+      <div class="card"><div class="row"><h3 style="margin:0">Python test (pytest + Playwright)</h3><span class="spacer"></span>
+        <a class="btn" href="/api/automation/scripts/${esc(script.id)}/export">Download ${esc(python_file)}</a>
+        <button class="btn" id="zipOne" title="With pytest.ini, requirements.txt, README.txt and RUN_TESTS.cmd">Download ready-to-run .zip</button></div>
+        <p class="muted">Runs with <code>pytest</code> (one test per data set of the Test Case) or with <code>python ${esc(python_file)}</code>. Passwords are read from environment variables, never stored in the file.</p>
+        <pre class="code">${esc(python)}</pre></div>
       <div class="card"><h3>Version history</h3>
         <table class="data"><tbody>${versions.slice().reverse().map((v) => `<tr><td>v${v.version}</td><td>${esc(v.reason)}</td><td>${esc(dateTimeOf(v.timestamp))}</td>
           <td>${v.version < script.version ? `<button class="link-btn" data-restore="${v.version}">Restore</button>` : '<span class="muted">current</span>'}</td></tr>`).join("")}</tbody></table>
         <p><button class="link-btn" id="archive">Archive this script</button></p></div>
     </div>`;
 
+  view.querySelector("#zipOne").addEventListener("click", () => downloadTests({ script_ids: [script.id] }, python_file.replace(/\.py$/, ".zip")));
   const table = view.querySelector("#steps");
   const rebind = () => {
     table.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
@@ -279,7 +302,8 @@ async function aiPanel(view) {
   const tc = params().get("tc") || "";
   view.innerHTML = `
     <form class="card grid" id="gen" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
-      <label>TFS Test Case ID <input name="test_case_id" value="${esc(tc)}" required inputmode="numeric"></label>
+      <label>TFS Test Case ID <input name="test_case_id" value="${esc(tc)}" inputmode="numeric"></label>
+      <label>or User Story ID (all its Test Cases) <input name="user_story_id" value="${esc(params().get("story") || "")}" inputmode="numeric"></label>
       <label>Application URL <input name="base_url" required placeholder="https://your-app/"></label>
       <label>Credential role <input name="credential_role" placeholder="e.g. admin"></label>
       <label>Application name <input name="application" placeholder="as saved in Application Credentials"></label>
@@ -290,26 +314,41 @@ async function aiPanel(view) {
     </form>
     <div class="card" id="progress" style="margin-top:12px" hidden><h3>Activity</h3><div class="feed" id="feed"></div><p id="done"></p></div>
     <div class="card" id="list" style="margin-top:12px"><p class="muted">Loading…</p></div>`;
-  let runId = null;
+  let runId = null, storyId = null, pending = 0;
   view.querySelector("#gen").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
+    if (!f.test_case_id === !f.user_story_id) { toast("Enter a Test Case ID or a User Story ID.", "warning"); return; }
     try {
       const r = await api("/api/automation/generate", { method: "POST", body: {
-        test_case_id: Number(f.test_case_id), base_url: f.base_url.trim(), credential_role: f.credential_role || null,
+        test_case_id: f.test_case_id ? Number(f.test_case_id) : null, user_story_id: f.user_story_id ? Number(f.user_story_id) : null,
+        base_url: f.base_url.trim(), credential_role: f.credential_role || null,
         application: f.application || null, discovery_id: f.discovery_id || null } });
       runId = r.run_id;
+      storyId = f.user_story_id || null;
+      pending = r.test_case_ids ? r.test_case_ids.length : 1;
       view.querySelector("#progress").hidden = false;
       view.querySelector("#feed").innerHTML = "";
       view.querySelector("#done").innerHTML = "";
     } catch (err) { toast(err.message, "error"); }
   });
   liveFeed(view.querySelector("#feed"), () => runId, async (ev) => {
+    // Discovery runs under the same run id and can fail without ending generation; count only this agent's results.
     if (ev.agent_id !== "automation_engineering" || !["agent.completed", "agent.failed"].includes(ev.name)) return;
+    pending -= 1;
     const s = await api(`/api/automation/generate/${encodeURIComponent(runId)}`);
-    view.querySelector("#done").innerHTML = s.script_id
-      ? `<a class="btn primary" href="#/ai-automation?script=${esc(s.script_id)}">Open the generated script</a>`
-      : '<span class="pill FAIL">No script was created. See the activity above.</span>';
+    const done = view.querySelector("#done");
+    if (storyId) {
+      const ids = s.script_ids || [];
+      done.innerHTML = `${ids.length} script(s) created${pending > 0 ? `, ${pending} test case(s) to go…` : "."}
+        ${ids.length && pending <= 0 ? '<button class="btn primary" id="zipStory">Download the Python tests (.zip)</button>' : ""}`;
+      const sid = storyId;
+      done.querySelector("#zipStory")?.addEventListener("click", () => downloadTests({ script_ids: ids }, `automated-tests-US${sid}.zip`));
+    } else {
+      done.innerHTML = s.script_id
+        ? `<a class="btn primary" href="#/ai-automation?script=${esc(s.script_id)}">Open the generated script</a>`
+        : '<span class="pill FAIL">No script was created. See the activity above.</span>';
+    }
     renderScriptList(view.querySelector("#list"), ["ai"], "");
   });
   await renderScriptList(view.querySelector("#list"), ["ai"], "No AI-generated scripts yet.");

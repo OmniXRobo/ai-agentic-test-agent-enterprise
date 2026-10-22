@@ -113,7 +113,8 @@ def test_test_plans_and_suites(tclient):
     plans = tclient.get("/api/tfs/test-plans").json()["plans"]
     assert plans[0]["name"] == "Sprint 4 Plan"
     suites = tclient.get("/api/tfs/test-plans/7/suites").json()["suites"]
-    assert suites[0]["name"] == "Checkout"
+    assert [s["name"] for s in suites] == ["Sprint 4 Plan", "Checkout"]
+    assert suites[1]["parent_id"] == 70 and plans[0]["root_suite_id"] == 70
 
 
 def test_dashboard_kpis_from_tfs(tclient):

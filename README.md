@@ -191,3 +191,23 @@ git-ignored. Secrets are never written to `settings.json` or logs.
 * CI builds the package on Windows, validates it, installs it to a temporary folder and validates the installed copy.
   The tested package is attached to each run as the artifact `AIAgenticTestAgent-Offline-windows` (kept 14 days):
   GitHub → Actions → the latest CI run → Artifacts.
+
+## TFS test generation and Python test scripts
+
+* **Test plan in TFS.** When you save a test design to TFS, choose *Create or reuse "<project> - <sprint> - Test Plan"*.
+  The plan gets the story's sprint and area and the AI test strategy as its description. A plan with the same name is
+  reused. The **Test Plans** page can also create a plan for a user story without a test design.
+* **Default testing-type suites.** Under the plan's root suite: Functional, Positive, Negative, Boundary / Edge Case,
+  End-to-End and Smoke Testing. Existing suites with these names are reused, never duplicated.
+* **Test cases with steps.** Each test case is created with its action/expected-result steps, a "Tested By" link to the
+  user story, a title like "Negative Testing - …", and is added to the suite of its testing type.
+* **Test data in TFS.** Each test case's **Summary** gets a Test Data table (one row per data set), and its
+  **Parameter values** get the same data (one row per data set, so Azure Test Runner runs one iteration per row).
+  Both are optional. After editing test data on the **Test Data** page, *Write to TFS* updates the test case again.
+* **Python automation scripts.** Every automation script can be downloaded as a standalone **pytest + Playwright** test
+  (`test_tc<id>_<title>.py`), with one test per data set of its TFS test case. It also runs with plain
+  `python <file>.py`. Passwords are read from environment variables (for example `ADMIN_PASSWORD`) and never written
+  into the file. *Download ready-to-run .zip* adds `pytest.ini`, `requirements.txt`, `README.txt` and `RUN_TESTS.cmd`,
+  which uses the platform's own Python and browsers, so it works on the offline package too (pytest is included).
+* **AI-Driven Automation for a whole user story**: enter a User Story ID instead of a Test Case ID to create one script
+  per linked test case, then download them all as one zip.

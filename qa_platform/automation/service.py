@@ -38,6 +38,8 @@ class AutomationService:
         self.guided_agent = GuidedBrowserAgent(bus)
         self.recordings: dict[str, dict[str, Any]] = {}
         self.generated: dict[str, str] = {}  # generation run id -> script id
+        self.generated_many: dict[str, list[str]] = {}  # story generation run id -> script ids
+        self.tfs = tfs
         self._lock = threading.Lock()
         self._exec_lock = threading.Lock()
 
@@ -141,6 +143,31 @@ class AutomationService:
                                                        application=application, discovery_id=discovery_id,
                                                        headless=headless))
         return run_id
+
+    def start_story_generation(self, user_story_id: int, base_url: str, *, credential_role: str | None = None,
+                               application: str | None = None, discovery_id: str | None = None,
+                               headless: bool = True) -> tuple[str, list[int]]:
+        """One script per Test Case linked to the user story, one after the other."""
+        story = self.tfs.detail(user_story_id)
+        ids = [int(t["id"]) for t in story["traceability"]["test_cases"]]
+        if not ids:
+            raise QAError("STORY_NO_TEST_CASES", f"User Story #{user_story_id} has no linked Test Cases in TFS.",
+                          status=409)
+        run_id = new_run_id("GEN")
+        self.generated_many[run_id] = []
+
+        def work() -> None:
+            # The first test case discovers the application; the others reuse that discovery.
+            for tc in ids:
+                try:
+                    script = self.generate(run_id, tc, base_url, credential_role=credential_role,
+                                           application=application, discovery_id=discovery_id, headless=headless)
+                    self.generated_many[run_id].append(script.id)
+                except Exception:
+                    log.info(f"Automation for Test Case #{tc} was not created (reported through events)")
+
+        self._background(run_id, work)
+        return run_id, ids
 
     def generate(self, run_id: str, test_case_id: int, base_url: str, *, credential_role: str | None = None,
                  application: str | None = None, discovery_id: str | None = None, headless: bool = True) -> Script:
