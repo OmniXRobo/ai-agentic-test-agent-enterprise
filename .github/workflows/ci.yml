@@ -86,6 +86,9 @@ jobs:
         env:
           QA_NO_PAUSE: "1"
         run: |
-          call "%CD%\downloaded\VALIDATE_OFFLINE.cmd" || exit /b 1
-          call "%CD%\downloaded\INSTALL_OFFLINE.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
+          rem The artifact holds the package folder itself, as a user sees it after Extract All.
+          for /d %%P in ("%CD%\downloaded\AIAgenticTestAgent-Offline-*") do set "PKG=%%~fP"
+          if not defined PKG (echo No package folder in the download & dir /b downloaded & exit /b 1)
+          call "%PKG%\VALIDATE_OFFLINE.cmd" || exit /b 1
+          call "%PKG%\INSTALL_OFFLINE.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
           type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"
