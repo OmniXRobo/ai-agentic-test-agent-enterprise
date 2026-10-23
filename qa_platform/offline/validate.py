@@ -30,7 +30,7 @@ from . import manifest as mf
 
 WINDOWS = sys.platform == "win32"
 REQUIRED_MODULES = {"fastapi": "fastapi", "uvicorn": "uvicorn", "httpx": "httpx", "pydantic": "pydantic",
-                    "keyring": "keyring", "playwright": "playwright"}
+                    "keyring": "keyring", "playwright": "playwright", "pytest": "pytest"}
 
 
 @dataclass

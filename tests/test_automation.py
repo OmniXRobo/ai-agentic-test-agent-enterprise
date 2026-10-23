@@ -287,3 +287,108 @@ def test_ai_generation_uses_only_discovered_selectors(paths, site):
         assert "#made-up-button" in script.notes and "teleport" in script.notes
         prompt = next(call for call in llm.calls if "Playwright automation engineer" in call["messages"][0]["content"])
         assert "Sign in as admin" in prompt["messages"][1]["content"]
+
+
+# ---- Python test export (pytest + Playwright) ------------------------------------------------------
+
+
+def _run_exported(folder: Path, *args: str, env_extra: dict[str, str]):
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "HEADLESS": "1", **env_extra}
+    return subprocess.run([sys.executable, *args], cwd=folder, env=env, capture_output=True, text=True, timeout=180)
+
+
+def test_pytest_export_is_valid_python_without_secrets(site):
+    import ast
+
+    from qa_platform.automation import pytest_export
+
+    script = _login_script(site)
+    script.name = 'TC101 Login """works""" \\ fine'
+    py = pytest_export.to_pytest(script, [{"name": "Gulf region", "values": {"region": "Middle East", "vip": True,
+                                                                              "note": "true story", "n": None}}])
+    ast.parse(py)
+    assert "s3cret" not in py and "ADMIN_PASSWORD" in py and "{{CRED:admin.password}}" in py
+    assert "('Gulf region', {'region': 'Middle East', 'vip': True, 'note': 'true story', 'n': None})" in py
+    assert pytest_export.file_name(script) == "test_tc101_login_works_fine.py"
+    assert "# Step 2: Enter value in #username" in py
+
+
+@needs_browser
+def test_exported_tests_pass_with_pytest_and_plain_python(client, site, tmp_path):
+    import io
+    import zipfile
+
+    body = _login_script(site).model_dump()
+    body["steps"][4]["value"] = "{{DATA:region}}"
+    r = client.post("/api/automation/scripts", json={k: body[k] for k in body if k not in ("id", "version")})
+    sid = r.json()["script"]["id"]
+    rt = client.app.state.runtime
+    for name, region in (("Gulf", "Middle East"), ("Europe", "Europe")):
+        rt.db.execute("INSERT INTO test_data (user_story_id, test_case_ref, tfs_test_case_id, name, kind, dataset, source_run_id,"
+                      " created_at, updated_at) VALUES ('118', 'TC1', 101, ?, 'valid', ?, 'R', 'x', 'x')",
+                      (name, json.dumps({"region": region})))
+    single = client.get(f"/api/automation/scripts/{sid}/export")
+    assert single.headers["content-disposition"].endswith('filename="test_tc101_login_works.py"')
+    assert "('Gulf', {'region': 'Middle East'})" in single.text
+    assert "def run(page):" in client.get(f"/api/automation/scripts/{sid}/export?format=playwright").text
+
+    r = client.post("/api/automation/export-bundle", json={"test_case_ids": ["101"]})
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        names = set(zf.namelist())
+        assert {"tests/test_tc101_login_works.py", "pytest.ini", "requirements.txt", "README.txt", "RUN_TESTS.cmd"} <= names
+        assert all("s3cret" not in zf.read(n).decode() for n in names)
+        assert "ADMIN_PASSWORD" in zf.read("README.txt").decode()
+        zf.extractall(tmp_path)
+    creds = {"ADMIN_USERNAME": "alice", "ADMIN_PASSWORD": "s3cret-pass"}
+    run = _run_exported(tmp_path, "-m", "pytest", "-p", "no:cacheprovider", env_extra=creds)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "2 passed" in run.stdout and "[Gulf]" in run.stdout and "[Europe]" in run.stdout
+    plain = _run_exported(tmp_path / "tests", "test_tc101_login_works.py", env_extra=creds)
+    assert plain.returncode == 0 and plain.stdout.count("PASSED") == 2, plain.stdout + plain.stderr
+    wrong = _run_exported(tmp_path, "-m", "pytest", "-p", "no:cacheprovider", env_extra={**creds, "ADMIN_PASSWORD": "nope"})
+    assert wrong.returncode == 1 and "2 failed" in wrong.stdout
+    missing = _run_exported(tmp_path, "-m", "pytest", "-p", "no:cacheprovider", env_extra={"ADMIN_USERNAME": "alice"})
+    assert "Set the environment variable ADMIN_PASSWORD" in missing.stdout
+
+    assert client.post("/api/automation/export-bundle", json={"user_story_id": "999"}).status_code == 404
+
+
+@needs_browser
+def test_ai_generation_for_every_test_case_of_a_story(paths, site):
+    from fastapi.testclient import TestClient
+
+    from qa_platform.credentials import MemoryBackend
+    from qa_platform.main import create_app
+    from tests.fake_ado import PAT, FakeAzureDevOps
+    from tests.fake_llm import FakeLLM
+
+    ado, llm = FakeAzureDevOps(), FakeLLM()
+    ado.items[1280]["Microsoft.VSTS.TCM.Steps"] = (
+        '<steps id="0" last="2"><step id="1" type="ValidateStep"><parameterizedString isformatted="true">'
+        "Sign in as admin</parameterizedString><parameterizedString isformatted=\"true\">Welcome shown"
+        "</parameterizedString></step></steps>")
+    app = create_app(paths, secret_backend=MemoryBackend(), tfs_transport=ado.transport(), ai_transport=llm.transport())
+    with TestClient(app) as c:
+        c.put("/api/tfs/profiles/online", json={"url": "https://dev.azure.com/acme", "project": "Shop", "pat": PAT,
+                                                "make_active": True})
+        c.put("/api/ai/settings", json={"base_url": "http://127.0.0.1:8080/v1", "model": "qwen2.5-7b-instruct-q4_k_m.gguf"})
+        assert c.post("/api/automation/generate", json={"base_url": site}).status_code == 400
+        auto = c.app.state.runtime.automation
+        disc = auto.discovery.crawl("DISC-G2", f"{site}/login.html", max_pages=1, max_depth=0, headless=True)
+        r = c.post("/api/automation/generate", json={"user_story_id": 118, "base_url": site, "discovery_id": disc["id"]}).json()
+        assert r["test_case_ids"] == [1280]
+        for _ in range(200):
+            status = c.get(f"/api/automation/generate/{r['run_id']}").json()
+            if status["script_ids"]:
+                break
+            time.sleep(0.05)
+        assert len(status["script_ids"]) == 1
+        assert auto.scripts.get(status["script_ids"][0]).test_case_id == "1280"
+        ado.relations[118] = []
+        c.post("/api/tfs/cache/clear")
+        assert c.post("/api/automation/generate", json={"user_story_id": 118, "base_url": site}).status_code == 409

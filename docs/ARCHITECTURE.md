@@ -170,6 +170,14 @@ Internal ids are what get persisted; only display text uses the mapping.
   `design_results`. Publishing (Test Suite Design Agent) creates test cases with `Microsoft.VSTS.TCM.Steps`,
   links them `TestedBy-Reverse` to the story, adds them to a suite, and stores datasets in `test_data`.
 
+* Publishing with a test plan (`POST /api/design/runs/{id}/publish` with `create_plan` or `plan_id`):
+  `TfsService.ensure_test_plan` reuses or creates "<project> - <sprint> - Test Plan" (`_apis/testplan/plans`, falling
+  back to the legacy `_apis/test/plans`), `ensure_suites` adds a static suite per testing type under the root suite
+  (`DEFAULT_SUITES`), and each case goes into the suite of its `category` (`CATEGORY_SUITE`). Test data is written to
+  `System.Description` (a Test Data table) and to `Microsoft.VSTS.TCM.Parameters` / `LocalDataSource` (the Parameter
+  values grid); fields the process does not have are skipped and reported. `POST /api/tfs/test-plans` creates a plan
+  with its suites on its own; `POST /api/test-data/tfs/{test_case_id}` rewrites one test case's test data.
+
 ## Playwright automation (Stage 4)
 
 * `automation/dsl.py`: scripts are JSON steps (`goto`, `click`, `fill`, `select`, `check`, `expect_*`, ...), each
@@ -193,6 +201,11 @@ Internal ids are what get persisted; only display text uses the mapping.
   for JMeter generation in Stage 5; stored in `discoveries` with a diff against the previous run of the same URL.
 * `automation/generator.py`: prompt contains the TFS steps and the discovered element inventory only; generated
   selectors are checked against it and anything else is reported in the script notes.
+* `automation/pytest_export.py`: standalone pytest + Playwright file per script (`GET /api/automation/scripts/{id}/export`,
+  `?format=playwright` for the plain script) and a zip with `pytest.ini`, `requirements.txt`, `README.txt` and
+  `RUN_TESTS.cmd` (`POST /api/automation/export-bundle`). Runtime values are resolved by a small helper in the file;
+  `{{CRED:role.password}}` reads the environment variable `ROLE_PASSWORD`. pytest is a runtime dependency so the offline
+  package can run the exported tests.
 * Browsers: `runtime/ms-playwright` is used when present (offline package); otherwise Playwright's per-user default.
   Without a desktop session runs default to headless.
 * Tests (`tests/test_automation.py`) drive real headless Chromium against `tests/site/`: pass/fail with evidence,

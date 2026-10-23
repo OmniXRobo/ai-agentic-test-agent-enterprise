@@ -206,6 +206,33 @@ class AzureDevOpsClient:
                 raise
             return self.request("GET", f"_apis/test/plans/{int(plan_id)}/suites", api_version="5.0").get("value", [])
 
+    def create_test_plan(self, name: str, *, area_path: str | None = None, iteration: str | None = None,
+                         description: str | None = None) -> dict[str, Any]:
+        """Returns the plan including ``rootSuite`` (the suite every child suite hangs under)."""
+        body = {k: v for k, v in {"name": name, "areaPath": area_path, "iteration": iteration,
+                                  "description": description}.items() if v}
+        try:
+            return self.request("POST", "_apis/testplan/plans", json=body)
+        except QAError as exc:
+            if exc.error_code != "TFS_NOT_FOUND":
+                raise
+            legacy = {"name": name, **({"area": {"name": area_path}} if area_path else {}),
+                      **({"iteration": iteration} if iteration else {}),
+                      **({"description": description} if description else {})}
+            return self.request("POST", "_apis/test/plans", json=legacy, api_version="5.0")
+
+    def create_test_suite(self, plan_id: int, parent_suite_id: int, name: str) -> dict[str, Any]:
+        try:
+            return self.request("POST", f"_apis/testplan/Plans/{int(plan_id)}/suites", json={
+                "suiteType": "staticTestSuite", "name": name, "parentSuite": {"id": int(parent_suite_id)}})
+        except QAError as exc:
+            if exc.error_code != "TFS_NOT_FOUND":
+                raise
+            created = self.request("POST", f"_apis/test/plans/{int(plan_id)}/suites/{int(parent_suite_id)}",
+                                   json={"suiteType": "StaticTestSuite", "name": name}, api_version="5.0")
+            # The legacy API answers with a list of the created suites.
+            return (created.get("value") or [created])[0] if isinstance(created, dict) else created[0]
+
     def suite_test_cases(self, plan_id: int, suite_id: int) -> list[dict[str, Any]]:
         try:
             return self.request("GET", f"_apis/testplan/Plans/{int(plan_id)}/Suites/{int(suite_id)}/TestCase").get("value", [])

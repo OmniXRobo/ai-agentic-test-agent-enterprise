@@ -64,6 +64,11 @@ class PublishIn(BaseModel):
     refs: list[str] | None = None
     plan_id: int | None = None
     suite_id: int | None = None
+    create_plan: bool = False
+    plan_name: str | None = Field(default=None, max_length=256)
+    default_suites: bool = True
+    data_in_summary: bool = True
+    data_as_parameters: bool = True
 
 
 def _busy(rt: Runtime) -> bool:
@@ -108,9 +113,14 @@ def design_history(user_story_id: int, rt: Runtime = Depends(runtime)) -> dict[s
 
 @router.post("/design/runs/{run_id}/publish")
 def publish(run_id: str, body: PublishIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    if (body.plan_id is None) != (body.suite_id is None):
-        raise QAError("SUITE_INCOMPLETE", "Choose both a test plan and a suite, or neither.")
-    return {"ok": True, **rt.design.publish(run_id, body.refs, body.plan_id, body.suite_id)}
+    if body.suite_id is not None and body.plan_id is None:
+        raise QAError("SUITE_INCOMPLETE", "Choose the test plan of that suite as well.")
+    if body.create_plan and body.plan_id is not None:
+        raise QAError("PLAN_CONFLICT", "Either create a new test plan or choose an existing one, not both.")
+    return {"ok": True, **rt.design.publish(
+        run_id, body.refs, body.plan_id, body.suite_id, create_plan=body.create_plan, plan_title=body.plan_name,
+        default_suites=body.default_suites, data_in_summary=body.data_in_summary,
+        data_as_parameters=body.data_as_parameters)}
 
 
 # ---- test data ------------------------------------------------------------------------
@@ -134,6 +144,21 @@ def test_data(
 @router.patch("/test-data/{data_id}")
 def update_test_data(data_id: int, body: TestDataIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "item": rt.design.update_test_data(data_id, body.name, body.values)}
+
+
+class TestDataToTfsIn(BaseModel):
+    summary: bool = True
+    parameters: bool = True
+
+
+@router.post("/test-data/tfs/{test_case_id}")
+def test_data_to_tfs(test_case_id: int, body: TestDataToTfsIn | None = None,
+                     rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    body = body or TestDataToTfsIn()
+    if not (body.summary or body.parameters):
+        raise QAError("NOTHING_SELECTED", "Choose the Summary, the Parameter values, or both.")
+    return {"ok": True, **rt.design.write_test_data_to_tfs(test_case_id, summary=body.summary,
+                                                            parameters=body.parameters)}
 
 
 @router.delete("/test-data/{data_id}")

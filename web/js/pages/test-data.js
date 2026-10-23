@@ -13,7 +13,8 @@ async function render(view, filters = {}) {
     ${items.map((d) => `<tr data-id="${d.id}"><td>${d.tfs_test_case_id ? `<a href="#/test-cases?id=${d.tfs_test_case_id}">#${d.tfs_test_case_id}</a>` : esc(d.test_case_ref)}</td>
       <td>${d.user_story_id ? `<a href="#/user-stories?id=${esc(d.user_story_id)}">#${esc(d.user_story_id)}</a>` : ""}</td>
       <td>${esc(d.name)}</td><td>${esc(d.kind || "")}</td><td><code>${esc(JSON.stringify(d.dataset))}</code></td><td>${esc(dateTimeOf(d.updated_at))}</td>
-      <td><button class="link-btn" data-edit="${d.id}">Edit</button> · <button class="link-btn" data-del="${d.id}">Delete</button></td></tr>`).join("")}
+      <td><button class="link-btn" data-edit="${d.id}">Edit</button> · <button class="link-btn" data-del="${d.id}">Delete</button>
+        ${d.tfs_test_case_id ? ` · <button class="link-btn" data-tfs="${d.tfs_test_case_id}" title="Write all data sets of this test case into its Summary and Parameter values in TFS">Write to TFS</button>` : ""}</td></tr>`).join("")}
     </tbody></table>`
     : '<p class="muted">No test data yet. Datasets appear here after you generate a test design and save its test cases to TFS.</p>';
   view.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", async () => {
@@ -25,6 +26,14 @@ async function render(view, filters = {}) {
       toast("Test data saved", "success");
       render(view, filters);
     } catch (err) { toast(err instanceof SyntaxError ? "That is not valid JSON." : err.message, "error"); }
+  }));
+  view.querySelectorAll("[data-tfs]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      const r = await api(`/api/test-data/tfs/${b.dataset.tfs}`, { method: "POST", body: {} });
+      toast(`Test Case #${r.test_case_id} updated in TFS with ${r.datasets} data set(s)`, "success");
+    } catch (err) { toast(err.message, "error"); }
+    b.disabled = false;
   }));
   view.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
     if (!confirm("Delete this dataset?")) return;

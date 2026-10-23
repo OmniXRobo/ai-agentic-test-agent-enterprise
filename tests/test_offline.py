@@ -234,7 +234,7 @@ def test_lock_pins_every_download_and_every_python_package():
         assert len(build.LOCK[key]["sha256"]) == 64 and build.LOCK[key]["url"].startswith("https://")
     reqs = build.REQUIREMENTS.read_text()
     pinned = [ln.split("==")[0] for ln in reqs.splitlines() if "==" in ln and not ln.startswith("#")]
-    for top in ("fastapi", "uvicorn", "httpx", "pydantic", "keyring", "playwright", "pywin32-ctypes"):
+    for top in ("fastapi", "uvicorn", "httpx", "pydantic", "keyring", "playwright", "pytest", "pywin32-ctypes"):
         assert top in pinned
     assert reqs.count("--hash=sha256:") >= len(pinned)
     top_level = {ln.split("==")[0]: ln.split("==")[1].strip() for ln in (APP_ROOT / "requirements.txt").read_text().splitlines()
