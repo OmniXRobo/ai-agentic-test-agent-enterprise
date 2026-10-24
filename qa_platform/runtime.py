@@ -90,6 +90,6 @@ def build_runtime(
                          transport=stt_transport)
     analytics = AnalyticsService(db, tfs, automation)
     reports = ReportService(paths, bus, db, tfs, automation, performance, defects, design, analytics)
-    studio = ScriptStudio(paths, settings, bus, db, runs, secrets, tfs, ai, automation, design)
+    studio = ScriptStudio(paths, settings, bus, db, runs, secrets, tfs, ai, automation, design, defects)
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
                    automation, performance, defects, voice, analytics, reports, studio)

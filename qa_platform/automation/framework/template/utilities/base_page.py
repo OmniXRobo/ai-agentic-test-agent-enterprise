@@ -56,6 +56,7 @@ class BasePage:
 
     def _element(self, loc: Loc, kind: str, state: str = "visible") -> Any:
         element = resolve(self.page, loc, state=state)
+        reporting.state.target = element
         reporting.show_status(f"Test Execution Agent - {reporting.current_label(loc.label())}")
         if config.VISUAL and state != "hidden":
             try:
@@ -93,7 +94,14 @@ class BasePage:
     def fill(self, loc: Loc, value: Any) -> None:
         text = "" if value is None else str(value)
         reporting.action("fill", f"Enter value in {loc.label()}", locator=loc.selector())
-        self._element(loc, "type").fill(text, timeout=config.TIMEOUT_MS)
+        element = self._element(loc, "type")
+        if config.VISUAL and config.TYPING_DELAY_MS > 0 and len(text) <= 200:
+            # Visible typing: focus the field, clear it, then type character by character.
+            element.click(timeout=config.TIMEOUT_MS)
+            element.fill("", timeout=config.TIMEOUT_MS)
+            element.press_sequentially(text, delay=config.TYPING_DELAY_MS, timeout=config.TIMEOUT_MS)
+        else:
+            element.fill(text, timeout=config.TIMEOUT_MS)
         self._done()
 
     def select(self, loc: Loc, value: Any) -> None:

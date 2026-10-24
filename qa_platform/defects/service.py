@@ -115,6 +115,8 @@ class DefectService:
         if self.mode == "disabled" or not event.run_id:
             return
         if event.name == names.EXECUTION_FAILED:
+            if str((event.details or {}).get("script_id") or "").startswith("FWS-"):
+                return  # AI-Driven framework runs are diagnosed by the Script Studio (see record_draft)
             kind = "functional"
         elif event.name == names.PERFORMANCE_FAILED and (event.details or {}).get("sla") == "FAIL":
             kind = "performance"
@@ -175,6 +177,23 @@ class DefectService:
             if automatic and self.mode == "automatic":
                 self._auto_create(saved["id"])
         return self.get(saved["id"])
+
+    def record_draft(self, draft: dict[str, Any]) -> dict[str, Any] | None:
+        """Store a draft built by another analysis (AI-Driven framework runs), with the usual duplicate check."""
+        if self.mode == "disabled":
+            return None
+        try:
+            saved = self._store(draft)
+            if saved.get("_new"):
+                try:
+                    self.check_duplicates(saved["id"])
+                except QAError as exc:
+                    log.info(f"Duplicate check skipped: {exc.message}", extra={"run_id": draft["source_run_id"]})
+                if self.mode == "automatic":
+                    self._auto_create(saved["id"])
+            return self.get(saved["id"])
+        finally:
+            self._finished_event(draft["source_run_id"]).set()
 
     def _store(self, draft: dict[str, Any]) -> dict[str, Any]:
         with self._lock:

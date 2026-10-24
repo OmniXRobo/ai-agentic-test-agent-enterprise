@@ -232,6 +232,18 @@ def test_edit_data_credentials_play_and_evidence(studio_env):
     assert all("{{" not in a["description"] for s in result["steps"] for a in s.get("actions", []))
     assert result["evidence"]["screenshots"] and all(Path(p).is_file() for p in result["evidence"]["screenshots"])
     assert result["traceability"]["user_story_id"] == "118" and result["traceability"]["test_case_id"] == "1281"
+    # A screenshot for every step, the expected result of the TFS step and the actual result.
+    folder = Path(result["evidence"]["folder"])
+    shots = sorted(p.name for p in (folder / "screenshots").glob("*.png"))
+    assert "Gulf-step_001_login.png" in shots and "Europe-step_005_the_travel_date_is_confirmed.png" in shots
+    assert len(shots) == 10 and all(s.get("screenshot") for s in result["steps"])
+    last = result["steps"][-1]
+    assert last["expected"] == "The travel date is confirmed" and last["actual"].startswith("As expected: Verify")
+    assert result["steps"][0]["expected"] == "Welcome shown" and result["steps"][0]["started_at"]
+    assert result["execution_mode"] == "Background / Headless" and result["duration_ms"] > 0
+    saved = json.loads((folder / "result.json").read_text())
+    assert saved["status"] == "PASSED" and (folder / "execution.log").is_file()
+    assert not (folder / "failure-analysis.json").exists()
     log = Path(result["evidence"]["log"]).read_text()
     assert "s3cret-pass" not in log
     assert "s3cret-pass" not in Path(result["evidence"]["progress"]).read_text()
@@ -253,11 +265,43 @@ def test_edit_data_credentials_play_and_evidence(studio_env):
     result = rt.studio.run(sid, headless=True, background=False)
     assert result["status"] == "PASSED" and len(result["tests"]) == 1, result["error"]
 
-    # Wrong password: FAILED with the failing step and a failure screenshot.
+    # The application shows another result: diagnosed as an application problem, and a defect draft is recorded.
+    combos[0]["values"]["travel_date"] = "not-a-date"
+    c.put(f"{base}/data", json={"combinations": combos}).raise_for_status()
+    detail = c.get(base).json()
+    source = detail["source"].replace('login_page.expect_welcome_message_text(data["travel_date"])',
+                                      'login_page.expect_welcome_message_text("Welcome bob")')
+    c.put(f"{base}/source", json={"source": source}).raise_for_status()
+    failed = rt.studio.run(sid, headless=True, background=False)
+    assert failed["status"] == "FAILED" and failed["failed_step"] == 4, failed["error"]
+    analysis = failed["failure_analysis"]
+    assert analysis["classification"] == "Expected Result Mismatch" and analysis["likely_application_problem"]
+    assert analysis["expected"] == "The travel date is confirmed" and "Welcome bob" in analysis["actual"]
+    assert analysis["failed_step_title"].endswith("The travel date is confirmed")
+    folder = Path(failed["evidence"]["folder"])
+    assert json.loads((folder / "failure-analysis.json").read_text())["classification"] == "Expected Result Mismatch"
+    names_ = {p.name for p in (folder / "screenshots").glob("*.png")}
+    assert {"Europe next month-step_005_the_travel_date_is_confirmed_FAILED.png".replace(" ", "_"),
+            "Europe_next_month-step_005_the_travel_date_is_confirmed_FAILED_full.png"} <= names_, names_
+    assert failed["diagnostics"]["url"].endswith("/login.html")
+    assert rt.defects.wait_for_automatic(failed["run_id"], 10)
+    drafts = rt.db.query("SELECT * FROM defect_drafts WHERE source_run_id = ?", (failed["run_id"],))
+    assert len(drafts) == 1 and "Expected Result Mismatch" in drafts[0]["repro_steps"]
+    events = [e["name"] for e in rt.db.query("SELECT name FROM events WHERE run_id = ? AND agent_id = ?",
+                                             (failed["run_id"], "failure_analysis"))]
+    assert "agent.started" in events and "agent.completed" in events
+
+    # Wrong password: an authentication problem, not an application defect.
+    c.put(f"{base}/source", json={"source": detail["source"]}).raise_for_status()
     c.put(f"{base}/credentials", json={"scope": "script", "password": "nope"}).raise_for_status()
     failed = rt.studio.run(sid, headless=True, background=False)
     assert failed["status"] == "FAILED" and failed["error"] and failed["failed_step"] is not None
     assert "nope" not in Path(failed["evidence"]["log"]).read_text()
+    analysis = failed["failure_analysis"]
+    assert analysis["classification"] == "Authentication Failure", analysis
+    assert any("Invalid credentials" in o for o in analysis["observed"]) and not analysis["likely_application_problem"]
+    time.sleep(0.5)
+    assert not rt.db.query("SELECT id FROM defect_drafts WHERE source_run_id = ?", (failed["run_id"],))
 
 
 @needs_browser
@@ -444,3 +488,63 @@ def test_cloud_ai_mode_uses_api_key_from_credential_store(client):
     assert r.status_code == 409 and "Cloud AI API key" in r.json()["message"]
     back = client.put("/api/ai/settings", json={"mode": "on_premise"}).json()
     assert back["label"] == "On-Premise AI" and back["base_url"] == "http://127.0.0.1:8080/v1"
+
+
+@pytest.fixture()
+def display(monkeypatch):
+    """A virtual screen for Visible Browser runs on a machine without one (CI)."""
+    import os
+    import subprocess
+
+    if os.environ.get("DISPLAY"):
+        yield os.environ["DISPLAY"]
+        return
+    if not shutil.which("Xvfb"):
+        pytest.skip("no display and no Xvfb for a visible browser")
+    proc = subprocess.Popen(["Xvfb", ":97", "-screen", "0", "1400x900x24"], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    time.sleep(0.5)
+    monkeypatch.setenv("DISPLAY", ":97")
+    yield ":97"
+    proc.terminate()
+
+
+@needs_browser
+def test_visible_browser_run_and_stop(studio_env, display):
+    import os
+
+    c, rt = studio_env["c"], studio_env["rt"]
+    generate(studio_env)
+    sid = next(i["id"] for i in c.get("/api/automation/studio/inventory").json()["items"] if i["test_case_id"] == "1280")
+    rt.studio.save_credentials(sid, username="alice", password="s3cret-pass", scope="script")
+
+    # Visible Browser: same script, cursor, highlight and typing; same result and evidence as headless.
+    visible = rt.studio.run(sid, headless=False, background=False)
+    assert visible["status"] == "PASSED", visible["error"]
+    assert visible["execution_mode"] == "Visible Browser"
+    assert len([s for s in visible["steps"] if s.get("screenshot")]) == len(visible["steps"]) == 2
+    headless = rt.studio.run(sid, headless=True, background=False)
+    assert headless["status"] == "PASSED"
+    assert [s["description"] for s in headless["steps"]] == [s["description"] for s in visible["steps"]]
+
+    # Stop: the run ends as STOPPED, evidence so far is kept and no browser or Python process is left behind.
+    rt.settings.update({"playback": {"visual_delay_ms": 1500}})
+    run_id = c.post(f"/api/automation/studio/scripts/{sid}/run", json={"headless": False}).json()["run_id"]
+    for _ in range(200):
+        if rt.studio.runner.processes.get(run_id) and (rt.paths.evidence / run_id / "progress.jsonl").exists():
+            break
+        time.sleep(0.05)
+    pid = rt.studio.runner.processes[run_id].pid
+    time.sleep(1.0)
+    assert c.post(f"/api/automation/studio/runs/{run_id}/stop").json()["ok"]
+    for _ in range(200):
+        rows = rt.automation.runner.results(run_id=run_id)
+        if rows and rows[0]["status"] != "RUNNING":
+            break
+        time.sleep(0.1)
+    assert rows[0]["status"] == "STOPPED"
+    assert json.loads((rt.paths.evidence / run_id / "result.json").read_text())["status"] == "STOPPED"
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pid, 0)  # the whole process group (pytest and its browser) is gone
+    assert run_id not in rt.studio.runner.running()
+    assert c.post(f"/api/automation/studio/runs/{run_id}/stop").status_code == 409

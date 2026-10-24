@@ -86,7 +86,8 @@ class JobRequest(BaseModel):
 
 class ScriptStudio:
     def __init__(self, paths: Paths, settings: Settings, bus: EventBus, db: Database, runs: RunStore,
-                 secrets: SecretStore, tfs: TfsService, ai: AIGateway, automation: Any, design: Any) -> None:
+                 secrets: SecretStore, tfs: TfsService, ai: AIGateway, automation: Any, design: Any,
+                 defects: Any = None) -> None:
         self.paths = paths
         self.settings = settings
         self.bus = bus
@@ -97,10 +98,12 @@ class ScriptStudio:
         self.ai = ai
         self.automation = automation
         self.design = design
+        self.defects = defects
         self.ws = FrameworkWorkspace(paths.workspace)
         self.agent: AutomationEngineeringAgent = automation.generator.agent
         self.creds = automation.creds
-        self.runner = FrameworkRunner(paths, settings, db, runs, automation.runner.execution, automation.runner.healer)
+        self.runner = FrameworkRunner(paths, settings, db, runs, automation.runner.execution, automation.runner.healer,
+                                      analyst=defects.analyst if defects else None, on_diagnosis=self._on_diagnosis)
         self._gen_lock = threading.Lock()
         self._write_lock = threading.RLock()
         self._stops: dict[str, threading.Event] = {}
@@ -541,7 +544,7 @@ class ScriptStudio:
         row = self.db.query_one("SELECT * FROM framework_scripts WHERE id = ?", (script_id,))
         if row is None:
             raise QAError("SCRIPT_NOT_FOUND", f"Script {script_id} does not exist.", status=404)
-        for key in ("acceptance_criteria", "components", "warnings"):
+        for key in ("acceptance_criteria", "components", "warnings", "manual_steps"):
             row[key] = loads(row[key]) if row[key] else []
         return row
 
@@ -559,7 +562,7 @@ class ScriptStudio:
             "credential_role": build.credential_role, "base_url": req.base_url, "status": "GENERATED",
             "updated_at": ts, "file_sha256": sha256(self.ws.path(test_rel).read_bytes()),
             "components": dumps(build.components), "notes": "\n".join(build.notes) or None,
-            "warnings": dumps(warnings), "job_id": job_id,
+            "warnings": dumps(warnings), "job_id": job_id, "manual_steps": dumps(ctx.steps),
         }
         if target:
             sid = target["id"]
@@ -1183,6 +1186,44 @@ class ScriptStudio:
         return out
 
     # ---- self-healing --------------------------------------------------------------------------------
+
+    def _on_diagnosis(self, result: dict[str, Any], found: dict[str, Any]) -> None:
+        """A likely application problem becomes a defect draft for Defect Review (never for automation issues)."""
+        if self.defects is None or not found.get("likely_application_problem"):
+            return
+        from ...defects import analysis
+
+        category = {"Network/API Failure": "navigation", "Application Performance Problem": "navigation"}.get(
+            found["classification"], "assertion")
+        product, severity, finding = analysis.CATEGORIES[category]
+        rec = self._record(result["script_id"])
+        what = found.get("failed_step_title") or "a step"
+        passed = [s["description"] for s in result["steps"] if s.get("status") == "PASSED"]
+        esc = analysis.html.escape
+        repro = (f"<p><strong>Classification:</strong> {esc(found['classification'])} ({found['confidence']}% "
+                 f"confidence). {esc(found['reason'])}</p>"
+                 f"<p><strong>Steps to reproduce</strong> (automated test {esc(rec['file'])}):</p>"
+                 + analysis._li([*passed, f"{what}  <- failed here"])
+                 + (f"<p><strong>Expected:</strong> {esc(found['expected'])}</p>" if found.get("expected") else "")
+                 + f"<p><strong>Actual:</strong> {esc(found.get('actual') or '')}</p>"
+                 + "".join(f"<p>{esc(o)}</p>" for o in found.get("observed", []))
+                 + f"<p><strong>Environment:</strong> {esc(result.get('base_url') or '')} · {esc(result['execution_mode'])}"
+                   f" · run {esc(result['run_id'])}</p>")
+        shots = [p for p in (found["evidence"].get("failure_screenshot"), found["evidence"].get("full_page_screenshot")) if p]
+        draft = {
+            "source": "functional", "source_run_id": result["run_id"],
+            "signature": analysis.signature("framework", rec["id"], found.get("failed_step"), found["classification"]),
+            "category": category, "product_defect": product, "title": f"TC{rec['test_case_id']} {rec['test_case_title']}: "
+                                                                       f"{what} - {found['classification'].lower()}"[:250],
+            "severity": severity, "priority": 2 if severity <= 2 else 3, "repro_steps": repro,
+            "facts": {"error": found.get("error"), "failed_step": found.get("failed_step"), "finding": finding,
+                      "classification": found["classification"], "confidence": found["confidence"],
+                      "script_id": rec["id"], "base_url": result.get("base_url")},
+            "evidence": [{"kind": "screenshot", "path": p} for p in shots],
+            "test_case_id": rec["test_case_id"], "user_story_id": rec["user_story_id"],
+        }
+        threading.Thread(target=self._safe(lambda: self.defects.record_draft(draft), result["run_id"]),
+                         daemon=True).start()
 
     def apply_healing(self, healing_id: int) -> dict[str, Any]:
         row = self.db.query_one("SELECT * FROM healing_events WHERE id = ?", (healing_id,))

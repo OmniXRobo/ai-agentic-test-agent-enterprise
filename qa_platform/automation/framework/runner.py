@@ -27,19 +27,23 @@ from ...runs import RunStore
 from ...storage.db import Database, dumps
 from ..browser import default_headless, ensure_browsers_path
 from ..runner import SelfHealingAgent, TestExecutionAgent
+from . import diagnosis
 
 RESULT_TAIL = 4000
 
 
 class FrameworkRunner:
     def __init__(self, paths: Paths, settings: Settings, db: Database, runs: RunStore,
-                 execution: TestExecutionAgent, healer: SelfHealingAgent) -> None:
+                 execution: TestExecutionAgent, healer: SelfHealingAgent, analyst: Any = None,
+                 on_diagnosis: Callable[[dict[str, Any], dict[str, Any]], None] | None = None) -> None:
         self.paths = paths
         self.settings = settings
         self.db = db
         self.runs = runs
         self.execution = execution
         self.healer = healer
+        self.analyst = analyst  # Failure & Quality Analysis Agent
+        self.on_diagnosis = on_diagnosis
         self.processes: dict[str, subprocess.Popen[str]] = {}
         self.stopped: set[str] = set()
 
@@ -64,7 +68,7 @@ class FrameworkRunner:
         evidence_dir = self.paths.evidence / run_id
         evidence_dir.mkdir(parents=True, exist_ok=True)
         events_file = evidence_dir / "progress.jsonl"
-        log_file = evidence_dir / "pytest-output.log"
+        log_file = evidence_dir / "execution.log"
         sid, tc, us = record["id"], record.get("test_case_id"), record.get("user_story_id")
         label = f"Test Case #{tc}" if tc else record.get("test_case_title") or sid
         browser = "chromium"
@@ -80,7 +84,8 @@ class FrameworkRunner:
             "started_at": started, "browser": browser, "base_url": record.get("base_url"), "steps": [],
             "evidence": {"folder": str(evidence_dir), "screenshots": [], "video": None, "trace": [],
                          "log": str(log_file), "progress": str(events_file)},
-            "failed_step": None, "error": None, "healed": [], "tests": [],
+            "failed_step": None, "error": None, "healed": [], "tests": [], "diagnostics": None, "failure_analysis": None,
+            "execution_mode": "Background / Headless" if headless else "Visible Browser", "headless": headless,
             "traceability": {"user_story_id": us, "acceptance_criteria": record.get("acceptance_criteria") or [],
                              "test_case_id": tc, "script": record.get("file"), "test_data": record.get("data_file")},
         }
@@ -123,6 +128,8 @@ class FrameworkRunner:
                         state.follow(events_file)
                         time.sleep(0.2)
                     state.follow(events_file)
+                if run_id in self.stopped:
+                    _wait_group_gone(proc.pid)  # the browser may outlive pytest by a moment
                 code = proc.returncode
                 output = mask(log_file.read_text(encoding="utf-8", errors="replace"))
                 log_file.write_text(output, encoding="utf-8")
@@ -134,6 +141,8 @@ class FrameworkRunner:
                 else:
                     result["status"] = "FAILED"
                     result["error"] = state.first_error() or _pytest_error(output, code)
+                if result["status"] == "FAILED":
+                    self._diagnose(result, record, run_id, evidence_dir)
                 if result["status"] != "PASSED":
                     raise _RunFailed(result["error"] or "The test failed.")
                 act.event(names.EXECUTION_COMPLETED, f"{label} PASSED" +
@@ -143,11 +152,13 @@ class FrameworkRunner:
         except _RunFailed:
             failed = result["failed_step"]
             where = f" at step {failed + 1}" if failed is not None else ""
+            analysis = result.get("failure_analysis") or {}
             self.execution.emit(names.EXECUTION_FAILED, f"{label} {result['status']}{where}: {result['error']}",
                                 run_id=run_id, test_case_id=tc, user_story_id=us,
-                                details={"link": f"#/history?run={run_id}", "failed_step": failed, "script_id": sid})
+                                details={"link": f"#/history?run={run_id}", "failed_step": failed, "script_id": sid,
+                                         "classification": analysis.get("classification")})
         except Exception as exc:  # the process could not start
-            result["status"] = "FAILED"
+            result["status"] = "ERROR"
             result["error"] = mask(f"The test could not run: {exc}")
             self.execution.emit(names.EXECUTION_FAILED, f"{label} could not run: {result['error']}", run_id=run_id,
                                 test_case_id=tc, user_story_id=us, details={"link": f"#/history?run={run_id}"})
@@ -158,7 +169,8 @@ class FrameworkRunner:
             if result["status"] == "PASSED" and result["healed"]:
                 self.db.execute("UPDATE healing_events SET result = 'validated' WHERE run_id = ? AND result = 'healed'",
                                 (run_id,))
-            (evidence_dir / "execution.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+            result["duration_ms"] = _duration_ms(result["started_at"], result["finished_at"])
+            (evidence_dir / "result.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
             self.db.execute(
                 "UPDATE execution_results SET status = ?, finished_at = ?, failed_step = ?, error = ?, steps = ?,"
                 " evidence = ? WHERE id = ?",
@@ -171,6 +183,45 @@ class FrameworkRunner:
             if on_finish:
                 on_finish(result)
         return result
+
+
+    def _diagnose(self, result: dict[str, Any], record: dict[str, Any], run_id: str, evidence_dir: Path) -> None:
+        """Failure & Quality Analysis Agent: classify the failure from the run's evidence."""
+        rows = self.db.query("SELECT * FROM healing_events WHERE run_id = ?", (run_id,))
+        for row in rows:
+            try:
+                row["candidates"] = json.loads(row["candidates"] or "[]")
+            except ValueError:
+                row["candidates"] = []
+
+        def work(act: Any = None) -> dict[str, Any]:
+            if act:
+                act.progress(30, "Reading the failed step, expected result, page state, console and network evidence")
+            found = diagnosis.diagnose(result, record, rows)
+            (evidence_dir / "failure-analysis.json").write_text(json.dumps(found, indent=2, default=str),
+                                                                encoding="utf-8")
+            if act:
+                act.complete(f"Failure analysis: {found['classification']} ({found['confidence']}% confidence)")
+            return found
+
+        try:
+            if self.analyst is None:
+                found = work()
+            else:
+                with self.analyst.activity(f"Diagnosing failed run of Test Case #{record.get('test_case_id')}",
+                                           run_id=run_id, test_case_id=record.get("test_case_id"),
+                                           user_story_id=record.get("user_story_id")) as act:
+                    found = work(act)
+            result["failure_analysis"] = found
+        except Exception as exc:  # the diagnosis never hides the run's own result
+            result["failure_analysis"] = {"classification": diagnosis.UNKNOWN, "confidence": 0,
+                                          "reason": f"The failure analysis could not complete: {exc}"}
+            return
+        if self.on_diagnosis:
+            try:
+                self.on_diagnosis(result, found)
+            except Exception as exc:
+                self.execution.log(f"Defect draft for {run_id} not recorded: {exc}", run_id=run_id)
 
 
 class _RunFailed(Exception):
@@ -234,7 +285,8 @@ class _Follow:
             if entry is None:
                 entry = {"index": len(r["steps"]), "action": "step", "description": self._label(rec, rec.get("title") or ""),
                          "status": "RUNNING", "tc_step": rec.get("tc_step"), "checkpoint": rec.get("checkpoint"),
-                         "combination": rec.get("combination")}
+                         "combination": rec.get("combination"), "started_at": rec.get("ts"),
+                         "expected": self._expected(rec.get("tc_step"))}
                 self.steps[key] = entry
                 r["steps"].append(entry)
                 total = max(len(self.record.get("flow_steps") or []), 1)
@@ -244,6 +296,11 @@ class _Follow:
             if rec.get("status") in ("PASSED", "FAILED"):
                 entry["status"] = rec["status"]
                 entry["duration_ms"] = rec.get("duration_ms")
+                entry["finished_at"] = rec.get("ts")
+                entry["actual"] = self._actual(entry, rec)
+                if rec.get("full_page"):
+                    entry["full_page"] = rec["full_page"]
+                    r["evidence"]["screenshots"].append(rec["full_page"])
                 if rec.get("screenshot"):
                     entry["screenshot"] = rec["screenshot"]
                     r["evidence"]["screenshots"].append(rec["screenshot"])
@@ -276,6 +333,8 @@ class _Follow:
                 r["evidence"]["trace"].append(rec["trace"])
             if rec.get("video"):
                 r["evidence"]["video"] = rec["video"]
+        elif kind == "diagnostics":
+            r["diagnostics"] = {k: rec.get(k) for k in ("url", "title", "page_messages", "console", "network", "step")}
         elif kind == "locator" and self.act:
             self.act.log(self.mask(f"{rec.get('note')}: {rec.get('used')}"))
 
@@ -333,6 +392,22 @@ class _Follow:
                 return comp.get("component")
         return None
 
+    def _expected(self, tc_step: Any) -> str | None:
+        """Expected result of the TFS Test Case step(s) a framework step automates."""
+        manual = self.record.get("manual_steps") or []
+        numbers = [int(n) for n in str(tc_step or "").split(",") if n.strip().isdigit()]
+        found = [manual[n - 1].get("expected") for n in numbers if 0 < n <= len(manual) and manual[n - 1].get("expected")]
+        return self.mask(" / ".join(found)) if found else None
+
+    def _actual(self, entry: dict[str, Any], rec: dict[str, Any]) -> str:
+        if rec["status"] == "FAILED":
+            return self.mask(rec.get("error") or "The step failed.")
+        actions = entry.get("actions") or []
+        checks = [a["description"] for a in actions if (a.get("action") or "").startswith("expect")]
+        if checks:
+            return "As expected: " + "; ".join(checks)
+        return "Done: " + "; ".join(a["description"] for a in actions) if actions else "Step completed."
+
     def first_error(self) -> str | None:
         for step in self.result["steps"]:
             if step.get("status") == "FAILED" and step.get("error"):
@@ -340,6 +415,15 @@ class _Follow:
         for test in self.result["tests"]:
             if test.get("status") == "FAILED" and test.get("error"):
                 return test["error"]
+        return None
+
+
+def _duration_ms(start: str | None, end: str | None) -> int | None:
+    from datetime import datetime
+
+    try:
+        return int((datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds() * 1000)
+    except (TypeError, ValueError):
         return None
 
 
@@ -376,3 +460,20 @@ def _terminate(proc: subprocess.Popen[str]) -> None:
             proc.kill()
         except OSError:
             pass
+
+
+def _wait_group_gone(pid: int, timeout: float = 8.0) -> None:
+    """After Stop, wait for every process of the run (pytest, browser) to exit; force it after ``timeout``."""
+    if sys.platform == "win32":
+        return  # taskkill /T /F has already ended the whole tree
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            os.killpg(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.1)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass

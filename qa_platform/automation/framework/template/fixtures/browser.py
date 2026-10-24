@@ -77,6 +77,7 @@ def browser_context(browser: Any, request: pytest.FixtureRequest) -> Iterator[An
 def page(browser_context: Any) -> Iterator[Any]:
     instance = browser_context.new_page()
     instance.set_default_timeout(max(config.TIMEOUT_MS, 15000))
+    _listen(instance)
     reporting.state.page = instance
     yield instance
     video = None
@@ -87,3 +88,27 @@ def page(browser_context: Any) -> Iterator[Any]:
     reporting.state.page = None
     if video:
         reporting.emit("evidence", name="video", video=str(video))
+
+
+def _listen(page: Any) -> None:
+    """Keep console errors and failed requests of the test for the failure diagnosis."""
+    def console(msg: Any) -> None:
+        if msg.type == "error" and len(reporting.state.console) < 50:
+            reporting.state.console.append(reporting.mask(msg.text)[:300])
+
+    def page_error(err: Any) -> None:
+        if len(reporting.state.console) < 50:
+            reporting.state.console.append(reporting.mask(f"Uncaught: {err}")[:300])
+
+    def failed(request: Any) -> None:
+        if len(reporting.state.network) < 50:
+            reporting.state.network.append(f"{request.method} {request.url} failed: {request.failure}"[:300])
+
+    def response(resp: Any) -> None:
+        if resp.status >= 400 and len(reporting.state.network) < 50:
+            reporting.state.network.append(f"{resp.request.method} {resp.url} -> HTTP {resp.status}"[:300])
+
+    page.on("console", console)
+    page.on("pageerror", page_error)
+    page.on("requestfailed", failed)
+    page.on("response", response)

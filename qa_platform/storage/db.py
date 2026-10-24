@@ -253,6 +253,7 @@ MIGRATIONS: list[str] = [
         warnings TEXT,
         cred_username TEXT,
         job_id TEXT,
+        manual_steps TEXT,
         last_result TEXT,
         last_run_id TEXT,
         last_run_at TEXT,

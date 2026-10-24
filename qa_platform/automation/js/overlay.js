@@ -18,6 +18,7 @@
         .box.type{border-color:#3b82f6;box-shadow:0 0 0 4px rgba(59,130,246,.25);}
         .box.assert{border-color:#a855f7;box-shadow:0 0 0 4px rgba(168,85,247,.25);}
         .box.heal{border-color:#f59e0b;box-shadow:0 0 0 4px rgba(245,158,11,.3);}
+        .box.fail{border-color:#ef4444;box-shadow:0 0 0 4px rgba(239,68,68,.3);}
         .tag{position:fixed;font:12px/1.4 Segoe UI,sans-serif;background:#111827;color:#fff;padding:2px 8px;border-radius:4px;display:none;white-space:nowrap;}
         .banner{position:fixed;right:12px;bottom:12px;max-width:60vw;font:12px/1.4 Segoe UI,sans-serif;background:rgba(17,24,39,.92);color:#fff;padding:6px 10px;border-radius:6px;border-left:4px solid #22c55e;display:none;}
         .ripple{position:fixed;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;border:3px solid #22c55e;animation:r .5s ease-out forwards;}

@@ -9,6 +9,8 @@ Windows PC (no user names or drive letters are stored anywhere).
     HEADLESS              1 to run without showing the browser
     QA_VISUAL             1 to show the cursor, highlights and current action (default: on when not headless)
     QA_VISUAL_DELAY_MS    pause before each action while visual playback is on (default 350)
+    QA_TYPING_DELAY_MS    delay between typed characters while visual playback is on (default 35)
+    QA_STEP_SCREENSHOTS   screenshot after every step, 1 or 0 (default 1; failures are always captured)
     QA_TIMEOUT_MS         default wait for an element (default 10000)
     QA_TRACE              1 to save a Playwright trace per test
     QA_VIDEO              1 to record a video per test
@@ -44,6 +46,8 @@ BROWSER = os.environ.get("BROWSER", "chromium").strip().lower() or "chromium"
 HEADLESS = _flag("HEADLESS", False)
 VISUAL = _flag("QA_VISUAL", not HEADLESS)
 VISUAL_DELAY_MS = _int("QA_VISUAL_DELAY_MS", 350)
+TYPING_DELAY_MS = _int("QA_TYPING_DELAY_MS", 35)
+STEP_SCREENSHOTS = _flag("QA_STEP_SCREENSHOTS", True)
 TIMEOUT_MS = _int("QA_TIMEOUT_MS", 10000)
 TRACE = _flag("QA_TRACE", False)
 VIDEO = _flag("QA_VIDEO", False)
