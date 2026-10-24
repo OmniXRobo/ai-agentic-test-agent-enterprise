@@ -100,7 +100,9 @@ class ScriptStore:
 class CredentialProfiles:
     """Role-based application credentials. Usernames in SQLite, passwords in the OS credential store.
 
-    Kept separate from TFS credentials (different credential-store namespace).
+    A credential belongs to an application and a role, optionally for one environment (for example
+    UAT). Kept separate from TFS credentials (different credential-store namespace). Scripts of the
+    AI-Driven Automation framework can also have their own credentials, which override these.
     """
 
     def __init__(self, db: Database, secrets: SecretStore) -> None:
@@ -108,24 +110,28 @@ class CredentialProfiles:
         self.secrets = secrets
 
     @staticmethod
-    def key(application: str, role: str) -> str:
-        return f"{application.strip().lower()}|{role.strip().lower()}"
+    def key(application: str, role: str, environment: str | None = None) -> str:
+        base = f"{application.strip().lower()}|{role.strip().lower()}"
+        return f"{base}|{environment.strip().lower()}" if environment and environment.strip() else base
 
     def list(self) -> list[dict[str, Any]]:
-        rows = self.db.query("SELECT * FROM app_credentials ORDER BY application, role")
+        rows = self.db.query("SELECT * FROM app_credentials ORDER BY application, role, environment")
         for r in rows:
             r["has_password"] = self.secrets.has(APP_CREDENTIAL_NAMESPACE, r["id"])
         return rows
 
-    def save(self, application: str, role: str, username: str, password: str | None, login_url: str | None) -> dict[str, Any]:
+    def save(self, application: str, role: str, username: str, password: str | None, login_url: str | None,
+             environment: str | None = None) -> dict[str, Any]:
         if not application.strip() or not role.strip() or not username.strip():
             raise QAError("CREDENTIAL_INVALID", "Application, role and username are required.")
-        cid = self.key(application, role)
+        env = (environment or "").strip()
+        cid = self.key(application, role, env)
         self.db.execute(
-            "INSERT INTO app_credentials (id, application, role, username, login_url, updated_at) VALUES (?,?,?,?,?,?)"
+            "INSERT INTO app_credentials (id, application, role, environment, username, login_url, updated_at)"
+            " VALUES (?,?,?,?,?,?,?)"
             " ON CONFLICT(id) DO UPDATE SET username = excluded.username, login_url = excluded.login_url,"
             " updated_at = excluded.updated_at",
-            (cid, application.strip(), role.strip(), username.strip(), login_url, now_iso()),
+            (cid, application.strip(), role.strip(), env, username.strip(), login_url, now_iso()),
         )
         if password:
             self.secrets.set(APP_CREDENTIAL_NAMESPACE, cid, password)
@@ -136,13 +142,28 @@ class CredentialProfiles:
         if self.secrets.available:
             self.secrets.delete(APP_CREDENTIAL_NAMESPACE, cid)
 
+    def find(self, application: str | None, role: str, environment: str | None = None) -> dict[str, Any] | None:
+        """The credential of exactly this application and role: the environment's own, else the general one."""
+        if not application:
+            return None
+        if environment and environment.strip():
+            row = self.db.query_one("SELECT * FROM app_credentials WHERE id = ?",
+                                    (self.key(application, role, environment),))
+            if row:
+                return row
+        return self.db.query_one("SELECT * FROM app_credentials WHERE id = ?", (self.key(application, role),))
+
+    def password_of(self, cid: str) -> str | None:
+        return self.secrets.get(APP_CREDENTIAL_NAMESPACE, cid)
+
     def lookup(self, application: str | None, role: str, field: str) -> str | None:
         """Resolve {{CRED:role.field}} for a script's application."""
         row = None
         if application:
             row = self.db.query_one("SELECT * FROM app_credentials WHERE id = ?", (self.key(application, role),))
         if row is None:
-            rows = self.db.query("SELECT * FROM app_credentials WHERE lower(role) = ?", (role.strip().lower(),))
+            rows = self.db.query("SELECT * FROM app_credentials WHERE lower(role) = ? AND environment = ''",
+                                 (role.strip().lower(),))
             row = rows[0] if len(rows) == 1 else None
         if row is None:
             return None

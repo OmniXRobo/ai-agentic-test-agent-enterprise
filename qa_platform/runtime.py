@@ -7,6 +7,7 @@ from typing import Any
 
 from .agents.orchestration import OrchestrationAgent
 from .ai.gateway import AIGateway
+from .automation.framework.studio import ScriptStudio
 from .automation.service import AutomationService
 from .config import Paths, Settings
 from .credentials import SecretBackend, SecretStore
@@ -47,6 +48,7 @@ class Runtime:
     voice: VoiceService
     analytics: AnalyticsService
     reports: ReportService
+    studio: ScriptStudio
 
     def close(self) -> None:
         self.db.close()
@@ -79,7 +81,7 @@ def build_runtime(
     orchestration = OrchestrationAgent(bus, db, settings, paths, runs)
     secrets = SecretStore(secret_backend)
     tfs = TfsService(settings, secrets, bus, transport=tfs_transport)
-    ai = AIGateway(settings, bus, transport=ai_transport)
+    ai = AIGateway(settings, bus, transport=ai_transport, secrets=secrets)
     design = DesignService(bus, db, runs, tfs, ai)
     automation = AutomationService(paths, settings, bus, db, runs, secrets, tfs, ai)
     performance = PerformanceService(paths, settings, bus, db, runs, ai, automation.discovery)
@@ -88,5 +90,6 @@ def build_runtime(
                          transport=stt_transport)
     analytics = AnalyticsService(db, tfs, automation)
     reports = ReportService(paths, bus, db, tfs, automation, performance, defects, design, analytics)
+    studio = ScriptStudio(paths, settings, bus, db, runs, secrets, tfs, ai, automation, design)
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation, performance, defects, voice, analytics, reports)
+                   automation, performance, defects, voice, analytics, reports, studio)

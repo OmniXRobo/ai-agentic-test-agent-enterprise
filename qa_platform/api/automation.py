@@ -194,6 +194,9 @@ def healing(script_id: str | None = None, rt: Runtime = Depends(runtime)) -> dic
 
 @router.post("/healing/{healing_id}/apply")
 def apply_healing(healing_id: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    row = rt.db.query_one("SELECT script_id FROM healing_events WHERE id = ?", (healing_id,))
+    if row and str(row["script_id"] or "").startswith("FWS-"):  # framework script: update its Page Object
+        return {"ok": True, "framework": rt.studio.apply_healing(healing_id)}
     return {"ok": True, "script": rt.automation.runner.apply_healing(healing_id).model_dump()}
 
 
@@ -323,6 +326,7 @@ class CredentialIn(BaseModel):
     username: str = Field(min_length=1, max_length=200)
     password: str | None = None
     login_url: str | None = None
+    environment: str | None = Field(default=None, max_length=60)
 
 
 @router.get("/credentials")
@@ -334,7 +338,8 @@ def credentials(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 def save_credential(body: CredentialIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     if body.password and not rt.secrets.available:
         raise QAError("CREDENTIAL_STORE_UNAVAILABLE", "The Windows Credential Manager is not available.", status=503)
-    item = rt.automation.creds.save(body.application, body.role, body.username, body.password, body.login_url)
+    item = rt.automation.creds.save(body.application, body.role, body.username, body.password, body.login_url,
+                                    body.environment)
     return {"ok": True, "item": item}
 
 

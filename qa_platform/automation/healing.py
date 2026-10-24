@@ -4,14 +4,16 @@ Activated only after the original selector (and its recorded alternates) fail.
 Candidates come from the live DOM; each is scored against the fingerprint
 recorded with the step. Only a candidate with confidence >= threshold that is
 unambiguous (clearly ahead of the runner-up) is used.
+
+This module has no imports from the platform: the AI-Driven Automation framework
+workspace copies it verbatim into ``utilities/healing.py`` so generated Page
+Objects heal with exactly the same scoring as the Enterprise QA Runtime.
 """
 
 from __future__ import annotations
 
 from difflib import SequenceMatcher
 from typing import Any
-
-from .dsl import Target
 
 THRESHOLD = 0.62
 MIN_MARGIN = 0.08
@@ -40,7 +42,7 @@ def _sim(a: str | None, b: str | None) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def score(target: Target, cand: dict[str, Any]) -> tuple[float, dict[str, float]]:
+def score(target: Any, cand: dict[str, Any]) -> tuple[float, dict[str, float]]:
     parts: dict[str, float] = {}
     total_weight = 0.0
     for field, weight in WEIGHTS.items():
@@ -66,7 +68,7 @@ def score(target: Target, cand: dict[str, Any]) -> tuple[float, dict[str, float]
     return round(raw, 3), parts
 
 
-def rank(target: Target, candidates: list[dict[str, Any]], exclude: set[str] | None = None) -> list[dict[str, Any]]:
+def rank(target: Any, candidates: list[dict[str, Any]], exclude: set[str] | None = None) -> list[dict[str, Any]]:
     exclude = exclude or set()
     scored = []
     for cand in candidates:

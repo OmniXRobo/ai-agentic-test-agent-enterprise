@@ -224,6 +224,96 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_reports_created ON reports(created_at);
     """,
+    # 9: AI-Driven Automation framework (Page Object Model) scripts, versions, generation jobs;
+    #    environment-specific application credentials; the Page Object locator a healing applies to
+    """
+    CREATE TABLE IF NOT EXISTS framework_scripts (
+        id TEXT PRIMARY KEY,
+        method TEXT NOT NULL,
+        project TEXT,
+        sprint TEXT,
+        user_story_id TEXT,
+        user_story_title TEXT,
+        acceptance_criteria TEXT,
+        test_case_id TEXT,
+        test_case_title TEXT,
+        file TEXT NOT NULL,
+        data_file TEXT NOT NULL,
+        application TEXT,
+        environment TEXT,
+        credential_role TEXT,
+        base_url TEXT,
+        status TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        generated_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        file_sha256 TEXT,
+        components TEXT,
+        notes TEXT,
+        warnings TEXT,
+        cred_username TEXT,
+        job_id TEXT,
+        last_result TEXT,
+        last_run_id TEXT,
+        last_run_at TEXT,
+        archived INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS ix_fws_tc ON framework_scripts(test_case_id);
+    CREATE TABLE IF NOT EXISTS framework_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        script_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        test_snapshot TEXT,
+        data_snapshot TEXT,
+        details TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_fwv_script ON framework_versions(script_id, version);
+    CREATE TABLE IF NOT EXISTS framework_jobs (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        finished_at TEXT,
+        request TEXT NOT NULL,
+        summary TEXT
+    );
+    CREATE TABLE IF NOT EXISTS framework_job_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        user_story_id TEXT,
+        user_story_title TEXT,
+        test_case_id TEXT NOT NULL,
+        test_case_title TEXT,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL,
+        script_id TEXT,
+        error_code TEXT,
+        error TEXT,
+        details TEXT,
+        log TEXT,
+        started_at TEXT,
+        finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_fwji_job ON framework_job_items(job_id, position);
+    ALTER TABLE healing_events ADD COLUMN component TEXT;
+    CREATE TABLE app_credentials_new (
+        id TEXT PRIMARY KEY,
+        application TEXT NOT NULL,
+        role TEXT NOT NULL,
+        environment TEXT NOT NULL DEFAULT '',
+        username TEXT NOT NULL,
+        login_url TEXT,
+        updated_at TEXT NOT NULL,
+        UNIQUE (application, role, environment)
+    );
+    INSERT INTO app_credentials_new (id, application, role, environment, username, login_url, updated_at)
+        SELECT id, application, role, '', username, login_url, updated_at FROM app_credentials;
+    DROP TABLE app_credentials;
+    ALTER TABLE app_credentials_new RENAME TO app_credentials;
+    """,
 ]
 
 

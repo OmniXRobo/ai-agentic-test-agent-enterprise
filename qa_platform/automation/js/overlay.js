@@ -3,7 +3,7 @@
 // application's DOM behaviour, and it is removed after each action.
 (() => {
   if (window.__qaOverlay) return;
-  let host = null, cursor = null, box = null, tag = null;
+  let host = null, cursor = null, box = null, tag = null, banner = null;
 
   function ensure() {
     if (host && host.isConnected) return;
@@ -19,14 +19,16 @@
         .box.assert{border-color:#a855f7;box-shadow:0 0 0 4px rgba(168,85,247,.25);}
         .box.heal{border-color:#f59e0b;box-shadow:0 0 0 4px rgba(245,158,11,.3);}
         .tag{position:fixed;font:12px/1.4 Segoe UI,sans-serif;background:#111827;color:#fff;padding:2px 8px;border-radius:4px;display:none;white-space:nowrap;}
+        .banner{position:fixed;right:12px;bottom:12px;max-width:60vw;font:12px/1.4 Segoe UI,sans-serif;background:rgba(17,24,39,.92);color:#fff;padding:6px 10px;border-radius:6px;border-left:4px solid #22c55e;display:none;}
         .ripple{position:fixed;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;border:3px solid #22c55e;animation:r .5s ease-out forwards;}
         @keyframes r{from{transform:scale(.3);opacity:1}to{transform:scale(1.6);opacity:0}}
       </style>
       <svg class="cursor" viewBox="0 0 24 24"><path d="M3 2l7 19 2.5-7.5L20 11z" fill="#fff" stroke="#111" stroke-width="1.5" stroke-linejoin="round"/></svg>
-      <div class="box"></div><div class="tag"></div>`;
+      <div class="box"></div><div class="tag"></div><div class="banner"></div>`;
     cursor = root.querySelector(".cursor");
     box = root.querySelector(".box");
     tag = root.querySelector(".tag");
+    banner = root.querySelector(".banner");
     host.__root = root;
     (document.body || document.documentElement).appendChild(host);
   }
@@ -58,6 +60,12 @@
       if (!host) return;
       box.style.display = "none";
       tag.style.display = "none";
+    },
+    // Current executing agent and action, shown in a corner (kept until replaced or cleared with an empty text).
+    status(text) {
+      ensure();
+      banner.textContent = text || "";
+      banner.style.display = text ? "block" : "none";
     },
     remove() {
       if (host) host.remove();

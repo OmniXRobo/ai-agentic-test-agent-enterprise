@@ -63,7 +63,7 @@ const NAV = [
   ["Settings", [
     ["settings", "Preferences", settings],
     ["tfs-settings", "TFS Connection", tfsSettings],
-    ["ai-settings", "On-Premise AI", aiSettings],
+    ["ai-settings", "AI Runtime", aiSettings],
     ["app-credentials", "Application Credentials", appCredentials],
     ["voice", "Voice Commands", voicePage],
   ]],
