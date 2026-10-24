@@ -142,11 +142,19 @@ git-ignored. Secrets are never written to `settings.json` or logs.
 * Follow-ups use the conversation's context and the page you are on: "open user story 118", then "generate test
   cases"; "run test case 1280", then "run it again". A missing detail is asked for ("Which test case?").
   Creating defects in TFS asks you to say confirm first.
-* **Speech recognition**: a local whisper.cpp server or any OpenAI-compatible speech server (works offline; nothing is
-  downloaded), or the browser's recognition (needs Internet in Chrome and Edge), or off (typed commands only).
+* **Speech recognition**: the built-in offline recognizer (default; a small Vosk English model bundled in the offline
+  package under `runtime\speech`, so the microphone works with no Internet and no speech server), a local whisper.cpp
+  server or any OpenAI-compatible speech server, the browser's recognition (needs Internet in Chrome and Edge), or off
+  (typed commands only). "JMeter" is understood however the recognizer spells it ("j meter", "jay meter").
   Sentences outside the fixed phrases are mapped by the On-Premise AI when it is available; it can only choose a
   supported command and never adds an ID you did not say.
-* **Spoken replies** use voices installed on the PC only, so they work without Internet.
+* **Spoken replies** use voices installed on the PC only, so they work without Internet. The default **pilot radio**
+  style answers like a pilot on the radio: "Roger, sir. Stand by." as soon as you stop talking, then "Copy, sir.
+  Starting test case creation." once the command is understood, with squelch, static and a roger beep. The reply is
+  rendered by a Windows voice (adult male by default) and played through a radio filter; without Windows voices the
+  browser's voice is used with the static around it. Choose "Plain voice" under Systems Configuration to turn it off.
+* The Voice Commands page is a cockpit-style console: radar scope with the microphone, live microphone level,
+  RECEIVING / PROCESSING / TRANSMITTING status, and a comms log.
 
 ## What works in Stage 8
 

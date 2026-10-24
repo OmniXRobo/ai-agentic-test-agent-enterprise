@@ -85,6 +85,7 @@ def test_validation_reports_missing_runtime_parts_without_secrets(tmp_path):
     assert by["Java runtime"].status == "FAIL" and by["JMeter"].status == "FAIL"
     assert by["Chromium for Playwright"].status == "FAIL"
     assert by["Data folder"].status == "PASS" and by["On-Premise AI files"].status == "INFO"
+    assert by["Offline speech model"].status == "INFO"
     assert by["Offline operation"].status == "INFO"
     text = val.render(results, app, manifest)
     assert "RESULT: FAIL" in text and "Version: 1.0.0" in text

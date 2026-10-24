@@ -26,5 +26,14 @@
     "publisher": "Apache Software Foundation",
     "checksum_source": "apache-jmeter-5.6.3.tgz.sha512 from archive.apache.org (SHA-512 verified, SHA-256 pinned here)",
     "license": "Apache-2.0"
+  },
+  "speech_model": {
+    "name": "Vosk speech model (small English, offline voice commands)",
+    "version": "0.15",
+    "url": "https://huggingface.co/rhasspy/vosk-models/resolve/main/en/vosk-model-small-en-us-0.15.zip",
+    "sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
+    "publisher": "Alpha Cephei (vosk-model-small-en-us-0.15), mirrored by Rhasspy on Hugging Face",
+    "checksum_source": "Git LFS SHA-256 of en/vosk-model-small-en-us-0.15.zip in huggingface.co/rhasspy/vosk-models",
+    "license": "Apache-2.0"
   }
 }

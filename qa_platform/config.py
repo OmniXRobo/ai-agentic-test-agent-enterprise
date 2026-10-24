@@ -65,9 +65,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "performance": {"jmeter_home": "", "java_home": ""},
     "playback": {"visual_cursor": True, "highlight": True},
     "voice": {
+        # builtin = the bundled offline recognizer (Vosk model in runtime/speech, works offline);
         # local = a whisper.cpp / OpenAI-compatible speech server on this PC or network (works offline);
         # browser = the browser's own recognition (Chrome/Edge use an online service); off = typed commands only
-        "stt_engine": "local",
+        "stt_engine": "builtin",
+        "stt_model_dir": "",
         "stt_url": "",
         "stt_api": "whisper_cpp",  # whisper_cpp (/inference) | openai (/audio/transcriptions)
         "stt_model": "",
@@ -75,6 +77,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "speak_replies": True,
         "tts_voice": "",
         "tts_rate": 1.0,
+        # radio = replies sound like a pilot on the radio (Windows voice through a radio filter, squelch, static)
+        "reply_style": "radio",
+        "radio_voice": "",
     },
 }
 

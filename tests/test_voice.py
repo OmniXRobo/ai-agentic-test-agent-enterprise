@@ -49,6 +49,14 @@ CONV = "conv-test-0001"
     ("run it again", "run_test_case", {"play": False}),
     ("yes", "confirm", {}),
     ("never mind", "cancel", {}),
+    ("Create the test case", "generate_test_cases", {}),
+    ("Create the automation test case", "generate_automation", {}),
+    ("Create the automated test case", "generate_automation", {}),
+    ("Do JMeter", "run_performance", {}),
+    ("do j meter test", "run_performance", {}),
+    ("Do the performance testing", "run_performance", {}),
+    ("Do a load test", "run_performance", {"kind": "load"}),
+    ("Create defects for the performance test", "create_defects", {"source": "performance"}),
 ])
 def test_spec_examples_map_to_supported_commands(text, command, params):
     intent = parse(text)
@@ -220,9 +228,9 @@ def test_creating_defects_by_voice_needs_confirmation(env, site):
 def test_local_speech_server_transcription(env):
     c, ado, rt, stt = env
     r = c.post("/api/voice/transcribe", content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
-    assert r.status_code == 409 and r.json()["error_code"] == "VOICE_STT_NOT_CONFIGURED"
+    assert r.status_code == 409 and r.json()["error_code"] == "VOICE_MODEL_MISSING"  # built-in engine, no model here
     assert c.put("/api/voice/settings", json={"stt_url": "ftp://x"}).status_code == 400
-    c.put("/api/voice/settings", json={"stt_url": "http://127.0.0.1:8081/", "language": "en"})
+    c.put("/api/voice/settings", json={"stt_engine": "local", "stt_url": "http://127.0.0.1:8081/", "language": "en"})
     r = c.post("/api/voice/transcribe", content=b"RIFF....WAVE", headers={"content-type": "audio/wav"}).json()
     assert r["text"] == "Open user story 118."
     req = stt.requests[-1]
@@ -256,3 +264,55 @@ def test_load_test_by_voice_overrides_this_run_only(env, site):
     used = json.loads(rt.performance.run_file(run["run_id"], "plan.json").read_text())
     assert used["profile"]["users"] == 3 and used["profile"]["duration_s"] == 10
     assert rt.performance.get_plan(plan.id).profile.users == 1  # the saved plan is unchanged
+
+
+def test_builtin_offline_recognizer_and_radio_voice(env, monkeypatch, tmp_path):
+    import io
+    import sys
+    import types
+    import wave
+
+    c, ado, rt, stt = env
+    assert c.get("/api/voice/settings").json()["stt_engine"] == "builtin"
+    diag = c.post("/api/voice/diagnostics").json()["checks"]
+    assert diag[0]["name"] == "Built-in offline speech recognition" and diag[0]["status"] in ("NOT_CONFIGURED", "FAIL")
+
+    model = tmp_path / "vosk-model-small-en-us-0.15"
+    (model / "am").mkdir(parents=True)
+    (model / "conf").mkdir()
+    fed: list[bytes] = []
+
+    class Recognizer:
+        def __init__(self, m, rate):
+            assert rate == 16000
+
+        def AcceptWaveform(self, data):
+            fed.append(data)
+
+        def FinalResult(self):
+            return json.dumps({"text": "do j meter test"})
+
+    fake = types.SimpleNamespace(SetLogLevel=lambda n: None, Model=lambda path: ("model", path), KaldiRecognizer=Recognizer)
+    monkeypatch.setitem(sys.modules, "vosk", fake)
+    c.put("/api/voice/settings", json={"stt_model_dir": str(tmp_path)})
+    assert c.post("/api/voice/diagnostics").json()["checks"][0]["status"] == "PASS"
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\0\0" * 16000)
+    r = c.post("/api/voice/transcribe", content=buf.getvalue(), headers={"content-type": "audio/wav"}).json()
+    assert r["text"] == "do j meter test" and sum(map(len, fed)) == 32000
+    assert say(c, r["text"])["command"] == "run_performance"
+    r = c.post("/api/voice/transcribe", content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
+    assert r.status_code == 422 and r.json()["error_code"] == "VOICE_AUDIO_FORMAT"
+
+    # An old saved "local" engine without a URL falls back to the built-in recognizer.
+    rt.settings.update({"voice": {"stt_engine": "local", "stt_url": ""}})
+    assert c.get("/api/voice/settings").json()["stt_engine"] == "builtin"
+
+    if sys.platform != "win32":  # Windows voices exist only on Windows; the dashboard then uses the browser voice
+        assert c.get("/api/voice/radio-voices").json() == {"ok": True, "available": False, "voices": []}
+        r = c.post("/api/voice/speak", json={"text": "Roger, sir. Stand by."})
+        assert r.status_code == 409 and r.json()["error_code"] == "VOICE_TTS_UNAVAILABLE"
