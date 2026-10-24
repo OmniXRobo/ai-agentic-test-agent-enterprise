@@ -91,8 +91,13 @@ def words_to_numbers(text: str) -> str:
     return " ".join(out)
 
 
+# How offline recognizers tend to hear "JMeter".
+_JMETER = re.compile(r"\b(?:j|jay|gee|g)\s?\.?\s?meters?\b")
+
+
 def normalize(text: str) -> str:
     text = text.lower().replace("-", " ").replace("’", "'")
+    text = _JMETER.sub("jmeter", text)
     text = re.sub(r"[^\w\s#'.]", " ", text)
     text = re.sub(r"\bnumber\b|#", " ", text)
     return re.sub(r"\s+", " ", words_to_numbers(text)).strip(" .")
@@ -143,7 +148,7 @@ def parse(text: str) -> Intent | None:
         kind = {"story": "user story", "bug": "defect", "issue": "defect"}.get(m.group(2), m.group(2))
         return Intent("open_work_item", {"kind": kind, "id": int(m.group(3))})
 
-    if re.search(r"\b(generate|create|design|write)\b.*\btest ?cases?\b", t) and "automation" not in t:
+    if re.search(r"\b(generate|create|design|write|make|prepare)\b.*\btest ?cases?\b", t) and not re.search(r"\bautomat", t):
         m = re.search(r"\b(?:user story|story)\s+" + _ID, t)
         return Intent("generate_test_cases", {"user_story_id": int(m.group(1))} if m else {})
 
@@ -161,8 +166,9 @@ def parse(text: str) -> Intent | None:
     if re.search(r"\b(run|execute|start|play)\b.*\ball\b.*\b(automated |automation |functional )?(tests?|scripts?)\b", t):
         return Intent("run_all_tests")
 
-    if re.search(r"\b(load|stress|spike|soak|performance|jmeter)\b.*\btest\b|\b(run|start)\b.*\bjmeter\b", t) and \
-            re.search(r"\b(run|start|execute|launch|begin|do)\b", t):
+    if re.search(r"\b(load|stress|spike|soak|performance)\b.*\btest(s|ing)?\b|\bjmeter\b", t) and \
+            re.search(r"\b(run|start|execute|launch|begin|do|perform|create|kick off)\b", t) and \
+            not re.search(r"\b(defects?|bugs?|report|results?)\b", t):
         p = {}
         kind = re.search(r"\b(load|stress|spike|soak)\b", t)
         if kind:

@@ -278,10 +278,17 @@ microphone ─► speech recognition ─► intent analysis ─► validation �
   not change and the plan actually used is in the run folder (`plan.json`, `plan.jmx`).
 * After a failed run the agent waits for the automatic failure analysis (`DefectService.wait_for_automatic`) and
   reports a new defect, an existing defect that received the new evidence, a likely duplicate, or a draft to review.
-* Speech recognition: `POST /api/voice/transcribe` takes 16 kHz mono WAV recorded in the browser and forwards it to the
-  configured server (`/inference` for whisper.cpp, `/audio/transcriptions` for OpenAI-compatible servers) without
-  proxies. Browser recognition is offered with a warning that Chrome and Edge use an online service. Replies use
-  `speechSynthesis` voices with `localService` only.
+* Speech recognition: `POST /api/voice/transcribe` takes 16 kHz mono WAV recorded in the browser. With the default
+  `builtin` engine `voice/offline_stt.py` recognizes it in-process with Vosk and the model in `runtime/speech` (or
+  `<data>/speech-model`, or `voice.stt_model_dir`); the `local` engine forwards it to the configured server
+  (`/inference` for whisper.cpp, `/audio/transcriptions` for OpenAI-compatible servers) without proxies. A saved
+  `local` engine with no URL is treated as `builtin`. Browser recognition is offered with a warning that Chrome and
+  Edge use an online service.
+* Spoken replies: with `voice.reply_style = "radio"` the dashboard wraps each reply in radio phrasing ("Roger, sir.
+  Stand by." on capture, "Copy, sir. Starting test case creation." on acceptance) and asks `POST /api/voice/speak` for
+  a WAV rendered by a Windows voice through System.Speech (`voice/tts.py`, PowerShell, cached in `<data>/voice-cache`).
+  `web/js/radio.js` plays it through a band-pass, drive and compressor chain with squelch, static and a roger beep.
+  Without Windows voices it falls back to `speechSynthesis` voices with `localService` only, with the static around it.
 * Tests (`tests/test_voice.py`) cover every example sentence from the requirements, follow-ups, asking for missing
   details, the AI fallback and its ID guard, confirmations, a real Playwright failure reported with the new TFS defect
   and its recurrence, a real JMeter run with spoken overrides, and the speech server API.

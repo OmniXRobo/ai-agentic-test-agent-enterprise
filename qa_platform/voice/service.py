@@ -4,9 +4,12 @@ USER SPEAKS -> speech recognition -> intent analysis -> command validation ->
 voice acknowledgement -> execute a supported dashboard action -> monitor it ->
 voice completion or failure response.
 
-* Speech recognition runs in the browser or on a local Whisper server
-  (whisper.cpp ``/inference`` or an OpenAI-compatible ``/audio/transcriptions``
-  endpoint) configured by URL. Nothing is downloaded and no other host is called.
+* Speech recognition runs on the bundled offline recognizer (offline_stt.py),
+  in the browser, or on a local Whisper server (whisper.cpp ``/inference`` or an
+  OpenAI-compatible ``/audio/transcriptions`` endpoint) configured by URL.
+  Nothing is downloaded and no other host is called.
+* Replies can be rendered with the PC's Windows voices (tts.py) so the
+  dashboard can play them as radio transmissions.
 * Every action calls the same services the dashboard pages use; there is no
   separate automation path.
 * Conversations keep context (the user story, test case, run and performance
@@ -46,6 +49,8 @@ from ..storage.db import Database, dumps, loads
 from ..tfs.service import TfsService
 from . import intents
 from .intents import Intent
+from .offline_stt import OfflineRecognizer
+from .tts import SystemVoice
 
 log = get_logger("voice")
 
@@ -160,24 +165,36 @@ class VoiceService:
         self.defects = defects
         self.transport = transport
         self.agent = VoiceCommandAgent(bus)
+        self.offline = OfflineRecognizer(settings)
+        self.system_voice = SystemVoice(settings.path.parent / "voice-cache")
         self._conversations: dict[str, Conversation] = {}
         self._lock = threading.Lock()
 
     # ---- settings and speech recognition ------------------------------------------------------
 
     def config(self) -> dict[str, Any]:
-        return self.settings.section("voice")
+        cfg = self.settings.section("voice")
+        # A local speech server without a URL cannot work; earlier versions saved exactly that as the default.
+        if cfg.get("stt_engine") == "local" and not (cfg.get("stt_url") or "").strip():
+            cfg = {**cfg, "stt_engine": "builtin"}
+        return cfg
 
     def transcribe(self, audio: bytes, content_type: str = "audio/wav") -> str:
         cfg = self.config()
+        if not audio:
+            raise QAError("VOICE_NO_AUDIO", "No audio was received.", status=422)
+        if cfg.get("stt_engine") == "builtin":
+            text = self.offline.transcribe(audio)
+            if not text:
+                raise QAError("VOICE_NOTHING_HEARD", "No speech was recognized. Try again a little closer to the "
+                                                     "microphone.", status=422)
+            return text
         if cfg.get("stt_engine") != "local":
             raise QAError("VOICE_STT_NOT_LOCAL", "Speech recognition is not set to the local speech server.", status=409)
         url = (cfg.get("stt_url") or "").rstrip("/")
         if not url:
             raise QAError("VOICE_STT_NOT_CONFIGURED", "No local speech recognition server URL is set in Voice settings.",
                           status=409)
-        if not audio:
-            raise QAError("VOICE_NO_AUDIO", "No audio was received.", status=422)
         language = cfg.get("language") or "en"
         if cfg.get("stt_api") == "openai":
             path, data = "/audio/transcriptions", {"model": cfg.get("stt_model") or "whisper-1",
@@ -208,7 +225,10 @@ class VoiceService:
         cfg = self.config()
         checks: list[dict[str, str]] = []
         engine = cfg.get("stt_engine")
-        if engine == "local":
+        if engine == "builtin":
+            status, detail = self.offline.status()
+            checks.append({"name": "Built-in offline speech recognition", "status": status, "detail": detail})
+        elif engine == "local":
             url = (cfg.get("stt_url") or "").rstrip("/")
             if not url:
                 checks.append({"name": "Local speech server", "status": "NOT_CONFIGURED",
@@ -229,6 +249,11 @@ class VoiceService:
         else:
             checks.append({"name": "Speech recognition", "status": "NOT_CONFIGURED",
                            "detail": "Voice input is off. Typed commands still work."})
+        if cfg.get("speak_replies") and cfg.get("reply_style") == "radio":
+            n = len(self.system_voice.voices())
+            checks.append({"name": "Radio voice (Windows voices)", "status": "PASS" if n else "WARN",
+                           "detail": f"{n} Windows voices found; replies are played as radio transmissions." if n else
+                           "No Windows voices here; the browser's voice is used with radio static instead."})
         name = "On-Premise AI for free-form requests"
         if not self.ai.config()["base_url"]:
             checks.append({"name": name, "status": "NOT_CONFIGURED", "detail": "Only the fixed command phrases are understood."})
@@ -241,6 +266,13 @@ class VoiceService:
                 checks.append({"name": name, "status": "WARN",
                                "detail": f"{exc.message} Only the fixed command phrases are understood until it is reachable."})
         return {"checks": checks}
+
+    def radio_voices(self) -> dict[str, Any]:
+        return {"available": self.system_voice.available(), "voices": self.system_voice.voices()}
+
+    def speak(self, text: str) -> bytes:
+        cfg = self.config()
+        return self.system_voice.render(text, cfg.get("radio_voice") or "", float(cfg.get("tts_rate") or 1))
 
     # ---- conversations -------------------------------------------------------------------------
 

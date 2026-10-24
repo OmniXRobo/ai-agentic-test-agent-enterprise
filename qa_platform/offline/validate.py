@@ -30,7 +30,7 @@ from . import manifest as mf
 
 WINDOWS = sys.platform == "win32"
 REQUIRED_MODULES = {"fastapi": "fastapi", "uvicorn": "uvicorn", "httpx": "httpx", "pydantic": "pydantic",
-                    "keyring": "keyring", "playwright": "playwright", "pytest": "pytest"}
+                    "keyring": "keyring", "playwright": "playwright", "pytest": "pytest", "vosk": "vosk"}
 
 
 @dataclass
@@ -126,6 +126,7 @@ class Validator:
             ("Data folder", self.check_data),
             ("Dashboard port", self.check_port),
             ("On-Premise AI files", self.check_ai_files),
+            ("Offline speech model", self.check_speech_files),
         ]
         if self.quick:  # used by the installer before switching versions: skip the slow launches
             items = [i for i in items if i[0] not in ("JMeter", "Chromium for Playwright")]
@@ -306,6 +307,14 @@ class Validator:
         server = next((p for p in ai.rglob("llama-server*") if p.is_file()), None)
         return Check("On-Premise AI files", "PASS", f"Bundled model: {sizes}"
                                                     + (f"; server: {server.name}" if server else "; no llama-server binary bundled"))
+
+    def check_speech_files(self) -> Check:
+        speech = self.app / "runtime" / "speech"
+        models = sorted(p.parent for p in speech.glob("*/am")) if speech.is_dir() else []
+        if not models:
+            return Check("Offline speech model", "INFO", "No speech model is bundled. Voice commands can be typed, "
+                                                         "or use a local speech server.")
+        return Check("Offline speech model", "PASS", f"Voice commands are recognized on this PC with {models[0].name}.")
 
 
 # ---- report ----------------------------------------------------------------------------------------

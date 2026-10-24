@@ -294,3 +294,125 @@ table.data td.num, table.data th.num { text-align: right; font-variant-numeric: 
 @media (max-width: 720px) { .voice-pop { position: fixed; left: 16px; right: 16px; top: 60px; width: auto; } }
 .split-2 { grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); align-items: start; }
 @media (max-width: 1100px) { .split-2 { grid-template-columns: 1fr; } }
+
+/* ---- Voice Commands: air force cockpit console (always dark, whatever the dashboard theme) ---- */
+.cockpit {
+  --hud: #5dff7a;
+  --hud-dim: rgba(93, 255, 122, 0.55);
+  --hud-soft: rgba(93, 255, 122, 0.12);
+  --amber: #ffb22e;
+  --bg: #050906;
+  --surface: #0a120c;
+  --surface-2: #0f1b12;
+  --border: #1e3a25;
+  --text: #cdf7d5;
+  --muted: #74a281;
+  --accent: #2fbf55;
+  --accent-soft: rgba(47, 191, 85, 0.16);
+  --run: var(--hud);
+  --fail: #ff4b3e;
+  --fail-soft: rgba(255, 75, 62, 0.16);
+  --warn: var(--amber);
+  --warn-soft: rgba(255, 178, 46, 0.14);
+  color-scheme: dark;
+  position: relative; display: grid; gap: 14px; padding: 16px; margin: -4px;
+  color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  background:
+    repeating-linear-gradient(0deg, rgba(93, 255, 122, 0.025) 0 1px, transparent 1px 3px),
+    radial-gradient(1200px 500px at 50% -10%, #102417 0%, transparent 60%),
+    linear-gradient(180deg, #070d09, #040705);
+  font-family: Consolas, "Cascadia Mono", "Lucida Console", "Courier New", monospace;
+}
+.cockpit input, .cockpit select { background: #050a06; color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 6px 8px; font: inherit; }
+.cockpit input:focus, .cockpit select:focus { outline: 1px solid var(--hud); border-color: var(--hud); }
+.cockpit .btn { border-radius: 3px; text-transform: uppercase; letter-spacing: .08em; font-family: inherit; font-size: 12px; color: var(--text); }
+.cockpit .btn.primary { background: #134b23; border-color: var(--hud-dim); color: var(--hud); }
+.cockpit .btn.primary:hover { background: #1a6630; }
+.cockpit h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: .22em; color: var(--hud); font-weight: 700; }
+.cockpit h3::before { content: "// "; color: var(--hud-dim); }
+.cockpit .muted { color: var(--muted); }
+.cockpit .pill { border-radius: 2px; text-transform: uppercase; }
+
+.ck-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border); background: rgba(0, 0, 0, .35); }
+.ck-callsign { font-weight: 700; letter-spacing: .28em; color: var(--hud); text-shadow: 0 0 8px rgba(93, 255, 122, .45); }
+.ck-wing { color: var(--amber); margin-right: 6px; }
+.ck-meta { display: flex; gap: 8px; flex-wrap: wrap; }
+.ck-meta span { font-size: 11px; letter-spacing: .14em; color: var(--amber); border: 1px solid rgba(255, 178, 46, .45); padding: 1px 7px; }
+.ck-clock { margin-left: auto; font-size: 13px; letter-spacing: .12em; color: var(--hud); font-variant-numeric: tabular-nums; }
+
+.ck-grid { display: grid; gap: 14px; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); align-items: stretch; }
+@media (max-width: 960px) { .ck-grid { grid-template-columns: 1fr; } .ck-clock { margin-left: 0; } }
+.ck-panel { position: relative; padding: 14px; background: rgba(10, 18, 12, .85); border: 1px solid var(--border); }
+/* HUD corner brackets */
+.ck-panel::before, .ck-panel::after { content: ""; position: absolute; width: 14px; height: 14px; border: 2px solid var(--hud-dim); pointer-events: none; }
+.ck-panel::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+.ck-panel::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+
+.ck-scope { display: grid; justify-items: center; gap: 10px; align-content: start; }
+.radar {
+  position: relative; width: min(240px, 70vw); aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center; overflow: hidden;
+  border: 2px solid var(--hud-dim); box-shadow: 0 0 24px rgba(93, 255, 122, .15), inset 0 0 40px rgba(93, 255, 122, .12);
+  background:
+    linear-gradient(var(--hud-soft), var(--hud-soft)) center / 1px 100% no-repeat,
+    linear-gradient(var(--hud-soft), var(--hud-soft)) center / 100% 1px no-repeat,
+    repeating-radial-gradient(circle, transparent 0 29px, rgba(93, 255, 122, .22) 29px 30px),
+    radial-gradient(circle, #0c2414 0%, #040a06 75%);
+}
+.radar-sweep {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(93, 255, 122, .45), rgba(93, 255, 122, 0) 70deg, transparent 360deg);
+  animation: sweep 4s linear infinite;
+}
+@keyframes sweep { to { transform: rotate(360deg); } }
+.cockpit[data-state="listening"] .radar-sweep { animation-duration: 1.4s; background: conic-gradient(from 0deg, rgba(255, 75, 62, .5), rgba(255, 75, 62, 0) 70deg, transparent 360deg); }
+.cockpit[data-state="thinking"] .radar-sweep { animation-duration: .9s; background: conic-gradient(from 0deg, rgba(255, 178, 46, .5), rgba(255, 178, 46, 0) 70deg, transparent 360deg); }
+.cockpit .mic-btn {
+  position: relative; z-index: 1; width: 92px; height: 92px; border-radius: 50%;
+  background: radial-gradient(circle at 50% 35%, #1d6b33, #0b2a14); color: var(--hud);
+  border: 2px solid var(--hud); box-shadow: 0 0 18px rgba(93, 255, 122, .45), inset 0 0 14px rgba(0, 0, 0, .6);
+}
+.cockpit .mic-btn:hover:not(:disabled) { box-shadow: 0 0 28px rgba(93, 255, 122, .7), inset 0 0 14px rgba(0, 0, 0, .6); }
+.cockpit .mic-btn.on { background: radial-gradient(circle at 50% 35%, #8a1d16, #3a0906); color: #ffd7d3; border-color: var(--fail); animation: micpulse 1.2s ease-in-out infinite; }
+.ck-status { display: flex; align-items: center; gap: 10px; font-size: 18px; letter-spacing: .3em; }
+.ck-status strong { color: var(--hud); text-shadow: 0 0 10px rgba(93, 255, 122, .5); }
+.ck-lamp { width: 12px; height: 12px; border-radius: 50%; background: var(--hud); box-shadow: 0 0 10px var(--hud); }
+.cockpit[data-state="listening"] .ck-lamp { background: var(--fail); box-shadow: 0 0 12px var(--fail); animation: blink .6s steps(2) infinite; }
+.cockpit[data-state="listening"] .ck-status strong { color: #ff8a80; }
+.cockpit[data-state="thinking"] .ck-lamp, .cockpit[data-state="speaking"] .ck-lamp { background: var(--amber); box-shadow: 0 0 12px var(--amber); animation: blink .9s steps(2) infinite; }
+.cockpit[data-state="thinking"] .ck-status strong, .cockpit[data-state="speaking"] .ck-status strong { color: var(--amber); }
+@keyframes blink { 50% { opacity: .25; } }
+.ck-hint { font-size: 12px; color: var(--muted); text-align: center; min-height: 2.6em; }
+.ck-meter { display: flex; align-items: center; gap: 3px; height: 34px; width: 100%; justify-content: center; }
+.ck-meter i { display: block; width: 5px; height: 100%; background: linear-gradient(0deg, var(--hud), var(--amber) 80%, var(--fail)); transform: scaleY(.08); transition: transform 80ms linear; border-radius: 1px; }
+.ck-readout { width: 100%; display: flex; justify-content: space-between; gap: 8px; font-size: 11px; letter-spacing: .14em; border-top: 1px dashed var(--border); padding-top: 6px; }
+.ck-readout span { color: var(--muted); }
+.ck-readout b { color: var(--amber); font-weight: 600; text-align: right; }
+
+.ck-comms { display: flex; flex-direction: column; min-height: 420px; }
+.cockpit .vlog { flex: 1; max-height: 440px; margin: 0 0 12px; padding: 10px; background: rgba(0, 0, 0, .45); border: 1px solid var(--border); }
+.cockpit .vmsg { border-radius: 2px; background: transparent; border-left: 3px solid var(--amber); padding: 6px 10px; }
+.cockpit .vmsg.you { align-self: stretch; max-width: none; background: rgba(255, 178, 46, .06); }
+.cockpit .vmsg.agent { border-left-color: var(--hud); background: rgba(93, 255, 122, .05); max-width: none; align-self: stretch; }
+.cockpit .vwho { font-size: 11px; letter-spacing: .2em; color: var(--amber); }
+.cockpit .vmsg.agent .vwho { color: var(--hud); }
+.ck-empty { color: var(--muted); margin: 0; }
+.ck-typed { flex-wrap: nowrap; }
+.ck-typed input { flex: 1; min-width: 0; }
+.ck-prompt { color: var(--hud); font-weight: 700; }
+.cockpit .chip { border-radius: 2px; background: rgba(93, 255, 122, .06); border-color: var(--border); color: var(--text); font-family: inherit; font-size: 12px; }
+.cockpit .chip:hover { border-color: var(--hud); color: var(--hud); }
+.ck-config summary { cursor: pointer; font-size: 12px; letter-spacing: .22em; color: var(--hud); font-weight: 700; }
+.ck-config[open] summary { margin-bottom: 12px; }
+.ck-config form.settings h3 { margin-top: 6px; }
+@media (prefers-reduced-motion: reduce) {
+  .radar-sweep, .cockpit .mic-btn.on, .ck-lamp { animation: none !important; }
+}
+.cockpit, .ck-panel { min-width: 0; }
+.cockpit form.settings select, .cockpit form.settings input:not([type=checkbox]) { max-width: 100%; min-width: 0; }
+.cockpit .chip { white-space: normal; text-align: left; max-width: 100%; }
+@media (max-width: 600px) {
+  .cockpit { padding: 10px; margin: 0; letter-spacing: 0; }
+  .ck-panel { padding: 12px 10px; }
+  .ck-callsign { letter-spacing: .14em; font-size: 13px; }
+  .ck-status { letter-spacing: .18em; }
+}

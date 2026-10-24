@@ -10,7 +10,8 @@ The result, ``dist_offline\\AIAgenticTestAgent-Offline-<version>\\``, runs on PC
     VALIDATE_OFFLINE.cmd     checks the package on the target PC
     README_OFFLINE.txt
     payload\\                 the application with runtime\\python, runtime\\jre, runtime\\apache-jmeter,
-                             runtime\\ms-playwright (and runtime\\ai if --ai-dir is given), MANIFEST.json, DEPENDENCIES.md
+                             runtime\\ms-playwright, runtime\\speech (offline voice commands)
+                             (and runtime\\ai if --ai-dir is given), MANIFEST.json, DEPENDENCIES.md
 
 Every download is pinned in packaging/offline-lock.json and checked against its SHA-256; Python packages are
 installed from packaging/requirements-offline-win.txt with --require-hashes. Chromium is fetched by Playwright's
@@ -43,6 +44,8 @@ LOCK = json.loads((REPO / "packaging" / "offline-lock.json").read_text(encoding=
 REQUIREMENTS = REPO / "packaging" / "requirements-offline-win.txt"
 TEMPLATES = REPO / "packaging" / "templates"
 APP_ITEMS = ("qa_platform", "web", "docs", "README.md", "requirements.txt", "START_QA_PLATFORM.cmd")
+# Pure-Python packages published only as source (hash-checked like the rest); vosk needs srt.
+SOURCE_ONLY = ("srt",)
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
 
 
@@ -120,7 +123,8 @@ def stage_python(payload: Path, cache: Path) -> Path:
     run([str(python), "-E", "-s", "-m", "ensurepip", "--default-pip"], env=env)
     log("Installing Python packages (hash-checked)")
     run([str(python), "-E", "-s", "-m", "pip", "install", "--no-cache-dir", "--disable-pip-version-check",
-         "--require-hashes", "--only-binary=:all:", "--no-warn-script-location", "-r", str(REQUIREMENTS)], env=env)
+         "--require-hashes", "--only-binary=:all:", *(f"--no-binary={p}" for p in SOURCE_ONLY),
+         "--no-warn-script-location", "-r", str(REQUIREMENTS)], env=env)
     run([str(python), "-E", "-s", "-m", "pip", "uninstall", "-y", "pip"], env=env)  # not needed at run time
     return python
 
@@ -140,6 +144,13 @@ def stage_java_and_jmeter(payload: Path, cache: Path) -> None:
             _safe_members([m.name for m in members], runtime)
             t.extractall(runtime, members=members)
     log(f"Java and JMeter staged in {runtime}")
+
+
+def stage_speech(payload: Path, cache: Path) -> None:
+    """The small offline speech model, so voice commands work without a speech server or Internet."""
+    speech = payload / "runtime" / "speech"
+    extract_zip(fetch("speech_model", cache), speech)
+    log(f"Offline speech model staged in {speech}")
 
 
 def stage_chromium(payload: Path, python: Path) -> list[dict]:
@@ -219,8 +230,9 @@ def main(argv: list[str] | None = None) -> int:
     stage_app(payload)
     python = stage_python(payload, cache)
     stage_java_and_jmeter(payload, cache)
+    stage_speech(payload, cache)
     components = [{**{k: LOCK[key][k] for k in ("name", "version", "license", "sha256")},
-                   "source": LOCK[key]["url"]} for key in ("python", "jre", "jmeter")]
+                   "source": LOCK[key]["url"]} for key in ("python", "jre", "jmeter", "speech_model")]
     components += stage_chromium(payload, python)
     components += stage_ai(payload, args.ai_dir)
     info = {"name": "AI Agentic Test Agent Enterprise", "version": __version__, "built_at": now_iso(),

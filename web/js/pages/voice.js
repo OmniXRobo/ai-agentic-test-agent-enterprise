@@ -1,37 +1,51 @@
-// Voice Commands: talk to the QA runtime, see what was understood, and set up speech recognition and voices.
+// Voice Commands: a cockpit-style comms console to talk to the QA runtime, see what was understood,
+// and set up speech recognition and the radio voice.
 
 import { api } from "../api.js";
 import { esc, toast } from "../util.js";
-import { voice, onVoice, conversationId, sendCommand, listen, loadSettings, localVoices, speak } from "../voice.js";
+import { voice, onVoice, conversationId, sendCommand, listen, loadSettings, localVoices, speak, prepare, ACK } from "../voice.js";
 
 const EXAMPLES = [
-  "Open user story 118", "Generate test cases", "Generate automation for test case 1280", "Play test case 1280",
+  "Create the test case", "Create the automation test case", "Do JMeter performance test",
+  "Open user story 118", "Generate automation for test case 1280", "Play test case 1280",
   "Run all automated tests", "Run a 100 user load test for checkout for five minutes", "Show failed tests",
   "Analyze the failure", "Create defects for failed tests", "Show performance report", "Stop the running test",
   "What is running", "Open TFS connection settings",
 ];
 const ENGINES = {
-  local: ["Local speech server (works offline)", "A whisper.cpp or OpenAI-compatible speech server on this PC or your network turns speech into text. Nothing leaves your network."],
+  builtin: ["Built-in offline recognizer (recommended)", "Speech is recognized on this PC by the bundled offline model. No Internet and no speech server are needed."],
+  local: ["Local speech server", "A whisper.cpp or OpenAI-compatible speech server on this PC or your network turns speech into text. Nothing leaves your network."],
   browser: ["Browser speech recognition", "Chrome and Edge send the audio to their online service, so this needs Internet. Do not use it on offline PCs."],
   off: ["Off (typed commands only)", "The microphone is not used. Type commands below."],
 };
 const KIND_CLASS = { failed: "FAIL", unsupported: "FAIL", needs_confirmation: "WARN", needs_input: "WARN", accepted: "RUNNING", progress: "RUNNING" };
+const STATUS = {
+  idle: ["STANDBY", "Ready to receive. Press the mic, then speak."],
+  listening: ["RECEIVING", "Speak now. Press again to stop."],
+  thinking: ["PROCESSING", "Analyzing your command…"],
+  speaking: ["TRANSMITTING", "Agent on the radio."],
+};
+const BARS = 28;
 
 let off = null;
+let clock = null;
 
 function logHtml() {
-  if (!voice.log.length) return '<p class="muted">Press the microphone and say a command, or type one below. Replies are spoken and shown here.</p>';
-  return voice.log.map((m) => `<div class="vmsg ${m.who}"><span class="vwho">${m.who === "you" ? "You" : "Voice Agent"}</span>
+  if (!voice.log.length) return '<p class="ck-empty">No traffic yet. Press the mic and give an order, or type one below. Replies come back over the radio and are logged here.</p>';
+  return voice.log.map((m) => `<div class="vmsg ${m.who}"><span class="vwho">${m.who === "you" ? "COMMAND" : "AGENT"}</span>
     <span class="vtext">${esc(m.text)}</span>${m.kind && KIND_CLASS[m.kind] ? `<span class="pill ${KIND_CLASS[m.kind]}">${esc(m.kind.replace("_", " "))}</span>` : ""}</div>`).join("");
 }
 
-function settingsHtml(s) {
+function settingsHtml(s, radio) {
   const voices = localVoices();
   return `
-    <form class="card settings" id="vset" style="max-width:none">
+    <form class="settings" id="vset" style="max-width:none">
       <h3>Speech recognition</h3>
       <label>Engine <select name="stt_engine">${Object.entries(ENGINES).map(([k, [l]]) => `<option value="${k}" ${k === s.stt_engine ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
       <p class="muted" id="engineHelp">${esc(ENGINES[s.stt_engine]?.[1] || "")}</p>
+      <div data-builtin ${s.stt_engine === "builtin" ? "" : "hidden"}>
+        <label>Speech model folder (optional) <input name="stt_model_dir" value="${esc(s.stt_model_dir || "")}" placeholder="bundled model in runtime\\speech"></label>
+      </div>
       <div data-local ${s.stt_engine === "local" ? "" : "hidden"}>
         <label>Server type <select name="stt_api">
           <option value="whisper_cpp" ${s.stt_api === "whisper_cpp" ? "selected" : ""}>whisper.cpp server (/inference)</option>
@@ -42,18 +56,29 @@ function settingsHtml(s) {
       <label>Language <input name="language" value="${esc(s.language)}" maxlength="5" style="width:90px"></label>
       <h3>Spoken replies</h3>
       <label><span><input type="checkbox" name="speak_replies" ${s.speak_replies ? "checked" : ""}> Speak replies aloud</span></label>
-      <label>Voice <select name="tts_voice"><option value="">Default voice for the language</option>
+      <label>Reply style <select name="reply_style">
+        <option value="radio" ${s.reply_style === "radio" ? "selected" : ""}>Pilot radio (squelch, static, roger beep)</option>
+        <option value="plain" ${s.reply_style === "plain" ? "selected" : ""}>Plain voice</option></select></label>
+      <label>Radio voice (Windows) <select name="radio_voice" ${radio.available ? "" : "disabled"}><option value="">Adult male voice (default)</option>
+        ${radio.voices.map((v) => `<option value="${esc(v.name)}" ${v.name === s.radio_voice ? "selected" : ""}>${esc(v.name)} (${esc(v.gender)}, ${esc(v.lang)})</option>`).join("")}</select></label>
+      <p class="muted">${radio.available ? `${radio.voices.length} Windows voices found. Radio replies are rendered with them on this PC, so they work offline.` : "No Windows voices here, so the browser voice below is used with radio static around it."}</p>
+      <label>Browser voice (fallback) <select name="tts_voice"><option value="">Male voice for the language</option>
         ${voices.map((v) => `<option value="${esc(v.name)}" ${v.name === s.tts_voice ? "selected" : ""}>${esc(v.name)} (${esc(v.lang)})</option>`).join("")}</select></label>
-      <p class="muted">${voices.length ? `Only voices installed on this PC are used (${voices.length} found), so replies work offline.` : "No installed voices were found in this browser. Replies are shown on screen only."}</p>
       <label>Speaking rate <input type="number" name="tts_rate" min="0.5" max="2" step="0.1" value="${esc(s.tts_rate)}" style="width:90px"></label>
-      <div class="row"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="testVoice">Test voice</button>
+      <div class="row"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="testVoice">Radio check</button>
         <button class="btn" type="button" id="diag">Check voice setup</button></div>
       <div id="diagOut"></div>
     </form>`;
 }
 
+function zulu() {
+  const d = new Date();
+  return `${String(d.getUTCHours()).padStart(2, "0")}${String(d.getUTCMinutes()).padStart(2, "0")}:${String(d.getUTCSeconds()).padStart(2, "0")} ZULU`;
+}
+
 async function render(view) {
   const s = await loadSettings(true);
+  const radio = await api("/api/voice/radio-voices").catch(() => ({ available: false, voices: [] }));
   try {
     const { items, context } = await api(`/api/voice/commands?conversation_id=${encodeURIComponent(conversationId)}&limit=50`);
     if (!voice.log.length) {
@@ -65,29 +90,62 @@ async function render(view) {
     }
     voice.pending = context?.pending || null;
   } catch { /* history is a convenience */ }
+  const engine = ENGINES[s.stt_engine]?.[0] || "";
   view.innerHTML = `
-    <div class="grid split-2">
-      <div>
-        <div class="card voice-card">
-          <div class="row"><button class="mic-btn" id="mic" aria-label="Speak a command"><svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12Z"/></svg></button>
-            <div><strong id="vstatus"></strong><div class="muted" id="vhint"></div></div></div>
+    <div class="cockpit">
+      <header class="ck-head">
+        <div class="ck-callsign"><span class="ck-wing" aria-hidden="true">&#9650;</span> TACTICAL VOICE COMMAND</div>
+        <div class="ck-meta"><span>CH 07</span><span>SECURE</span><span>${s.stt_engine === "builtin" || s.stt_engine === "local" ? "OFFLINE LINK" : s.stt_engine === "browser" ? "ONLINE LINK" : "KEYBOARD ONLY"}</span></div>
+        <div class="ck-clock" id="ckClock">${zulu()}</div>
+      </header>
+      <div class="ck-grid">
+        <section class="ck-panel ck-scope">
+          <div class="radar" id="radar">
+            <div class="radar-sweep" aria-hidden="true"></div>
+            <button class="mic-btn" id="mic" aria-label="Speak a command"><svg viewBox="0 0 24 24" width="38" height="38" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12Z"/></svg></button>
+          </div>
+          <div class="ck-status"><span class="ck-lamp" id="lamp"></span><strong id="vstatus"></strong></div>
+          <div class="ck-hint" id="vhint"></div>
+          <div class="ck-meter" id="meter" aria-hidden="true">${"<i></i>".repeat(BARS)}</div>
+          <div class="ck-readout"><span>RECOGNITION</span><b>${esc(engine.replace(/ \(.*\)$/, "").toUpperCase())}</b></div>
+          <div class="ck-readout"><span>REPLY</span><b>${s.speak_replies ? (s.reply_style === "radio" ? "PILOT RADIO" : "PLAIN VOICE") : "TEXT ONLY"}</b></div>
+        </section>
+        <section class="ck-panel ck-comms">
+          <h3>COMMS LOG</h3>
           <div class="vlog" id="vlog" aria-live="polite"></div>
           <div class="row" id="confirmRow" hidden><button class="btn primary" id="yes">Confirm</button><button class="btn" id="no">Cancel</button></div>
-          <form class="row" id="typed"><input name="text" placeholder="Type a command, for example: run test case 1280" autocomplete="off" style="flex:1;min-width:0" maxlength="500">
-            <button class="btn" type="submit">Send</button></form>
-        </div>
-        <div class="card" style="margin-top:12px"><h3>Things you can say</h3>
-          <div class="chips">${EXAMPLES.map((e) => `<button class="chip" data-say="${esc(e)}">${esc(e)}</button>`).join("")}</div>
-          <p class="muted">Follow-ups use what you just opened or ran: "open user story 118", then "generate test cases"; "run test case 1280", then "run it again". Creating defects in TFS asks for confirmation first.</p></div>
+          <form class="row ck-typed" id="typed"><span class="ck-prompt" aria-hidden="true">&gt;</span><input name="text" placeholder="Type an order, for example: create the test case" autocomplete="off" maxlength="500">
+            <button class="btn primary" type="submit">Send</button></form>
+        </section>
       </div>
-      <div>${settingsHtml(s)}</div>
+      <section class="ck-panel">
+        <h3>ORDERS YOU CAN GIVE</h3>
+        <div class="chips">${EXAMPLES.map((e) => `<button class="chip" data-say="${esc(e)}">${esc(e)}</button>`).join("")}</div>
+        <p class="muted">The agent answers "Roger, sir. Stand by." while it analyzes, then confirms the mission, for example "Copy, sir. Starting test case creation."
+          Follow-ups use what you just opened or ran: "open user story 118", then "create the test case"; "run test case 1280", then "run it again". Creating defects in TFS asks for confirmation first.</p>
+      </section>
+      <details class="ck-panel ck-config"><summary>SYSTEMS CONFIGURATION</summary>${settingsHtml(s, radio)}</details>
     </div>`;
+
+  const bars = [...view.querySelectorAll("#meter i")];
+  let shown = { log: -1, status: "", error: null, pending: null };
   const update = () => {
-    const status = { idle: "Ready", listening: "Listening…", thinking: "Working…" }[voice.status];
-    view.querySelector("#vstatus").textContent = status;
-    view.querySelector("#vhint").textContent = voice.error || (voice.status === "listening" ? "Speak now. Press again to stop." : s.stt_engine === "off" ? "Voice input is off; type a command." : "Press the microphone, then speak.");
-    view.querySelector("#mic").classList.toggle("on", voice.status === "listening");
-    view.querySelector("#mic").disabled = s.stt_engine === "off" || voice.status === "thinking";
+    const state = voice.status !== "idle" ? voice.status : voice.speaking ? "speaking" : "idle";
+    const level = state === "listening" ? voice.level : 0;
+    bars.forEach((b, i) => {
+      const center = 1 - Math.abs(i - (BARS - 1) / 2) / (BARS / 2);
+      b.style.transform = `scaleY(${Math.max(0.08, Math.min(1, level * (0.5 + center) * (0.75 + Math.random() * 0.5)))})`;
+    });
+    const key = { log: voice.log.length, status: state, error: voice.error, pending: voice.pending?.kind || null };
+    if (key.log === shown.log && key.status === shown.status && key.error === shown.error && key.pending === shown.pending) return;
+    shown = key;
+    const [label, hint] = STATUS[state];
+    view.querySelector(".cockpit").dataset.state = state;
+    view.querySelector("#vstatus").textContent = label;
+    view.querySelector("#vhint").textContent = voice.error || (state === "idle" && s.stt_engine === "off" ? "Voice input is off; type your order." : hint);
+    const mic = view.querySelector("#mic");
+    mic.classList.toggle("on", state === "listening");
+    mic.disabled = s.stt_engine === "off" || voice.status === "thinking";
     const log = view.querySelector("#vlog");
     log.innerHTML = logHtml();
     log.scrollTop = log.scrollHeight;
@@ -96,6 +154,10 @@ async function render(view) {
   off?.();
   off = onVoice(update);
   update();
+  clearInterval(clock);
+  clock = setInterval(() => { const el = view.querySelector("#ckClock"); if (el) el.textContent = zulu(); }, 1000);
+  prepare(ACK);
+
   const run = (fn) => fn().catch((err) => { update(); if (err?.message) toast(err.message, "error"); });
   view.querySelector("#mic").addEventListener("click", () => run(listen));
   view.querySelector("#typed").addEventListener("submit", (e) => {
@@ -112,24 +174,28 @@ async function render(view) {
   form.stt_engine.addEventListener("change", () => {
     view.querySelector("#engineHelp").textContent = ENGINES[form.stt_engine.value][1];
     view.querySelector("[data-local]").hidden = form.stt_engine.value !== "local";
+    view.querySelector("[data-builtin]").hidden = form.stt_engine.value !== "builtin";
   });
   form.stt_api.addEventListener("change", () => { view.querySelector("[data-openai]").hidden = form.stt_api.value !== "openai"; });
+  const formSettings = () => ({
+    stt_engine: form.stt_engine.value, stt_api: form.stt_api.value, stt_url: form.stt_url.value, stt_model: form.stt_model.value,
+    stt_model_dir: form.stt_model_dir.value.trim(), language: form.language.value.trim() || "en", speak_replies: form.speak_replies.checked,
+    reply_style: form.reply_style.value, radio_voice: form.radio_voice.value, tts_voice: form.tts_voice.value,
+    tts_rate: Number(form.tts_rate.value) || 1,
+  });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const body = {
-      stt_engine: form.stt_engine.value, stt_api: form.stt_api.value, stt_url: form.stt_url.value, stt_model: form.stt_model.value,
-      language: form.language.value.trim() || "en", speak_replies: form.speak_replies.checked, tts_voice: form.tts_voice.value,
-      tts_rate: Number(form.tts_rate.value) || 1,
-    };
-    try { voice.settings = (({ ok, ...rest }) => rest)(await api("/api/voice/settings", { method: "PUT", body })); toast("Voice settings saved", "success"); render(view); }
+    try { voice.settings = (({ ok, ...rest }) => rest)(await api("/api/voice/settings", { method: "PUT", body: formSettings() })); toast("Voice settings saved", "success"); render(view); }
     catch (err) { toast(err.message, "error"); }
   });
-  view.querySelector("#testVoice").addEventListener("click", () => {
-    if (!localVoices().length) { toast("No installed voice was found in this browser.", "error"); return; }
+  view.querySelector("#testVoice").addEventListener("click", async () => {
     const was = voice.settings;
-    voice.settings = { ...was, speak_replies: true, tts_voice: form.tts_voice.value, tts_rate: Number(form.tts_rate.value) || 1 };
-    speak("Voice Command Agent ready.");
-    voice.settings = was;
+    const trial = { ...was, ...formSettings(), speak_replies: true };
+    if (trial.reply_style !== "radio" && !localVoices().length) { toast("No installed voice was found in this browser.", "error"); return; }
+    if (trial.radio_voice !== was.radio_voice || trial.tts_rate !== was.tts_rate) {
+      toast("Save first to hear a different Windows voice or rate on the radio.", "info");
+    }
+    await speak("Radio check. Voice Command Agent, loud and clear. Ready for your orders, sir. Over.", trial);
   });
   view.querySelector("#diag").addEventListener("click", async () => {
     const out = view.querySelector("#diagOut");
@@ -148,7 +214,7 @@ async function render(view) {
     }
     checks.push({ name: "Microphone", status: mic, detail: micDetail });
     const n = localVoices().length;
-    checks.push({ name: "Installed voices", status: n ? "PASS" : "WARN", detail: n ? `${n} voices installed on this PC.` : "No installed voices; replies are shown on screen only." });
+    checks.push({ name: "Browser voices", status: n ? "PASS" : "WARN", detail: n ? `${n} voices installed on this PC.` : "No installed browser voices." });
     out.innerHTML = `<table class="data"><tbody>${checks.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="pill ${c.status === "NOT_CONFIGURED" ? "WAITING" : esc(c.status)}">${esc(c.status.replace("_", " "))}</span></td><td class="muted">${esc(c.detail)}</td></tr>`).join("")}</tbody></table>`;
   });
 }
@@ -161,5 +227,7 @@ export async function mount(view) {
 export function unmount() {
   off?.();
   off = null;
+  clearInterval(clock);
+  clock = null;
   if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = null;
 }

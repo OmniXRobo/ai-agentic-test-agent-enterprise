@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -30,7 +30,8 @@ class CommandIn(BaseModel):
 
 
 class VoiceSettingsIn(BaseModel):
-    stt_engine: Literal["local", "browser", "off"] | None = None
+    stt_engine: Literal["builtin", "local", "browser", "off"] | None = None
+    stt_model_dir: str | None = Field(default=None, max_length=400)
     stt_url: str | None = Field(default=None, max_length=300)
     stt_api: Literal["whisper_cpp", "openai"] | None = None
     stt_model: str | None = Field(default=None, max_length=120)
@@ -38,6 +39,12 @@ class VoiceSettingsIn(BaseModel):
     speak_replies: bool | None = None
     tts_voice: str | None = Field(default=None, max_length=200)
     tts_rate: float | None = Field(default=None, ge=0.5, le=2)
+    reply_style: Literal["radio", "plain"] | None = None
+    radio_voice: str | None = Field(default=None, max_length=200)
+
+
+class SpeakIn(BaseModel):
+    text: str = Field(min_length=1, max_length=600)
 
 
 @router.post("/commands")
@@ -62,6 +69,18 @@ async def transcribe(request: Request, rt: Runtime = Depends(runtime)) -> dict[s
     content_type = request.headers.get("content-type", "audio/wav").split(";")[0]
     text = await run_in_threadpool(rt.voice.transcribe, audio, content_type)
     return {"ok": True, "text": text}
+
+
+@router.get("/radio-voices")
+def radio_voices(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **rt.voice.radio_voices()}
+
+
+@router.post("/speak")
+async def speak(body: SpeakIn, rt: Runtime = Depends(runtime)) -> Response:
+    """A reply spoken by a Windows voice as WAV, for the dashboard's radio effect."""
+    audio = await run_in_threadpool(rt.voice.speak, body.text)
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/settings")

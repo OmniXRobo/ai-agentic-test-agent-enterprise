@@ -29,4 +29,7 @@ It contains its own Python, Java (Eclipse Temurin JRE), Apache JMeter and Chromi
 On-Premise AI: the package does not download models. If the package was built with a model it is in
 payload\runtime\ai; otherwise point the On-Premise AI settings at your own llama.cpp (Qwen GGUF) server.
 
+Voice commands: a small offline speech model is bundled in payload\runtime\speech, so the microphone works without
+Internet or a speech server. Replies use the PC's own Windows voices.
+
 DEPENDENCIES.md in payload lists every bundled component and Python package with its version and license.
