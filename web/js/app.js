@@ -12,6 +12,7 @@ import { workItemPage } from "./pages/workitems.js";
 import * as aiSettings from "./pages/ai-settings.js";
 import * as testDesign from "./pages/test-design.js";
 import * as testData from "./pages/test-data.js";
+import * as scriptStudio from "./pages/script-studio.js";
 import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
 import * as appCredentials from "./pages/app-credentials.js";
 import { perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
@@ -40,7 +41,7 @@ const NAV = [
     ["test-data", "Test Data", testData],
   ]],
   ["Automation Studio", [
-    ["ai-automation", "AI-Driven Automation", aiAutomation],
+    ["ai-automation", "AI-Driven Automation", scriptStudio],
     ["guided-automation", "Guided Browser Automation", guidedAutomation],
     ["discovery", "Application Discovery & Update", discovery],
     ["hybrid-automation", "Hybrid Test Automation", hybridAutomation],
@@ -73,6 +74,8 @@ const ROUTES = new Map();
 for (const [, items] of NAV) {
   for (const [route, title, page] of items) ROUTES.set(route, { route, title, page });
 }
+// The earlier single-script AI generation page stays available (and opens its scripts) without a nav entry.
+ROUTES.set("ai-automation-classic", { route: "ai-automation", title: "AI-Driven Automation (single script)", page: aiAutomation });
 
 function renderNav() {
   const nav = document.getElementById("nav");

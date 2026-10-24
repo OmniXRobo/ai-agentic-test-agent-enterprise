@@ -180,6 +180,21 @@ def run(script_id: str, body: PlayIn | None = None, rt: Runtime = Depends(runtim
     return {"ok": True, "run_id": rt.studio.run(script_id, combination=body.combination, headless=body.headless)}
 
 
+class PlayManyIn(BaseModel):
+    script_ids: list[str] = Field(min_length=1, max_length=500)
+    headless: bool | None = None
+
+
+@router.post("/run-many", status_code=202)
+def run_many(body: PlayManyIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "runs": rt.studio.run_many(body.script_ids, headless=body.headless)}
+
+
+@router.get("/scripts/{script_id}/runs/{run_id}")
+def run_result(script_id: str, run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "result": rt.studio.run_result(script_id, run_id)}
+
+
 @router.post("/runs/{run_id}/stop")
 def stop_run(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     if not rt.studio.runner.stop(run_id):

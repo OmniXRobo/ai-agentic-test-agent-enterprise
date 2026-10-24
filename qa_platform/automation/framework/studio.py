@@ -112,6 +112,7 @@ class ScriptStudio:
                         " ('RUNNING', 'RESOLVING', 'WAITING')", (now_iso(),))
         self.db.execute("UPDATE framework_job_items SET status = 'STOPPED', error = 'Interrupted by a restart.'"
                         " WHERE status IN ('WAITING', 'RUNNING')")
+        self.db.execute("UPDATE framework_scripts SET last_result = 'STOPPED' WHERE last_result = 'RUNNING'")
 
     def workspace(self) -> FrameworkWorkspace:
         if not self._ready:
@@ -668,6 +669,18 @@ class ScriptStudio:
             if role else None,
             "versions": self.versions(script_id),
             "components": self.components_of(rec, source),
+            "catalog": self.catalog(),
+        }
+
+    def catalog(self) -> dict[str, Any]:
+        """Page Object methods and flows that a new Flow Logic step can call."""
+        reg = registry.scan(self.workspace().root)
+        return {
+            "page_objects": [{"name": p.class_name, "module": p.module, "doc": p.doc,
+                              "methods": [{"name": m.name, "params": m.params, "doc": m.doc} for m in p.methods.values()]}
+                             for p in sorted(reg.page_objects.values(), key=lambda x: x.class_name)],
+            "flows": [{"name": f.name, "module": f.module, "params": f.params[1:], "doc": f.doc}
+                      for f in sorted(reg.flows.values(), key=lambda x: x.name)],
         }
 
     def _data(self, rec: dict[str, Any]) -> dict[str, Any] | None:
@@ -1143,10 +1156,43 @@ class ScriptStudio:
                 return self.runner.run(payload, run_id, workspace=self.ws.root, env_extra=env, secrets=secrets,
                                        combination=combination, headless=headless, on_finish=finish)
 
+        self.db.execute("UPDATE framework_scripts SET last_result = 'RUNNING', last_run_id = ?, last_run_at = ? WHERE id = ?",
+                        (run_id, now_iso(), script_id))
         if not background:
             return work()
         threading.Thread(target=self._safe(work, run_id), name=run_id, daemon=True).start()
         return run_id
+
+    def run_many(self, script_ids: list[str], *, headless: bool | None = None) -> list[dict[str, Any]]:
+        """Play Selected: every script runs separately (one at a time) and has its own result."""
+        out = []
+        for sid in script_ids:
+            try:
+                out.append({"script_id": sid, "run_id": self.run(sid, headless=headless)})
+            except QAError as exc:
+                out.append({"script_id": sid, "run_id": None, "error_code": exc.error_code, "error": exc.message})
+        return out
+
+    def run_result(self, script_id: str, run_id: str) -> dict[str, Any]:
+        """The complete result of one run: steps, screenshots, failure analysis, healing, logs and trace."""
+        rec = self._record(script_id)
+        if not re.match(r"^RUN-[0-9A-Za-z-]+$", run_id or ""):
+            raise QAError("RUN_ID_INVALID", f"Invalid run id '{run_id}'.", status=400)
+        rows = self.automation.runner.results(script_id=script_id, run_id=run_id, limit=1)
+        if not rows:
+            raise QAError("RUN_NOT_FOUND", f"Run {run_id} of {script_id} does not exist.", status=404)
+        path = self.paths.evidence / run_id / "result.json"
+        result = rows[0]
+        if path.is_file():
+            try:
+                result = {**result, **json.loads(path.read_text(encoding="utf-8"))}
+            except ValueError:
+                pass
+        result["healing"] = [h for h in self.automation.runner.healing_events(script_id) if h["run_id"] == run_id]
+        result["script"] = {k: rec[k] for k in ("id", "file", "test_case_id", "test_case_title", "user_story_id",
+                                                "user_story_title", "acceptance_criteria", "sprint")}
+        result["running"] = run_id in self.runner.running()
+        return result
 
     @staticmethod
     def _safe(fn: Any, name: str) -> Any:

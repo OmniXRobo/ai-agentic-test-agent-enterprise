@@ -548,3 +548,103 @@ def test_visible_browser_run_and_stop(studio_env, display):
         os.killpg(pid, 0)  # the whole process group (pytest and its browser) is gone
     assert run_id not in rt.studio.runner.running()
     assert c.post(f"/api/automation/studio/runs/{run_id}/stop").status_code == 409
+
+
+def _serve_through(page, c: TestClient) -> str:
+    """Serve the web UI and API to a real browser page from the in-process app (no port needed)."""
+    origin = "http://studio.test"
+
+    def handle(route):
+        req = route.request
+        path = req.url[len(origin):] or "/"
+        if path.startswith("/api/events/stream"):
+            return route.abort()  # the live stream never ends; pages fall back to polling
+        r = c.request(req.method, path, content=req.post_data_buffer, headers={k: v for k, v in req.headers.items()
+                                                                              if k.lower() == "content-type"})
+        route.fulfill(status=r.status_code, body=r.content,
+                      headers={k: v for k, v in r.headers.items() if k.lower() in ("content-type", "content-disposition")})
+
+    page.route(f"{origin}/**", handle)
+    return origin
+
+
+@needs_browser
+def test_script_studio_page_inventory_play_dialog_result_and_evidence(studio_env):
+    from playwright.sync_api import expect, sync_playwright
+
+    c, rt = studio_env["c"], studio_env["rt"]
+    generate(studio_env)
+    sid = next(i["id"] for i in c.get("/api/automation/studio/inventory").json()["items"] if i["test_case_id"] == "1280")
+    rt.studio.save_credentials(sid, username="alice", password="s3cret-pass", scope="script")
+    errors: list[str] = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        page = browser.new_page()
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        origin = _serve_through(page, c)
+
+        # Inventory: the spec's columns, newest first, the actions of each script.
+        page.goto(f"{origin}/#/ai-automation")
+        inv = page.locator("#inv")
+        expect(inv.locator("tbody tr")).to_have_count(2)
+        heads = inv.locator("thead th").all_inner_texts()
+        assert heads[1:] == ["Method", "User Story", "User Story Title", "Test Case", "Test Case Title", "Sprint",
+                             "Script", "Generated", "Status", "Last Result", "Actions"]
+        row = inv.locator("tbody tr", has_text="TC1280")
+        for action in ("View Script", "Edit Script", "Flow Logic", "Play", "Regenerate / Update"):
+            expect(row.get_by_text(action, exact=True)).to_be_visible()
+
+        # View Script: highlighted Python with traceability.
+        row.get_by_text("View Script", exact=True).click()
+        expect(page.locator(".codeview pre.code.py")).to_contain_text("TC1280")
+        expect(page.locator(".py-k").first).to_be_visible()
+
+        # Play asks how to run; Cancel runs nothing.
+        page.locator("#play").click()
+        dialog = page.get_by_role("dialog")
+        expect(dialog).to_contain_text("How would you like to run this automation?")
+        expect(dialog.get_by_text("Visible Browser Execution")).to_be_visible()
+        dialog.get_by_role("button", name="Cancel").click()
+        expect(dialog).to_have_count(0)
+        assert not rt.automation.runner.results(script_id=sid)
+
+        # Headless: live status, then the result with steps, then the evidence and logs.
+        page.locator("#play").click()
+        dialog.get_by_text("Background / Headless Execution").click()
+        dialog.get_by_role("button", name="Run Test").click()
+        live = page.locator("#live")
+        expect(live).to_contain_text("Test Execution Agent - RUNNING")
+        expect(live).to_contain_text("Background / Headless")
+        expect(page.locator("#lastResult")).to_contain_text("PASSED", timeout=90_000)
+        pane = page.locator("#tabPane")
+        expect(pane).to_contain_text("Welcome message shown", timeout=10_000)
+        expect(pane.locator("table.data").first).to_contain_text("PASSED")
+        page.get_by_role("tab", name="Evidence").click()
+        expect(page.locator(".evidence-list .shot")).to_have_count(2)
+        page.locator(".evidence-list .shot").first.click()
+        expect(page.get_by_role("dialog")).to_contain_text("1 of 2")
+        page.keyboard.press("Escape")
+        page.get_by_role("tab", name="Logs").click()
+        expect(pane).to_contain_text("passed")
+        expect(pane).not_to_contain_text("s3cret-pass")
+
+        # Inventory shows the last result and offers Result / Logs / Evidence.
+        page.goto(f"{origin}/#/ai-automation?tab=scripts")
+        row = page.locator("#inv tbody tr", has_text="TC1280")
+        expect(row).to_contain_text("PASSED")
+        for action in ("Result", "Logs", "Evidence"):
+            expect(row.get_by_text(action, exact=True)).to_be_visible()
+
+        # Play Selected asks once and recommends Headless for several tests.
+        page.locator("#all").check()
+        page.locator("#playSel").click()
+        dialog = page.get_by_role("dialog")
+        expect(dialog).to_contain_text("Recommended for several tests")
+        assert dialog.locator("input[value=headless]").is_checked()
+        dialog.get_by_role("button", name="Cancel").click()
+
+        # Generate wizard loads Sprint, User Stories and the existing-automation badge.
+        page.get_by_role("tab", name="Generate Automation").click()
+        expect(page.locator("#stories")).to_contain_text("US118")
+        browser.close()
+    assert not errors, errors
