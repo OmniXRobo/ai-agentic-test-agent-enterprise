@@ -1,4 +1,4 @@
-"""On-Premise AI settings/diagnostics, AI test design and test data API."""
+"""AI runtime (On-Premise AI / Cloud AI) settings and diagnostics, AI test design and test data API."""
 
 from __future__ import annotations
 
@@ -19,11 +19,23 @@ log = get_logger("api.design")
 
 
 class AISettingsIn(BaseModel):
+    mode: str | None = Field(default=None, pattern="^(on_premise|cloud)$")
     base_url: str | None = None
     model: str | None = None
+    cloud_base_url: str | None = None
+    cloud_model: str | None = None
+    api_key: str | None = Field(default=None, max_length=4000, description="Cloud AI API key (Credential Manager)")
+    clear_api_key: bool = False
     timeout_seconds: float | None = Field(default=None, ge=5, le=1800)
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=256, le=32768)
+
+
+def _ai_url(value: str) -> str:
+    value = value.strip().rstrip("/")
+    if value and not value.lower().startswith(("http://", "https://")):
+        raise QAError("AI_URL_INVALID", "The AI server URL must start with http:// or https://.")
+    return value
 
 
 @router.get("/ai/settings")
@@ -33,11 +45,20 @@ def ai_settings(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 
 @router.put("/ai/settings")
 def put_ai_settings(body: AISettingsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    patch = body.model_dump(exclude_none=True)
+    patch = body.model_dump(exclude_none=True, exclude={"cloud_base_url", "cloud_model", "api_key", "clear_api_key"})
     if "base_url" in patch:
-        patch["base_url"] = patch["base_url"].strip().rstrip("/")
-        if patch["base_url"] and not patch["base_url"].lower().startswith(("http://", "https://")):
-            raise QAError("AI_URL_INVALID", "The AI server URL must start with http:// or https://.")
+        patch["base_url"] = _ai_url(patch["base_url"])
+    cloud: dict[str, Any] = {}
+    if body.cloud_base_url is not None:
+        cloud["base_url"] = _ai_url(body.cloud_base_url)
+    if body.cloud_model is not None:
+        cloud["model"] = body.cloud_model.strip()
+    if cloud:
+        patch["cloud"] = cloud
+    if body.api_key:
+        rt.ai.set_api_key(body.api_key.strip())
+    elif body.clear_api_key:
+        rt.ai.set_api_key(None)
     rt.settings.update({"ai": patch})
     return {"ok": True, **rt.ai.config()}
 

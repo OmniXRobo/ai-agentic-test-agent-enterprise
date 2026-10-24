@@ -39,6 +39,8 @@ class Paths:
         self.scripts = self.root / "automation"
         self.performance = self.root / "performance"
         self.reports = self.root / "reports"
+        # Generated Python Playwright framework (Page Objects, flows, tests, test data)
+        self.workspace = self.root / "automation-workspace"
 
     def ensure(self) -> "Paths":
         for p in (self.root, self.logs, self.evidence, self.scripts, self.performance, self.reports):

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .api import automation, core, defects, design, performance, reports, tfs, voice
+from .api import automation, core, defects, design, performance, reports, studio, tfs, voice
 from .config import WEB_ROOT, Paths
 from .errors import install_error_handlers
 from .logging_setup import configure_logging, get_logger
@@ -41,6 +41,7 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app.include_router(core.router)
     app.include_router(tfs.router)
     app.include_router(design.router)
+    app.include_router(studio.router)
     app.include_router(automation.router)
     app.include_router(performance.router)
     app.include_router(defects.router)

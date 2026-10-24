@@ -8,7 +8,7 @@ import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
 const ACTIONS = ["goto", "click", "dblclick", "fill", "type", "select", "check", "uncheck", "press", "hover", "wait",
   "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot"];
 const MODE_NAMES = { ai: "AI-Driven", guided: "Guided", discovery: "Discovery", hybrid: "Hybrid", manual: "Manual" };
-const ROUTE_FOR_MODE = { ai: "ai-automation", guided: "guided-automation", discovery: "discovery", hybrid: "hybrid-automation", manual: "guided-automation" };
+const ROUTE_FOR_MODE = { ai: "ai-automation-classic", guided: "guided-automation", discovery: "discovery", hybrid: "hybrid-automation", manual: "guided-automation" };
 
 let cleanups = [];
 const onCleanup = (fn) => cleanups.push(fn);
@@ -346,7 +346,7 @@ async function aiPanel(view) {
       done.querySelector("#zipStory")?.addEventListener("click", () => downloadTests({ script_ids: ids }, `automated-tests-US${sid}.zip`));
     } else {
       done.innerHTML = s.script_id
-        ? `<a class="btn primary" href="#/ai-automation?script=${esc(s.script_id)}">Open the generated script</a>`
+        ? `<a class="btn primary" href="#/ai-automation-classic?script=${esc(s.script_id)}">Open the generated script</a>`
         : '<span class="pill FAIL">No script was created. See the activity above.</span>';
     }
     renderScriptList(view.querySelector("#list"), ["ai"], "");

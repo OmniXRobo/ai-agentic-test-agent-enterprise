@@ -9,19 +9,21 @@ async function render(view) {
   const { items, store_available } = await api("/api/automation/credentials");
   view.querySelector("#store").hidden = store_available;
   view.querySelector("#list").innerHTML = items.length ? `
-    <table class="data"><thead><tr><th>Application</th><th>Role</th><th>Username</th><th>Password</th><th>Login URL</th><th>Updated</th><th></th></tr></thead><tbody>
-    ${items.map((c) => `<tr><td>${esc(c.application)}</td><td>${esc(c.role)}</td><td>${esc(c.username)}</td>
+    <table class="data"><thead><tr><th>Application</th><th>Environment</th><th>Role</th><th>Username</th><th>Password</th><th>Login URL</th><th>Updated</th><th></th></tr></thead><tbody>
+    ${items.map((c) => `<tr><td>${esc(c.application)}</td><td>${c.environment ? esc(c.environment) : '<span class="muted">All</span>'}</td><td>${esc(c.role)}</td><td>${esc(c.username)}</td>
       <td>${c.has_password ? '<span class="pill PASS">Saved</span>' : '<span class="pill WARN">Not set</span>'}</td>
       <td>${esc(c.login_url || "")}</td><td>${esc(dateTimeOf(c.updated_at))}</td>
       <td><button class="link-btn" data-edit="${esc(c.id)}">Edit</button> · <button class="link-btn" data-del="${esc(c.id)}">Delete</button></td></tr>`).join("")}
     </tbody></table>
-    <p class="muted">Use <code>{{CRED:role.username}}</code> and <code>{{CRED:role.password}}</code> in scripts. Passwords are resolved only at run time and masked in logs and evidence.</p>`
+    <p class="muted">Use <code>{{CRED:role.username}}</code> and <code>{{CRED:role.password}}</code> in scripts. Passwords are resolved only at run time and masked in logs and evidence.
+      An environment-specific credential is used instead of the general one when a script runs against that environment; a script's own credentials (Automation Studio) override both.</p>`
     : '<p class="muted">No application credentials saved yet.</p>';
   const form = view.querySelector("#f");
   view.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
     const c = items.find((x) => x.id === b.dataset.edit);
     form.application.value = c.application;
     form.role.value = c.role;
+    form.environment.value = c.environment || "";
     form.username.value = c.username;
     form.login_url.value = c.login_url || "";
     form.password.value = "";
@@ -42,6 +44,7 @@ export async function mount(view) {
       <h3>Save a credential</h3>
       <label>Application <input name="application" required placeholder="e.g. Booking Portal"></label>
       <label>Role <input name="role" required placeholder="e.g. admin, agent, customer"></label>
+      <label>Environment (optional) <input name="environment" placeholder="e.g. UAT; blank = all environments"></label>
       <label>Username <input name="username" required autocomplete="off"></label>
       <label>Password <input name="password" type="password" autocomplete="new-password" placeholder="Password"></label>
       <label>Login URL (optional) <input name="login_url" placeholder="https://your-app/login"></label>
@@ -56,7 +59,7 @@ export async function mount(view) {
     try {
       await api("/api/automation/credentials", { method: "PUT", body: {
         application: f.application.trim(), role: f.role.trim(), username: f.username.trim(),
-        password: f.password || null, login_url: f.login_url.trim() || null } });
+        password: f.password || null, login_url: f.login_url.trim() || null, environment: f.environment.trim() || null } });
       form.reset();
       toast("Credential saved", "success");
       render(view);

@@ -1,10 +1,14 @@
-"""AI gateway to the On-Premise LLM.
+"""AI gateway: On-Premise AI or Cloud AI behind one OpenAI-compatible interface.
 
 QA Application -> AI Gateway -> On-Premise LLM server (OpenAI-compatible API, e.g.
-llama.cpp ``llama-server`` with a Qwen GGUF model, or Ollama) -> local model.
+llama.cpp ``llama-server`` with a Qwen GGUF model, or Ollama) -> local model, or
+-> a Cloud AI endpoint that speaks the same chat-completions API (no provider SDK,
+so the platform is not tied to one vendor).
 
-* Never downloads models and never calls the Internet: requests ignore proxy
-  environment variables and go only to the configured base URL.
+* On-Premise AI never downloads models and never calls the Internet: requests
+  ignore proxy environment variables and go only to the configured base URL.
+* Cloud AI sends the API key (kept in the Windows Credential Manager, never in
+  settings) as a Bearer token and honours the PC's proxy settings.
 * Structured output: ``complete_json`` validates the reply against a pydantic
   model and asks the model once to repair invalid output. There is no
   non-AI fallback that would produce made-up content.
@@ -22,6 +26,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from ..config import Settings
+from ..credentials import SecretStore
 from ..errors import QAError
 from ..events import names
 from ..events.bus import EventBus, QAEvent
@@ -30,6 +35,10 @@ from ..logging_setup import get_logger
 log = get_logger("ai")
 
 T = TypeVar("T", bound=BaseModel)
+
+AI_SECRET_NAMESPACE = "ai"
+CLOUD_KEY = "cloud_api_key"
+MODES = {"on_premise": "On-Premise AI", "cloud": "Cloud AI"}
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
 
@@ -58,28 +67,63 @@ def extract_json(text: str) -> Any:
 
 
 class AIGateway:
-    def __init__(self, settings: Settings, bus: EventBus, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(self, settings: Settings, bus: EventBus, transport: httpx.BaseTransport | None = None,
+                 secrets: SecretStore | None = None) -> None:
         self.settings = settings
         self.bus = bus
         self.transport = transport
+        self.secrets = secrets
         self._lock = threading.Lock()
         self._last_unavailable = 0.0
 
+    def mode(self) -> str:
+        mode = self.settings.section("ai").get("mode") or "on_premise"
+        return mode if mode in MODES else "on_premise"
+
+    def label(self) -> str:
+        return MODES[self.mode()]
+
+    def has_api_key(self) -> bool:
+        return bool(self.secrets and self.secrets.available and self.secrets.has(AI_SECRET_NAMESPACE, CLOUD_KEY))
+
     def config(self) -> dict[str, Any]:
         ai = self.settings.section("ai")
+        cloud = ai.get("cloud") or {}
+        mode = self.mode()
+        active = cloud if mode == "cloud" else ai
         return {
-            "base_url": (ai.get("base_url") or "").rstrip("/"),
-            "model": ai.get("model") or "",
+            "mode": mode,
+            "label": MODES[mode],
+            "base_url": (active.get("base_url") or "").rstrip("/"),
+            "model": active.get("model") or "",
             "timeout_seconds": float(ai.get("timeout_seconds") or 120),
             "temperature": float(ai.get("temperature", 0.2)),
             "max_tokens": int(ai.get("max_tokens", 4096)),
+            "on_premise": {"base_url": (ai.get("base_url") or "").rstrip("/"), "model": ai.get("model") or ""},
+            "cloud": {"base_url": (cloud.get("base_url") or "").rstrip("/"), "model": cloud.get("model") or "",
+                      "has_api_key": self.has_api_key()},
         }
+
+    def set_api_key(self, value: str | None) -> None:
+        if self.secrets is None or not self.secrets.available:
+            raise QAError("CREDENTIAL_STORE_UNAVAILABLE", "The Windows Credential Manager is not available.", status=503)
+        if value:
+            self.secrets.set(AI_SECRET_NAMESPACE, CLOUD_KEY, value)
+        else:
+            self.secrets.delete(AI_SECRET_NAMESPACE, CLOUD_KEY)
 
     def _client(self, timeout: float) -> httpx.Client:
         cfg = self.config()
         if not cfg["base_url"]:
-            raise QAError("AI_NOT_CONFIGURED", "No On-Premise AI server URL is configured.", status=409)
-        return httpx.Client(base_url=cfg["base_url"], timeout=timeout, trust_env=False, transport=self.transport)
+            raise QAError("AI_NOT_CONFIGURED", f"No {cfg['label']} server URL is configured.", status=409)
+        headers = {}
+        if cfg["mode"] == "cloud":
+            key = self.secrets.get(AI_SECRET_NAMESPACE, CLOUD_KEY) if self.has_api_key() else None
+            if not key:
+                raise QAError("AI_NOT_CONFIGURED", "No Cloud AI API key is saved.", status=409)
+            headers["Authorization"] = f"Bearer {key}"
+        return httpx.Client(base_url=cfg["base_url"], timeout=timeout, trust_env=cfg["mode"] == "cloud",
+                            transport=self.transport, headers=headers)
 
     def _unavailable(self, reason: str) -> None:
         now = time.monotonic()
@@ -95,7 +139,7 @@ class AIGateway:
             try:
                 resp = c.get("/models")
             except httpx.HTTPError as exc:
-                raise QAError("AI_UNREACHABLE", f"On-Premise AI server not reachable: {type(exc).__name__}.",
+                raise QAError("AI_UNREACHABLE", f"{self.label()} server not reachable: {type(exc).__name__}.",
                               status=502, details=str(exc)) from exc
         if resp.status_code != 200:
             raise QAError("AI_REQUEST_FAILED", f"/models returned HTTP {resp.status_code}.", status=502)
@@ -123,16 +167,19 @@ class AIGateway:
             try:
                 resp = c.post("/chat/completions", json=body)
             except httpx.TimeoutException as exc:
-                self._unavailable("On-Premise AI did not answer in time.")
-                raise QAError("AI_TIMEOUT", "The On-Premise AI server did not answer in time.", status=504) from exc
+                self._unavailable(f"{cfg['label']} did not answer in time.")
+                raise QAError("AI_TIMEOUT", f"The {cfg['label']} server did not answer in time.", status=504) from exc
             except httpx.HTTPError as exc:
-                self._unavailable(f"On-Premise AI server not reachable at {cfg['base_url']}.")
-                raise QAError("AI_UNREACHABLE", f"On-Premise AI server not reachable at {cfg['base_url']}.",
+                self._unavailable(f"{cfg['label']} server not reachable at {cfg['base_url']}.")
+                raise QAError("AI_UNREACHABLE", f"{cfg['label']} server not reachable at {cfg['base_url']}.",
                               status=502, details=str(exc)) from exc
             if resp.status_code == 400 and json_mode:
                 # Some servers do not support response_format; retry without it.
                 body.pop("response_format", None)
                 resp = c.post("/chat/completions", json=body)
+        if resp.status_code in (401, 403):
+            raise QAError("AI_REQUEST_FAILED", f"The {cfg['label']} server rejected the request (HTTP "
+                          f"{resp.status_code}): check the API key.", status=502, details=resp.text[:500])
         if resp.status_code != 200:
             raise QAError("AI_REQUEST_FAILED", f"The AI server returned HTTP {resp.status_code}.", status=502,
                           details=resp.text[:500])
@@ -162,7 +209,7 @@ class AIGateway:
             try:
                 return model.model_validate(extract_json(reply))
             except (ValueError, ValidationError) as exc:
-                raise QAError("AI_OUTPUT_INVALID", "The On-Premise AI did not return valid structured output.",
+                raise QAError("AI_OUTPUT_INVALID", f"The {self.label()} did not return valid structured output.",
                               status=502, details=str(exc)[:500]) from exc
 
     # ---- diagnostics -----------------------------------------------------------
@@ -180,12 +227,19 @@ class AIGateway:
                     add(name, "SKIP", f"Not run because {after} failed.")
 
         if not cfg["base_url"]:
-            add("Configuration", "FAIL", "No On-Premise AI server URL is configured.")
+            add("Configuration", "FAIL", f"No {cfg['label']} server URL is configured.")
             skip("configuration")
             return self._diag_result(cfg, checks)
         host = httpx.URL(cfg["base_url"]).host
         local = host in ("127.0.0.1", "localhost", "::1") or host.startswith(("10.", "192.168.", "172."))
-        add("Configuration", "PASS", f"Server {cfg['base_url']} ({'local/on-premise network' if local else 'non-local host: check it is on-premise'}).")
+        if cfg["mode"] == "cloud":
+            if not cfg["cloud"]["has_api_key"]:
+                add("Configuration", "FAIL", "No Cloud AI API key is saved.")
+                skip("configuration")
+                return self._diag_result(cfg, checks)
+            add("Configuration", "PASS", f"Cloud AI endpoint {cfg['base_url']} with a saved API key.")
+        else:
+            add("Configuration", "PASS", f"Server {cfg['base_url']} ({'local/on-premise network' if local else 'non-local host: check it is on-premise'}).")
         try:
             loaded = self.models()
             add("Server Reachability", "PASS", f"Models endpoint answered; models: {', '.join(loaded) or 'none reported'}.")
@@ -228,5 +282,6 @@ class AIGateway:
         ok = all(c["status"] == "PASS" for c in checks)
         if not ok:
             failed = next(c for c in checks if c["status"] == "FAIL")
-            self._unavailable(f"On-Premise AI: {failed['name']} failed. {failed['detail']}")
-        return {"ok": ok, "base_url": cfg["base_url"], "model": cfg["model"], "checks": checks}
+            self._unavailable(f"{cfg['label']}: {failed['name']} failed. {failed['detail']}")
+        return {"ok": ok, "mode": cfg["mode"], "label": cfg["label"], "base_url": cfg["base_url"], "model": cfg["model"],
+                "checks": checks}
