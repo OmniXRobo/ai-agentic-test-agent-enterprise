@@ -96,6 +96,7 @@ Existing rows keep working (`application` null → treated as the base URL host)
 * Application Discovery Agent emits WAITING_FOR_INPUT / RESUMING progress.
 * Requirements Intelligence Agent runs first in TFS modes; QA Orchestration Agent maps requirements.
 * Script Studio `_inventory` prefers the application's latest authenticated memory and adds requirement context to the prompt.
+* Agentic chain: with *Generate Playwright scripts* (TFS + Application), the QA Orchestration Agent hands the Test Cases in scope to AI-Driven Automation (`ScriptStudio.start_job`) with this run's `discovery_id`, so no second crawl happens; the job state shows GENERATING_SCRIPTS until the scripts are done. `POST /api/knowledge/{id}/scripts` starts the same generation from a saved Unified QA Knowledge.
 
 ## 7. Regression risks and mitigations
 

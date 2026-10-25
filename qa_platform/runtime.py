@@ -109,6 +109,7 @@ def build_runtime(
     hierarchy = HierarchyService(tfs)
     knowledge = KnowledgeService(db, bus, hierarchy, automation, design)
     studio.knowledge = knowledge  # Unified QA Knowledge for the Automation Engineering Agent
+    knowledge.studio = studio  # requirement -> discovery -> script generation chain
     health = HealthService(tfs, ai, orchestration, voice)
     voice.attach(studio=studio, reports=reports, notifications=notifications, health=health)
     llm = ManagedLLM(settings, paths)

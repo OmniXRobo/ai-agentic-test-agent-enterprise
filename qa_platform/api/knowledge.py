@@ -32,6 +32,17 @@ class IntelligentDiscoveryIn(BaseModel):
     environment: str | None = Field(default=None, max_length=60)
     explore: bool = True
     scope: ScopeIn | None = None
+    # Agentic chain: after mapping, generate the Playwright scripts of the Test Cases in scope.
+    generate_scripts: bool = False
+    on_existing: str = Field(default="skip", pattern="^(skip|regenerate|new_version)$")
+
+
+class KnowledgeScriptsIn(BaseModel):
+    base_url: str | None = None
+    credential_role: str | None = Field(default=None, max_length=60)
+    environment: str | None = Field(default=None, max_length=60)
+    headless: bool = True
+    on_existing: str = Field(default="skip", pattern="^(skip|regenerate|new_version)$")
 
 
 # ---- TFS requirement hierarchy ---------------------------------------------------------------
@@ -76,8 +87,18 @@ def start(body: IntelligentDiscoveryIn, rt: Runtime = Depends(runtime)) -> dict[
     run_id = rt.knowledge.start(body.source, base_url=base_url, scope=body.scope.model_dump() if body.scope else None,
                                 max_pages=body.max_pages, max_depth=body.max_depth, headless=body.headless,
                                 application=body.application, credential_role=body.credential_role,
-                                environment=body.environment, explore=body.explore)
+                                environment=body.environment, explore=body.explore,
+                                generate_scripts=body.generate_scripts and body.source == "tfs_app",
+                                on_existing=body.on_existing)
     return {"ok": True, "run_id": run_id}
+
+
+@router.post("/api/knowledge/{kid}/scripts", status_code=202)
+def knowledge_scripts(kid: str, body: KnowledgeScriptsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    job_id = rt.knowledge.generate_scripts(kid, base_url=(body.base_url or "").strip() or None,
+                                           credential_role=body.credential_role, environment=body.environment,
+                                           headless=body.headless, on_existing=body.on_existing)
+    return {"ok": True, "job_id": job_id}
 
 
 @router.get("/api/knowledge/requirement-memory")

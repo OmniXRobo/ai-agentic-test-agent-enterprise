@@ -42,7 +42,7 @@ DESTRUCTIVE = re.compile(
     r"close\s+account|unsubscribe|refund|void|withdraw)\b", re.I)
 STATES = ("IDLE", "PREPARING", "READING_REQUIREMENTS", "RESOLVING_HIERARCHY", "BUILDING_REQUIREMENT_MEMORY",
           "OPENING_APPLICATION", "AUTHENTICATING", "RUNNING", "WAITING_FOR_INPUT", "RESUMING",
-          "MAPPING_REQUIREMENTS", "ANALYZING_GAPS", "UPDATING_MEMORY", "COMPLETED", "FAILED", "STOPPED")
+          "MAPPING_REQUIREMENTS", "ANALYZING_GAPS", "GENERATING_SCRIPTS", "UPDATING_MEMORY", "COMPLETED", "FAILED", "STOPPED")
 ACTIVE_STATES = set(STATES) - {"IDLE", "COMPLETED", "FAILED", "STOPPED"}
 INPUT_TIMEOUT_S = 30 * 60
 CLICKS_PER_PAGE = 15
@@ -108,6 +108,7 @@ class DiscoveryJob:
         self.summary: dict[str, Any] | None = None
         self.requirement_memory_id: str | None = None
         self.knowledge_id: str | None = None
+        self.script_job_id: str | None = None  # AI-Driven Automation job started after discovery
         self.started_at = now_iso()
         self.finished_at: str | None = None
         self.history: list[dict[str, str]] = []
@@ -175,7 +176,7 @@ class DiscoveryJob:
         return {"run_id": self.run_id, "state": self.state, "active": self.active, "request": self.request,
                 "discovery_id": self.discovery_id, "error": self.error, "summary": self.summary,
                 "requirement_memory_id": self.requirement_memory_id, "knowledge_id": self.knowledge_id,
-                "started_at": self.started_at, "finished_at": self.finished_at, "history": self.history[-30:],
+                "script_job_id": self.script_job_id, "started_at": self.started_at, "finished_at": self.finished_at, "history": self.history[-30:],
                 "options": {k: v for k, v in self.options.items() if k not in ("password",)}}
 
 

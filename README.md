@@ -96,7 +96,11 @@ git-ignored. Secrets are never written to `settings.json` or logs.
     Typed passwords are never stored; they become `{{CRED:role.password}}`.
   * **Application Discovery & Update**: crawls same-site pages (logout links skipped), inventories elements, forms
     and the XHR/fetch API endpoints the pages call, and shows what changed since the previous discovery. Build a
-    script from selected elements.
+    script from selected elements. With **TFS + Application** it runs the whole agentic chain: read the selected TFS
+    requirements (Epic / Feature / User Story / Acceptance Criteria / Test Case), discover the application (signing
+    in, pausing for OTP or unknown values), map requirements to pages and elements with coverage and gaps, then
+    generate the Playwright scripts of the Test Cases in scope through AI-Driven Automation (option on by default;
+    also a *Generate Playwright Scripts* button on the coverage page).
   * **Hybrid Test Automation**: record extra steps into any script at any position.
 * **Script editor**: steps table, runtime values (`{{TODAY+3d:%d/%m/%Y}}`, `{{DATA:field}}`, `{{CRED:role.username}}`),
   readable Playwright Python export, version history with restore, and archive instead of delete.
