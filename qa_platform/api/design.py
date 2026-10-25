@@ -63,6 +63,51 @@ def put_ai_settings(body: AISettingsIn, rt: Runtime = Depends(runtime)) -> dict[
     return {"ok": True, **rt.ai.config()}
 
 
+class ManagedLLMIn(BaseModel):
+    server_path: str | None = Field(default=None, max_length=500)
+    model_path: str | None = Field(default=None, max_length=500)
+    alias: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[\w.:-]+$")
+    host: str | None = Field(default=None, pattern=r"^(127\.0\.0\.1|localhost|0\.0\.0\.0|[\w.-]+)$", max_length=100)
+    port: int | None = Field(default=None, ge=1024, le=65535)
+    context_size: int | None = Field(default=None, ge=512, le=262144)
+    startup_timeout_s: int | None = Field(default=None, ge=10, le=1800)
+    auto_start: bool | None = None
+
+
+@router.get("/ai/managed")
+def managed_status(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **rt.llm.status()}
+
+
+@router.put("/ai/managed")
+def managed_settings(body: ManagedLLMIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    patch = body.model_dump(exclude_none=True)
+    for key in ("server_path", "model_path"):
+        if key in patch:
+            patch[key] = patch[key].strip().strip('"')
+    rt.settings.update({"ai": {"managed": patch}})
+    return {"ok": True, **rt.llm.status()}
+
+
+@router.post("/ai/managed/detect")
+def managed_detect(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **rt.llm.detect()}
+
+
+@router.post("/ai/managed/{action}")
+def managed_control(action: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    if action == "start":
+        result = rt.llm.start(wait=False)
+    elif action == "restart":
+        rt.llm.stop()
+        result = rt.llm.start(wait=False)
+    elif action == "stop":
+        result = rt.llm.stop()
+    else:
+        raise QAError("NOT_FOUND", "Unknown action.", status=404)
+    return {"ok": True, **result}
+
+
 @router.get("/ai/models")
 def ai_models(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "models": rt.ai.models()}
