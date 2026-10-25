@@ -32,10 +32,10 @@ from ...clock import now_iso
 from ...config import Paths, Settings
 from ...credentials import APP_CREDENTIAL_NAMESPACE, SecretStore
 from ...design.service import html_to_text, split_criteria
-from ...agents.base import BaseAgent
 from ...errors import QAError
 from ...events import names
 from ...events.bus import EventBus
+from ...knowledge.service import RequirementsIntelligenceAgent
 from ...logging_setup import get_logger
 from ...runs import RunStore
 from ...storage.db import Database, dumps, loads
@@ -85,12 +85,6 @@ class JobRequest(BaseModel):
     headless: bool = True
 
 
-class RequirementReader(BaseAgent):
-    """Requirements Intelligence Agent, as it reads the requirement of each Test Case being automated."""
-
-    agent_id = "requirements"
-
-
 class ScriptStudio:
     def __init__(self, paths: Paths, settings: Settings, bus: EventBus, db: Database, runs: RunStore,
                  secrets: SecretStore, tfs: TfsService, ai: AIGateway, automation: Any, design: Any,
@@ -107,7 +101,7 @@ class ScriptStudio:
         self.design = design
         self.defects = defects
         self.knowledge: Any = None  # Unified QA Knowledge (set by the runtime)
-        self.requirements_agent = RequirementReader(bus)
+        self.requirements_agent = RequirementsIntelligenceAgent(bus)
         self.ws = FrameworkWorkspace(paths.workspace)
         self.agent: AutomationEngineeringAgent = automation.generator.agent
         self.creds = automation.creds
