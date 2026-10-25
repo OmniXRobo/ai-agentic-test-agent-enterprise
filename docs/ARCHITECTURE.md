@@ -335,3 +335,53 @@ microphone ─► speech recognition ─► intent analysis ─► validation �
   upgrade and one kept previous version, automatic rollback, damaged packages, unsafe targets, the rollback swap,
   the launch scripts, checksum enforcement and archive path checks. The `offline-package` CI job does a real build,
   install and validation on Windows.
+
+## AI-Driven Automation Script Studio
+
+Code: `qa_platform/automation/framework/` (API `qa_platform/api/studio.py`, UI `web/js/pages/script-studio.js`).
+
+* **Workspace** (`workspace.py`): `<data>/automation-workspace`, created from `framework/template` (the template's
+  `_conftest.py` becomes `conftest.py`). Runtime files (`utilities/`, `fixtures/`, `conftest.py`, `RUN_TESTS.cmd`)
+  carry a runtime signature and are refreshed on upgrade, keeping the old copy in `.versions/`. All writes are
+  atomic, every save keeps a version, and paths are always relative to the workspace.
+* **Registry** (`registry.py`) parses the workspace with `ast`: Page Object classes, their locators and methods, flows
+  and tests. Generation reuses what exists. **Builder / codegen** (`builder.py`, `codegen.py`): the AI returns only a
+  `MappedTest` (each step mapped to discovered elements and an action); locators are chosen in the spec's priority
+  order (test id, role + name, label, placeholder, text, stable CSS/id, XPath last) and the Python is generated
+  deterministically.
+* **Validator** (`validator.py`) runs in a staging copy of the workspace: syntax, imports (including submodules),
+  undefined names, Page Object / flow / fixture / test data references, call arity of Page Object methods in every
+  dependent flow and test, Playwright usage, traceability header and markers, then `pytest --collect-only` of the
+  affected tests. Error codes: `SYNTAX_INVALID`, `IMPORT_VALIDATION_FAILED`, `PAGE_OBJECT_REFERENCE_INVALID`,
+  `TEST_DATA_MISSING` and others; nothing is written when a check fails.
+* **Studio service** (`studio.py`): Sprint → User Story → Test Case selection, generation jobs (one thread, per-item
+  status, stop, retry), inventory (table `framework_scripts`, migration 9, plus `framework_jobs`/`framework_job_items`),
+  edits, flow operations, test data, credential overrides, versions, components with impact analysis, healing apply.
+  A script is GENERATED only when its file exists and validated.
+* **Runner** (`runner.py`): each Play is `python -m pytest <test>` in its own process group with
+  `QA_EVENTS_FILE`, `QA_EVIDENCE_DIR`, `HEADLESS` and `QA_VISUAL` (visible mode). Credentials are passed only as the
+  `QA_CRED_USERNAME`/`QA_CRED_PASSWORD` environment variables. The test's `utilities/reporting.py` writes JSON-lines
+  records (test, step, action, healing, evidence, diagnostics, locator) that the runner follows live to publish
+  `execution.step` events and the Test Execution Agent status. Stop terminates the process group, waits for it to
+  disappear (then kills it) and records STOPPED with the evidence captured so far.
+* **Diagnosis** (`diagnosis.py`): rule-based Failure & Quality Analysis over the failed step, its expected result,
+  the error, the page state collected by `conftest.py` at the failure (URL, visible error messages, console errors,
+  failed requests) and the healing events. Rules check credentials/data, Python errors, environment, authentication,
+  network, locators, failed checks and timeouts in that order, so a Playwright exception alone never becomes an
+  application defect. The result is written to `failure-analysis.json`, shown in the Result view and, only when it is
+  likely an application problem, passed to `DefectService.record_draft`.
+
+Impact on shared code (all backward compatible):
+
+* `automation/healing.py`: the healing target type is generic so the framework's locators can use it.
+* `automation/js/overlay.js`: additive banner/status and a red `.box.fail` outline for failure screenshots.
+* Migration 9: new framework tables and an `environment` column on application credentials;
+  `CredentialProfiles` accepts an optional environment (empty matches the old rows).
+* `ai/gateway.py`: an AI Runtime mode, On-Premise (default, unchanged) or Cloud (API key in Windows Credential
+  Manager under `ai/cloud_api_key`, never in settings).
+* `defects/service.py`: `EXECUTION_FAILED` events of framework scripts (`FWS-…`) are skipped by the generic handler
+  because the studio's diagnosis decides; new `record_draft()` stores a prepared draft with duplicate checks.
+* `api/automation.py`: applying a healing record of a framework script goes to the studio.
+* UI: the *AI-Driven Automation* nav entry opens the Script Studio; the earlier page stays at `#/ai-automation-classic`.
+* Tests: `tests/test_studio.py` runs generation → edit → Play (headless and visible under Xvfb) → step evidence →
+  PASS/FAIL → diagnosis → healing → Stop with real pytest + Playwright processes, plus a browser test of the page.

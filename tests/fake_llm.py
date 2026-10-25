@@ -68,6 +68,7 @@ class FakeLLM:
         self.calls = []
         self.down = False
         self.bad_json_once = bad_json_once
+        self.extra = {}  # marker -> reply or callable(body) -> reply, checked before REPLIES
 
     def transport(self):
         return httpx.MockTransport(self.handle)
@@ -83,8 +84,10 @@ class FakeLLM:
             system = body["messages"][0]["content"]
             if body["messages"][0]["role"] == "user":
                 return self._reply("READY")
-            for marker, reply in REPLIES.items():
+            for marker, reply in {**self.extra, **REPLIES}.items():
                 if marker in system:
+                    if callable(reply):  # a reply that depends on the request (e.g. which Test Case)
+                        reply = reply(body)
                     if self.bad_json_once:
                         self.bad_json_once = False
                         return self._reply("Sure! Here you go: {not json")

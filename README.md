@@ -219,3 +219,50 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   which uses the platform's own Python and browsers, so it works on the offline package too (pytest is included).
 * **AI-Driven Automation for a whole user story**: enter a User Story ID instead of a Test Case ID to create one script
   per linked test case, then download them all as one zip.
+
+## AI-Driven Automation Script Studio
+
+**Automation Studio → AI-Driven Automation** turns TFS User Stories and Test Cases into a maintainable
+**Python + Playwright** framework (Page Object Model, business flows, tests, test data, fixtures, utilities) in the
+data folder's `automation-workspace\`. Every path in it is relative, so the folder (or *Download framework (.zip)*)
+runs on another Windows PC with `RUN_TESTS.cmd`.
+
+* **Generate Automation.** Pick a Sprint, then tick User Stories (all their Test Cases) or open a story and pick Test
+  Cases; several stories can be generated in one job. The job page shows progress and a status per Test Case
+  (Retry, View Details, Open Logs, Stop). Test Cases that already have automation ask whether to open, regenerate
+  (only what changed), keep a new version or skip.
+* **The Automation Engineering Agent** asks the AI (On-Premise or Cloud, see *Settings → AI Runtime*) only to map
+  each Test Case step to page elements; the Python is written deterministically from that mapping. Existing Page
+  Objects, flows and fixtures are reused; only missing methods, pages and flows are added. Before anything is saved,
+  a copy of the framework is checked: syntax, imports, undefined names, Page Object / flow / fixture / test data
+  references, method signatures of every test that uses a changed Page Object, Playwright usage, traceability, and
+  `pytest --collect-only`. Files are written atomically and verified on disk; a script is shown as GENERATED only
+  when its `.py` file exists (otherwise FILE MISSING). The previous working version is kept if generation fails.
+* **Script Inventory** (newest first): Method, User Story, Test Case, Sprint, Script, Generated, Status, Last Result
+  and the actions View Script, Edit Script, Flow Logic, Play, Result, Logs, Evidence, Regenerate / Update.
+  *Play Selected* asks once for the mode (Headless recommended) and runs each script separately.
+* **Per script:** View Script (highlighted Python and traceability), Edit Script (validated, backed up and versioned),
+  Flow Logic (rename, reorder, remove or add business steps), Test Data (combinations and date/time rules from the
+  Windows clock, e.g. `{{TODAY+7d:%d/%m/%Y}}`), Credentials (a script-specific override wins over the application
+  credentials; passwords stay in Windows Credential Manager), Components (shared Page Objects and flows with impact
+  analysis), History (view, compare, restore).
+* **Play** asks *Visible Browser Execution* (moving cursor, element highlight, visible typing; passwords are never
+  shown) or *Background / Headless Execution* (the same script). The status turns RUNNING at once and a live panel
+  shows the Test Execution Agent, Test Case, mode, current step and elapsed time; **Stop** ends the run and its
+  browser, keeps the evidence and marks it STOPPED. Results are PASSED, FAILED, STOPPED or ERROR.
+* **Evidence** of each run (never overwritten) in `data\evidence\<run id>\`: `result.json`, `execution.log`,
+  `progress.jsonl`, `junit.xml`, `trace.zip` files, `screenshots\` with one screenshot per step
+  (`<data set>-step_001_<step>.png`) and, for a failed step, `..._FAILED.png` (failing element outlined) and
+  `..._FAILED_full.png`. **Result** shows every step with its expected result (from TFS), actual result, status, time,
+  duration and screenshot; **Evidence** shows the screenshots in order; **Logs** shows the execution log (secrets
+  masked) and the generation log.
+* **Failure & Quality Analysis.** A failed run is classified as Application Functional Defect, Automation Script Defect,
+  Locator Changed, Test Data Problem, Environment Failure, Authentication Failure, Network/API Failure, Timeout,
+  Expected Result Mismatch, Application Performance Problem or Unknown - Manual Investigation Required, with a
+  confidence, what was observed (page, messages, console errors, failed requests, self-healing attempts) and the next
+  step (`failure-analysis.json`). Only likely application problems become a defect draft in **Defect Review**;
+  script, data, credential, environment and locator problems never do.
+* **Self-healing** records the original locator, replacement, confidence, page, time, Test Case and result. The Page
+  Object is changed only when you choose *Update Page Object* after a passing run, as a new version.
+* The single-script AI generation page used before stays available from links to its scripts
+  (`#/ai-automation-classic`).
