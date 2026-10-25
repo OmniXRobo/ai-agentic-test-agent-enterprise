@@ -315,6 +315,33 @@ MIGRATIONS: list[str] = [
     DROP TABLE app_credentials;
     ALTER TABLE app_credentials_new RENAME TO app_credentials;
     """,
+    # 10: Application Memory per application (versioned), Requirement Memory and Unified QA Knowledge
+    """
+    ALTER TABLE discoveries ADD COLUMN application TEXT;
+    ALTER TABLE discoveries ADD COLUMN version INTEGER;
+    ALTER TABLE discoveries ADD COLUMN knowledge_source TEXT;
+    ALTER TABLE discoveries ADD COLUMN state TEXT;
+    CREATE INDEX IF NOT EXISTS ix_disc_app ON discoveries(application, created_at);
+    CREATE TABLE IF NOT EXISTS requirement_memory (
+        id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        memory TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_reqmem_scope ON requirement_memory(project, scope_key);
+    CREATE TABLE IF NOT EXISTS qa_knowledge (
+        id TEXT PRIMARY KEY,
+        application TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        discovery_id TEXT,
+        requirement_memory_id TEXT,
+        created_at TEXT NOT NULL,
+        knowledge TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_qak_app ON qa_knowledge(application, created_at);
+    """,
 ]
 
 

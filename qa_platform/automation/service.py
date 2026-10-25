@@ -7,6 +7,7 @@ from typing import Any
 
 from ..agents.base import new_run_id
 from ..ai.gateway import AIGateway
+from ..clock import now_iso
 from ..config import Paths, Settings
 from ..credentials import SecretStore
 from ..errors import QAError
@@ -15,7 +16,7 @@ from ..logging_setup import get_logger
 from ..runs import RunStore
 from ..storage.db import Database
 from ..tfs.service import TfsService
-from .discovery import AppDiscoveryAgent, Discovery
+from .discovery import AppDiscoveryAgent, Discovery, DiscoveryJob, DiscoveryStopped
 from .dsl import Script, Step, new_script_id
 from .generator import AutomationEngineeringAgent, AutomationGenerator
 from .recorder import GuidedBrowserAgent, RecordingSession
@@ -33,7 +34,8 @@ class AutomationService:
         self.creds = CredentialProfiles(db, secrets)
         self.runner = Runner(paths, settings, db, runs, self.scripts, self.creds, TestExecutionAgent(bus),
                              ManualPlaybackAgent(bus), SelfHealingAgent(bus))
-        self.discovery = Discovery(AppDiscoveryAgent(bus), db)
+        self.discovery = Discovery(AppDiscoveryAgent(bus), db, self.creds, secrets)
+        self.discovery_jobs: dict[str, DiscoveryJob] = {}
         self.generator = AutomationGenerator(AutomationEngineeringAgent(bus), ai, tfs)
         self.guided_agent = GuidedBrowserAgent(bus)
         self.recordings: dict[str, dict[str, Any]] = {}
@@ -129,11 +131,54 @@ class AutomationService:
     # ---- discovery and AI generation -----------------------------------------------------
 
     def start_discovery(self, base_url: str, max_pages: int = 15, max_depth: int = 3,
-                        headless: bool = True) -> str:
+                        headless: bool = True, **options: Any) -> str:
+        """Interactive discovery job: it can pause for input and resume in the same browser session.
+
+        ``options`` are passed to ``Discovery.crawl`` (application, credential_role, environment, explore,
+        knowledge_source, allow_destructive). ``work`` replaces the plain crawl, for example to run the
+        Requirements Intelligence Agent first; it receives the job and returns the discovery result.
+        """
+        work = options.pop("work", None)
         run_id = new_run_id("DISC")
-        self._background(run_id, lambda: self.discovery.crawl(run_id, base_url, max_pages=max_pages,
-                                                              max_depth=max_depth, headless=headless))
+        job = DiscoveryJob(run_id, {"base_url": base_url, "max_pages": max_pages, "max_depth": max_depth,
+                                    "headless": headless, **options})
+        job.set_state("PREPARING", "Preparing discovery")
+        with self._lock:
+            self.discovery_jobs[run_id] = job
+            for old in [k for k, j in self.discovery_jobs.items() if not j.active][:-20]:
+                self.discovery_jobs.pop(old, None)  # keep the last finished jobs only
+
+        def crawl(j: DiscoveryJob) -> dict[str, Any]:
+            return self.discovery.crawl(run_id, base_url, max_pages=max_pages, max_depth=max_depth,
+                                        headless=headless, job=j, **options)
+
+        def run() -> None:
+            try:
+                result = (work or crawl)(job)
+                job.discovery_id = result.get("id")
+                job.summary = result.get("summary")
+                job.set_state("COMPLETED", "Discovery completed")
+            except DiscoveryStopped:
+                job.set_state("STOPPED", "Stopped by the tester")
+            except QAError as exc:
+                job.error = exc.message
+                job.set_state("FAILED", exc.message)
+                raise
+            except Exception as exc:
+                job.error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:300] if str(exc) else ''}"
+                job.set_state("FAILED", job.error)
+                raise
+            finally:
+                job.finished_at = now_iso()
+
+        self._background(run_id, run)
         return run_id
+
+    def discovery_job(self, run_id: str) -> DiscoveryJob:
+        job = self.discovery_jobs.get(run_id)
+        if job is None:
+            raise QAError("DISCOVERY_JOB_NOT_FOUND", f"Discovery {run_id} is not running in this session.", status=404)
+        return job
 
     def start_generation(self, test_case_id: int, base_url: str, *, credential_role: str | None = None,
                          application: str | None = None, discovery_id: str | None = None,
@@ -172,9 +217,10 @@ class AutomationService:
     def generate(self, run_id: str, test_case_id: int, base_url: str, *, credential_role: str | None = None,
                  application: str | None = None, discovery_id: str | None = None, headless: bool = True) -> Script:
         """AI-driven generation in the caller's thread; saves and returns the new script."""
-        disc = self.discovery.get(discovery_id) if discovery_id else self.discovery.latest_for(base_url)
+        disc = self.discovery.get(discovery_id) if discovery_id else self.discovery.latest_for(base_url, application)
         if disc is None:
-            disc = self.discovery.crawl(run_id, base_url, max_pages=5, max_depth=1, headless=headless)
+            disc = self.discovery.crawl(run_id, base_url, max_pages=5, max_depth=1, headless=headless,
+                                        application=application, credential_role=credential_role)
         script = self.generator.generate(run_id, test_case_id=test_case_id, base_url=base_url, discovery=disc,
                                          credential_role=credential_role, application=application)
         saved = self.scripts.save(script, reason=f"AI-generated ({run_id})")

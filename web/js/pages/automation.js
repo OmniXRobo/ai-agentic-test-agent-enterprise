@@ -4,6 +4,7 @@
 import { api } from "../api.js";
 import { subscribe } from "../store.js";
 import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
+import { discoveryPanel as discoveryPanelImpl } from "./discovery.js";
 
 const ACTIONS = ["goto", "click", "dblclick", "fill", "type", "select", "check", "uncheck", "press", "hover", "wait",
   "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot"];
@@ -446,82 +447,8 @@ async function hybridPanel(view) {
   await renderScriptList(view.querySelector("#list"), ["hybrid"], "No hybrid scripts yet.");
 }
 
-async function discoveryDetail(view, id) {
-  const { discovery: d } = await api(`/api/automation/discoveries/${encodeURIComponent(id)}`);
-  const diff = d.diff;
-  view.innerHTML = `
-    <p><a href="#/discovery">← Application Discovery & Update</a></p>
-    <div class="card"><h2>${esc(d.base_url)}</h2>
-      <p class="muted">${esc(d.id)} · ${esc(dateTimeOf(d.created_at))} · ${d.pages.length} pages · ${d.pages.reduce((n, p) => n + (p.elements?.length || 0), 0)} elements · ${d.endpoints.length} API endpoints</p>
-      ${diff ? `<h3>Changes since the previous discovery</h3>
-        <p>Pages added: ${diff.pages_added.length} · removed: ${diff.pages_removed.length} · elements added: ${diff.elements_added} · removed: ${diff.elements_removed.length} · endpoints added: ${diff.endpoints_added.length} · removed: ${diff.endpoints_removed.length}</p>
-        ${diff.elements_removed.length ? `<details><summary>Removed elements (scripts using these may need self-healing)</summary>${diff.elements_removed.map((x) => `<div><code>${esc(x)}</code></div>`).join("")}</details>` : ""}
-        ${[...diff.pages_added.map((x) => `+ ${x}`), ...diff.pages_removed.map((x) => `− ${x}`), ...diff.endpoints_added.map((x) => `+ ${x}`), ...diff.endpoints_removed.map((x) => `− ${x}`)].map((x) => `<div><code>${esc(x)}</code></div>`).join("")}`
-        : '<p class="muted">First discovery of this URL; later discoveries show what changed.</p>'}
-    </div>
-    <div class="card" style="margin-top:12px"><h3>API endpoints</h3>
-      ${d.endpoints.length ? `<table class="data"><thead><tr><th>Method</th><th>Endpoint</th><th>Calls</th><th>Status</th><th>Content type</th></tr></thead><tbody>
-        ${d.endpoints.map((e) => `<tr><td>${esc(e.method)}</td><td><code>${esc(e.endpoint)}</code></td><td>${e.count}</td><td>${esc(e.statuses.join(", "))}</td><td>${esc(e.content_type || "")}</td></tr>`).join("")}
-      </tbody></table><p class="muted">This inventory is used to build JMeter performance tests.</p>` : '<p class="muted">No XHR/fetch traffic was observed.</p>'}
-    </div>
-    ${d.pages.map((p, pi) => `
-      <details class="card tc" style="margin-top:12px;padding:12px 16px">
-        <summary><strong>${esc(p.title || p.url)}</strong> <span class="muted">${esc(p.url)}</span>
-          ${p.error ? `<span class="pill FAIL">${esc(p.error)}</span>` : `<span class="muted">${p.elements.length} elements · ${p.forms.length} forms</span>`}</summary>
-        ${p.error ? "" : `<form data-page="${pi}">
-          <table class="data"><thead><tr><th></th><th>Element</th><th>Role</th><th>Locator</th></tr></thead><tbody>
-          ${p.elements.map((el) => `<tr><td><input type="checkbox" value="${esc(el.selector)}"></td><td>${esc(el.name || el.text || el.placeholder || el.tag)}</td>
-            <td>${esc(el.role || el.tag)}</td><td><code>${esc(el.selector)}</code></td></tr>`).join("")}</tbody></table>
-          <div class="row"><input name="name" placeholder="Script name"><button class="btn primary" type="submit">Create script from selected elements</button></div></form>`}
-      </details>`).join("")}`;
-  view.querySelectorAll("form[data-page]").forEach((form) => form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const selectors = [...form.querySelectorAll("input[type=checkbox]:checked")].map((c) => c.value);
-    if (!selectors.length) { toast("Select at least one element.", "warning"); return; }
-    try {
-      const { script } = await api(`/api/automation/discoveries/${encodeURIComponent(id)}/scripts`, { method: "POST", body: {
-        page_url: d.pages[Number(form.dataset.page)].url, selectors, name: form.querySelector("[name=name]").value } });
-      location.hash = `#/discovery?script=${encodeURIComponent(script.id)}`;
-    } catch (err) { toast(err.message, "error"); }
-  }));
-}
-
-async function discoveryPanel(view) {
-  const id = params().get("id");
-  if (id) return discoveryDetail(view, id);
-  view.innerHTML = `
-    <form class="card grid" id="disc" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
-      <label>Application URL <input name="base_url" required placeholder="https://your-app/"></label>
-      <label>Max pages <input name="max_pages" type="number" min="1" max="200" value="15"></label>
-      <label>Link depth <input name="max_depth" type="number" min="0" max="10" value="3"></label>
-      <div class="row" style="align-self:end"><button class="btn primary" type="submit">Discover</button></div>
-      <p class="muted" style="grid-column:1/-1">The Application Discovery Agent crawls same-site pages (skipping logout links), inventories interactive elements and forms, and records the API endpoints the pages call. Running it again shows what changed.</p>
-    </form>
-    <div class="card" id="progress" style="margin-top:12px" hidden><h3>Activity</h3><div class="feed" id="feed"></div></div>
-    <div class="card" id="discs" style="margin-top:12px"><p class="muted">Loading…</p></div>
-    <div class="card" id="list" style="margin-top:12px"><p class="muted">Loading…</p></div>`;
-  let runId = null;
-  const renderDiscs = async () => {
-    const { items } = await api("/api/automation/discoveries");
-    view.querySelector("#discs").innerHTML = `<h3>Discoveries</h3>${items.length ? `<table class="data"><thead><tr><th>Application</th><th>Pages</th><th>API endpoints</th><th>When</th></tr></thead><tbody>
-      ${items.map((d) => `<tr class="clickable" data-id="${esc(d.id)}"><td>${esc(d.base_url)}</td><td>${d.pages}</td><td>${d.endpoints}</td><td>${esc(dateTimeOf(d.created_at))}</td></tr>`).join("")}</tbody></table>`
-      : '<p class="muted">No discoveries yet.</p>'}`;
-    view.querySelectorAll("#discs tr[data-id]").forEach((tr) => tr.addEventListener("click", () => { location.hash = `#/discovery?id=${encodeURIComponent(tr.dataset.id)}`; }));
-  };
-  view.querySelector("#disc").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const f = Object.fromEntries(new FormData(e.target));
-    try {
-      const r = await api("/api/automation/discoveries", { method: "POST", body: { base_url: f.base_url.trim(), max_pages: Number(f.max_pages), max_depth: Number(f.max_depth) } });
-      runId = r.run_id;
-      view.querySelector("#progress").hidden = false;
-      view.querySelector("#feed").innerHTML = "";
-    } catch (err) { toast(err.message, "error"); }
-  });
-  liveFeed(view.querySelector("#feed"), () => runId, (ev) => {
-    if (ev.agent_id === "app_discovery" && ["agent.completed", "agent.failed"].includes(ev.name)) setTimeout(renderDiscs, 300);
-  });
-  await Promise.all([renderDiscs(), renderScriptList(view.querySelector("#list"), ["discovery"], "No scripts created from discovery yet.")]);
+function discoveryPanel(view) {
+  return discoveryPanelImpl(view, { onCleanup, liveFeed, renderScriptList });
 }
 
 function page(panel) {

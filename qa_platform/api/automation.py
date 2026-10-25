@@ -253,6 +253,16 @@ class DiscoveryIn(BaseModel):
     max_pages: int = Field(default=15, ge=1, le=200)
     max_depth: int = Field(default=3, ge=0, le=10)
     headless: bool = True
+    application: str | None = Field(default=None, max_length=120)
+    credential_role: str | None = Field(default=None, max_length=60)
+    environment: str | None = Field(default=None, max_length=60)
+    explore: bool = True
+    allow_destructive: bool = False
+
+
+class DiscoveryInputIn(BaseModel):
+    values: dict[str, str] = {}
+    save_static: bool = False
 
 
 class FromDiscoveryIn(BaseModel):
@@ -273,14 +283,40 @@ class GenerateIn(BaseModel):
 
 @router.post("/discoveries", status_code=202)
 def start_discovery(body: DiscoveryIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    run_id = rt.automation.start_discovery(_url(body.base_url, "application URL"), body.max_pages, body.max_depth,
-                                           body.headless)
+    run_id = rt.automation.start_discovery(
+        _url(body.base_url, "application URL"), body.max_pages, body.max_depth, body.headless,
+        application=body.application, credential_role=body.credential_role, environment=body.environment,
+        explore=body.explore, allow_destructive=body.allow_destructive)
     return {"ok": True, "run_id": run_id}
 
 
 @router.get("/discoveries")
-def list_discoveries(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    return {"ok": True, "items": rt.automation.discovery.list()}
+def list_discoveries(application: str | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": rt.automation.discovery.list(application=application)}
+
+
+@router.get("/discovery-applications")
+def discovery_applications(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": rt.automation.discovery.applications()}
+
+
+@router.get("/discovery-jobs/{run_id}")
+def discovery_job(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "job": rt.automation.discovery_job(run_id).view()}
+
+
+@router.post("/discovery-jobs/{run_id}/input")
+def discovery_input(run_id: str, body: DiscoveryInputIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    job = rt.automation.discovery_job(run_id)
+    job.answer(body.values, body.save_static)
+    return {"ok": True}
+
+
+@router.post("/discovery-jobs/{run_id}/stop")
+def discovery_stop(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    if not rt.automation.discovery_job(run_id).stop():
+        raise QAError("DISCOVERY_NOT_ACTIVE", f"Discovery {run_id} is not running.", status=409)
+    return {"ok": True}
 
 
 @router.get("/discoveries/{discovery_id}")

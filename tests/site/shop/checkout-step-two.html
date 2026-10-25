@@ -1,0 +1,8 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Test Shop</title><script src="common.js"></script></head>
+<body>
+<script>shop.guard();</script>
+<span class="title" data-test="title">Checkout: Overview</span>
+<button id="finish" data-test="finish">Finish</button>
+<script>shop.header(); document.getElementById("finish").onclick = () => { localStorage.setItem("ordered", "1"); shop.go("checkout-complete.html"); };</script>
+</body></html>

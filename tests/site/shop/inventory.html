@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Test Shop</title><script src="common.js"></script></head>
+<body>
+<script>shop.guard();</script>
+<span class="title" data-test="title">Products</span>
+<select class="product_sort_container" data-test="product-sort-container"><option value="az">Name (A to Z)</option><option value="za">Name (Z to A)</option></select>
+<div class="inventory_list"></div>
+<script>
+  shop.header();
+  fetch("api/inventory").then((r) => r.json()).then((items) => {
+    document.querySelector(".inventory_list").innerHTML = items.map((i) => `
+      <div class="inventory_item">
+        <a href="#" id="item_${i.id}_title_link"><div class="inventory_item_name">${i.name}</div></a>
+        <div class="inventory_item_price">$${i.price}</div>
+        <button class="btn_inventory" data-test="add-to-cart-${i.id}" id="add-to-cart-${i.id}">Add to cart</button>
+      </div>`).join("");
+    items.forEach((i) => {
+      document.getElementById(`item_${i.id}_title_link`).onclick = (e) => { e.preventDefault(); shop.go(`inventory-item.html?id=${i.id}`); };
+      document.getElementById(`add-to-cart-${i.id}`).onclick = () => { shop.setCart([...shop.cart(), i.id]); };
+    });
+  });
+</script>
+</body></html>

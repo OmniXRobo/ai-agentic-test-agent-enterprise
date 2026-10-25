@@ -428,7 +428,7 @@ def test_stop_job_and_error_reasons(studio_env):
         gate.wait(10)
         return mapping(body)
     llm.extra[MARKER] = slow
-    rt.automation.discovery.latest_for = lambda url: {"id": "D", "pages": [{"url": f"{url}/login.html", "title": "Sign in",
+    rt.automation.discovery.latest_for = lambda url, application=None: {"id": "D", "pages": [{"url": f"{url}/login.html", "title": "Sign in",
         "elements": [{"selector": "#username", "tag": "input", "element_id": "username"},
                      {"selector": "#password", "tag": "input", "element_id": "password"},
                      {"selector": "#login-btn", "tag": "button", "role": "button", "name": "Sign in"},
