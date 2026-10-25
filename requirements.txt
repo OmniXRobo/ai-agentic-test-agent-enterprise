@@ -1,11 +1,15 @@
-# Runtime dependencies (pinned for reproducible offline bundles)
-fastapi==0.115.6
-uvicorn==0.34.0
+# Runtime dependencies (pinned for reproducible offline bundles; packaging/requirements-offline-win.txt adds hashes)
+fastapi==0.142.4
+# Pinned directly so security fixes do not wait for FastAPI: keep it clear of pip-audit findings
+starlette==1.7.0
+uvicorn==0.54.0
 httpx==0.28.1
-pydantic==2.10.4
-keyring==25.6.0
-playwright==1.56.0
+pydantic==2.13.5
+keyring==25.7.0
+playwright==1.63.0
 # Offline speech recognition for voice commands (model bundled in runtime/speech)
 vosk==0.3.45
 # Runs exported automated tests (pytest + Playwright)
-pytest==8.3.4
+pytest==9.1.1
+# CA bundle used by httpx/requests; pinned to a release without known advisories
+certifi==2026.10.19

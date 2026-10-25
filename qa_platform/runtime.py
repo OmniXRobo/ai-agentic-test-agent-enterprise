@@ -17,6 +17,7 @@ from .design.service import DesignService
 from .events import names
 from .events.bus import EventBus
 from .events.state import AgentStateManager
+from .first_run import FirstRunSetup
 from .health import HealthService
 from .logging_setup import get_logger
 from .knowledge.service import KnowledgeService
@@ -61,6 +62,7 @@ class Runtime:
     knowledge: KnowledgeService
     health: HealthService
     llm: ManagedLLM
+    setup: FirstRunSetup
 
     def close(self) -> None:
         self.llm.close()  # only the llama-server this application started
@@ -116,4 +118,5 @@ def build_runtime(
         except Exception as exc:  # the application still starts; the AI page shows why
             log.warning(f"Managed LLM did not start: {exc}")
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation, performance, defects, voice, analytics, reports, studio, hierarchy, knowledge, health, llm)
+                   automation, performance, defects, voice, analytics, reports, studio, hierarchy, knowledge, health, llm,
+                   FirstRunSetup(settings, paths, tfs, llm, voice, health))

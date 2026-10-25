@@ -10,6 +10,13 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Version 23.1.0: offline install kit for company PCs
+
+The offline package now bundles llama-server, opens a **First-Run Setup** screen that asks only for the TFS URL,
+project and PAT, the `.gguf` model file and (optionally) a voice model, and ships a CycloneDX SBOM, a `SHA256SUMS.txt`
+for the zip and Python packages without known vulnerabilities (checked by `pip-audit` in CI). How to hand it to a
+security team and install it is in [docs/OFFLINE_INSTALL.md](docs/OFFLINE_INSTALL.md).
+
 ## Version 23.0.0: Command Center
 
 The AI Voice Command Center, the HUD theme, real agent states, allow-listed voice commands with an offline
@@ -191,8 +198,10 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   `py -3 packaging\build_offline_package.py [--zip] [--ai-dir <folder with a Qwen GGUF model>]`. It writes
   `dist_offline\AIAgenticTestAgent-Offline-<version>\` with `INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`,
   `README_OFFLINE.txt` and `payload\` (the application, `runtime\python`, `runtime\jre`, `runtime\apache-jmeter-5.6.3`,
-  `runtime\ms-playwright`, optional `runtime\ai`, `MANIFEST.json` with the SHA-256 of every file and `DEPENDENCIES.md`).
-  Python 3.12.8, Temurin JRE 17.0.13 and JMeter 5.6.3 are pinned with checksums in `packaging/offline-lock.json`;
+  `runtime\ms-playwright`, `runtime\ai\llama.cpp` (llama-server), `MANIFEST.json` with the SHA-256 of every file,
+  `DEPENDENCIES.md` and `sbom.cdx.json`).
+  Python, the Temurin JRE, JMeter, llama-server and the speech model are pinned with checksums in
+  `packaging/offline-lock.json` (`packaging/update_pins.py` refreshes the Java and llama-server pins);
   Python packages come from `packaging/requirements-offline-win.txt` with `--require-hashes`. Models are never
   downloaded: `--ai-dir` copies the folder you give it.
 * **VALIDATE_OFFLINE.cmd** checks Windows, administrator rights (not needed), every package file against the manifest,
@@ -206,7 +215,8 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   `logs\`. `ROLLBACK_OFFLINE.cmd` in the install folder returns to the previous version.
 * CI builds the package on Windows, validates it, installs it to a temporary folder and validates the installed copy.
   The tested package is attached to each run as the artifact `AIAgenticTestAgent-Offline-windows` (kept 14 days):
-  GitHub → Actions → the latest CI run → Artifacts.
+  GitHub → Actions → the latest CI run → Artifacts. `AIAgenticTestAgent-Offline-windows-zip` holds the same package
+  as one zip with `SHA256SUMS.txt` and `sbom.cdx.json`, for a security scan.
 
 ## TFS test generation and Python test scripts
 

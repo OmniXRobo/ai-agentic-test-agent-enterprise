@@ -21,6 +21,7 @@ import * as voicePage from "./pages/voice.js";
 import * as reports from "./pages/reports.js";
 import * as analytics from "./pages/analytics.js";
 import * as commandCenter from "./pages/command-center.js";
+import * as setupPage from "./pages/setup.js";
 import { voice, onVoice, listen, loadSettings, agentName } from "./voice.js";
 
 // route -> { title, page }
@@ -64,6 +65,7 @@ const NAV = [
     ["analytics", "Analytics", analytics],
   ]],
   ["Settings", [
+    ["setup", "First-Run Setup", setupPage],
     ["settings", "Preferences", settings],
     ["tfs-settings", "TFS Connection", tfsSettings],
     ["ai-settings", "AI Runtime", aiSettings],
@@ -266,4 +268,12 @@ initConnection();
 initVoice();
 initStrip();
 window.addEventListener("hashchange", navigate);
-start().then(navigate);
+
+// A new install opens First-Run Setup until TFS and the local LLM model are set (or the screen is skipped).
+async function firstRun() {
+  try {
+    const s = await api("/api/setup");
+    if (s.needed && !location.hash.replace(/^#\/?/, "")) history.replaceState(null, "", "#/setup"); // no hashchange: navigate() runs next
+  } catch { /* the dashboard still opens */ }
+}
+start().then(firstRun).then(navigate);

@@ -161,7 +161,7 @@ def _shortcuts(target: Path, log: Log) -> None:
 
 
 def install(source: Path, target: Path, *, validation: Validation = subprocess_validation,
-            shortcuts: bool = True) -> int:
+            shortcuts: bool = True, prefill: dict[str, str] | None = None) -> int:
     source, target = source.resolve(), target.resolve()
     _check_target(source, target)
     stamp = _stamp()
@@ -224,6 +224,14 @@ def install(source: Path, target: Path, *, validation: Validation = subprocess_v
         if old_previous is not None:
             shutil.rmtree(old_previous, ignore_errors=True)
         _write_launchers(target)
+        if prefill and any(prefill.values()):
+            from ..first_run import prefill as write_prefill
+
+            try:
+                applied = write_prefill(data / "settings.json", **prefill)
+                log(f"Pre-filled First-Run Setup ({', '.join(sorted(applied))}); the TFS PAT is entered there.")
+            except Exception as exc:  # the install itself succeeded; the setup screen asks instead
+                log(f"Setup values were not pre-filled ({getattr(exc, 'message', exc)}). Enter them in First-Run Setup.")
         if shortcuts:
             _shortcuts(target, log)
         log(f"Installed. Start it with {target / 'START_QA_PLATFORM.cmd'}")
@@ -290,12 +298,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--source", type=Path, default=APP_ROOT, help="the package's payload folder")
     ap.add_argument("--target", type=Path, default=None, help=f"install folder (default {default_target()})")
     ap.add_argument("--no-shortcuts", action="store_true")
+    # Optional: pre-fill First-Run Setup so the user only pastes the PAT (never given on a command line).
+    ap.add_argument("--tfs-url", default="", help="TFS collection URL, e.g. https://tfs-server/tfs/DefaultCollection")
+    ap.add_argument("--tfs-project", default="")
+    ap.add_argument("--llm-model", default="", help="the Qwen .gguf model file")
+    ap.add_argument("--llm-server", default="", help="another llama-server.exe (default: the bundled one)")
+    ap.add_argument("--voice-model", default="", help="a Vosk model folder (default: the bundled one)")
     args = ap.parse_args(argv)
     target = args.target or default_target()
     if args.action == "rollback":
         return rollback(target)
     try:
-        return install(args.source, target, shortcuts=not args.no_shortcuts)
+        return install(args.source, target, shortcuts=not args.no_shortcuts,
+                       prefill={"tfs_url": args.tfs_url, "tfs_project": args.tfs_project, "llm_model": args.llm_model,
+                                "llm_server": args.llm_server, "voice_model": args.voice_model})
     except InstallError as exc:
         print(f"Install stopped: {exc}", file=sys.stderr)
         return 1

@@ -9,7 +9,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        python: ["3.11", "3.12"]
+        python: ["3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +35,18 @@ jobs:
           tar -xzf jmeter.tgz -C "$dest"
           echo "JMETER_HOME=$RUNNER_TEMP/apache-jmeter-$v" >> "$GITHUB_ENV"
       - run: python -m pytest -q
+  security-audit:
+    # Fails the build when a bundled Python package has a known vulnerability (PyPI advisory database / OSV),
+    # before the package reaches a company security scan.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install pip-audit==2.10.1
+      - name: Audit the exact packages bundled in the offline package
+        run: pip-audit --strict --no-deps --disable-pip -r packaging/requirements-offline-win.txt
   offline-package:
     # Builds the portable package exactly as a user would, validates it with the network blocked,
     # installs it per-user (no administrator rights) and validates the installed copy.
@@ -48,6 +60,12 @@ jobs:
         with:
           path: dist_offline/downloads
           key: offline-downloads-${{ hashFiles('packaging/offline-lock.json') }}
+      - name: Resolve Java and llama-server pins (temporary, publisher checksums verified)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python packaging/update_pins.py --write
+          type packaging\offline-lock.json
       - name: Build the offline package (validates it at the end)
         env:
           QA_NO_PAUSE: "1"
@@ -71,6 +89,16 @@ jobs:
           # Bundled JMeter and Python packages contain dot-files that MANIFEST.json lists; without them the
           # installer rightly reports the package as damaged.
           include-hidden-files: true
+      - name: Publish the zip, its checksum and the SBOM (hand these to the security team)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIAgenticTestAgent-Offline-windows-zip
+          path: |
+            dist_offline/AIAgenticTestAgent-Offline-*.zip
+            dist_offline/SHA256SUMS.txt
+            dist_offline/AIAgenticTestAgent-Offline-*/sbom.cdx.json
+          retention-days: 14
+          compression-level: 0
   offline-package-download:
     # Proves the artifact people download installs: fetch it the way a user would, on a fresh runner, then
     # validate and install it.

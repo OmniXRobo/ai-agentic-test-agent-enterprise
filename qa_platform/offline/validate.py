@@ -299,14 +299,20 @@ class Validator:
 
     def check_ai_files(self) -> Check:
         ai = self.app / "runtime" / "ai"
+        server = next((p for p in sorted(ai.rglob("llama-server.exe" if WINDOWS else "llama-server")) if p.is_file()),
+                      None) if ai.is_dir() else None
         models = sorted(ai.rglob("*.gguf")) if ai.is_dir() else []
-        if not models:
-            return Check("On-Premise AI files", "INFO", "No model is bundled. Point On-Premise AI settings at your "
-                                                        "llama.cpp (Qwen GGUF) server; nothing is downloaded.")
-        sizes = ", ".join(f"{m.name} ({m.stat().st_size / 1e9:.1f} GB)" for m in models)
-        server = next((p for p in ai.rglob("llama-server*") if p.is_file()), None)
-        return Check("On-Premise AI files", "PASS", f"Bundled model: {sizes}"
-                                                    + (f"; server: {server.name}" if server else "; no llama-server binary bundled"))
+        model_note = ("; bundled model: " + ", ".join(f"{m.name} ({m.stat().st_size / 1e9:.1f} GB)" for m in models)
+                      if models else "; choose your .gguf model in First-Run Setup")
+        if not server:
+            # A package built from the lock always has it; a developer copy may not.
+            status = "FAIL" if self.manifest is not None else "INFO"
+            return Check("On-Premise AI files", status, f"No llama-server in {ai}. Choose one in First-Run Setup.")
+        out = _run([str(server), "--version"], timeout=60)
+        text = " ".join((out.stdout + out.stderr).split())
+        if out.returncode != 0:
+            return Check("On-Premise AI files", "FAIL", f"{server} did not run (exit {out.returncode}): {text[-300:]}")
+        return Check("On-Premise AI files", "PASS", f"llama-server runs ({text[:80]}){model_note}")
 
     def check_speech_files(self) -> Check:
         speech = self.app / "runtime" / "speech"
