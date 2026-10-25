@@ -648,3 +648,29 @@ def test_script_studio_page_inventory_play_dialog_result_and_evidence(studio_env
         expect(page.locator("#stories")).to_contain_text("US118")
         browser.close()
     assert not errors, errors
+
+
+@needs_browser
+def test_voice_automate_user_story_reads_requirement_discovers_app_and_creates_scripts(studio_env):
+    """'Automate user story 118': Requirements Intelligence -> Application Discovery -> Automation Engineering."""
+    c, rt, site = studio_env["c"], studio_env["rt"], studio_env["site"]
+    conv = "conv-agentic-118"
+    c.post("/api/voice/commands", json={"text": "open user story 118", "conversation_id": conv})
+    rt.voice._conv(conv).base_url = site  # the application address given earlier in the conversation
+    r = c.post("/api/voice/commands", json={"text": "Hami, read the requirement, discover the application and create "
+                                                    "the scripts for user story 118", "conversation_id": conv}).json()
+    assert r["status"] == "accepted" and r["command"] == "automate_user_story", r
+    assert r["owner"] == "requirements"
+    end = time.monotonic() + 180
+    done = None
+    while time.monotonic() < end and done is None:
+        done = rt.db.query_one("SELECT status, final_reply FROM voice_commands WHERE id = ? AND finished_at IS NOT NULL",
+                               (r["command_id"],))
+        time.sleep(0.2)
+    assert done and done["status"] == "completed", done
+    assert "created 2 scripts" in done["final_reply"]
+    events = rt.db.query("SELECT agent_id, name FROM events WHERE name = 'agent.completed' ORDER BY id")
+    order = [e["agent_id"] for e in events]
+    for agent in ("requirements", "app_discovery", "automation_engineering"):
+        assert agent in order, order
+    assert order.index("requirements") < order.index("automation_engineering")

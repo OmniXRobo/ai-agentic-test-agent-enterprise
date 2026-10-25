@@ -138,28 +138,42 @@ table.data th { font-family: var(--hud-font); letter-spacing: .08em; font-size: 
 :root[data-theme="light"] .card::before, :root[data-theme="light"] .card::after { display: none; }
 :root[data-theme="light"] .btn.primary { background: var(--accent); border-color: var(--accent); }
 
-/* The earlier green cockpit console uses the same cyan palette now. */
+/* The voice pages keep the green night-vision tactical console (app.css .cockpit): monospace type, green HUD,
+   amber channel tags, red while receiving. Everything placed inside it (agent cards, handoff, status lights,
+   settings) takes the same palette. */
 .cockpit {
-  --hud: #38d6ff;
-  --hud-dim: rgba(56, 214, 255, 0.55);
-  --hud-soft: rgba(56, 214, 255, 0.12);
-  --bg: #040a14;
-  --surface: #081426;
-  --surface-2: #0c1c33;
-  --border: #1b3354;
-  --text: #d6ecff;
-  --muted: #7f97b8;
-  --accent: #22c7f0;
-  --accent-soft: rgba(34, 199, 240, 0.16);
-  background:
-    repeating-linear-gradient(0deg, rgba(56, 214, 255, 0.025) 0 1px, transparent 1px 3px),
-    radial-gradient(1200px 500px at 50% -10%, #0e2441 0%, transparent 60%),
-    linear-gradient(180deg, #06101e, #040a14);
-  font-family: var(--hud-font);
+  --ok: var(--hud);
+  --ok-soft: rgba(93, 255, 122, .12);
+  --run: var(--hud);
+  --glow: 0 0 0 1px rgba(93, 255, 122, .35), 0 0 16px rgba(93, 255, 122, .25);
+  --panel-grad: linear-gradient(180deg, rgba(12, 24, 15, .94), rgba(6, 12, 8, .96));
+  --hud-font: Consolas, "Cascadia Mono", "Lucida Console", "Courier New", monospace;
 }
-.cockpit .btn.primary { background: #0d3d5c; color: var(--hud); }
-.cockpit .btn.primary:hover { background: #12547d; }
-.cockpit .ck-meter i { background: linear-gradient(0deg, var(--hud), var(--amber) 85%, var(--fail)); }
+.cockpit .agent-card { background: var(--panel-grad); border: 1px solid var(--border); border-radius: 2px; font-family: inherit; color: var(--text); }
+.cockpit .agent-card .agent-name { color: var(--text); letter-spacing: .04em; }
+.cockpit .agent-card.RUNNING { border-color: var(--hud); }
+.cockpit .agent-card.FAILED { border-color: var(--fail); }
+.cockpit .agent-card.WAITING, .cockpit .agent-card.PAUSED { border-color: var(--amber); }
+.cockpit .agent-facts dt { color: var(--muted); }
+.cockpit .progress { background: rgba(93, 255, 122, .08); }
+.cockpit .progress span { background: var(--hud); }
+.cockpit .handoff { font-family: inherit; }
+.cockpit .handoff .hop { background: rgba(0, 0, 0, .4); border-color: var(--border); border-radius: 2px; color: var(--text); }
+.cockpit .handoff .hop.on { border-color: var(--amber); color: var(--amber); box-shadow: 0 0 12px rgba(255, 178, 46, .3); }
+.cockpit .handoff .hop.done { border-color: var(--hud); color: var(--hud); }
+.cockpit .handoff .hop.bad { border-color: var(--fail); color: #ff8a80; }
+.cockpit .handoff .arrow { color: var(--hud-dim); }
+.cockpit .pill.READY, .cockpit .pill.PASS, .cockpit .pill.COMPLETED { color: var(--hud); background: rgba(93, 255, 122, .1); }
+.cockpit .pill.RUNNING, .cockpit .pill.EXECUTING { color: var(--hud); }
+.cockpit .pill.WAITING, .cockpit .pill.WARN, .cockpit .pill.PAUSED { color: var(--amber); background: rgba(255, 178, 46, .1); }
+.cockpit .pill.FAIL, .cockpit .pill.FAILED { color: #ff8a80; background: rgba(255, 75, 62, .12); }
+.cockpit .lamp.PASS { background: var(--hud); box-shadow: 0 0 8px var(--hud); }
+.cockpit .card { background: rgba(10, 18, 12, .85); border: 1px solid var(--border); border-radius: 2px; box-shadow: none; }
+.cockpit .card::before, .cockpit .card::after { border-color: var(--hud-dim); }
+.cockpit form.settings label, .cockpit form.settings { color: var(--text); }
+.cockpit input[type=range], .cockpit input[type=checkbox] { accent-color: var(--hud); }
+.cockpit code { color: var(--amber); }
+.cockpit a:not(.btn) { color: var(--hud); }
 
 @media (max-width: 1100px) { .sys-strip { justify-content: flex-start; order: 3; flex-basis: 100%; } }
 @media (prefers-reduced-motion: reduce) {
@@ -181,10 +195,11 @@ table.data th { font-family: var(--hud-font); letter-spacing: .08em; font-size: 
 .cc .cc-top .ck-panel, .cc .cc-bottom .ck-panel { margin-bottom: 0; }
 .cc .cc-top, .cc .cc-bottom { margin-bottom: 14px; }
 .cc .vlog { min-height: 260px; max-height: 360px; }
-.cc-agent { text-align: center; font-family: var(--hud-font); font-size: 22px; letter-spacing: .18em; color: var(--accent); text-shadow: 0 0 10px rgba(34, 199, 240, .55); margin-top: 6px; }
+.cc-agent { text-align: center; font-size: 22px; letter-spacing: .3em; color: var(--hud); text-shadow: 0 0 10px rgba(93, 255, 122, .55); margin-top: 6px; }
 .cc-lights { display: grid; gap: 6px; margin-top: 12px; }
 .cc-light { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-.cc-light b { font-weight: 600; color: var(--text); }
+.cc-light b { font-weight: 600; color: var(--amber); }
+.cc-light { border-top: 1px dashed var(--border); padding-top: 5px; }
 .cc .handoff .arrow { color: var(--muted); }
 .cc-radio { display: grid; gap: 8px; }
 .cc-switch { display: flex; align-items: center; gap: 8px; font-size: 13px; }

@@ -35,6 +35,7 @@ from ...design.service import html_to_text, split_criteria
 from ...errors import QAError
 from ...events import names
 from ...events.bus import EventBus
+from ...knowledge.service import RequirementsIntelligenceAgent
 from ...logging_setup import get_logger
 from ...runs import RunStore
 from ...storage.db import Database, dumps, loads
@@ -100,6 +101,7 @@ class ScriptStudio:
         self.design = design
         self.defects = defects
         self.knowledge: Any = None  # Unified QA Knowledge (set by the runtime)
+        self.requirements_agent = RequirementsIntelligenceAgent(bus)
         self.ws = FrameworkWorkspace(paths.workspace)
         self.agent: AutomationEngineeringAgent = automation.generator.agent
         self.creds = automation.creds
@@ -414,21 +416,27 @@ class ScriptStudio:
     def _generate(self, job_id: str, item: dict[str, Any], req: JobRequest, cache: dict[str, Any],
                   target: dict[str, Any] | None, variant: int, act: Any, note: Any, stop: threading.Event) -> dict[str, Any]:
         tc = item["test_case_id"]
-        note(f"Reading Test Case #{tc}")
-        case = self.tfs.detail(int(tc))
-        steps = parse_tfs_steps(case.get("steps"))
-        if not steps:
-            raise QAError("TEST_CASE_NO_STEPS", f"Test Case #{tc} has no steps in TFS.", status=409)
-        story_id = item["user_story_id"] or next((str(l["id"]) for l in case.get("links", [])
-                                                  if l.get("relation") == "Tests"), None)
-        story = self._story(cache, story_id)
-        criteria = _criteria(story) if story else []
-        note(f"Read {len(steps)} step(s) with expected results" + (f"; User Story #{story_id} with {len(criteria)} "
-                                                                   f"Acceptance Criteria" if story else ""))
-        datasets = [{"name": r["name"], "values": r["dataset"]} for r in
-                    reversed(self.design.list_test_data(tfs_test_case_id=int(tc))) if isinstance(r["dataset"], dict)]
-        note(f"Test Data: {len(datasets)} data set(s)")
+        # 1. Requirements Intelligence Agent: the requirement (User Story, Acceptance Criteria), the Test Case and data.
+        with self.requirements_agent.activity(f"Reading the requirement for Test Case #{tc}", run_id=job_id,
+                                              test_case_id=tc) as req_act:
+            note(f"Reading Test Case #{tc}")
+            case = self.tfs.detail(int(tc))
+            steps = parse_tfs_steps(case.get("steps"))
+            if not steps:
+                raise QAError("TEST_CASE_NO_STEPS", f"Test Case #{tc} has no steps in TFS.", status=409)
+            story_id = item["user_story_id"] or next((str(l["id"]) for l in case.get("links", [])
+                                                      if l.get("relation") == "Tests"), None)
+            story = self._story(cache, story_id)
+            criteria = _criteria(story) if story else []
+            note(f"Read {len(steps)} step(s) with expected results" + (f"; User Story #{story_id} with {len(criteria)} "
+                                                                       f"Acceptance Criteria" if story else ""))
+            datasets = [{"name": r["name"], "values": r["dataset"]} for r in
+                        reversed(self.design.list_test_data(tfs_test_case_id=int(tc))) if isinstance(r["dataset"], dict)]
+            note(f"Test Data: {len(datasets)} data set(s)")
+            req_act.complete(f"Requirement read: {len(steps)} steps" + (f", {len(criteria)} acceptance criteria" if story else ""))
+        # 2. Application Discovery Agent: the application's pages and elements (discovered now if not known yet).
         inventory = self._inventory(cache, req, job_id, note)
+        # 3. Automation Engineering Agent: maps the steps to the discovered elements and writes the script.
         reg = registry.scan(self.ws.root)
         note(f"Framework: {len(reg.page_objects)} Page Object(s), {len(reg.flows)} flow(s), {len(reg.tests)} test(s)"
              " checked for reuse")

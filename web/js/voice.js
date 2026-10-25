@@ -22,6 +22,7 @@ export const voice = {
   micError: null, // why the microphone cannot be used (permission, no device, disconnected)
   wake: false, // wake-name listening is on
   executing: null, // {command_id, command, owner} while a background task runs
+  task: null, // {since, command}: the last background task, for the agent handoff chain
   lastHeard: "",
 };
 
@@ -206,6 +207,7 @@ export async function sendCommand(text, source = "typed") {
     if (r.status === "accepted") {
       expectedHash.set(r.command_id, r.navigate || location.hash);
       voice.executing = { command_id: r.command_id, command: r.command, owner: r.owner || null };
+      voice.task = { since: Date.now() - 1500, command: r.command }; // agents started from now on worked on this task
       final = "executing";
     } else if (r.status === "completed") final = "completed";
     else if (r.status === "failed" || r.status === "unsupported") final = "failed";

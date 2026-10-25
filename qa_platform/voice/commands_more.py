@@ -7,6 +7,7 @@ whose result is spoken when it ends.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
 from ..errors import QAError
@@ -384,4 +385,52 @@ class MoreCommands:
             return Outcome("completed", "There are no unread notifications.")
         said = " ".join(f"{n['title']}." for n in items)
         return Outcome("completed", f"{_plural(len(items), 'unread notification')}: {said}", navigate="#/notifications")
+
+    # ---- agentic automation: read the requirement, discover the application, create the script ----------------
+
+    def _studio_job(self, selections: list[dict[str, Any]], base_url: str, what: str) -> Callable[..., tuple[str, str | None]]:
+        """Background job: Script Studio generation (Requirements -> Application Discovery -> Automation Engineering)."""
+        from ..automation.framework.studio import JobRequest
+
+        def job(progress: Callable[[str], None]) -> tuple[str, str | None]:
+            job_id = self.studio.start_job(JobRequest(selections=selections, base_url=base_url))
+            while True:  # the generation job runs in its own thread; wait for its real outcome
+                j = self.studio.job(job_id)
+                if j["status"] in ("COMPLETED", "FAILED", "STOPPED"):
+                    break
+                time.sleep(1)
+            n = j["summary"]
+            if j["status"] == "FAILED" and not n["completed"]:
+                failed = next((i for i in j["items"] if i["status"] == "FAILED"), None)
+                raise QAError("GENERATION_FAILED", (failed or {}).get("error") or j.get("error") or "No script was created.")
+            skipped = sum(i["status"] == "SKIPPED" for i in j["items"])
+            made = n["completed"] - skipped
+            say = (f"Automation for {what} is ready: I read the requirement, used the discovered application and created "
+                   f"{made} script{'s' if made != 1 else ''}")
+            say += (f", {skipped} already existed" if skipped else "") + (f", {n['failed']} failed" if n["failed"] else "") + "."
+            return say, f"#/ai-automation?job={job_id}"
+
+        return job
+
+    def _cmd_automate_user_story(self, conv: Conversation, intent: Intent) -> Outcome:
+        sid = intent.params.get("user_story_id") or conv.user_story_id
+        if not sid:
+            return self._ask(conv, intent, "user_story_id", "Which user story? Say its number.")
+        conv.user_story_id = int(sid)
+        if self.studio is None:
+            return Outcome("failed", "AI-Driven Automation is not available in this runtime.")
+        if not self.ai.config()["base_url"]:
+            return Outcome("failed", "Automation generation needs the On-Premise AI, and no AI server is configured.",
+                           navigate="#/ai-settings")
+        base_url, why = self._known_base_url(conv, 0)
+        if not base_url:
+            return Outcome("completed", f"User story {sid} is selected on AI-Driven Automation. Enter the application "
+                                        "address there, because I don't know which application to test yet.",
+                           navigate="#/ai-automation?tab=generate")
+        conv.base_url = base_url
+        return Outcome("accepted", f"Reading user story {sid}, discovering {base_url} ({why}) and creating the "
+                                   "automation scripts for its test cases.",
+                       job=self._studio_job([{"user_story_id": int(sid)}], base_url, f"user story {sid}"),
+                       owner="requirements", job_title=f"Voice: automating User Story #{sid}",
+                       failure="Automation generation failed")
 

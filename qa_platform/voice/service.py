@@ -624,6 +624,12 @@ class VoiceService(MoreCommands):
             return Outcome("failed", "Automation generation needs the On-Premise AI, and no AI server is configured.",
                            navigate="#/ai-settings")
         conv.base_url = base_url
+        if self.studio is not None:  # agentic: requirement -> application discovery -> Page Object script
+            return Outcome("accepted", f"Reading the requirement of test case {tc}, using the application at {base_url} "
+                                       f"({why}) and creating its automation script.",
+                           job=self._studio_job([{"test_case_ids": [int(tc)]}], base_url, f"test case {tc}"),
+                           owner="requirements", job_title=f"Voice: generating automation for Test Case #{tc}",
+                           failure="Automation generation failed")
         run_id = new_run_id("GEN")
 
         def job(progress: Callable[[str], None]) -> tuple[str, str | None]:

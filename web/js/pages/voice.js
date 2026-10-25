@@ -23,7 +23,7 @@ function formHtml(s, radio, pb) {
   return `
     <form class="settings" id="vset" style="max-width:none">
       <div class="grid2">
-        <section class="card">
+        <section class="ck-panel">
           <h3>Agent identity</h3>
           <label>Display name <input name="agent_display_name" value="${esc(s.agent_display_name || "HAMI")}" maxlength="40" dir="auto" required></label>
           <p class="muted">Shown on every page and in replies. Any language, for example an Arabic name, works.</p>
@@ -33,7 +33,7 @@ function formHtml(s, radio, pb) {
             <option value="standard" ${s.phrase_style !== "tactical" ? "selected" : ""}>Standard: "OK, I will do your task now."</option>
             <option value="tactical" ${s.phrase_style === "tactical" ? "selected" : ""}>Tactical: "Command received. Executing now."</option></select></label>
         </section>
-        <section class="card">
+        <section class="ck-panel">
           <h3>Listening</h3>
           ${check("voice_enabled", s.voice_enabled !== false, "Voice on (microphone and spoken replies)")}
           <label>Listening mode <select name="listen_mode">
@@ -53,7 +53,7 @@ function formHtml(s, radio, pb) {
           </div>
           <label>Language <input name="language" value="${esc(s.language)}" maxlength="5" style="width:90px"></label>
         </section>
-        <section class="card">
+        <section class="ck-panel">
           <h3>Voice reply</h3>
           ${check("speak_replies", s.speak_replies, "Speak replies aloud")}
           <label>Reply style <select name="reply_style">
@@ -68,7 +68,7 @@ function formHtml(s, radio, pb) {
           <label>Speaking speed <input type="number" name="tts_rate" min="0.5" max="2" step="0.1" value="${esc(s.tts_rate)}" style="width:90px"></label>
           ${range("voice_volume", pct(s.voice_volume, 0.9), "Voice volume")}
         </section>
-        <section class="card">
+        <section class="ck-panel">
           <h3>Radio effect and background audio</h3>
           ${range("radio_intensity", pct(s.radio_intensity, 0.5), "Radio intensity")}
           ${check("wireless_tone", s.wireless_tone !== false, "Wireless tones (radio-open and radio-close beeps)")}
@@ -77,7 +77,7 @@ function formHtml(s, radio, pb) {
           ${range("ambience_volume", pct(s.ambience_volume, 0.2), "Background volume")}
           <p class="muted">The ambience drops to almost silent while you speak and stays very low while the agent speaks. Effects are generated on this PC and never reach the microphone.</p>
         </section>
-        <section class="card">
+        <section class="ck-panel">
           <h3>Playback cursor</h3>
           ${check("visual_cursor", pb.visual_cursor !== false, "Show the playback cursor")}
           ${check("highlight", pb.highlight !== false, "Highlight the element before each action")}
@@ -86,12 +86,12 @@ function formHtml(s, radio, pb) {
           ${range("click_volume", pct(pb.click_volume, 0.35), "Click volume")}
         </section>
       </div>
-      <div class="row"><button class="btn primary" type="submit">Save</button>
+      <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Save</button>
         <button class="btn" type="button" id="testVoice">Test Voice</button>
         <button class="btn" type="button" id="testRadio">Test Radio</button>
         <button class="btn" type="button" id="stopSpeak">Stop Speaking</button>
         <button class="btn" type="button" id="diag">Check voice setup</button>
-        <a class="btn" href="#/command-center">Open Command Center</a></div>
+</div>
       <div id="diagOut"></div>
     </form>`;
 }
@@ -125,9 +125,15 @@ async function render(view) {
     api("/api/settings").catch(() => ({ settings: { playback: {} } })),
   ]);
   view.innerHTML = `
-    <div class="page-head"><div><h2>Voice &amp; Command Agent</h2>
-      <p class="muted">Settings for <b dir="auto">${esc(agentName())}</b>. Everything runs on this PC: offline recognition, installed voices and locally generated radio effects.</p></div></div>
-    ${formHtml(s, radio, all.settings.playback || {})}`;
+    <div class="cockpit">
+      <header class="ck-head">
+        <div class="ck-callsign"><span class="ck-wing" aria-hidden="true">&#9650;</span> SYSTEMS CONFIGURATION</div>
+        <div class="ck-meta"><span>AGENT <b dir="auto">${esc(agentName())}</b></span><span>OFFLINE LINK</span><span>LOCAL AUDIO</span></div>
+        <a class="btn primary" href="#/command-center" style="margin-left:auto">Tactical Voice Command</a>
+      </header>
+      <p class="muted" style="margin:0">Voice &amp; Command Agent settings. Everything runs on this PC: offline recognition, installed voices and locally generated radio effects.</p>
+      ${formHtml(s, radio, all.settings.playback || {})}
+    </div>`;
 
   const form = view.querySelector("#vset");
   form.querySelectorAll(".range input").forEach((r) => r.addEventListener("input", () => { r.nextElementSibling.textContent = `${r.value}%`; }));

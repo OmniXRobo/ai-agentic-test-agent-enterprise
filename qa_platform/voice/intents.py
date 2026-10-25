@@ -205,6 +205,13 @@ def parse(text: str) -> Intent | None:
         m = re.search(r"\b(?:user story|story)\s+" + _ID, t)
         return Intent("generate_test_cases", {"user_story_id": int(m.group(1))} if m else {})
 
+    m = re.search(r"\b(?:user story|story)\s+" + _ID, t)
+    if m and re.search(r"\b(automate|automation|automated|scripts?)\b", t) and \
+            re.search(r"\b(automate|generate|create|build|write|make|discover|read)\b", t):
+        return Intent("automate_user_story", {"user_story_id": int(m.group(1))})
+    if re.fullmatch(r"automate (?:the |this |that )?(?:user )?story", t):
+        return Intent("automate_user_story", {})
+
     if re.search(r"\b(generate|create|build|write)\b.*\b(automation|automated test|script)\b", t):
         p: dict[str, Any] = {}
         m = re.search(r"\btest case\s+" + _ID, t)
