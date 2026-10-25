@@ -60,12 +60,6 @@ jobs:
         with:
           path: dist_offline/downloads
           key: offline-downloads-${{ hashFiles('packaging/offline-lock.json') }}
-      - name: Resolve Java and llama-server pins (temporary, publisher checksums verified)
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python packaging/update_pins.py --write
-          type packaging\offline-lock.json
       - name: Build the offline package (validates it at the end)
         env:
           QA_NO_PAUSE: "1"
