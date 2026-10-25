@@ -99,6 +99,7 @@ class ScriptStudio:
         self.automation = automation
         self.design = design
         self.defects = defects
+        self.knowledge: Any = None  # Unified QA Knowledge (set by the runtime)
         self.ws = FrameworkWorkspace(paths.workspace)
         self.agent: AutomationEngineeringAgent = automation.generator.agent
         self.creds = automation.creds
@@ -361,6 +362,26 @@ class ScriptStudio:
             self._item_update(item["id"], status="FAILED", error_code="PYTHON_GENERATION_FAILED",
                               error=f"Python generation failed: {type(exc).__name__}: {exc}", finished_at=now_iso())
 
+    def _knowledge_text(self, tc: str, application: str | None) -> str | None:
+        if self.knowledge is None:
+            return None
+        try:
+            found = self.knowledge.for_test_case(tc, application) or self.knowledge.for_test_case(tc)
+        except Exception:
+            return None
+        if not found:
+            return None
+        lines = []
+        for st in found["test_case"].get("steps", []):
+            m = st.get("match")
+            where = f"{m['page']}" + (f" / {m['element']} ({m['selector']})" if m and m.get("selector") else "") if m else "NOT FOUND"
+            lines.append(f"Step {st['index']}: {st['action']} -> {where}")
+        if found.get("page_objects"):
+            lines.append("Page Objects: " + ", ".join(found["page_objects"]))
+        for f in found.get("flows", [])[:5]:
+            lines.append(f"Business flow: {f['name']}")
+        return "\n".join(lines)
+
     def _ai_label(self) -> str:
         return self.ai.label()
 
@@ -375,11 +396,13 @@ class ScriptStudio:
         key = f"{req.base_url}|{req.discovery_id or ''}"
         if key not in cache["inventory"]:
             disc = self.automation.discovery.get(req.discovery_id) if req.discovery_id else \
-                self.automation.discovery.latest_for(req.base_url)
+                self.automation.discovery.latest_for(req.base_url, req.application)
             if disc is None:
                 note(f"No element inventory for {req.base_url} yet; the Application Discovery Agent is discovering it.")
                 disc = self.automation.discovery.crawl(job_id, req.base_url, max_pages=10, max_depth=2,
-                                                       headless=req.headless)
+                                                       headless=req.headless, application=req.application,
+                                                       credential_role=req.credential_role,
+                                                       environment=req.environment)
             inventory = Inventory(disc)
             if not len(inventory):
                 raise QAError("DISCOVERY_EMPTY", "No interactive elements were discovered on the application.", status=409)
@@ -421,6 +444,10 @@ class ScriptStudio:
                 f"Credential role: {req.credential_role or '(choose a role name)'}\n\nManual test steps:\n{manual}\n\n"
                 f"Test Data:\n{data_text}\n\nEXISTING FLOWS:\n{flows}\n\n"
                 f"ELEMENT INVENTORY (selector | role | name):\n{inventory.text()}")
+        known = self._knowledge_text(tc, req.application)
+        if known:
+            note("Unified QA Knowledge found for this Test Case (requirement to application mapping)")
+            user += f"\n\nUNIFIED QA KNOWLEDGE (from Intelligent Discovery; prefer these mapped elements):\n{known}"
         note(f"Asking the {self._ai_label()} to map the steps")
         try:
             mapped = self.ai.complete_json(SYSTEM_PROMPT, user, MappedTest, max_tokens=6000)

@@ -16,6 +16,7 @@ from .design.service import DesignService
 from .events import names
 from .events.bus import EventBus
 from .events.state import AgentStateManager
+from .knowledge.service import KnowledgeService
 from .notifications import NotificationService
 from .performance.service import PerformanceService
 from .reports.analytics import AnalyticsService
@@ -23,6 +24,7 @@ from .reports.service import ReportService
 from .runs import RunStore
 from .storage.db import Database
 from .voice.service import VoiceService
+from .tfs.hierarchy import HierarchyService
 from .tfs.service import TfsService
 
 LIFECYCLE = (names.AGENT_STARTED, names.AGENT_COMPLETED, names.AGENT_FAILED)
@@ -49,6 +51,8 @@ class Runtime:
     analytics: AnalyticsService
     reports: ReportService
     studio: ScriptStudio
+    hierarchy: HierarchyService
+    knowledge: KnowledgeService
 
     def close(self) -> None:
         self.db.close()
@@ -91,5 +95,8 @@ def build_runtime(
     analytics = AnalyticsService(db, tfs, automation)
     reports = ReportService(paths, bus, db, tfs, automation, performance, defects, design, analytics)
     studio = ScriptStudio(paths, settings, bus, db, runs, secrets, tfs, ai, automation, design, defects)
+    hierarchy = HierarchyService(tfs)
+    knowledge = KnowledgeService(db, bus, hierarchy, automation, design)
+    studio.knowledge = knowledge  # Unified QA Knowledge for the Automation Engineering Agent
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation, performance, defects, voice, analytics, reports, studio)
+                   automation, performance, defects, voice, analytics, reports, studio, hierarchy, knowledge)
