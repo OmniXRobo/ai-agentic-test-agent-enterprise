@@ -231,7 +231,7 @@ def test_builder_stages_application_without_tests_or_data(tmp_path):
 
 
 def test_lock_pins_every_download_and_every_python_package():
-    for key in ("python", "jre", "jmeter"):
+    for key in ("python", "jre", "jmeter", "speech_model", "llama_server"):
         assert len(build.LOCK[key]["sha256"]) == 64 and build.LOCK[key]["url"].startswith("https://")
     reqs = build.REQUIREMENTS.read_text()
     pinned = [ln.split("==")[0] for ln in reqs.splitlines() if "==" in ln and not ln.startswith("#")]
