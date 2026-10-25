@@ -35,6 +35,8 @@ CATEGORIES = {
     "testplan": "Microsoft.TestPlanCategory",
     "testsuite": "Microsoft.TestSuiteCategory",
     "task": "Microsoft.TaskCategory",
+    "epic": "Microsoft.EpicCategory",
+    "feature": "Microsoft.FeatureCategory",
 }
 
 LIST_FIELDS = [

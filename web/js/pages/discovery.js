@@ -4,6 +4,14 @@
 
 import { api } from "../api.js";
 import { esc, toast, dateTimeOf } from "../util.js";
+import { scopeSelector } from "./tfs-scope.js";
+
+const SOURCES = [
+  ["application", "Application Only", "Explore the live application with Playwright; TFS is not needed."],
+  ["tfs", "TFS Requirements Only", "Read the selected TFS hierarchy and build Requirement Memory; the application is not opened."],
+  ["tfs_app", "TFS + Application — Intelligent Discovery", "Requirements guide the exploration (without limiting it), then each Feature, User Story, Acceptance Criterion and Test Case is mapped to the application, with coverage and gaps."],
+];
+const LEVEL_LABEL = { epic: "Epic", feature: "Feature", story: "User Story", ac: "Acceptance Criterion", testcase: "Test Case" };
 
 const STATE_PILL = { COMPLETED: "PASSED", FAILED: "FAILED", STOPPED: "FAILED", WAITING_FOR_INPUT: "WARN" };
 const STATE_TEXT = {
@@ -38,9 +46,19 @@ function modal(title, body, onCleanup) {
 }
 
 // "How should discovery run?" - asked before every discovery.
-function modeDialog(onCleanup) {
+function modeDialog(onCleanup, summary = "", needsBrowser = true, startLabel = "Start Discovery") {
   return new Promise((resolve) => {
-    const m = modal("Start discovery", `
+    if (!needsBrowser) {
+      const m = modal("Start", `${summary}<div class="row"><span class="spacer"></span><button class="btn" data-cancel>Cancel</button>
+        <button class="btn primary" data-start>${esc(startLabel)}</button></div>`, onCleanup);
+      let done = false;
+      const answer = (v) => { if (!done) { done = true; resolve(v); } m.close(); };
+      m.onClose(() => { if (!done) { done = true; resolve(null); } });
+      m.el.querySelector("[data-cancel]").addEventListener("click", () => answer(null));
+      m.el.querySelector("[data-start]").addEventListener("click", () => answer({ headless: true }));
+      return;
+    }
+    const m = modal("Start discovery", `${summary}
       <p>How should discovery run?</p>
       <div class="choices">
         <label class="choice"><input type="radio" name="mode" value="visible" checked>
@@ -49,7 +67,7 @@ function modeDialog(onCleanup) {
           <span><strong>Background / Headless</strong><span class="muted">The same discovery without a browser window.</span></span></label>
       </div>
       <div class="row"><span class="spacer"></span><button class="btn" data-cancel>Cancel</button>
-        <button class="btn primary" data-start>Start Discovery</button></div>`, onCleanup);
+        <button class="btn primary" data-start>${esc(startLabel)}</button></div>`, onCleanup);
     let done = false;
     const answer = (v) => { if (!done) { done = true; resolve(v); } m.close(); };
     m.onClose(() => { if (!done) { done = true; resolve(null); } });
@@ -177,16 +195,90 @@ async function discoveryDetail(view, id) {
   }));
 }
 
+function pct(v) {
+  return v === null || v === undefined ? "—" : `${v}%`;
+}
+
+function coverageTree(nodes) {
+  const row = (n) => `<details class="tc" ${n.level !== "ac" && n.level !== "testcase" ? "open" : ""} style="margin-left:${n.level === "epic" ? 0 : 14}px">
+    <summary><strong>${esc(n.label)}</strong> ${esc(n.title || "")} <span class="muted">${esc(LEVEL_LABEL[n.level] || n.level)}${n.active ? "" : " · context"}</span>
+      <span class="pill ${n.status === "MAPPED" ? "PASSED" : n.status === "PARTIAL" ? "WARN" : "FAILED"}">${n.status === "NOT_MAPPED" ? "⚠ NOT MAPPED" : pct(n.coverage)}</span></summary>
+    ${n.application_areas?.length ? `<div class="muted">Mapped application areas: ${esc(n.application_areas.join(", "))}</div>` : ""}
+    ${n.mapped_to?.length ? `<div class="muted">Mapped to: ${n.mapped_to.map((m) => esc(`${m.page}${m.element ? ` / ${m.element}` : ""}`)).join(", ")}</div>` : ""}
+    ${(n.children || []).map(row).join("")}</details>`;
+  return nodes.map(row).join("");
+}
+
+async function knowledgeDetail(view, kid) {
+  const { knowledge: k } = await api(`/api/knowledge/${encodeURIComponent(kid)}`);
+  const s = k.summary;
+  const cnt = k.counts || {};
+  const item = (label, value) => `<div><div class="kpi-label">${esc(label)}</div><div class="kpi-value" style="font-size:20px">${esc(value ?? "—")}</div></div>`;
+  view.innerHTML = `
+    <p><a href="#/discovery">← Application Discovery & Update</a></p>
+    <div class="card"><h2>Unified QA Knowledge · ${esc(k.application)}</h2>
+      <p class="card-sub">${esc(k.id)} · ${esc(dateTimeOf(k.created_at))} · Knowledge source: TFS + Application ·
+        <a href="#/discovery?id=${encodeURIComponent(k.discovery_id)}">Application Memory</a> ·
+        <a href="#/discovery?memory=${encodeURIComponent(k.requirement_memory_id)}">Requirement Memory</a></p>
+      <div class="grid kpis">
+        ${item("Coverage", pct(k.coverage.overall))}${item("TFS Project", k.project?.name)}${item("Sprint", k.iteration?.name || "—")}
+        ${item("Features", cnt.feature)}${item("User Stories", cnt.story)}${item("Acceptance Criteria", cnt.ac)}${item("Test Cases", cnt.testcase)}
+        ${item("Requirement mappings", s.requirement_mappings)}${item("Unmapped requirements", s.unmapped_requirements)}${item("Unmapped application features", s.unmapped_application_features)}
+      </div></div>
+    <div class="card" style="margin-top:12px"><h3>Requirement Coverage Map</h3>${coverageTree(k.tree)}</div>
+    <div class="card" style="margin-top:12px"><h3>Test Case mapping</h3>
+      ${Object.values(k.test_cases).map((t) => `<details class="tc"><summary><strong>${esc(t.label)}</strong> ${esc(t.title || "")}
+        <span class="pill ${t.coverage >= 80 ? "PASSED" : t.coverage ? "WARN" : "FAILED"}">${t.coverage}%</span></summary>
+        ${t.steps.map((st) => `<div>Step ${st.index} — ${esc(st.action)}: ${st.match ? `✓ ${esc(st.match.page)}${st.match.element ? ` / ${esc(st.match.element)}` : ""}` : '<span class="pill FAILED">⚠ NOT FOUND</span>'}</div>
+          ${st.expected ? `<div class="muted" style="margin-left:16px">Expected: ${esc(st.expected)} — ${st.expected_match ? `✓ ${esc(st.expected_match.page)}${st.expected_match.element ? ` / ${esc(st.expected_match.element)}` : ""}` : "⚠ not observed"}</div>` : ""}`).join("")}
+      </details>`).join("") || '<p class="muted">No Test Cases in scope.</p>'}</div>
+    <div class="card" style="margin-top:12px"><h3>Requirement gaps</h3><p class="muted">Requirement exists, but the application behaviour could not be found.</p>
+      ${k.requirement_gaps.length ? `<table class="data"><thead><tr><th>Item</th><th>Detail</th><th>Reason</th></tr></thead><tbody>
+        ${k.requirement_gaps.map((g) => `<tr><td>${esc(g.label)}${g.step ? ` step ${g.step}` : ""}</td><td>${esc(g.text || "")}</td><td>${esc(g.reason)}</td></tr>`).join("")}</tbody></table>` : '<p class="muted">None.</p>'}</div>
+    <div class="card" style="margin-top:12px"><h3>Application gaps</h3><p class="muted">Application functionality exists, but no requirement maps to it. Nothing is created in TFS automatically.</p>
+      ${k.application_gaps.length ? k.application_gaps.map((g) => `<div>${esc(g.page)} <span class="muted">${esc(g.reason)}</span></div>`).join("") : '<p class="muted">None (or reported as out-of-scope discovery below for a partial scope).</p>'}</div>
+    <div class="card" style="margin-top:12px"><h3>Out-of-Scope Discovery</h3><p class="muted">Adjacent application structure found while exploring, outside the selected requirements.</p>
+      ${k.out_of_scope.length ? k.out_of_scope.map((g) => `<div>${esc(g.page)} <span class="muted">${esc(g.reason)}</span></div>`).join("") : '<p class="muted">None.</p>'}</div>
+    ${k.flows?.length ? `<div class="card" style="margin-top:12px"><h3>Business flows</h3>${k.flows.map((f) => `<div>${esc(f.name)}</div>`).join("")}
+      <p class="muted">Page Objects: ${esc((k.page_objects || []).join(", "))}. AI-Driven Automation uses this knowledge when it generates these Test Cases.</p></div>` : ""}`;
+}
+
+async function memoryDetail(view, mid) {
+  const { memory: m } = await api(`/api/knowledge/requirement-memory/${encodeURIComponent(mid)}`);
+  const list = (title, rows, fmt) => rows.length ? `<details class="tc" open><summary><strong>${esc(title)}</strong> <span class="muted">${rows.length}</span></summary>${rows.map(fmt).join("")}</details>` : "";
+  const ctx = (r) => (r.active ? "" : ' <span class="muted">(parent context)</span>');
+  view.innerHTML = `
+    <p><a href="#/discovery">← Application Discovery & Update</a></p>
+    <div class="card"><h2>Requirement Memory · ${esc(m.project?.name || "")}</h2>
+      <p class="card-sub">${esc(m.id)} · v${m.version || 1} · ${esc(dateTimeOf(m.created_at))} · scope: ${esc(m.option)}${m.iteration?.name ? ` · ${esc(m.iteration.name)}` : ""}</p>
+      ${list("Epics", m.epics, (r) => `<div>${esc(r.label)} ${esc(r.title)}${ctx(r)}</div>`)}
+      ${list("Features", m.features, (r) => `<div>${esc(r.label)} ${esc(r.title)}${ctx(r)}</div>`)}
+      ${list("User Stories", m.user_stories, (r) => `<div>${esc(r.label)} ${esc(r.title)}${ctx(r)}${r.description ? `<div class="muted">${esc(r.description)}</div>` : ""}</div>`)}
+      ${list("Acceptance Criteria", m.acceptance_criteria, (r) => `<div>${esc(r.label)} ${esc(r.text || r.title)}${ctx(r)}</div>`)}
+      ${list("Test Cases", m.test_cases, (r) => `<details class="tc"><summary>${esc(r.label)} ${esc(r.title)}${ctx(r)} <span class="muted">${(r.steps || []).length} steps · ${(r.test_data || []).length} data sets</span></summary>
+        ${(r.steps || []).map((s) => `<div>${s.index}. ${esc(s.action)}${s.expected ? ` <span class="muted">→ ${esc(s.expected)}</span>` : ""}</div>`).join("")}</details>`)}
+      <h3 style="margin-top:12px">What the requirements expect</h3>
+      <p class="muted">Pages: ${esc(m.expected.pages.join(", ") || "—")}<br>Fields: ${esc(m.expected.fields.join(", ") || "—")}<br>
+        Buttons: ${esc(m.expected.buttons.join(", ") || "—")}<br>Validations: ${esc(m.expected.validations.join(" | ") || "—")}</p></div>`;
+}
+
 export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptList }) {
   const id = params().get("id");
   if (id) return discoveryDetail(view, id);
+  if (params().get("knowledge")) return knowledgeDetail(view, params().get("knowledge"));
+  if (params().get("memory")) return memoryDetail(view, params().get("memory"));
   let creds = [];
   let apps = [];
   try { ({ items: creds } = await api("/api/automation/credentials")); } catch { /* optional */ }
   try { ({ items: apps } = await api("/api/automation/discovery-applications")); } catch { /* optional */ }
   const appNames = [...new Set([...creds.map((c) => c.application), ...apps.map((a) => a.application)])];
   view.innerHTML = `
-    <form class="card grid" id="disc" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+    <div class="card"><h3>Discovery Knowledge Source</h3><div class="choices" id="sources">
+      ${SOURCES.map(([k, label, text]) => `<label class="choice"><input type="radio" name="source" value="${k}" ${k === "tfs_app" ? "checked" : ""}>
+        <span><strong>${esc(label)}</strong>${k === "tfs_app" ? ' <span class="pill PASSED">Recommended</span>' : ""}<span class="muted">${esc(text)}</span></span></label>`).join("")}
+    </div></div>
+    <div class="card" id="scopeBox" style="margin-top:12px"></div>
+    <form class="card grid" id="disc" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:12px">
       <label>Application URL <input name="base_url" required placeholder="https://your-app/"></label>
       <label>Max pages <input name="max_pages" type="number" min="1" max="200" value="15"></label>
       <label>Link depth <input name="max_depth" type="number" min="0" max="10" value="3"></label>
@@ -206,9 +298,22 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
         <button class="btn" id="stopBtn" hidden>Stop Discovery</button></div>
       <div id="jobResult"></div>
       <div class="feed" id="feed" style="max-height:320px"></div></div>
+    <div class="card" id="knowledge" style="margin-top:12px" hidden></div>
     <div class="card" id="discs" style="margin-top:12px"><p class="muted">Loading…</p></div>
     <div class="card" id="list" style="margin-top:12px"><p class="muted">Loading…</p></div>`;
   const form = view.querySelector("#disc");
+  const source = () => view.querySelector("[name=source]:checked").value;
+  let scope = null;
+  const applySource = async () => {
+    const src = source();
+    const box = view.querySelector("#scopeBox");
+    box.hidden = src === "application";
+    form.base_url.required = src !== "tfs";
+    form.querySelectorAll("label,p").forEach((el) => { if (!el.contains(form.base_url) && !el.querySelector("[name=max_pages]") && el.tagName !== "DIV") el.hidden = src === "tfs"; });
+    form.querySelector("button[type=submit]").textContent = src === "tfs" ? "Build Requirement Memory" : src === "tfs_app" ? "Start Intelligent Discovery" : "Discover";
+    if (src !== "application" && !scope) { box.innerHTML = '<p class="muted">Loading TFS…</p>'; scope = await scopeSelector(box); }
+  };
+  view.querySelectorAll("[name=source]").forEach((r) => r.addEventListener("change", applySource));
   const roleSel = form.querySelector("[name=credential_role]");
   const fillRoles = () => {
     const app = form.application.value.trim().toLowerCase();
@@ -245,9 +350,12 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
     }
     if (job.state !== "WAITING_FOR_INPUT" && inputModal) { inputModal.close(); inputModal = null; }
     const res = view.querySelector("#jobResult");
-    if (job.state === "COMPLETED" && job.discovery_id) {
-      res.innerHTML = `<p>Discovery completed: ${job.summary ? `${job.summary.pages} pages, ${job.summary.elements} elements, ${job.summary.endpoints} APIs.` : ""}
-        <a href="#/discovery?id=${encodeURIComponent(job.discovery_id)}">Open the result</a></p>`;
+    if (job.state === "COMPLETED" && (job.discovery_id || job.requirement_memory_id)) {
+      res.innerHTML = `<p>Completed.
+        ${job.summary?.pages !== undefined ? `${job.summary.pages} pages, ${job.summary.elements} elements, ${job.summary.endpoints} APIs.` : ""}
+        ${job.knowledge_id ? `<a href="#/discovery?knowledge=${encodeURIComponent(job.knowledge_id)}">Open coverage and gaps</a> ·` : ""}
+        ${job.discovery_id ? `<a href="#/discovery?id=${encodeURIComponent(job.discovery_id)}">Open Application Memory</a>` : ""}
+        ${job.requirement_memory_id ? ` · <a href="#/discovery?memory=${encodeURIComponent(job.requirement_memory_id)}">Open Requirement Memory</a>` : ""}</p>`;
     } else if (job.state === "FAILED") {
       res.innerHTML = `<p class="pill FAILED">${esc(job.error || "Discovery failed")}</p>`;
     } else if (job.state === "STOPPED") {
@@ -272,13 +380,28 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
-    const choice = await modeDialog(onCleanup);
+    const src = source();
+    let resolved = null;
+    if (src !== "application") {
+      if (!scope?.ready) { toast("Connect TFS first, or choose Application Only.", "warning"); return; }
+      try { resolved = await scope.preview(); } catch (err) { toast(err.message, "error"); return; }
+      if (!resolved.total) { toast("The selected scope has no requirements.", "warning"); return; }
+    }
+    const c = resolved?.counts;
+    const summary = resolved ? `<div class="card" style="margin:8px 0"><h3>${src === "tfs" ? "REQUIREMENT SCOPE" : "INTELLIGENT DISCOVERY SCOPE"}</h3>
+      ${resolved.large ? '<p class="pill WARN">Large Scope: this loads a large part of the requirement hierarchy. Continue?</p>' : ""}
+      <div>Project: <strong>${esc(resolved.project || "")}</strong></div>
+      ${resolved.iteration ? `<div>Sprint: <strong>${esc(resolved.iteration)}</strong></div>` : ""}
+      <div>${["epic", "feature", "story", "ac", "testcase"].filter((k) => c[k]).map((k) => `${esc({ epic: "Epics", feature: "Features", story: "User Stories", ac: "Acceptance Criteria", testcase: "Test Cases" }[k])}: <strong>${c[k]}</strong>`).join(" · ")}</div>
+      ${src === "tfs_app" ? `<div>Application: <strong>${esc(f.base_url.trim())}</strong></div><div>Mode: <strong>TFS + Application</strong></div>` : ""}</div>` : "";
+    const choice = await modeDialog(onCleanup, summary, src !== "tfs",
+      src === "tfs" ? "Build Requirement Memory" : src === "tfs_app" ? "Start Intelligent Discovery" : "Start Discovery");
     if (!choice) return;
     try {
-      const r = await api("/api/automation/discoveries", { method: "POST", body: {
-        base_url: f.base_url.trim(), max_pages: Number(f.max_pages), max_depth: Number(f.max_depth), headless: choice.headless,
+      const r = await api("/api/knowledge/discoveries", { method: "POST", body: {
+        source: src, base_url: f.base_url.trim() || null, max_pages: Number(f.max_pages), max_depth: Number(f.max_depth), headless: choice.headless,
         application: f.application.trim() || null, credential_role: f.credential_role || null,
-        environment: f.environment.trim() || null, explore: f.explore === "on" } });
+        environment: f.environment.trim() || null, explore: f.explore === "on", scope: src === "application" ? null : scope.value() } });
       runId = r.run_id;
       askedId = null;
       view.querySelector("#progress").hidden = false;
@@ -288,5 +411,16 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
     } catch (err) { toast(err.message, "error"); }
   });
   liveFeed(view.querySelector("#feed"), () => runId);
-  await Promise.all([renderDiscs(), renderScriptList(view.querySelector("#list"), ["discovery"], "No scripts created from discovery yet.")]);
+  const renderKnowledge = async () => {
+    let items = [];
+    try { ({ items } = await api("/api/knowledge")); } catch { return; }
+    const box = view.querySelector("#knowledge");
+    box.hidden = !items.length;
+    box.innerHTML = `<h3>Unified QA Knowledge</h3><table class="data"><thead><tr><th>Application</th><th>TFS scope</th><th>Coverage</th><th>Mapped</th><th>Unmapped requirements</th><th>Unmapped application areas</th><th>When</th></tr></thead><tbody>
+      ${items.map((k) => `<tr class="clickable" data-k="${esc(k.id)}"><td>${esc(k.application)}</td><td>${esc(k.project || "")} · ${esc(k.option || "")}</td><td>${k.coverage}%</td>
+        <td>${k.summary.requirement_mappings}</td><td>${k.summary.unmapped_requirements}</td><td>${k.summary.unmapped_application_features}</td><td>${esc(dateTimeOf(k.created_at))}</td></tr>`).join("")}</tbody></table>`;
+    box.querySelectorAll("tr[data-k]").forEach((tr) => tr.addEventListener("click", () => { location.hash = `#/discovery?knowledge=${encodeURIComponent(tr.dataset.k)}`; }));
+  };
+  await Promise.all([renderDiscs(), renderKnowledge(), applySource(),
+    renderScriptList(view.querySelector("#list"), ["discovery"], "No scripts created from discovery yet.")]);
 }

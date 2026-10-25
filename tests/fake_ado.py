@@ -13,7 +13,7 @@ PAT = "valid-pat"
 
 class FakeAzureDevOps:
     def __init__(self, base="https://dev.azure.com/acme", project="Shop", bug_type="Bug", severity=False,
-                 legacy_test_api=False):
+                 legacy_test_api=False, hierarchy=False):
         self.base = base
         self.legacy_test_api = legacy_test_api
         self.plans = {7: {"id": 7, "name": "Sprint 4 Plan", "state": "Active", "rootSuite": {"id": 70}}}
@@ -38,6 +38,48 @@ class FakeAzureDevOps:
         self.next_id = 2000
         self.requests: list[httpx.Request] = []
         self.unreachable = False
+        self.hierarchy = hierarchy
+        if hierarchy:
+            self._add_hierarchy()
+
+    def _add_hierarchy(self):
+        """Epic E10 -> Features F100, F101 -> User Stories -> Test Cases (Agile process with Epics and Features)."""
+        steps = ('<steps id="0" last="5">'
+                 '<step id="2" type="ActionStep"><parameterizedString isformatted="true">&lt;P&gt;Open the application&lt;/P&gt;</parameterizedString><parameterizedString isformatted="true">&lt;P&gt;Login page is displayed&lt;/P&gt;</parameterizedString></step>'
+                 '<step id="3" type="ActionStep"><parameterizedString isformatted="true">&lt;P&gt;Enter Username&lt;/P&gt;</parameterizedString><parameterizedString isformatted="true"></parameterizedString></step>'
+                 '<step id="4" type="ActionStep"><parameterizedString isformatted="true">&lt;P&gt;Enter Password&lt;/P&gt;</parameterizedString><parameterizedString isformatted="true"></parameterizedString></step>'
+                 '<step id="5" type="ActionStep"><parameterizedString isformatted="true">&lt;P&gt;Click Login&lt;/P&gt;</parameterizedString><parameterizedString isformatted="true">&lt;P&gt;Products are displayed&lt;/P&gt;</parameterizedString></step>'
+                 '</steps>')
+        cart_steps = ('<steps id="0" last="3">'
+                      '<step id="2" type="ActionStep"><parameterizedString isformatted="true">&lt;P&gt;Click Add to cart&lt;/P&gt;</parameterizedString><parameterizedString isformatted="true"></parameterizedString></step>'
+                      '<step id="3" type="ActionStep"><parameterizedString isformatted="true">&lt;P&gt;Click Cart&lt;/P&gt;</parameterizedString><parameterizedString isformatted="true">&lt;P&gt;Your Cart page lists the product&lt;/P&gt;</parameterizedString></step>'
+                      '</steps>')
+        it = "Shop\\Sprint 4"
+        self.items.update({
+            10: {"System.Title": "E-Commerce Platform", "System.WorkItemType": "Epic", "System.State": "Active", "System.IterationPath": "Shop"},
+            100: {"System.Title": "Online Purchase", "System.WorkItemType": "Feature", "System.State": "Active", "System.IterationPath": it},
+            101: {"System.Title": "Returns", "System.WorkItemType": "Feature", "System.State": "New", "System.IterationPath": "Shop\\Sprint 5"},
+            201: {"System.Title": "Customer logs in", "System.WorkItemType": "User Story", "System.State": "Active", "System.IterationPath": it,
+                  "System.Description": "<p>The customer signs in on the Login page.</p>",
+                  "Microsoft.VSTS.Common.AcceptanceCriteria": "<ul><li>Customer can login successfully</li><li>Customer sees an error for a wrong password</li></ul>"},
+            202: {"System.Title": "Customer manages cart", "System.WorkItemType": "User Story", "System.State": "Active", "System.IterationPath": it,
+                  "Microsoft.VSTS.Common.AcceptanceCriteria": "<ul><li>Customer can add product to cart</li><li>Customer can apply a discount coupon</li></ul>"},
+            203: {"System.Title": "Customer starts a return", "System.WorkItemType": "User Story", "System.State": "New", "System.IterationPath": "Shop\\Sprint 5",
+                  "Microsoft.VSTS.Common.AcceptanceCriteria": "<ul><li>Customer can request a return</li></ul>"},
+            1268: {"System.Title": "Customer logs in successfully", "System.WorkItemType": "Test Case", "System.State": "Design", "System.IterationPath": it,
+                   "Microsoft.VSTS.TCM.Steps": steps},
+            1269: {"System.Title": "Customer adds a product to the cart", "System.WorkItemType": "Test Case", "System.State": "Design", "System.IterationPath": it,
+                   "Microsoft.VSTS.TCM.Steps": cart_steps},
+            1270: {"System.Title": "Return form", "System.WorkItemType": "Test Case", "System.State": "Design", "System.IterationPath": "Shop\\Sprint 5"},
+        })
+        child, parent = "System.LinkTypes.Hierarchy-Forward", "System.LinkTypes.Hierarchy-Reverse"
+        tested_by, tests = "Microsoft.VSTS.Common.TestedBy-Forward", "Microsoft.VSTS.Common.TestedBy-Reverse"
+        links = {10: [(child, 100), (child, 101)], 100: [(parent, 10), (child, 201), (child, 202)],
+                 101: [(parent, 10), (child, 203)], 201: [(parent, 100), (tested_by, 1268)],
+                 202: [(parent, 100), (tested_by, 1269)], 203: [(parent, 101), (tested_by, 1270)],
+                 1268: [(tests, 201)], 1269: [(tests, 202)], 1270: [(tests, 203)]}
+        for k, v in links.items():
+            self.relations.setdefault(k, []).extend(v)
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -76,7 +118,7 @@ class FakeAzureDevOps:
         if path.startswith("/acme/_apis/projects/"):
             return httpx.Response(404, json={"message": "project not found"})
         if path == f"{proj}/_apis/wit/workitemtypes":
-            types = ["User Story", "Test Case", self.bug_type, "Task"]
+            types = ["User Story", "Test Case", self.bug_type, "Task"] + (["Epic", "Feature"] if self.hierarchy else [])
             return httpx.Response(200, json={"value": [{"name": t, "states": [
                 {"name": "Active", "category": "InProgress"}, {"name": "Closed", "category": "Completed"}]} for t in types]})
         if path == f"{proj}/_apis/wit/workitemtypecategories":
@@ -84,7 +126,9 @@ class FakeAzureDevOps:
                 {"referenceName": "Microsoft.RequirementCategory", "defaultWorkItemType": {"name": "User Story"}, "workItemTypes": [{"name": "User Story"}]},
                 {"referenceName": "Microsoft.BugCategory", "defaultWorkItemType": {"name": self.bug_type}, "workItemTypes": [{"name": self.bug_type}]},
                 {"referenceName": "Microsoft.TestCaseCategory", "defaultWorkItemType": {"name": "Test Case"}, "workItemTypes": [{"name": "Test Case"}]},
-            ]})
+            ] + ([{"referenceName": "Microsoft.EpicCategory", "defaultWorkItemType": {"name": "Epic"}, "workItemTypes": [{"name": "Epic"}]},
+                  {"referenceName": "Microsoft.FeatureCategory", "defaultWorkItemType": {"name": "Feature"}, "workItemTypes": [{"name": "Feature"}]}]
+                 if self.hierarchy else [])})
         m = re.match(rf"{re.escape(proj)}/_apis/wit/workitemtypes/([^/]+)/fields", path)
         if m:
             refs = ["System.Title", "System.Description", "System.State", "System.AssignedTo", "System.Tags",
@@ -105,7 +149,8 @@ class FakeAzureDevOps:
             return httpx.Response(201, json={"id": aid, "url": f"{self.base}/_apis/wit/attachments/{aid}"})
         if path == f"{proj}/_apis/wit/classificationnodes/iterations":
             return httpx.Response(200, json={"path": f"\\{self.project}\\Iteration", "children": [
-                {"path": f"\\{self.project}\\Iteration\\Sprint 4"}]})
+                {"path": f"\\{self.project}\\Iteration\\Sprint 4"}] + ([{"path": f"\\{self.project}\\Iteration\\Sprint 5"}]
+                                                                   if self.hierarchy else [])})
         if path == f"{proj}/_apis/wit/classificationnodes/areas":
             return httpx.Response(200, json={"path": f"\\{self.project}\\Area"})
         if path == f"{proj}/_apis/wit/wiql":
@@ -214,6 +259,11 @@ class FakeAzureDevOps:
         m = re.search(r"\[System.Title\] CONTAINS '([^']*)'", query)
         if m and m.group(1).lower() not in f["System.Title"].lower():
             return False
+        m = re.search(r"\[System.IterationPath\] UNDER '([^']*)'", query)
+        if m:
+            path = f.get("System.IterationPath", "").lower()
+            if not (path == m.group(1).lower() or path.startswith(m.group(1).lower() + "\\")):
+                return False
         m = re.search(r"\[System.State\] NOT IN \(([^)]*)\)", query)
         if m and f["System.State"] in re.findall(r"'([^']*)'", m.group(1)):
             return False
