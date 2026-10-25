@@ -89,12 +89,17 @@ class AutomationService:
                 self.scripts.get(append_to)
             run_id = new_run_id("REC")
             session = RecordingSession(self.guided_agent, run_id, start_url, browser=browser, headless=headless,
-                                       credential_role=credential_role)
+                                       credential_role=credential_role, playback=self.settings.section("playback"))
             self.recordings[run_id] = {"session": session, "name": name, "append_to": append_to, "insert_at": insert_at,
                                        "browser": browser, "credential_role": credential_role,
                                        "test_case_id": test_case_id, "application": application, "start_url": start_url}
             session.start()
         return run_id
+
+    def voice_action(self, run_id: str, params: dict[str, Any]) -> str:
+        """A spoken browser action in the active recording (click, fill, select, select a date, scroll, ...)."""
+        session: RecordingSession = self.recording(run_id)["session"]
+        return str(session.command("voice", dict(params), timeout=90))
 
     def recording(self, run_id: str) -> dict[str, Any]:
         rec = self.recordings.get(run_id)

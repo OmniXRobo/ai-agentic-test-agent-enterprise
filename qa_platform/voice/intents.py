@@ -313,12 +313,16 @@ def browser_action(t: str) -> Intent | None:
     """Contextual browser commands, valid while a recording is active (checked by the service)."""
     m = re.search(r"\b(?:select|choose|pick|set|enter)\b\s+(?:the\s+)?(?:date\s+(?:to|as)\s+)?(day after tomorrow|day before yesterday|"
                   r"today|tomorrow|yesterday|previous day|next day)\b", t)
+    field = re.search(r"\b(?:in|for|on|into)\s+(?:the\s+)?(.+?)(?:\s+field|\s+box)?$", t[m.end():] if m else "")
     if m:
-        return Intent("browser_action", {"action": "select_date", "days": _DAYS[m.group(1)]})
+        return Intent("browser_action", {"action": "select_date", "days": _DAYS[m.group(1)],
+                                         **({"target": field.group(1)} if field else {})})
     m = re.search(r"\b(?:select|choose|pick)\b.*?\b(\d+)\s+days?\s+(from now|later|ahead|ago|before|back)\b|\bin\s+(\d+)\s+days\b", t)
     if m:
         n = int(m.group(1) or m.group(3))
-        return Intent("browser_action", {"action": "select_date", "days": -n if m.group(2) in ("ago", "before", "back") else n})
+        field = re.search(r"\b(?:in|for|on|into)\s+(?:the\s+)?(.+?)(?:\s+field|\s+box)?$", t[m.end():])
+        return Intent("browser_action", {"action": "select_date", "days": -n if m.group(2) in ("ago", "before", "back") else n,
+                                         **({"target": field.group(1)} if field else {})})
     if re.search(r"\b(open|show|click)\b\s+(?:the\s+|this\s+)?(calendar|date picker|datepicker)\b", t):
         return Intent("browser_action", {"action": "open_calendar", "target": "calendar"})
     if re.search(r"\b(open|expand|click)\b\s+(?:the\s+|this\s+)?(drop ?down|list box|select box)\b", t):

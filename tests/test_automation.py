@@ -392,3 +392,41 @@ def test_ai_generation_for_every_test_case_of_a_story(paths, site):
         ado.relations[118] = []
         c.post("/api/tfs/cache/clear")
         assert c.post("/api/automation/generate", json={"user_story_id": 118, "base_url": site}).status_code == 409
+
+
+@needs_browser
+def test_voice_actions_during_recording_record_a_date_rule_not_a_literal_date(auto, rt, tmp_path):
+    from datetime import date, timedelta
+
+    from tests.test_visual_playback import PAGE
+
+    page_file = tmp_path / "booking.html"
+    page_file.write_text(PAGE.replace('<select id="s">', '<label for="s">Cabin</label><select id="s">'), encoding="utf-8")
+    run_id = auto.start_recording(page_file.as_uri(), name="Voice booking", headless=True)
+    session = auto.recording(run_id)["session"]
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        try:
+            session.command("url", timeout=2)
+            break
+        except Exception:
+            time.sleep(0.2)
+    # Spoken through the Voice Command Agent, exactly as the person would say it.
+    r = rt.voice.handle("Hami, select tomorrow in travel date", conversation_id="conv-recording-test", source="typed")
+    assert r["status"] == "completed" and r["command"] == "browser_action", r
+    assert "Current Date + 1 day" in r["say"]
+    assert "Entered" in auto.voice_action(run_id, {"action": "fill", "target": "Plain", "value": "hello"})
+    assert "Selected" in auto.voice_action(run_id, {"action": "select", "target": "Cabin", "value": "Business"})
+    time.sleep(0.5)
+    script = auto.stop_recording(run_id)
+    pick = [s for s in script.steps if s.action == "pick_date"]
+    assert len(pick) == 1 and pick[0].value == "{{TODAY+1d:%Y-%m-%d}}"
+    assert pick[0].description == "Pick date Current Date + 1 day in Travel date"
+    literal = (date.today() + timedelta(days=1)).strftime("%d/%m/%Y")
+    assert literal not in script.model_dump_json()  # no hard-coded date and no recorded calendar clicks
+    assert not any(s.action == "click" for s in script.steps)
+    assert any(s.action == "fill" and s.value == "hello" for s in script.steps)
+    assert any(s.action == "select" and s.value == "bus" for s in script.steps)
+    # Playback picks the date of the day it runs through the page's calendar.
+    record = auto.run_script(script.id, headless=True, background=False)
+    assert record["status"] == "PASSED", record.get("error")

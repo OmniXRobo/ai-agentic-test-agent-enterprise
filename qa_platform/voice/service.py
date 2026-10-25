@@ -431,6 +431,11 @@ class VoiceService(MoreCommands):
             else:
                 follow.params[pending["param"]] = value
                 return follow
+        # While a browser recording runs, "click search", "select tomorrow" and the like act in that browser.
+        if (intent is None or intent.command == "open_page") and self._active_recording(conv):
+            spoken = intents.browser_action(intents.normalize(text))
+            if spoken:
+                return spoken
         if intent is None:
             intent = self._ai_intent(text)
         return intent
