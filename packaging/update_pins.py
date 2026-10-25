@@ -62,11 +62,15 @@ def temurin(days: int, work: Path) -> dict:
 def llama_server(days: int, work: Path) -> dict:
     token = os.environ.get("GITHUB_TOKEN")
     headers = {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {token}"} if token else {})}
-    for rel in get_json("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=100", headers):
+    # llama.cpp publishes several builds a day, so the first old-enough one can be many pages back.
+    releases = (rel for page in range(1, 11)
+                for rel in get_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=100&page={page}", headers))
+    for rel in releases:
         if rel["prerelease"] or rel["draft"] or not old_enough(rel["published_at"], days):
             continue
         asset = next((a for a in rel["assets"] if a["name"].endswith("-bin-win-cpu-x64.zip")), None)
         if not asset or not (asset.get("digest") or "").startswith("sha256:"):
+            print(f"[pins] {rel['tag_name']}: no Windows CPU x64 zip with a digest ({', '.join(a['name'] for a in rel['assets'])[:300]})")
             continue
         path = work / asset["name"]
         actual = download(asset["browser_download_url"], path)
