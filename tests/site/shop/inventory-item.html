@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Test Shop</title><script src="common.js"></script></head>
+<body>
+<script>shop.guard();</script>
+<button id="back-to-products" data-test="back-to-products">Back to products</button>
+<div class="inventory_details_name" data-test="inventory-item-name">Product</div>
+<button id="add-to-cart" data-test="add-to-cart">Add to cart</button>
+<script>
+  shop.header();
+  document.getElementById("back-to-products").onclick = () => shop.go("inventory.html");
+  document.getElementById("add-to-cart").onclick = () => shop.setCart([...shop.cart(), 1]);
+</script>
+</body></html>

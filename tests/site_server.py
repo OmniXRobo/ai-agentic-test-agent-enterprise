@@ -26,6 +26,15 @@ class SiteHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path.split("?")[0].endswith("/api/inventory"):
+            items = [{"id": 4, "name": "Backpack", "price": 29.99}, {"id": 0, "name": "Bike Light", "price": 9.99}]
+            body = json.dumps(items).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         super().do_GET()
 
 

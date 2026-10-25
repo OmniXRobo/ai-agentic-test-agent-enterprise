@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Test Shop</title><script src="common.js"></script></head>
+<body>
+<script>shop.guard();</script>
+<span class="title" data-test="title">Your Cart</span>
+<div class="cart_list"></div>
+<button id="continue-shopping" data-test="continue-shopping">Continue Shopping</button>
+<button id="checkout" data-test="checkout">Checkout</button>
+<script>
+  shop.header();
+  document.querySelector(".cart_list").innerHTML = shop.cart().map((id, n) => `<div class="cart_item">Item ${id} <button id="remove-${n}" data-test="remove-${n}">Remove</button></div>`).join("");
+  document.querySelectorAll("[id^=remove-]").forEach((b) => b.onclick = () => { window.__removed = true; });
+  document.getElementById("continue-shopping").onclick = () => shop.go("inventory.html");
+  document.getElementById("checkout").onclick = () => shop.go("checkout-step-one.html");
+</script>
+</body></html>

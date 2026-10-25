@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Test Shop</title><script src="common.js"></script></head>
+<body>
+<div class="login_logo">Test Shop</div>
+<div id="root"></div>
+<script>
+  // Rendered by script after load, like a single-page application.
+  setTimeout(() => {
+    document.getElementById("root").innerHTML = `
+      <form id="login" onsubmit="return false">
+        <input class="input_error form_input" placeholder="Username" type="text" data-test="username" id="user-name" name="user-name">
+        <input class="input_error form_input" placeholder="Password" type="password" data-test="password" id="password" name="password">
+        ${new URLSearchParams(location.search).has("tenant") ? '<input placeholder="Tenant" data-test="tenant" id="tenant" name="tenant" required>' : ""}
+        <div class="error-message-container"></div>
+        <input type="submit" class="submit-button btn_action" data-test="login-button" id="login-button" name="login-button" value="Login">
+      </form>`;
+    document.getElementById("login-button").onclick = () => {
+      const u = document.getElementById("user-name").value, p = document.getElementById("password").value;
+      const t = document.getElementById("tenant");
+      const err = document.querySelector(".error-message-container");
+      if (t && t.value !== "acme") { err.innerHTML = '<h3 data-test="error">Epic sadface: Unknown tenant</h3>'; return; }
+      if (!["standard_user", "mfa_user"].includes(u) || p !== "secret_sauce") {
+        err.innerHTML = '<h3 data-test="error">Epic sadface: Username and password do not match any user in this service</h3>';
+        return;
+      }
+      if (u === "mfa_user") { sessionStorage.setItem("pending", u); location.href = "otp.html"; return; }
+      localStorage.setItem("shop_user", u);
+      location.href = "inventory.html";
+    };
+  }, 150);
+</script>
+</body></html>
