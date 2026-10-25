@@ -32,6 +32,12 @@ def health(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "version": __version__, "time": now_iso(), "data_root": str(rt.paths.root)}
 
 
+@router.get("/health/summary")
+def health_summary(refresh: bool = Query(False), rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Status strip: TFS, Local AI, Playwright, speech. Cached; refresh=true re-checks now."""
+    return {"ok": True, "version": __version__, **rt.health.summary(force=refresh)}
+
+
 @router.get("/meta")
 def meta() -> dict[str, Any]:
     return {
@@ -223,6 +229,11 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
     theme = patch.get("ui", {}).get("theme")
     if theme is not None and theme not in ("light", "dark"):
         raise QAError("SETTINGS_INVALID", "Theme must be 'light' or 'dark'.")
+    pb = patch.get("playback", {})
+    if "cursor_speed_ms" in pb and not (isinstance(pb["cursor_speed_ms"], (int, float)) and 0 <= pb["cursor_speed_ms"] <= 2000):
+        raise QAError("SETTINGS_INVALID", "Cursor movement time must be between 0 and 2000 ms.")
+    if "click_volume" in pb and not (isinstance(pb["click_volume"], (int, float)) and 0 <= pb["click_volume"] <= 1):
+        raise QAError("SETTINGS_INVALID", "Click sound volume must be between 0 and 1.")
     mode = patch.get("defects", {}).get("creation_mode")
     if mode is not None and mode not in ("review", "automatic", "disabled"):
         raise QAError("SETTINGS_INVALID", "Defect creation mode must be review, automatic or disabled.")

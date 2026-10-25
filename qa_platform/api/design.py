@@ -70,7 +70,9 @@ def ai_models(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 
 @router.post("/ai/diagnostics")
 def ai_diagnostics(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    return rt.ai.diagnostics()
+    result = rt.ai.diagnostics()
+    rt.health.ai_tested(result)
+    return result
 
 
 # ---- test design --------------------------------------------------------------------

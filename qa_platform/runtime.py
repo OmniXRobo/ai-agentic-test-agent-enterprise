@@ -16,6 +16,7 @@ from .design.service import DesignService
 from .events import names
 from .events.bus import EventBus
 from .events.state import AgentStateManager
+from .health import HealthService
 from .knowledge.service import KnowledgeService
 from .notifications import NotificationService
 from .performance.service import PerformanceService
@@ -53,6 +54,7 @@ class Runtime:
     studio: ScriptStudio
     hierarchy: HierarchyService
     knowledge: KnowledgeService
+    health: HealthService
 
     def close(self) -> None:
         self.db.close()
@@ -98,5 +100,7 @@ def build_runtime(
     hierarchy = HierarchyService(tfs)
     knowledge = KnowledgeService(db, bus, hierarchy, automation, design)
     studio.knowledge = knowledge  # Unified QA Knowledge for the Automation Engineering Agent
+    health = HealthService(tfs, ai, orchestration, voice)
+    voice.attach(studio=studio, reports=reports, notifications=notifications, health=health)
     return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation, performance, defects, voice, analytics, reports, studio, hierarchy, knowledge)
+                   automation, performance, defects, voice, analytics, reports, studio, hierarchy, knowledge, health)

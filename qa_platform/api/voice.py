@@ -41,6 +41,17 @@ class VoiceSettingsIn(BaseModel):
     tts_rate: float | None = Field(default=None, ge=0.5, le=2)
     reply_style: Literal["radio", "plain"] | None = None
     radio_voice: str | None = Field(default=None, max_length=200)
+    agent_display_name: str | None = Field(default=None, min_length=1, max_length=40)
+    agent_command_name: str | None = Field(default=None, min_length=2, max_length=30, pattern=r"^[A-Za-z][A-Za-z' -]*$")
+    voice_enabled: bool | None = None
+    listen_mode: Literal["push_to_talk", "wake_name"] | None = None
+    phrase_style: Literal["standard", "tactical"] | None = None
+    radio_intensity: float | None = Field(default=None, ge=0, le=1)
+    wireless_tone: bool | None = None
+    static_volume: float | None = Field(default=None, ge=0, le=1)
+    ambience_enabled: bool | None = None
+    ambience_volume: float | None = Field(default=None, ge=0, le=1)
+    voice_volume: float | None = Field(default=None, ge=0, le=1)
 
 
 class SpeakIn(BaseModel):
@@ -71,6 +82,17 @@ async def transcribe(request: Request, rt: Runtime = Depends(runtime)) -> dict[s
     return {"ok": True, "text": text}
 
 
+@router.post("/warmup")
+def warmup(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Load the offline speech model in the background (it is kept for the whole session)."""
+    import threading
+
+    if rt.voice.config().get("stt_engine") != "builtin":
+        return {"ok": True, "loading": False}
+    threading.Thread(target=rt.voice.offline.warm, name="speech-warmup", daemon=True).start()
+    return {"ok": True, "loading": True}
+
+
 @router.get("/radio-voices")
 def radio_voices(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, **rt.voice.radio_voices()}
@@ -91,6 +113,11 @@ def get_settings(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 @router.put("/settings")
 def put_settings(body: VoiceSettingsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     patch = body.model_dump(exclude_none=True)
+    for key in ("agent_display_name", "agent_command_name"):
+        if key in patch:
+            patch[key] = " ".join(patch[key].split())
+            if not patch[key]:
+                raise QAError("VOICE_NAME_INVALID", "The agent name cannot be empty.")
     if "stt_url" in patch:
         patch["stt_url"] = patch["stt_url"].strip().rstrip("/")
         if patch["stt_url"] and not patch["stt_url"].lower().startswith(("http://", "https://")):

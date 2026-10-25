@@ -8,6 +8,9 @@ AGENT_PROGRESS = "agent.progress"
 AGENT_COMPLETED = "agent.completed"
 AGENT_FAILED = "agent.failed"
 AGENT_LOG = "agent.log"
+# A running agent waits for the tester (for example an OTP during discovery), then continues.
+AGENT_PAUSED = "agent.paused"
+AGENT_RESUMED = "agent.resumed"
 
 REQUIREMENTS_STARTED = "requirements.started"
 REQUIREMENTS_COMPLETED = "requirements.completed"
@@ -47,6 +50,8 @@ VOICE_COMMAND_RECEIVED = "voice.command.received"
 VOICE_COMMAND_ACCEPTED = "voice.command.accepted"
 VOICE_COMMAND_COMPLETED = "voice.command.completed"
 VOICE_COMMAND_FAILED = "voice.command.failed"
+# The command moved from the Voice Command Agent to the agent that does the work (and back).
+VOICE_HANDOFF = "voice.handoff"
 
 REPORT_STARTED = "report.started"
 REPORT_COMPLETED = "report.completed"

@@ -50,6 +50,7 @@ def delete_pat(mode: Literal["online", "offline"], rt: Runtime = Depends(runtime
 @router.post("/test/{mode}")
 def test_connection(mode: Literal["online", "offline"], rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     result = rt.tfs.test_connection(mode)
+    rt.health.tfs_tested(result)
     return {**result, "ok": result["ok"]}
 
 

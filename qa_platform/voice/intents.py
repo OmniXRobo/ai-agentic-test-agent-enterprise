@@ -11,11 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-COMMANDS = (
-    "help", "confirm", "cancel", "status", "open_page", "open_work_item", "generate_test_cases",
-    "generate_automation", "run_test_case", "run_all_tests", "start_recording", "run_performance",
-    "stop_run", "show_failed", "show_performance_report", "analyze_failure", "create_defects",
-)
+# The full list, with parameters and which commands need confirmation, is in registry.py.
 
 # route, label, spoken aliases (longest alias wins)
 PAGES: list[tuple[str, str, tuple[str, ...]]] = [
@@ -50,7 +46,10 @@ PAGES: list[tuple[str, str, tuple[str, ...]]] = [
                                         "azure devops settings")),
     ("ai-settings", "On-Premise AI", ("on premise ai settings", "on premise ai", "ai settings", "llm settings")),
     ("app-credentials", "Application Credentials", ("application credentials", "credentials")),
-    ("voice", "Voice Commands", ("voice commands", "voice settings", "voice")),
+    ("voice", "Voice & Command Agent", ("voice and command agent", "voice commands", "voice settings", "voice")),
+    ("command-center", "AI Voice Command Center", ("voice command center", "command center", "mission control")),
+    ("reports", "Reports", ("reports", "report list")),
+    ("analytics", "Analytics", ("analytics", "quality analytics", "trends")),
 ]
 PAGE_LABELS = {route: label for route, label, _ in PAGES}
 
@@ -143,7 +142,61 @@ def parse(text: str) -> Intent | None:
     if re.search(r"\b(stop|abort|halt|cancel)\b.*\b(test|run|load|jmeter|execution|playback|everything|it)\b", t):
         return Intent("stop_run")
 
-    m = re.search(r"\b(open|show|display|go to|bring up)\b.*?\b(user story|story|test case|defect|bug|work item|issue)\s+" + _ID, t)
+    if re.fullmatch(r"(please )?(go |take me )?back( please)?|(go to |open )?(the )?previous (page|screen)", t):
+        return Intent("go_back")
+    m = re.fullmatch(r"(?:select|choose|pick|open|take|use)\s+(?:the\s+)?(first|second|third|fourth|fifth|last|\d+(?:st|nd|rd|th)?)"
+                     r"(?:\s+(?:one|1|item|result|row|entry|test|test case|story|user story))?", t)
+    if m:
+        word = m.group(1)
+        pos = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "last": -1}.get(word)
+        return Intent("select_item", {"position": pos if pos else int(re.sub(r"\D", "", word))})
+    if re.search(r"\b(stop|finish|end|save|close)\b\s+(?:the\s+)?(manual\s+|browser\s+)?record(ing)?\b", t):
+        return Intent("stop_recording")
+    m = re.search(r"\b(test|check|verify|diagnose|ping)\b\s+(?:the\s+)?(?:(online|offline|local|cloud)\s+)?(tfs|azure devops)\b", t)
+    if m:
+        mode = {"local": "offline", "cloud": "online"}.get(m.group(2) or "", m.group(2))
+        return Intent("test_tfs", {"mode": mode} if mode else {})
+    m = re.search(r"\b(switch|change|move)\b.*?\b(online|offline|local|cloud)\b.*\btfs\b|\buse\s+(?:the\s+)?(online|offline|local|cloud)\s+tfs\b", t)
+    if m:
+        mode = m.group(2) or m.group(3)
+        return Intent("switch_tfs", {"mode": {"local": "offline", "cloud": "online"}.get(mode, mode)})
+    if re.search(r"\b(test|check|verify|diagnose|ping)\b\s+(?:the\s+)?(?:local\s+|on premise\s+)?(ai|llm|language model|model|queen|qwen)\b", t):
+        return Intent("test_ai")
+    if re.search(r"\b(read|any|show|check)\b.*\b(notifications|alerts)\b", t) and not re.search(r"\b(open|go to)\b", t):
+        return Intent("read_notifications")
+    if re.search(r"\b(create|generate|make|prepare|build)\b.*\btest (plan|suites?)\b", t):
+        m = re.search(r"\b(?:user story|story)\s+" + _ID, t)
+        return Intent("generate_test_plan", {"user_story_id": int(m.group(1))} if m else {})
+    if re.search(r"\b(save|publish|push|write|upload)\b.*\btest ?cases?\b", t) and not re.search(r"\bdata\b", t):
+        m = re.search(r"\b(?:user story|story)\s+" + _ID, t)
+        return Intent("save_test_cases", {"user_story_id": int(m.group(1))} if m else {})
+    m = re.search(r"\b(create|generate|make|prepare|build|write|save|push|delete|remove|clear)\b.*\btest data\b", t)
+    if m:
+        verb = m.group(1)
+        p: dict[str, Any] = {}
+        tc = re.search(r"\btest case\s+" + _ID, t)
+        if tc:
+            p["test_case_id"] = int(tc.group(1))
+        if verb in ("delete", "remove", "clear"):
+            return Intent("delete_test_data", p)
+        if verb in ("write", "save", "push") and re.search(r"\b(tfs|azure devops)\b", t):
+            return Intent("write_test_data", p)
+        return Intent("create_test_data", p)
+    m = re.search(r"\b(open|show|edit|display)\b\s+(?:me\s+)?(?:the\s+)?(script editor|test script|script|flow logic|recorded steps|"
+                  r"steps editor|script history|script credentials)\b", t)
+    if m:
+        tab = {"script editor": "edit", "test script": "view", "script": "view", "flow logic": "flow",
+               "recorded steps": "edit", "steps editor": "edit", "script history": "history",
+               "script credentials": "credentials"}[m.group(2)]
+        p = {"tab": "edit" if m.group(1) == "edit" else tab}
+        tc = re.search(r"\btest case\s+" + _ID, t)
+        if tc:
+            p["test_case_id"] = int(tc.group(1))
+        return Intent("open_script", p)
+    if re.search(r"\b(archive|delete|remove)\b\s+(?:the\s+)?(script|automation|automated test)\b", t):
+        tc = re.search(r"\btest case\s+" + _ID, t)
+        return Intent("archive_script", {"test_case_id": int(tc.group(1))} if tc else {})
+    m = re.search(r"\b(open|show|display|go to|bring up|load|select|pick|get)\b.*?\b(user story|story|test case|defect|bug|work item|issue)\s+" + _ID, t)
     if m:
         kind = {"story": "user story", "bug": "defect", "issue": "defect"}.get(m.group(2), m.group(2))
         return Intent("open_work_item", {"kind": kind, "id": int(m.group(3))})
@@ -193,8 +246,46 @@ def parse(text: str) -> Intent | None:
     if re.search(r"\b(run|play|execute|replay)\b\s+(it|this|that|the test|this test|that test|the test case|again)\b", t):
         return Intent("run_test_case", {"play": t.startswith(("play", "replay"))})
 
-    if re.search(r"\b(start|begin|open|new)\b.*\brecord(ing)?\b|\brecord (a |an )?(new )?(test|script)\b", t):
-        return Intent("start_recording")
+    m = re.search(r"\b(start|begin|open|new)\b.*\brecord(ing)?\b|\brecord (a |an )?(new )?(test|script)\b", t)
+    if m:
+        p = {}
+        sc = re.search(r"\brecord(?:ing)?\s+(?:for|of)\s+(?:the\s+)?([\w .'-]+?)(?:\s+scenario)?$", t)
+        if sc:
+            p["scenario"] = sc.group(1).strip()
+        return Intent("start_recording", p)
+    m = re.search(r"\b(show|list|find|search|which)\b\s+(?:me\s+)?(?:all\s+)?(?:the\s+)?(?:open\s+)?(user stories|stories|test cases|defects|bugs)\b(.*)$", t)
+    if m and m.group(3).strip():
+        rest = m.group(3)
+        kind = {"stories": "user story", "user stories": "user story", "test cases": "test case", "bugs": "defect",
+                "defects": "defect"}[m.group(2)]
+        p = {"kind": kind}
+        sp = re.search(r"\b(?:in|for|from)\s+(?:the\s+)?((?:sprint|iteration)\s+[\w.-]+)", rest)
+        if sp:
+            p["sprint"] = sp.group(1)
+        st = re.search(r"\b(?:with\s+)?(?:state|status)\s+([\w -]+?)(?:\s+(?:in|for|about)\b|$)", rest)
+        if st:
+            p["state"] = st.group(1).strip()
+        tx = re.search(r"\b(?:about|containing|named|called|matching|with title)\s+(.+)$", rest)
+        if tx:
+            p["text"] = tx.group(1).strip()
+        if len(p) > 1:
+            return Intent("search_work_items", p)
+    if re.search(r"\b(generate|create|build|make|prepare|produce)\b.*\breport\b", t) and "defect" not in t:
+        scope = "performance" if re.search(r"\b(performance|load|jmeter)\b", t) else \
+            "functional" if "functional" in t else "both"
+        p = {"scope": scope}
+        d = re.search(r"\b(?:last|past)\s+(\d+)\s+days?\b", t)
+        if d:
+            p["days"] = int(d.group(1))
+        elif re.search(r"\b(last|past|this) week\b", t):
+            p["days"] = 7
+        return Intent("generate_report", p)
+    if re.search(r"\b(show|open|display|view)\b\s+(?:me\s+)?(?:the\s+)?(?:latest\s+|last\s+)?(?:qa\s+|functional\s+)?report\b", t):
+        return Intent("show_report")
+    m = re.search(r"\b(show|open|display|view)\b\s+(?:me\s+)?(?:the\s+)?(?:latest\s+|last\s+)?(evidence|screenshots?|logs?|result|results)\b", t)
+    if m and "performance" not in t:
+        what = {"screenshot": "evidence", "screenshots": "evidence", "log": "logs", "results": "result"}.get(m.group(2), m.group(2))
+        return Intent("show_result", {"what": what})
     if re.search(r"\b(show|list|open|display|which)\b.*\bfail(ed|ing|ures?)\b", t) and "defect" not in t:
         return Intent("show_failed")
     if re.search(r"\b(show|open|display)\b.*\b(performance|load test|jmeter)\b.*\b(report|results?)\b", t):
@@ -211,6 +302,67 @@ def parse(text: str) -> Intent | None:
         page = match_page(m.group(2))
         if page:
             return Intent("open_page", {"route": page})
+    return browser_action(t)
+
+
+_DAYS = {"today": 0, "tomorrow": 1, "yesterday": -1, "previous day": -1, "next day": 1, "day after tomorrow": 2,
+         "day before yesterday": -2}
+
+
+def browser_action(t: str) -> Intent | None:
+    """Contextual browser commands, valid while a recording is active (checked by the service)."""
+    m = re.search(r"\b(?:select|choose|pick|set|enter)\b\s+(?:the\s+)?(?:date\s+(?:to|as)\s+)?(day after tomorrow|day before yesterday|"
+                  r"today|tomorrow|yesterday|previous day|next day)\b", t)
+    if m:
+        return Intent("browser_action", {"action": "select_date", "days": _DAYS[m.group(1)]})
+    m = re.search(r"\b(?:select|choose|pick)\b.*?\b(\d+)\s+days?\s+(from now|later|ahead|ago|before|back)\b|\bin\s+(\d+)\s+days\b", t)
+    if m:
+        n = int(m.group(1) or m.group(3))
+        return Intent("browser_action", {"action": "select_date", "days": -n if m.group(2) in ("ago", "before", "back") else n})
+    if re.search(r"\b(open|show|click)\b\s+(?:the\s+|this\s+)?(calendar|date picker|datepicker)\b", t):
+        return Intent("browser_action", {"action": "open_calendar", "target": "calendar"})
+    if re.search(r"\b(open|expand|click)\b\s+(?:the\s+|this\s+)?(drop ?down|list box|select box)\b", t):
+        return Intent("browser_action", {"action": "click", "target": "dropdown"})
+    if re.search(r"\b(go to|open|click)\b\s+(?:the\s+)?next page\b|^next page$", t):
+        return Intent("browser_action", {"action": "next_page"})
+    m = re.fullmatch(r"scroll\s+(down|up)(?:\s+a bit|\s+more)?", t)
+    if m:
+        return Intent("browser_action", {"action": "scroll", "value": m.group(1)})
+    m = re.fullmatch(r"(?:enter|type|fill in|fill)\s+(.+?)\s+(?:in|into|on)\s+(?:the\s+)?(.+?)(?:\s+field|\s+box)?", t)
+    if m:
+        return Intent("browser_action", {"action": "fill", "value": m.group(1), "target": m.group(2)})
+    if re.fullmatch(r"(?:enter|type)\s+(?:this|that|the)\s+value", t):
+        return Intent("browser_action", {"action": "fill"})
+    m = re.fullmatch(r"(?:select|choose|pick)\s+(.+?)(?:\s+(?:in|from)\s+(?:the\s+)?(.+?))?", t)
+    if m:
+        return Intent("browser_action", {"action": "select", "value": m.group(1), **({"target": m.group(2)} if m.group(2) else {})})
+    m = re.fullmatch(r"(?:click|press|tap|hit)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\s+button|\s+link)?", t)
+    if m:
+        return Intent("browser_action", {"action": "click", "target": m.group(1)})
+    return None
+
+
+# Nouns that show a sentence is about QA work, so an unmatched sentence is unclear rather than unsupported.
+QA_NOUNS = {
+    "user story": "Which user story, and what should I do with it: open it, generate test cases, or create the test plan?",
+    "test case": "Which test case, and what should I do: open it, run it, generate automation or create test data?",
+    "test data": "For which test case should I create, write or delete test data?",
+    "automation": "Which test case should I generate or run automation for?",
+    "script": "Which test case's script should I open, run or archive?",
+    "record": "Should I start or stop a browser recording?",
+    "report": "Should I generate a new report, or open the latest one?",
+    "tfs": "Should I test the TFS connection, switch between online and offline, or open TFS settings?",
+    "defect": "Should I analyze the failure, create defects from the drafts, or open Defect Review?",
+    "test": "Which test should I run, and should it play visibly?",
+    "page": "Which page should I open?",
+}
+
+
+def clarify_question(text: str) -> str | None:
+    t = normalize(text)
+    for noun, question in QA_NOUNS.items():
+        if re.search(rf"\b{noun}", t):
+            return question
     return None
 
 
