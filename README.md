@@ -10,6 +10,14 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Version 23.0.0: Command Center
+
+The AI Voice Command Center, the HUD theme, real agent states, allow-listed voice commands with an offline
+radio voice, the synchronized playback cursor, `pick_date`, voice commands while recording and the Managed
+Local LLM are described in [docs/COMMAND_CENTER_UPGRADE.md](docs/COMMAND_CENTER_UPGRADE.md) (including install,
+rollback and what to verify on Windows). [docs/CAPABILITY_INVENTORY.md](docs/CAPABILITY_INVENTORY.md) lists every
+capability.
+
 ## Quick start (development)
 
 ```
