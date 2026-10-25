@@ -73,6 +73,10 @@ COMMANDS: tuple[CommandSpec, ...] = (
                 (_ID("test_case_id", "test case number"),), destructive=True),
     CommandSpec("generate_automation", "generate Playwright automation for a test case",
                 (_ID("test_case_id", "test case number"), _NAME), examples=("generate automation",)),
+    CommandSpec("automate_user_story", "read a user story's requirement, discover the application and create the "
+                                       "automation scripts for all its test cases",
+                (_ID("user_story_id", "user story number"),),
+                examples=("automate user story 118", "read the requirement and create the scripts for user story 118")),
     CommandSpec("open_script", "open the script of a test case in Script Studio (view, edit, flow logic, data, "
                                "credentials, history, results, logs, evidence)",
                 (_ID("test_case_id", "test case number"),

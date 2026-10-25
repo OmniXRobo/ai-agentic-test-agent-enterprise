@@ -20,6 +20,13 @@ removed. The baseline it started from is tagged `baseline-v22.7.4`; see **Rollba
 | Voice during recording | Spoken click, entry, selection, next page, scroll and date commands act in the recorded browser with the cursor visible. "Select tomorrow in travel date" is recorded as `pick_date {{TODAY+1d:%Y-%m-%d}}` (Current Date + 1 day) and computed at playback. Calendar clicks are not recorded as a literal date. |
 | Managed Local LLM | AI Runtime → Managed Local LLM offers Auto Detect for llama-server and GGUF models, plus alias, host, port, context and startup timeout. Start/Restart points the On-Premise AI at the server. Stop Managed LLM stops only the process this application started. Pages never start, restart or poll it. |
 
+## Update: agentic voice automation and the tactical voice theme
+
+* **"Automate user story 118"** (also "read the requirement, discover the application and create the scripts for user story 118") runs the real Script Studio pipeline for every Test Case of the story. The Requirements agent reads each Test Case, its story, acceptance criteria and data. The Application Discovery agent uses the stored discovery of the application, or crawls it when none exists. The Automation Engineering agent then writes the Page Object scripts. The reply reports how many scripts were created, already existed or failed.
+* **"Generate automation for test case 1280"** now uses the same pipeline instead of the older one-step generator, when Script Studio is available.
+* The Command Center handoff shows the real chain for the current order: Listening → Understanding → Requirements → Application Discovery → Automation Engineering → Reporting. Each step comes from the agents' own start and finish events.
+* The AI Voice Command Center and the Voice & Command Agent settings use the green tactical cockpit: "TACTICAL VOICE COMMAND", CH 07 / SECURE / OFFLINE LINK chips, CALLSIGN / RECOGNITION / REPLY readouts, COMMS LOG, ORDERS YOU CAN GIVE and SYSTEMS CONFIGURATION. The clock shows Windows local time.
+
 ## New and changed APIs
 
 * `GET /api/health/summary?refresh=` returns the status strip. The checks are cached for 5 minutes. A TFS or AI connection test updates them at once.

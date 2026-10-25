@@ -16,7 +16,7 @@ const SQUADRON = ["voice_command", "requirements", "test_planning", "test_case_d
   "guided_browser", "test_execution", "jmeter_load", "reporting", "defect_intelligence"];
 
 const EXAMPLES = [
-  "Open user story 118", "Generate test cases for user story 118", "Create the test plan", "Generate automation for test case 1280",
+  "Open user story 118", "Generate test cases for user story 118", "Automate user story 118", "Create the test plan", "Generate automation for test case 1280",
   "Run test case 1280", "Run it again", "Show failed tests", "Show me the evidence", "Start manual recording",
   "Open the calendar", "Select tomorrow", "Stop recording", "Test the TFS connection", "Check the local AI",
   "Generate the report", "What is running", "Go back", "Stop the current test",
@@ -41,26 +41,43 @@ let lastOwner = null; // the agent the last command was handed to
 function voiceState() { return voice.speaking ? "speaking" : voice.status; }
 
 function logHtml() {
-  if (!voice.log.length) return `<p class="ck-empty">No traffic yet. Press the mic and give an instruction, or type one below.</p>`;
+  if (!voice.log.length) return `<p class="ck-empty">No traffic yet. Press the mic and give an order, or type one below. Replies come back over the radio and are logged here.</p>`;
   return voice.log.slice(-60).map((m) => `<div class="vmsg ${m.who}"><span class="vwho">${m.who === "you" ? "YOU" : esc(agentName())}</span>
     <span class="vtext" dir="auto">${esc(m.text)}</span>${m.kind && KIND_CLASS[m.kind] ? `<span class="pill ${KIND_CLASS[m.kind]}">${esc(m.kind.replace("_", " "))}</span>` : ""}</div>`).join("");
 }
 
 // Voice LISTENING → UNDERSTANDING → <Agent> RUNNING → COMPLETED → Voice REPORTING
+// Voice LISTENING → UNDERSTANDING → each agent that worked on the task (e.g. Requirements → Application Discovery →
+// Automation Engineering), in the order they really started → Voice REPORTING.
+function taskChain() {
+  if (!voice.task) return [];
+  return [...state.agents.values()]
+    .filter((a) => a.id !== "voice_command" && a.started_at && new Date(a.started_at).getTime() >= voice.task.since)
+    .sort((a, b) => new Date(a.started_at) - new Date(b.started_at));
+}
+
 function handoffHtml() {
   const vs = voiceState();
-  const owner = (voice.executing?.owner && state.agents.get(voice.executing.owner)) || activeAgent(state.agents)
-    || (lastOwner && state.agents.get(lastOwner)) || null;
-  const os = owner ? agentState(owner, state.agents).state : null;
+  let chain = taskChain();
+  if (!chain.length) {
+    const owner = (voice.executing?.owner && state.agents.get(voice.executing.owner)) || activeAgent(state.agents)
+      || (lastOwner && state.agents.get(lastOwner)) || null;
+    chain = owner ? [owner] : [];
+  }
   const hop = (label, sub, cls) => `<span class="hop ${cls}"><small>${esc(sub)}</small>${esc(label)}</span>`;
   const heard = ["listening"].includes(vs) ? "on" : voice.log.length ? "done" : "";
   const understood = ["transcribing", "thinking"].includes(vs) ? "on" : voice.log.length && !["listening"].includes(vs) ? "done" : "";
-  const ownerCls = !owner ? "" : os === "RUNNING" || os === "PAUSED" || os === "WAITING" ? "on" : os === "FAILED" ? "bad" : os === "COMPLETED" ? "done" : "";
   const report = vs === "speaking" ? "on" : vs === "completed" ? "done" : vs === "failed" ? "bad" : "";
+  const agents = chain.map((a) => {
+    const os = agentState(a, state.agents).state;
+    const cls = os === "RUNNING" || os === "PAUSED" || os === "WAITING" ? "on" : os === "FAILED" ? "bad" : a.finished_at ? "done" : "";
+    const shown = os === "READY" && a.finished_at ? (a.status === "FAILED" ? "FAILED" : "COMPLETED") : os;
+    return hop(shown, a.name.replace(/ Agent$/, ""), cls);
+  });
   return [
     hop("Listening", "Voice", heard),
     hop("Understanding", "Voice", understood),
-    hop(owner ? os : "No task", owner ? owner.name.replace(/ Agent$/, "") : "Specialist", ownerCls),
+    ...(agents.length ? agents : [hop("No task", "Specialist", "")]),
     hop("Reporting", "Voice", report),
   ].join('<span class="arrow" aria-hidden="true">&#10148;</span>');
 }
@@ -112,8 +129,8 @@ export async function mount(view) {
   view.innerHTML = `
     <div class="cockpit cc">
       <header class="ck-head">
-        <div class="ck-callsign"><span class="ck-wing" aria-hidden="true">&#9650;</span> AI VOICE COMMAND CENTER</div>
-        <div class="ck-meta"><span>AGENT <b dir="auto" id="ccName">${esc(agentName())}</b></span><span>${s.stt_engine === "builtin" || s.stt_engine === "local" ? "OFFLINE SPEECH" : s.stt_engine === "browser" ? "ONLINE SPEECH" : "KEYBOARD ONLY"}</span>
+        <div class="ck-callsign"><span class="ck-wing" aria-hidden="true">&#9650;</span> TACTICAL VOICE COMMAND</div>
+        <div class="ck-meta"><span>CH 07</span><span>SECURE</span><span>${s.stt_engine === "builtin" || s.stt_engine === "local" ? "OFFLINE LINK" : s.stt_engine === "browser" ? "ONLINE LINK" : "KEYBOARD ONLY"}</span>
           <span>${wakeMode ? `WAKE NAME "${esc((s.agent_command_name || "Hami").toUpperCase())}"` : "PUSH-TO-TALK"}</span></div>
         <div class="ck-clock" id="ccClock" title="Windows system time"></div>
       </header>
@@ -130,22 +147,25 @@ export async function mount(view) {
             ${wakeMode ? `<button class="btn" id="ccWake">Start wake-name listening</button>` : ""}
             <button class="btn" id="ccCancel">Cancel</button>
           </div>
+          <div class="ck-readout"><span>CALLSIGN</span><b dir="auto" id="ccName">${esc(agentName())}</b></div>
+          <div class="ck-readout"><span>RECOGNITION</span><b>${s.stt_engine === "builtin" ? "BUILT-IN OFFLINE RECOGNIZER" : s.stt_engine === "local" ? "LOCAL SPEECH SERVER" : s.stt_engine === "browser" ? "BROWSER" : "OFF"}</b></div>
+          <div class="ck-readout"><span>REPLY</span><b>${s.speak_replies ? (s.reply_style === "radio" ? "PILOT RADIO" : "PLAIN VOICE") : "TEXT ONLY"}</b></div>
           <div class="cc-lights" id="ccLights"></div>
         </section>
         <section class="ck-panel ck-comms">
-          <h3>TRANSCRIPT</h3>
+          <h3>COMMS LOG</h3>
           <div class="vlog" id="ccLog" aria-live="polite"></div>
           <div class="row" id="ccConfirm" hidden><span class="muted">Confirm this operation?</span><button class="btn primary" id="ccYes">Confirm</button><button class="btn" id="ccNo">Cancel</button></div>
           <form class="row ck-typed" id="ccTyped"><span class="ck-prompt" aria-hidden="true">&gt;</span>
-            <input name="text" placeholder="Type an instruction, for example: run test case 1280" autocomplete="off" maxlength="500" dir="auto">
+            <input name="text" placeholder="Type an order, for example: automate user story 118" autocomplete="off" maxlength="500" dir="auto">
             <button class="btn primary" type="submit">Send</button></form>
         </section>
       </div>
       <section class="ck-panel"><h3>COMMAND HANDOFF</h3><div class="handoff" id="ccHandoff"></div></section>
       <section class="ck-panel"><h3>AGENT SQUADRON</h3><div class="squad" id="ccSquad"></div></section>
       <div class="cc-bottom">
-        <section class="ck-panel"><h3>RADIO</h3>${radioHtml(s)}</section>
-        <section class="ck-panel"><h3>INSTRUCTIONS YOU CAN GIVE</h3>
+        <section class="ck-panel"><h3>RADIO CONFIGURATION</h3>${radioHtml(s)}</section>
+        <section class="ck-panel"><h3>ORDERS YOU CAN GIVE</h3>
           <div class="chips">${EXAMPLES.map((e) => `<button class="chip" data-say="${esc(e)}">${esc(e)}</button>`).join("")}</div>
           <p class="muted">Follow-ups use what you just opened or ran ("select the second one", "run it again", "go back"). Anything that changes or deletes data in TFS asks "Confirm this operation?" first.</p>
         </section>
@@ -193,7 +213,7 @@ export async function mount(view) {
     if (c.type === "health") $("#ccLights").innerHTML = lightsHtml();
   }));
   const clock = $("#ccClock");
-  const showClock = () => { clock.textContent = new Date().toLocaleTimeString([], { hour12: false }); };
+  const showClock = () => { clock.textContent = `${new Date().toLocaleTimeString([], { hour12: false })} LOCAL`; };
   showClock();
   cleanups.push(onTick(() => { showClock(); refreshCards(squad); $("#ccHandoff").innerHTML = handoffHtml(); }));
   if (!state.health) loadHealth();
