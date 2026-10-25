@@ -28,7 +28,7 @@ from . import codegen
 from .codegen import FlowCall, FlowPlan, LocatorPlan, MethodPlan, TestPlan, TestStepPlan
 from .registry import BASE_PAGE_METHODS, PageObjectInfo, Registry
 
-ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "check", "uncheck", "press", "hover",
+ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
            "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url")
 ELEMENT_ACTIONS = set(ACTIONS) - {"goto", "expect_url"}
 CHECKPOINT_ACTIONS = {"expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url"}
@@ -205,6 +205,7 @@ METHOD_PREFIX = {
     "fill": ("enter_{}", ["value"], "fill", "Enter {} value"),
     "type": ("enter_{}", ["value"], "fill", "Enter {} value"),
     "select": ("select_{}", ["value"], "select", "Select a value in {}"),
+    "pick_date": ("pick_{}_date", ["value"], "pick_date", "Pick a date in {}"),
     "click": ("click_{}", [], "click", "Click {}"),
     "dblclick": ("double_click_{}", [], "double_click", "Double-click {}"),
     "check": ("check_{}", [], "check", "Check {}"),

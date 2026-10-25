@@ -267,6 +267,8 @@ def _step_lines(step: Any) -> list[str]:
         lines = [f"{loc}.fill({v} or \"\", timeout={timeout})"]
     elif a == "select":
         lines = [f"{loc}.select_option({v}, timeout={timeout})"]
+    elif a == "pick_date":  # typed in ISO form here; the runtime and the framework use the calendar itself
+        lines = [f"{loc}.fill({v} or \"\", timeout={timeout})"]
     elif a == "press":
         lines = [f"{loc}.press({v} or \"Enter\", timeout={timeout})"]
     elif a == "expect_visible":

@@ -29,6 +29,7 @@ from ..agents.base import BaseAgent
 from ..clock import now_iso
 from ..credentials import APP_CREDENTIAL_NAMESPACE
 from ..errors import QAError
+from ..events import names
 from ..storage.db import Database, dumps, loads
 from .browser import js, launch, start_playwright
 
@@ -203,6 +204,7 @@ class Discovery:
         with self.agent.activity(f"Discovering {base_url}", run_id=run_id) as act:
             ex.act = act
             if job:
+                job.on_state = lambda state, text: _pause_events(act, state, text)
                 job.set_state("OPENING_APPLICATION", f"Opening {base_url}")
             ex.run()
             if job:
@@ -1050,3 +1052,11 @@ def business_flows(pages: list[dict[str, Any]], edges: list[dict[str, Any]], lim
     for f in out:
         f.pop("keys")
     return out
+
+
+def _pause_events(act: Any, state: str, text: str) -> None:
+    """Agent cards show PAUSED only while discovery really waits for the tester's input."""
+    if state == "WAITING_FOR_INPUT":
+        act.event(names.AGENT_PAUSED, f"Paused: {text or 'waiting for your input'}")
+    elif state == "RESUMING":
+        act.event(names.AGENT_RESUMED, text or "Input received; continuing")

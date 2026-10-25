@@ -45,6 +45,8 @@ def browser(playwright_runtime: Any) -> Iterator[Any]:
     options: dict[str, Any] = {"headless": config.HEADLESS}
     if name in ("msedge", "chrome"):
         options["channel"] = name
+    if kind == "chromium":
+        options["args"] = ["--autoplay-policy=no-user-gesture-required"]  # the cursor's quiet click sound
     instance = getattr(playwright_runtime, kind).launch(**options)
     yield instance
     instance.close()
@@ -57,7 +59,9 @@ def browser_context(browser: Any, request: pytest.FixtureRequest) -> Iterator[An
         options["record_video_dir"] = str(config.evidence_dir())
     context = browser.new_context(**options)
     context.add_init_script(config.asset("fingerprint.js"))
+    context.add_init_script(config.asset("calendar.js"))
     if config.VISUAL:
+        context.add_init_script(config.overlay_config())
         context.add_init_script(config.asset("overlay.js"))
     if config.TRACE:
         context.tracing.start(screenshots=True, snapshots=True, sources=False)

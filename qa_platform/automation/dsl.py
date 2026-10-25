@@ -30,13 +30,13 @@ from pydantic import BaseModel, Field
 
 from ..clock import now
 
-ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "check", "uncheck", "press", "hover",
+ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
            "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot")
 
-Action = Literal["goto", "click", "dblclick", "fill", "type", "select", "check", "uncheck", "press", "hover",
+Action = Literal["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
                  "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot"]
 
-NEEDS_TARGET = {"click", "dblclick", "fill", "type", "select", "check", "uncheck", "hover",
+NEEDS_TARGET = {"click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "hover",
                 "expect_visible", "expect_hidden", "expect_text", "expect_value"}
 
 
@@ -94,7 +94,7 @@ def describe(step: Step) -> str:
     v = step.value or ""
     return {
         "goto": f"Open {v}", "click": f"Click {what}", "dblclick": f"Double-click {what}", "fill": f"Enter value in {what}",
-        "type": f"Type into {what}", "select": f"Select '{v}' in {what}", "check": f"Check {what}",
+        "type": f"Type into {what}", "select": f"Select '{v}' in {what}", "pick_date": f"Pick date {v} in {what}", "check": f"Check {what}",
         "uncheck": f"Uncheck {what}", "press": f"Press {v or 'Enter'}" + (f" in {what}" if what else ""),
         "hover": f"Hover over {what}", "wait": f"Wait {v or 1000} ms", "expect_visible": f"Verify {what} is visible",
         "expect_hidden": f"Verify {what} is hidden", "expect_text": f"Verify {what} shows '{v}'",
@@ -227,6 +227,8 @@ def to_playwright_python(script: Script) -> str:
             lines.append(f"    {loc}.fill({_py(step.value)})")
         elif a == "select":
             lines.append(f"    {loc}.select_option({_py(step.value)})")
+        elif a == "pick_date":  # the Enterprise QA Runtime opens the calendar and clicks the day; plain export types it
+            lines.append(f"    {loc}.fill({_py(step.value)})")
         elif a == "press":
             lines.append(f"    page.keyboard.press({_py(step.value)})" if not step.target else f"    {loc}.press({_py(step.value)})")
         elif a == "wait":

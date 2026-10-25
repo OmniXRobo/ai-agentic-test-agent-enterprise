@@ -63,15 +63,22 @@ class BasePage:
                 element.scroll_into_view_if_needed(timeout=config.TIMEOUT_MS)
                 box = element.bounding_box(timeout=config.TIMEOUT_MS)
                 if box:
-                    self.page.evaluate("([b, k, l]) => window.__qaOverlay && window.__qaOverlay.point(b.x, b.y, b.width,"
-                                       " b.height, k, l)", [box, kind, loc.label()[:60]])
+                    # move (resolves when the cursor has arrived) -> highlight dwell -> click pulse -> act
+                    self.page.evaluate("([b, k, l]) => window.__qaOverlay ? window.__qaOverlay.point(b.x, b.y, b.width,"
+                                       " b.height, k, l) : null", [box, kind, loc.label()[:60]])
                     self.page.wait_for_timeout(config.VISUAL_DELAY_MS)
+                    self._box = box
                     if kind == "click":
-                        self.page.evaluate("([x, y]) => window.__qaOverlay && window.__qaOverlay.click(x, y)",
-                                           [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2])
+                        self._pulse(box)
             except Exception:
                 pass
         return element
+
+    _box: Any = None
+
+    def _pulse(self, box: dict[str, float]) -> None:
+        self.page.evaluate("([x, y]) => window.__qaOverlay ? window.__qaOverlay.click(x, y) : null",
+                           [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2])
 
     def _done(self) -> None:
         if config.VISUAL:
@@ -107,11 +114,74 @@ class BasePage:
     def select(self, loc: Loc, value: Any) -> None:
         text = "" if value is None else str(value)
         reporting.action("select", f"Select '{text}' in {loc.label()}", locator=loc.selector())
+        self._box = None
         element = self._element(loc, "type")
+        if config.VISUAL and self._box:
+            try:  # show the options and the cursor choosing one (a native list cannot be opened by automation)
+                options = element.evaluate("el => el.options ? [...el.options].map(o => [o.value, o.text.trim()]) : null")
+                index = next((i for i, (v, t) in enumerate(options or []) if v == text or t.lower() == text.lower()), None)
+                if index is not None:
+                    self.page.evaluate("([b, o, i]) => window.__qaOverlay ? window.__qaOverlay.choose(b.x, b.y, b.width,"
+                                       " b.height, o, i) : null", [self._box, [t for _v, t in options], index])
+            except Exception:
+                pass
         try:
             element.select_option(value=text, timeout=config.TIMEOUT_MS)
         except Exception:
             element.select_option(label=text, timeout=config.TIMEOUT_MS)
+        self._done()
+
+    def pick_date(self, loc: Loc, value: Any) -> None:
+        """Choose a date (YYYY-MM-DD) as a person would: open the calendar, page to the month, click the day.
+
+        Date inputs are filled directly; if no calendar can be read the date is typed in the field's format.
+        """
+        text = "" if value is None else str(value)
+        m = re.match(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})", text)
+        if not m:
+            raise AssertionError(f"pick_date needs a date as YYYY-MM-DD, got '{text}'.")
+        from datetime import date
+
+        target = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        iso = target.isoformat()
+        reporting.action("pick_date", f"Pick date {iso} in {loc.label()}", locator=loc.selector())
+        element = self._element(loc, "click")
+        if (element.get_attribute("type") or "").lower() == "date":
+            element.fill(iso, timeout=config.TIMEOUT_MS)
+            self._done()
+            return
+        element.click(timeout=config.TIMEOUT_MS)
+        self.page.wait_for_timeout(300)
+        for _ in range(25):
+            step = self.page.evaluate("iso => window.__qaCal ? window.__qaCal.step(iso) : ''", iso)
+            if not step:
+                break
+            mark = self.page.locator('[data-qa-cal="target"]').first
+            if config.VISUAL:
+                try:
+                    box = mark.bounding_box(timeout=config.TIMEOUT_MS)
+                    if box:
+                        self.page.evaluate("([b, l]) => window.__qaOverlay ? window.__qaOverlay.point(b.x, b.y, b.width,"
+                                           " b.height, 'click', l) : null", [box, f"Day {target.day}" if step == "day" else "Change month"])
+                        self.page.wait_for_timeout(min(config.VISUAL_DELAY_MS, 250))
+                        self._pulse(box)
+                except Exception:
+                    pass
+            mark.click(timeout=config.TIMEOUT_MS)
+            if step == "day":
+                self.page.evaluate("() => window.__qaCal && window.__qaCal.clear()")
+                self._done()
+                return
+            self.page.wait_for_timeout(200)
+        placeholder = (element.get_attribute("placeholder") or "").lower()
+        fmt = "%Y-%m-%d"
+        if re.search(r"mm[/.-]dd[/.-]y{2,4}", placeholder):
+            fmt = "%m/%d/%Y"
+        elif re.search(r"dd[/.-]mm[/.-]y{2,4}", placeholder):
+            sep = re.search(r"dd([/.-])mm", placeholder).group(1)
+            fmt = f"%d{sep}%m{sep}%Y"
+        self.page.keyboard.press("Escape")
+        element.fill(target.strftime(fmt), timeout=config.TIMEOUT_MS)
         self._done()
 
     def check(self, loc: Loc) -> None:

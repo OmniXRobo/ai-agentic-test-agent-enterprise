@@ -40,6 +40,9 @@ def launch(pw: Any, browser: str = "chromium", headless: bool = False) -> Any:
     options: dict[str, Any] = {"headless": headless}
     if browser in ("msedge", "chrome"):
         options["channel"] = browser
+    if kind == "chromium":
+        # lets the playback cursor's quiet click sound play without a user gesture in the page
+        options["args"] = ["--autoplay-policy=no-user-gesture-required"]
     try:
         return getattr(pw, kind).launch(**options)
     except Exception as exc:

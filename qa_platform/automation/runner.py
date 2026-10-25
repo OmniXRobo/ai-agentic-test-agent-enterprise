@@ -17,6 +17,7 @@ from ..events import names
 from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from . import healing
+from . import visual as visual_fx
 from .browser import default_headless, js, launch, start_playwright
 from .dsl import describe, NEEDS_TARGET, Script, Step, ValueResolver
 from .store import CredentialProfiles, ScriptStore
@@ -161,7 +162,9 @@ class Runner:
                 ctx_opts["record_video_dir"] = str(evidence_dir)
             context = browser.new_context(**ctx_opts)
             context.add_init_script(js("fingerprint"))
+            context.add_init_script(js("calendar"))
             if visual:
+                context.add_init_script(visual_fx.overlay_config(playback))
                 context.add_init_script(js("overlay"))
             page = context.new_page()
             page.set_default_timeout(15000)
@@ -270,8 +273,8 @@ class Runner:
                 locator.scroll_into_view_if_needed(timeout=timeout)
                 box = locator.bounding_box(timeout=timeout)
                 if box:
-                    page.evaluate("([b, k, l]) => window.__qaOverlay && window.__qaOverlay.point(b.x, b.y, b.width, b.height, k, l)",
-                                  [box, kind, (step.target.description or step.action)[:60]])
+                    # move (the Promise resolves when the cursor has arrived) -> highlight dwell -> act
+                    visual_fx.point(page, box, kind, step.target.description or step.action)
                     page.wait_for_timeout(delay)
             except Exception:
                 box = None
@@ -280,19 +283,27 @@ class Runner:
         a = step.action
         if a == "click":
             if box:
-                page.evaluate("([x, y]) => window.__qaOverlay && window.__qaOverlay.click(x, y)",
-                              [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2])
+                visual_fx.click(page, box)
             locator.click(timeout=timeout)
+        elif a == "pick_date":
+            how = visual_fx.pick_date(page, locator, value or "", timeout, bool(box), delay)
+            act.event(names.EXECUTION_STEP, f"Date {value} chosen ({how})", step=index)
         elif a == "dblclick":
+            if box:
+                visual_fx.click(page, box)
             locator.dblclick(timeout=timeout)
         elif a in ("fill", "type"):
             locator.fill(value or "", timeout=timeout)
         elif a == "select":
+            if box:
+                visual_fx.choose(page, locator, box, value or "")
             try:
                 locator.select_option(value=value, timeout=timeout)
             except Exception:
                 locator.select_option(label=value, timeout=timeout)
         elif a == "check":
+            if box:
+                visual_fx.click(page, box)
             locator.check(timeout=timeout)
         elif a == "uncheck":
             locator.uncheck(timeout=timeout)
