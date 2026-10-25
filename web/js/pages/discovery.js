@@ -18,7 +18,7 @@ const STATE_TEXT = {
   PREPARING: "Preparing", READING_REQUIREMENTS: "Reading requirements", RESOLVING_HIERARCHY: "Resolving hierarchy",
   BUILDING_REQUIREMENT_MEMORY: "Building Requirement Memory", OPENING_APPLICATION: "Opening application",
   AUTHENTICATING: "Authenticating", RUNNING: "Exploring", WAITING_FOR_INPUT: "Waiting for input", RESUMING: "Resuming",
-  MAPPING_REQUIREMENTS: "Mapping requirements", ANALYZING_GAPS: "Analyzing gaps", UPDATING_MEMORY: "Updating memory",
+  MAPPING_REQUIREMENTS: "Mapping requirements", ANALYZING_GAPS: "Analyzing gaps", GENERATING_SCRIPTS: "Generating scripts", UPDATING_MEMORY: "Updating memory",
   COMPLETED: "Completed", FAILED: "Failed", STOPPED: "Stopped",
 };
 
@@ -226,7 +226,8 @@ async function knowledgeDetail(view, kid) {
         ${item("Requirement mappings", s.requirement_mappings)}${item("Unmapped requirements", s.unmapped_requirements)}${item("Unmapped application features", s.unmapped_application_features)}
       </div></div>
     <div class="card" style="margin-top:12px"><h3>Requirement Coverage Map</h3>${coverageTree(k.tree)}</div>
-    <div class="card" style="margin-top:12px"><h3>Test Case mapping</h3>
+    <div class="card" style="margin-top:12px"><div class="row"><h3 style="margin:0">Test Case mapping</h3><span class="spacer"></span>
+      ${Object.keys(k.test_cases).length ? `<button class="btn primary" id="genScripts">Generate Playwright Scripts (${Object.keys(k.test_cases).length} Test Case${Object.keys(k.test_cases).length === 1 ? "" : "s"})</button>` : ""}</div>
       ${Object.values(k.test_cases).map((t) => `<details class="tc"><summary><strong>${esc(t.label)}</strong> ${esc(t.title || "")}
         <span class="pill ${t.coverage >= 80 ? "PASSED" : t.coverage ? "WARN" : "FAILED"}">${t.coverage}%</span></summary>
         ${t.steps.map((st) => `<div>Step ${st.index} — ${esc(st.action)}: ${st.match ? `✓ ${esc(st.match.page)}${st.match.element ? ` / ${esc(st.match.element)}` : ""}` : '<span class="pill FAILED">⚠ NOT FOUND</span>'}</div>
@@ -241,6 +242,13 @@ async function knowledgeDetail(view, kid) {
       ${k.out_of_scope.length ? k.out_of_scope.map((g) => `<div>${esc(g.page)} <span class="muted">${esc(g.reason)}</span></div>`).join("") : '<p class="muted">None.</p>'}</div>
     ${k.flows?.length ? `<div class="card" style="margin-top:12px"><h3>Business flows</h3>${k.flows.map((f) => `<div>${esc(f.name)}</div>`).join("")}
       <p class="muted">Page Objects: ${esc((k.page_objects || []).join(", "))}. AI-Driven Automation uses this knowledge when it generates these Test Cases.</p></div>` : ""}`;
+  view.querySelector("#genScripts")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await api(`/api/knowledge/${encodeURIComponent(kid)}/scripts`, { method: "POST", body: { headless: true, on_existing: "skip" } });
+      location.hash = `#/ai-automation?job=${encodeURIComponent(r.job_id)}`;
+    } catch (err) { toast(err.message, "error"); e.target.disabled = false; }
+  });
 }
 
 async function memoryDetail(view, mid) {
@@ -288,6 +296,10 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
       <label>Credential role <select name="credential_role"><option value="">Any saved role for this application</option></select></label>
       <label>Environment <input name="environment" placeholder="Optional, e.g. UAT"></label>
       <label class="row" style="display:flex;align-self:end"><input type="checkbox" name="explore" checked> Click through menus, buttons and script links</label>
+      <div class="row" id="genBox" style="grid-column:1/-1;flex-wrap:wrap;gap:12px">
+        <label class="row"><input type="checkbox" name="generate_scripts" checked> Then generate the Playwright scripts for the Test Cases in scope (AI-Driven Automation)</label>
+        <label class="row">If a script already exists <select name="on_existing"><option value="skip">Skip it</option>
+          <option value="new_version">Create a new version</option><option value="regenerate">Regenerate it</option></select></label></div>
       <p class="muted" style="grid-column:1/-1">The Application Discovery Agent signs in when the application asks for it, using
         <a href="#/app-credentials">Application Credentials</a>. When a value is unknown (credentials, authentication code, tenant, CAPTCHA) it pauses
         and asks you, then continues in the same browser session. It explores pages, menus, dialogs and script-driven navigation, never clicks
@@ -310,6 +322,7 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
     box.hidden = src === "application";
     form.base_url.required = src !== "tfs";
     form.querySelectorAll("label,p").forEach((el) => { if (!el.contains(form.base_url) && !el.querySelector("[name=max_pages]") && el.tagName !== "DIV") el.hidden = src === "tfs"; });
+    view.querySelector("#genBox").hidden = src !== "tfs_app";
     form.querySelector("button[type=submit]").textContent = src === "tfs" ? "Build Requirement Memory" : src === "tfs_app" ? "Start Intelligent Discovery" : "Discover";
     if (src !== "application" && !scope) { box.innerHTML = '<p class="muted">Loading TFS…</p>'; scope = await scopeSelector(box); }
   };
@@ -356,6 +369,9 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
         ${job.knowledge_id ? `<a href="#/discovery?knowledge=${encodeURIComponent(job.knowledge_id)}">Open coverage and gaps</a> ·` : ""}
         ${job.discovery_id ? `<a href="#/discovery?id=${encodeURIComponent(job.discovery_id)}">Open Application Memory</a>` : ""}
         ${job.requirement_memory_id ? ` · <a href="#/discovery?memory=${encodeURIComponent(job.requirement_memory_id)}">Open Requirement Memory</a>` : ""}</p>`;
+      if (job.script_job_id) res.innerHTML += scriptsLink(job);
+    } else if (job.state === "GENERATING_SCRIPTS" && job.script_job_id) {
+      res.innerHTML = scriptsLink(job);
     } else if (job.state === "FAILED") {
       res.innerHTML = `<p class="pill FAILED">${esc(job.error || "Discovery failed")}</p>`;
     } else if (job.state === "STOPPED") {
@@ -367,6 +383,8 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
       renderDiscs();
     }
   };
+  const scriptsLink = (job) => `<p>Playwright scripts: <a href="#/ai-automation?job=${encodeURIComponent(job.script_job_id)}">open the AI-Driven Automation job</a>
+    ${job.summary?.scripts ? ` (${job.summary.scripts.completed ?? 0} of ${job.summary.scripts.test_cases} generated${job.summary.scripts.failed ? `, ${job.summary.scripts.failed} failed` : ""})` : ""}</p>`;
   const watch = () => {
     clearInterval(poll);
     poll = setInterval(async () => {
@@ -393,7 +411,8 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
       <div>Project: <strong>${esc(resolved.project || "")}</strong></div>
       ${resolved.iteration ? `<div>Sprint: <strong>${esc(resolved.iteration)}</strong></div>` : ""}
       <div>${["epic", "feature", "story", "ac", "testcase"].filter((k) => c[k]).map((k) => `${esc({ epic: "Epics", feature: "Features", story: "User Stories", ac: "Acceptance Criteria", testcase: "Test Cases" }[k])}: <strong>${c[k]}</strong>`).join(" · ")}</div>
-      ${src === "tfs_app" ? `<div>Application: <strong>${esc(f.base_url.trim())}</strong></div><div>Mode: <strong>TFS + Application</strong></div>` : ""}</div>` : "";
+      ${src === "tfs_app" ? `<div>Application: <strong>${esc(f.base_url.trim())}</strong></div><div>Mode: <strong>TFS + Application</strong></div>` : ""}
+      ${src === "tfs_app" && f.generate_scripts === "on" ? `<div>Then: <strong>generate Playwright scripts for ${c.testcase} Test Case(s)</strong></div>` : ""}</div>` : "";
     const choice = await modeDialog(onCleanup, summary, src !== "tfs",
       src === "tfs" ? "Build Requirement Memory" : src === "tfs_app" ? "Start Intelligent Discovery" : "Start Discovery");
     if (!choice) return;
@@ -401,7 +420,8 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
       const r = await api("/api/knowledge/discoveries", { method: "POST", body: {
         source: src, base_url: f.base_url.trim() || null, max_pages: Number(f.max_pages), max_depth: Number(f.max_depth), headless: choice.headless,
         application: f.application.trim() || null, credential_role: f.credential_role || null,
-        environment: f.environment.trim() || null, explore: f.explore === "on", scope: src === "application" ? null : scope.value() } });
+        environment: f.environment.trim() || null, explore: f.explore === "on",
+        generate_scripts: src === "tfs_app" && f.generate_scripts === "on", on_existing: f.on_existing || "skip", scope: src === "application" ? null : scope.value() } });
       runId = r.run_id;
       askedId = null;
       view.querySelector("#progress").hidden = false;

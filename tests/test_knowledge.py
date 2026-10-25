@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import time
 
 import pytest
@@ -12,6 +14,7 @@ from qa_platform.knowledge.mapping import AppIndex, map_requirements, tokens
 from qa_platform.knowledge.requirements import classify_step, expected_pages
 from qa_platform.main import create_app
 from tests.fake_ado import PAT, FakeAzureDevOps
+from tests.fake_llm import FakeLLM
 
 
 @pytest.fixture()
@@ -254,6 +257,58 @@ def test_tfs_plus_application_maps_requirements_to_the_discovered_shop(kc, site)
     assert 'Step 2: Enter Username -> LoginPage / Username ([data-test="username"])' in text
     assert "Business flow: Login" in text
     assert kc.get("/api/knowledge", params={"application": "shop"}).json()["items"][0]["id"] == k["id"]
+
+
+def _shop_mapping(body: dict) -> dict:
+    """The Automation Engineering Agent's answer: sign in to the shop with the selectors discovery found."""
+    user = body["messages"][1]["content"]
+    start = re.search(r"Start URL: (\S+)", user).group(1)
+    login = [{"action": "goto", "value": start, "description": "Open the shop", "manual_step": 1, "business_flow": "login"}]
+    for sel, value, name in (('[data-test="username"]', "{{CRED:standard.username}}", "username"),
+                             ('[data-test="password"]', "{{CRED:standard.password}}", "password")):
+        login.append({"action": "fill", "selector": sel, "value": value, "description": f"Enter the {name}",
+                      "manual_step": 2, "business_flow": "login", "element_name": name})
+    login.append({"action": "click", "selector": '[data-test="login-button"]', "description": "Click Login",
+                  "manual_step": 3, "business_flow": "login", "element_name": "login"})
+    return {"steps": login, "covered_acceptance_criteria": []}
+
+
+def test_agentic_chain_reads_requirements_discovers_and_generates_scripts(paths, ado, site):
+    """Read TFS requirement -> discover the application -> map -> generate the Playwright scripts, in one run."""
+    llm = FakeLLM()
+    llm.extra["Automation Engineering Agent building a Page Object Model"] = _shop_mapping
+    app = create_app(paths, secret_backend=MemoryBackend(), tfs_transport=ado.transport(), ai_transport=llm.transport())
+    with TestClient(app) as c:
+        c.put("/api/tfs/profiles/online", json={"url": "https://dev.azure.com/acme", "project": "Shop", "pat": PAT,
+                                                "make_active": True})
+        c.put("/api/ai/settings", json={"base_url": "http://127.0.0.1:8080/v1", "model": "qwen2.5-7b-instruct-q4_k_m.gguf"})
+        rt = c.app.state.runtime
+        rt.automation.creds.save("shop", "standard", "standard_user", "secret_sauce", None)
+        r = c.post("/api/knowledge/discoveries", json={
+            "source": "tfs_app", "base_url": f"{site}/shop/index.html", "max_pages": 6, "max_depth": 2,
+            "application": "shop", "credential_role": "standard", "generate_scripts": True,
+            "scope": {"option": "stories", "ids": ["201"]}})
+        assert r.status_code == 202, r.text
+        job = _wait(c, r.json()["run_id"], {"COMPLETED", "FAILED"}, timeout=300)
+        assert job["state"] == "COMPLETED", job["error"]
+        order = [h["state"] for h in job["history"]]
+        assert order.index("ANALYZING_GAPS") < order.index("GENERATING_SCRIPTS") < order.index("COMPLETED")
+        assert job["script_job_id"] and job["summary"]["scripts"]["test_cases"] == 1
+        gen = c.get(f"/api/automation/studio/jobs/{job['script_job_id']}").json()["job"]
+        assert gen["status"] == "COMPLETED", gen
+        assert gen["request"]["discovery_id"] == job["discovery_id"]  # no second crawl: reuses this discovery
+        assert [i["test_case_id"] for i in gen["items"]] == ["1268"] and gen["items"][0]["status"] == "GENERATED"
+        prompt = next(b["messages"][1]["content"] for b in llm.calls if "Test Case: TC1268" in b["messages"][1]["content"])
+        assert "UNIFIED QA KNOWLEDGE" in prompt and "LoginPage" in prompt
+        assert "secret_sauce" not in json.dumps(gen)
+        # The coverage page can start the same generation again later.
+        r = c.post(f"/api/knowledge/{job['knowledge_id']}/scripts", json={"on_existing": "skip"})
+        assert r.status_code == 202, r.text
+        deadline = time.monotonic() + 120
+        while (again := c.get(f"/api/automation/studio/jobs/{r.json()['job_id']}").json()["job"])["status"] not in (
+                "COMPLETED", "FAILED", "STOPPED") and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert again["status"] == "COMPLETED" and again["items"][0]["status"] == "SKIPPED"  # script already exists
 
 
 def test_intelligent_discovery_validation(kc):

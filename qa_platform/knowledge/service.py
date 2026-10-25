@@ -6,11 +6,13 @@ Knowledge sources:
 * ``tfs``: Requirements Intelligence Agent only -> Requirement Memory (the application is not opened).
 * ``tfs_app`` (recommended): Requirements Intelligence Agent -> Requirement Memory -> Application Discovery
   Agent guided by it (but not limited to it) -> QA Orchestration Agent maps requirements to the
-  application -> coverage and gaps -> Unified QA Knowledge.
+  application -> coverage and gaps -> Unified QA Knowledge -> (optionally) the Automation Engineering
+  Agent generates the Playwright scripts of the Test Cases in scope through AI-Driven Automation.
 """
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -40,13 +42,15 @@ class KnowledgeService:
         self.hierarchy = hierarchy
         self.automation = automation
         self.design = design
+        self.studio: Any = None  # AI-Driven Automation (set by the runtime)
         self.requirements_agent = RequirementsIntelligenceAgent(bus)
         self.orchestration_agent = QAOrchestrationAgent(bus)
 
     # ---- start ----------------------------------------------------------------------------
 
     def start(self, source: str, *, base_url: str | None, scope: dict[str, Any] | None, max_pages: int = 15,
-              max_depth: int = 3, headless: bool = True, **discovery_options: Any) -> str:
+              max_depth: int = 3, headless: bool = True, generate_scripts: bool = False,
+              on_existing: str = "skip", **discovery_options: Any) -> str:
         if source not in SOURCES:
             raise QAError("KNOWLEDGE_SOURCE_INVALID", f"Unknown discovery knowledge source '{source}'.")
         if source in ("application", "tfs_app") and not base_url:
@@ -73,7 +77,12 @@ class KnowledgeService:
             job.discovery_id = discovery["id"]
             knowledge = self._map(job, memory, mem_id, discovery, application or discovery["application"])
             job.knowledge_id = knowledge["id"]
-            return {**discovery, "knowledge_id": knowledge["id"]}
+            result = {**discovery, "knowledge_id": knowledge["id"]}
+            if generate_scripts:
+                scripts = self._scripts(job, knowledge, base_url, headless=headless, on_existing=on_existing,
+                                        wait=True, **discovery_options)
+                result["summary"] = {**(discovery.get("summary") or {}), "scripts": scripts}
+            return result
 
         return self.automation.start_discovery(base_url or "", max_pages, max_depth, headless, work=work,
                                                knowledge_source=source, scope=scope, **discovery_options)
@@ -146,6 +155,68 @@ class KnowledgeService:
                          f"{s['unmapped_requirements']} unmapped requirement(s), {s['unmapped_application_features']} "
                          "application area(s) without requirements", knowledge_id=kid)
         return knowledge
+
+    def generate_scripts(self, kid: str, *, base_url: str | None = None, credential_role: str | None = None,
+                         environment: str | None = None, headless: bool = True, on_existing: str = "skip") -> str:
+        """Generate the Playwright scripts of the Test Cases in a Unified QA Knowledge (AI-Driven Automation job id)."""
+        k = self.knowledge(kid)
+        disc = self.automation.discovery.get(k["discovery_id"])
+        url = base_url or disc["base_url"]
+        return self._start_scripts(k, url, credential_role=credential_role, environment=environment,
+                                   headless=headless, on_existing=on_existing)
+
+    def _test_cases(self, knowledge: dict[str, Any]) -> list[int]:
+        return [int(t) for t in knowledge.get("test_cases", {}) if str(t).isdigit()]
+
+    def _start_scripts(self, knowledge: dict[str, Any], base_url: str, *,
+                       credential_role: str | None, environment: str | None, headless: bool, on_existing: str) -> str:
+        from ..automation.framework.studio import JobRequest, JobSelection
+
+        if self.studio is None:
+            raise QAError("STUDIO_UNAVAILABLE", "AI-Driven Automation is not available.", status=503)
+        tcs = self._test_cases(knowledge)
+        if not tcs:
+            raise QAError("NO_TEST_CASES_IN_SCOPE", "The selected requirements have no Test Cases to automate.", status=409)
+        req = JobRequest(selections=[JobSelection(test_case_ids=tcs)], base_url=base_url,
+                         application=knowledge["application"], environment=environment, credential_role=credential_role,
+                         discovery_id=knowledge["discovery_id"], on_existing=on_existing, headless=headless)
+        return self.studio.start_job(req)
+
+    def _scripts(self, job: DiscoveryJob, knowledge: dict[str, Any], base_url: str, *, headless: bool,
+                 on_existing: str, wait: bool, **options: Any) -> dict[str, Any]:
+        """Last step of the agentic chain: hand the mapped Test Cases to the Automation Engineering Agent."""
+        with self.orchestration_agent.activity("Generating Playwright scripts for the Test Cases in scope",
+                                               run_id=job.run_id) as act:
+            job.set_state("GENERATING_SCRIPTS", "Automation Engineering Agent generating the Playwright scripts")
+            tcs = self._test_cases(knowledge)
+            if not tcs:
+                act.complete("No Test Cases in the selected requirements; no scripts to generate")
+                return {"job_id": None, "test_cases": 0}
+            gen_id = self._start_scripts(knowledge, base_url, credential_role=options.get("credential_role"),
+                                         environment=options.get("environment"), headless=headless,
+                                         on_existing=on_existing)
+            job.script_job_id = gen_id
+            act.log(f"AI-Driven Automation job {gen_id}: {len(tcs)} Test Case(s), reusing this discovery's elements")
+            status = "RUNNING"
+            summary: dict[str, Any] = {}
+            while wait:
+                if job.stopping:
+                    self.studio.stop_job(gen_id)
+                job_view = self.studio.job(gen_id)
+                status, summary = job_view["status"], job_view["summary"]
+                if status in ("COMPLETED", "FAILED", "STOPPED", "INTERRUPTED"):
+                    break
+                act.progress(min(95, 10 + summary.get("progress", 0) * 85 // 100),
+                             f"{summary.get('completed', 0)} of {summary.get('total', len(tcs))} script(s) generated")
+                time.sleep(1)
+            job.check()
+            if wait and status == "FAILED" and not summary.get("completed"):
+                err = self.studio.job(gen_id).get("error") or "every Test Case failed; open the job for details"
+                act.log(f"Script generation failed: {err}")
+            act.complete(f"Scripts: {summary.get('completed', 0)} generated, {summary.get('failed', 0)} failed "
+                         f"(AI-Driven Automation job {gen_id})", script_job_id=gen_id)
+            return {"job_id": gen_id, "status": status, "test_cases": len(tcs), **{k: summary.get(k) for k in
+                                                                                ("completed", "failed")}}
 
     # ---- reading ----------------------------------------------------------------------------
 
