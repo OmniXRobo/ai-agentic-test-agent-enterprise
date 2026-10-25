@@ -15,7 +15,12 @@ voice completion or failure response.
 * Conversations keep context (the user story, test case, run and performance
   plan last referred to) so follow-ups like "generate automation for the smoke
   test" or "run it again" resolve to the current item.
-* Commands that write to TFS ask for spoken confirmation first.
+* Commands that change or delete saved data ask "Confirm this operation?" first
+  (``destructive`` in registry.py); only the registered commands can run.
+* Replies follow the configured phrase style: "OK, I will do your task now." /
+  "Please clarify the instruction." / "Unable to complete the command." (standard)
+  or "Command received." / "Mission complete." / "Command unsuccessful." (tactical).
+  Success is only announced from the result the service returned.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from difflib import SequenceMatcher
 from typing import Any, Callable, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..agents.base import BaseAgent, new_run_id
 from ..ai.gateway import AIGateway
@@ -47,14 +52,32 @@ from ..performance.tools import find_java, find_jmeter
 from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from ..tfs.service import TfsService
-from . import intents
+from . import intents, registry
+from .commands_more import MoreCommands
+from .model import Conversation, Outcome
 from .intents import Intent
 from .offline_stt import OfflineRecognizer
 from .tts import SystemVoice
 
 log = get_logger("voice")
 
-UNSUPPORTED = "I cannot perform that instruction because no supported QA action is mapped to it."
+UNSUPPORTED = "That operation is not supported."
+
+PHRASES = {
+    "standard": {"ack": "OK, I will do your task now.", "done": "Task complete.", "fail": "Unable to complete the command.",
+                 "clarify": "Please clarify the instruction.", "confirm": "Confirm this operation?"},
+    "tactical": {"ack": "Command received.", "done": "Mission complete.", "fail": "Command unsuccessful.",
+                 "clarify": "Say again. Please clarify the instruction.", "confirm": "Confirm this operation?"},
+}
+
+
+def compose(status: str, say: str, style: str = "standard", background: bool = False) -> str:
+    """The full spoken line for a reply: the fixed opening of its kind, then what actually happened."""
+    p = PHRASES.get(style) or PHRASES["standard"]
+    head = {"accepted": p["ack"], "completed": p["done"] if background else p["ack"], "failed": p["fail"],
+            "unsupported": p["fail"], "needs_input": p["clarify"], "unclear": p["clarify"],
+            "needs_confirmation": p["confirm"]}.get(status, "")
+    return f"{head} {say}".strip()
 PENDING_SECONDS = 120
 DESIGN_AGENTS = {"requirements", "test_planning", "test_case_design", "test_data", "test_suite_design"}
 FAILURE_PHRASES = {
@@ -71,50 +94,28 @@ class VoiceCommandAgent(BaseAgent):
 
 
 class AIVoiceIntent(BaseModel):
-    """What the On-Premise AI may return when the rules do not match: one supported command or 'unsupported'."""
-    command: Literal[intents.COMMANDS + ("unsupported",)]  # type: ignore[valid-type]
-    user_story_id: int | None = None
-    test_case_id: int | None = None
-    name: str | None = Field(default=None, max_length=120)
-    kind: Literal["load", "stress", "spike", "soak"] | None = None
-    users: int | None = Field(default=None, ge=1, le=100000)
-    duration_s: int | None = Field(default=None, ge=10, le=7 * 86400)
-    page: str | None = Field(default=None, max_length=80)
+    """What the On-Premise AI may return: one registered command (or unsupported / unclear) and its parameters.
+
+    Small local models sometimes put the parameters next to "command" instead of inside "params";
+    both shapes are accepted, and every parameter is validated against the registry afterwards.
+    """
+    model_config = ConfigDict(extra="allow")
+    command: str = Field(max_length=40)
+    params: dict[str, Any] = Field(default_factory=dict)
+    question: str | None = Field(default=None, max_length=200)
+
+    def all_params(self) -> dict[str, Any]:
+        return {**(self.model_extra or {}), **(self.params or {})}
 
 
 AI_SYSTEM = (
-    "You map a QA engineer's spoken request to exactly one command of a QA dashboard. Commands: "
-    "open_page (page = the page name), open_work_item (test_case_id or user_story_id), generate_test_cases "
-    "(user_story_id), generate_automation (test_case_id or name), run_test_case (test_case_id or name), "
-    "run_all_tests, start_recording, run_performance (name of the plan, kind, users, duration_s), stop_run, "
-    "show_failed, show_performance_report, analyze_failure, create_defects, status, help. "
-    "Use only numbers and names that appear in the request; never invent IDs. If the request does not clearly "
-    "ask for one of these commands, answer with command 'unsupported'. Reply with JSON only."
+    "You map a QA engineer's spoken request to exactly one command of a QA dashboard. Commands:\n"
+    + registry.ai_catalog() + "\n"
+    "Use only numbers and names that appear in the request; never invent IDs, pages, selectors or commands. "
+    "If the request is about QA work but too vague to pick one command, answer command 'unclear' with a short "
+    "specific question in 'question'. If it asks for something none of the commands do, answer 'unsupported'. "
+    'Reply with JSON only: {"command": "...", "params": {...}, "question": null}.'
 )
-
-
-@dataclass
-class Conversation:
-    id: str
-    user_story_id: int | None = None
-    test_case_id: int | None = None
-    script_id: str | None = None
-    run_id: str | None = None
-    run_kind: str | None = None
-    perf_plan_id: str | None = None
-    base_url: str | None = None
-    pending: dict[str, Any] | None = None  # {"kind": "confirm"|"input", "intent": Intent, "param": str, "at": float}
-    lock: threading.Lock = field(default_factory=threading.Lock)
-
-
-@dataclass
-class Outcome:
-    status: str  # completed | accepted | failed | unsupported | needs_confirmation | needs_input
-    say: str
-    navigate: str | None = None
-    job: Callable[[Callable[[str], None]], tuple[str, str | None]] | None = None  # (say_progress) -> (say, navigate)
-    job_title: str | None = None
-    failure: str = "That did not complete"
 
 
 def _sec(ms: float | None) -> str:
@@ -147,7 +148,7 @@ def _match_score(query: str, *candidates: str | None) -> float:
     return best
 
 
-class VoiceService:
+class VoiceService(MoreCommands):
     def __init__(self, settings: Settings, bus: EventBus, db: Database, runs: RunStore, state: AgentStateManager,
                  tfs: TfsService, ai: AIGateway, design: DesignService, automation: AutomationService,
                  performance: PerformanceService, defects: DefectService,
@@ -169,6 +170,32 @@ class VoiceService:
         self.system_voice = SystemVoice(settings.path.parent / "voice-cache")
         self._conversations: dict[str, Conversation] = {}
         self._lock = threading.Lock()
+        # Wired by the runtime after the other services exist (see runtime.build_runtime).
+        self.studio: Any = None
+        self.reports: Any = None
+        self.notifications: Any = None
+        self.health: Any = None
+
+    def attach(self, **services: Any) -> None:
+        for key, value in services.items():
+            setattr(self, key, value)
+
+    def style(self) -> str:
+        return self.config().get("phrase_style") or "standard"
+
+    def agent_name(self) -> str:
+        return self.config().get("agent_display_name") or "HAMI"
+
+    def strip_wake_name(self, text: str) -> str:
+        """'Saqr, generate test cases' -> 'generate test cases' (the configured command name, never hard-coded)."""
+        cfg = self.config()
+        names_ = {n.strip().lower() for n in (cfg.get("agent_command_name"), cfg.get("agent_display_name")) if n}
+        t = text.strip()
+        for n in sorted(names_, key=len, reverse=True):
+            m = re.match(rf"^\s*(?:hey|ok|okay|hi)?[\s,]*{re.escape(n)}\b[\s,.:!-]*", t, re.I)
+            if m:
+                return t[m.end():].strip()
+        return t
 
     # ---- settings and speech recognition ------------------------------------------------------
 
@@ -327,7 +354,7 @@ class VoiceService:
 
     def handle(self, text: str, *, conversation_id: str, source: str = "typed",
                page: dict[str, Any] | None = None) -> dict[str, Any]:
-        text = (text or "").strip()
+        text = self.strip_wake_name(text or "")
         if not text:
             raise QAError("VALIDATION_FAILED", "Say or type a command.", status=422)
         conv = self._conv(conversation_id)
@@ -339,14 +366,15 @@ class VoiceService:
             base = {"conversation_id": conversation_id, "command_id": command_id}
             self.agent.emit(names.VOICE_COMMAND_RECEIVED, f'Voice command received: "{text}"', details=base)
             intent = self._understand(text, conv)
-            outcome = self._dispatch(conv, intent)
+            outcome = self._dispatch(conv, intent, text)
             self.db.execute("UPDATE voice_commands SET command = ?, params = ?, via = ?, status = ?, reply = ?,"
                             " finished_at = ? WHERE id = ?",
                             (intent.command if intent else None, dumps(intent.params) if intent else None,
                              intent.via if intent else None, "running" if outcome.job else outcome.status,
                              outcome.say, None if outcome.job else now_iso(), command_id))
-        details = {**base, "command": intent.command if intent else None, "say": outcome.say,
-                   "navigate": outcome.navigate}
+        speak = compose(outcome.status, outcome.say, self.style())
+        details = {**base, "command": intent.command if intent else None, "say": outcome.say, "speak_line": speak,
+                   "navigate": outcome.navigate, "owner": outcome.owner}
         if outcome.status in ("failed", "unsupported"):
             self.agent.emit(names.VOICE_COMMAND_FAILED, outcome.say, details=details)
         elif outcome.job:
@@ -354,7 +382,8 @@ class VoiceService:
             self._start_job(conv, command_id, text, outcome)
         else:
             self.agent.emit(names.VOICE_COMMAND_COMPLETED, outcome.say, details=details)
-        return {"command_id": command_id, "status": outcome.status, "say": outcome.say, "navigate": outcome.navigate,
+        return {"command_id": command_id, "status": outcome.status, "say": outcome.say, "speak": speak,
+                "navigate": outcome.navigate, "owner": outcome.owner, "agent_name": self.agent_name(),
                 "command": intent.command if intent else None, "via": intent.via if intent else None,
                 "context": self.context(conversation_id)}
 
@@ -368,6 +397,8 @@ class VoiceService:
                 with self.agent.activity(outcome.job_title or f'Voice command: "{text}"') as act:
                     def progress(message: str) -> None:
                         act.progress(None, message, **base, speak=message)
+                    act.event(names.VOICE_HANDOFF, f"Command handed to {outcome.owner or 'the runtime'}",
+                              **base, to=outcome.owner, phase="executing")
                     say, navigate = outcome.job(progress)  # type: ignore[misc]
                     act.complete(say)
             except QAError as exc:
@@ -375,10 +406,12 @@ class VoiceService:
             except Exception as exc:  # reported, never silent
                 log.exception("Voice command job failed")
                 status, say = "failed", f"{outcome.failure} because of an unexpected error: {type(exc).__name__}."
+            line = compose(status, say, self.style(), background=True)
             self.db.execute("UPDATE voice_commands SET status = ?, final_reply = ?, finished_at = ? WHERE id = ?",
                             (status, say, now_iso(), command_id))
             self.agent.emit(names.VOICE_COMMAND_COMPLETED if status == "completed" else names.VOICE_COMMAND_FAILED,
-                            say, details={**base, "speak": say, "say": say, "navigate": navigate})
+                            say, details={**base, "speak": line, "say": say, "navigate": navigate, "owner": outcome.owner,
+                                          "result": status})
 
         threading.Thread(target=work, name=f"voice-{command_id}", daemon=True).start()
 
@@ -398,6 +431,11 @@ class VoiceService:
             else:
                 follow.params[pending["param"]] = value
                 return follow
+        # While a browser recording runs, "click search", "select tomorrow" and the like act in that browser.
+        if (intent is None or intent.command == "open_page") and self._active_recording(conv):
+            spoken = intents.browser_action(intents.normalize(text))
+            if spoken:
+                return spoken
         if intent is None:
             intent = self._ai_intent(text)
         return intent
@@ -410,39 +448,31 @@ class VoiceService:
         except QAError as exc:
             log.info(f"AI intent analysis unavailable: {exc.message}")
             return None
-        if r.command == "unsupported":
-            return None
-        digits = set(re.findall(r"\d+", intents.normalize(text)))
-        params: dict[str, Any] = {}
-        for key in ("user_story_id", "test_case_id", "users"):
-            value = getattr(r, key)
-            if value is not None and str(value) in digits:  # an ID the user did not say is never used
-                params[key] = value
-        if r.duration_s and any(str(int(r.duration_s / f)) in digits for f in (1, 60, 3600) if r.duration_s % f == 0):
-            params["duration_s"] = r.duration_s
-        if r.kind:
-            params["kind"] = r.kind
-        if r.name and r.name.lower() in text.lower():
-            params["name"] = r.name
+        if r.command == "unclear" and r.question:
+            return Intent("unclear", {"question": r.question.strip()}, via="ai")
+        params = registry.validate(r.command, r.all_params(), text)
+        if params is None:
+            return None  # unsupported, or a command the registry does not offer to the AI
         if r.command == "open_page":
-            route = intents.match_page(intents.normalize(r.page or ""))
-            if not route:
+            if "page" not in params:
                 return None
-            params = {"route": route}
+            params = {"route": params["page"]}
         if r.command == "open_work_item":
-            if "test_case_id" in params:
-                params = {"kind": "test case", "id": params["test_case_id"]}
-            elif "user_story_id" in params:
-                params = {"kind": "user story", "id": params["user_story_id"]}
-            else:
+            if "id" not in params:
                 return None
+            params.setdefault("kind", "work item")
         return Intent(r.command, params, via="ai")
 
     # ---- command validation and dispatch -------------------------------------------------------
 
-    def _dispatch(self, conv: Conversation, intent: Intent | None) -> Outcome:
+    def _dispatch(self, conv: Conversation, intent: Intent | None, text: str = "") -> Outcome:
         if intent is None:
+            question = intents.clarify_question(text)
+            if question:
+                return Outcome("unclear", question)
             return Outcome("unsupported", UNSUPPORTED)
+        if intent.command == "unclear":
+            return Outcome("unclear", intent.params.get("question") or "What should I do?")
         pending = conv.pending if conv.pending and time.monotonic() - conv.pending["at"] < PENDING_SECONDS else None
         if intent.command == "confirm":
             if not pending or pending["kind"] != "confirm":
@@ -456,11 +486,18 @@ class VoiceService:
             return Outcome("completed", "Cancelled." if pending else "There is nothing to cancel.")
         else:
             conv.pending = None
-        handler = getattr(self, f"_cmd_{intent.command}")
+        spec = registry.BY_ID.get(intent.command)
+        handler = getattr(self, f"_cmd_{intent.command}", None)
+        if spec is None or handler is None:
+            return Outcome("unsupported", UNSUPPORTED)
         try:
-            return handler(conv, intent)
+            outcome = handler(conv, intent)
         except QAError as exc:
-            return Outcome("failed", f"I couldn't do that. {exc.message}")
+            return Outcome("failed", exc.message)
+        if spec.destructive and outcome.status == "accepted" and not intent.params.get("confirmed"):
+            conv.pending = {"kind": "confirm", "intent": intent, "at": time.monotonic()}
+            return Outcome("needs_confirmation", f"{outcome.confirm_text or outcome.say} Say confirm to continue, or cancel.")
+        return outcome
 
     def _ask(self, conv: Conversation, intent: Intent, param: str, question: str) -> Outcome:
         conv.pending = {"kind": "input", "intent": intent, "param": param, "at": time.monotonic()}
@@ -469,11 +506,13 @@ class VoiceService:
     # ---- commands ------------------------------------------------------------------------------
 
     def _cmd_help(self, conv: Conversation, intent: Intent) -> Outcome:
-        return Outcome("completed", "You can say, for example: open user story 118, generate test cases, generate "
-                                    "automation for test case 1280, play test case 1280, run all automated tests, run "
-                                    "a 100 user load test for checkout for five minutes, show failed tests, analyze "
-                                    "the failure, create defects for failed tests, or stop the running test.",
-                       navigate="#/voice")
+        name = self.config().get("agent_command_name") or "Hami"
+        return Outcome("completed", f"You can say, for example: {name}, load user story 118; generate test cases; "
+                                    "create the test plan; generate automation for test case 1280; play test case 1280; "
+                                    "run it again; show failed tests; select the second one; show me the report; "
+                                    "test the TFS connection; or stop the current test. During a recording: open the "
+                                    "calendar, select tomorrow, click search.",
+                       navigate="#/command-center")
 
     def _cmd_status(self, conv: Conversation, intent: Intent) -> Outcome:
         running = [s["name"] for s in self.state.snapshot() if s["status"] == "RUNNING" and s["agent_id"] != "voice_command"]
@@ -526,6 +565,8 @@ class VoiceService:
         conv.user_story_id = sid
         run_id = new_run_id("DESIGN")
 
+        conv.design_run_id = run_id
+
         def job(progress: Callable[[str], None]) -> tuple[str, str | None]:
             result = self.design.run(sid, run_id)
             n = len(result.get("test_cases") or [])
@@ -533,8 +574,8 @@ class VoiceService:
                     f"generated for user story {sid}. Review them on AI Test Design before saving them to TFS.",
                     f"#/test-design?story={sid}&run={run_id}")
 
-        return Outcome("accepted", f"Yes, I will generate the test cases for user story {sid} now.",
-                       navigate=f"#/test-design?story={sid}", job=job,
+        return Outcome("accepted", f"User story {sid} located. Generating test cases now.",
+                       navigate=f"#/test-design?story={sid}", job=job, owner="test_case_design",
                        job_title=f"Voice: generating test cases for User Story #{sid}", failure="Test case generation failed")
 
     def _resolve_test_case(self, conv: Conversation, intent: Intent) -> int | None:
@@ -591,8 +632,8 @@ class VoiceService:
             return (f"Automation generated for test case {tc}: {len(script.steps)} steps in the script "
                     f"{script.name}. Say play test case {tc} to run it.", f"#/guided-automation?script={script.id}")
 
-        return Outcome("accepted", f"Yes, I will generate automation for test case {tc} on {base_url}, taken from {why}.",
-                       job=job, job_title=f"Voice: generating automation for Test Case #{tc}",
+        return Outcome("accepted", f"Generating automation for test case {tc} on {base_url}, taken from {why}.",
+                       job=job, owner="automation_engineering", job_title=f"Voice: generating automation for Test Case #{tc}",
                        failure="Automation generation failed")
 
     def _find_script(self, conv: Conversation, intent: Intent) -> dict[str, Any] | None:
@@ -634,8 +675,8 @@ class VoiceService:
             conv.run_id, conv.run_kind = record["run_id"], "functional"
             return self._functional_result(record, label, progress), f"#/history?run={record['run_id']}"
 
-        return Outcome("accepted", f"Yes. I will {'play' if play else 'run'} {label} now.", navigate="#/workflow",
-                       job=job, job_title=f"Voice: running {label}", failure="The test could not run")
+        return Outcome("accepted", f"{'Playing' if play else 'Running'} {label} now.", navigate="#/workflow",
+                       job=job, owner="test_execution", job_title=f"Voice: running {label}", failure="The test could not run")
 
     def _functional_result(self, record: dict[str, Any], label: str, progress: Callable[[str], None]) -> str:
         script = self.automation.scripts.get(record["script_id"]) if record.get("script_id") else None
@@ -709,13 +750,8 @@ class VoiceService:
                     "#/history?status=FAILED" if failed else "#/history")
 
         n = len(scripts)
-        return Outcome("accepted", f"Yes. I will run all {n} automated test{'s' if n != 1 else ''}.",
-                       navigate="#/workflow", job=job, job_title=f"Voice: running {n} automated tests")
-
-    def _cmd_start_recording(self, conv: Conversation, intent: Intent) -> Outcome:
-        return Outcome("completed", "Guided Browser Automation is open. Enter the start address and press Record, "
-                                    "because a recording needs the application address.",
-                       navigate="#/guided-automation")
+        return Outcome("accepted", f"Running all {n} automated test{'s' if n != 1 else ''}.",
+                       navigate="#/workflow", job=job, owner="test_execution", job_title=f"Voice: running {n} automated tests")
 
     def _cmd_run_performance(self, conv: Conversation, intent: Intent) -> Outcome:
         plans = self.performance.list_plans()
@@ -776,9 +812,10 @@ class VoiceService:
                 raise out["error"]
             return self._performance_result(out["result"], progress), f"#/perf-results?run={run_id}"
 
-        return Outcome("accepted", f"Yes. I will prepare and run a {_duration_words(plan.profile.duration_s)} "
+        return Outcome("accepted", f"Preparing and running a {_duration_words(plan.profile.duration_s)} "
                                    f"{plan.name} {kind} test with {users} virtual users.",
-                       navigate="#/workflow", job=job, job_title=f"Voice: {users}-user {plan.name} {kind} test",
+                       navigate="#/workflow", job=job, owner="jmeter_load",
+                       job_title=f"Voice: {users}-user {plan.name} {kind} test",
                        failure="The performance test could not run")
 
     def _performance_result(self, run: dict[str, Any], progress: Callable[[str], None]) -> str:
@@ -896,7 +933,7 @@ class VoiceService:
                 parts.append(f"{len(failed)} could not be created; see Defect Review.")
             return " ".join(parts) or "Nothing was created.", "#/defect-review?status=all"
 
-        return Outcome("accepted", f"Yes. Creating {n} defect{'s' if n != 1 else ''} in TFS now.", job=job,
+        return Outcome("accepted", f"Creating {n} defect{'s' if n != 1 else ''} in TFS now.", job=job, owner="defect_intelligence",
                        job_title=f"Voice: creating {n} defects in TFS")
 
     # confirm/cancel are resolved in _dispatch

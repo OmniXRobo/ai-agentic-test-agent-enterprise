@@ -1,5 +1,6 @@
 // Live runtime state fed by one Server-Sent Events connection.
-// Pages subscribe to changes instead of polling.
+// Pages subscribe to changes instead of polling. One shared 1 s ticker (onTick) serves every clock and
+// elapsed-time label, and system health is fetched once and cached (loadHealth), so pages add no timers.
 
 import { api } from "./api.js";
 
@@ -10,6 +11,7 @@ export const state = {
   unread: 0,
   connected: false,
   lastEventId: null,
+  health: null, // {items:[{key,label,status,value,detail}], overall}
 };
 const MAX_EVENTS = 400;
 
@@ -31,15 +33,18 @@ function applyEvent(ev) {
   const agent = ev.agent_id && state.agents.get(ev.agent_id);
   if (agent) {
     if (ev.name === "agent.started") {
-      Object.assign(agent, { status: "RUNNING", activity: ev.activity, progress: ev.progress, run_id: ev.run_id, started_at: ev.timestamp, finished_at: null });
+      Object.assign(agent, { status: "RUNNING", paused: false, activity: ev.activity, progress: ev.progress, run_id: ev.run_id, started_at: ev.timestamp, finished_at: null });
     } else if (ev.name === "agent.completed" || ev.name === "agent.failed") {
       Object.assign(agent, {
         status: ev.name === "agent.completed" ? "PASSED" : "FAILED",
         activity: ev.activity || agent.activity,
         progress: ev.name === "agent.completed" ? 100 : agent.progress,
         finished_at: ev.timestamp,
+        paused: false,
       });
     } else if (agent.status === "RUNNING" && ev.run_id === agent.run_id) {
+      if (ev.name === "agent.paused") agent.paused = true;
+      if (ev.name === "agent.resumed") agent.paused = false;
       if (ev.activity) agent.activity = ev.activity;
       if (ev.progress !== null && ev.progress !== undefined) agent.progress = ev.progress;
     }
@@ -95,4 +100,34 @@ function connect() {
 
 export function stop() {
   if (source) source.close();
+}
+
+// ---- shared ticker: one interval for the whole dashboard, running only while someone listens ----
+const tickers = new Set();
+let tickHandle = null;
+
+export function onTick(fn) {
+  tickers.add(fn);
+  if (!tickHandle) {
+    tickHandle = setInterval(() => {
+      if (document.hidden) return; // nothing to draw on a hidden tab
+      for (const t of tickers) { try { t(); } catch (err) { console.error(err); } }
+    }, 1000);
+  }
+  return () => {
+    tickers.delete(fn);
+    if (!tickers.size && tickHandle) { clearInterval(tickHandle); tickHandle = null; }
+  };
+}
+
+// ---- system health (TFS, Local AI, Playwright, speech): cached by the runtime, fetched on demand ----
+let healthLoading = null;
+
+export function loadHealth(refresh = false) {
+  if (healthLoading) return healthLoading;
+  healthLoading = api(`/api/health/summary${refresh ? "?refresh=true" : ""}`)
+    .then((h) => { state.health = h; emit({ type: "health" }); return h; })
+    .catch((err) => { console.error("Health check failed", err); return state.health; })
+    .finally(() => { healthLoading = null; });
+  return healthLoading;
 }

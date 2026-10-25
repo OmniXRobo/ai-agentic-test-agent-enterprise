@@ -137,7 +137,8 @@ def test_follow_up_uses_the_story_in_context_and_reports_completion(env):
     assert r["status"] == "completed" and r["navigate"] == "#/user-stories?id=118"
     assert r["say"] == "User Story 118 opened: Checkout with saved card."
     r = say(c, "Generate the test cases")  # no number: the story just opened
-    assert r["status"] == "accepted" and r["say"] == "Yes, I will generate the test cases for user story 118 now."
+    assert r["status"] == "accepted" and r["say"] == "User story 118 located. Generating test cases now."
+    assert r["speak"] == "OK, I will do your task now. User story 118 located. Generating test cases now."
     done = final(rt, r["command_id"])
     assert done["status"] == "completed"
     assert done["final_reply"].startswith("Test case generation completed successfully. 2 test cases were generated")
@@ -166,7 +167,8 @@ def test_unsupported_without_ai_and_ai_fallback_never_invents_ids(env):
     c.put("/api/ai/settings", json={"base_url": ""})
     r = say(c, "order a pizza")
     assert r["status"] == "unsupported"
-    assert r["say"] == "I cannot perform that instruction because no supported QA action is mapped to it."
+    assert r["say"] == "That operation is not supported."
+    assert r["speak"] == "Unable to complete the command. That operation is not supported."
 
 
 def test_status_pages_and_stop(env):
@@ -189,7 +191,7 @@ def test_voice_run_reports_failure_and_new_defect(env, site):
     script.steps[-1].value, script.steps[-1].timeout_ms = "Welcome bob", 600
     rt.automation.scripts.save(script)
     r = say(c, "Run test case 1280")
-    assert r["say"] == "Yes. I will run test case 1280 now." and r["navigate"] == "#/workflow"
+    assert r["say"] == "Running test case 1280 now." and r["navigate"] == "#/workflow"
     done = final(rt, r["command_id"])
     talk = spoken(rt, r["command_id"])
     assert talk and talk[0].startswith("The test execution failed at step 8") and "unexpected result" in talk[0], (done, talk)
@@ -256,7 +258,7 @@ def test_load_test_by_voice_overrides_this_run_only(env, site):
         name="Checkout", kind="load", requests=[HttpRequest(name="Checkout page", url=f"{site}/products.html")],
         profile=LoadProfile(users=1, ramp_up_s=1, duration_s=60, think_time_ms=200), sla=Sla(p95_ms=5000)))
     r = say(c, "Run a load test for checkout with 3 users for ten seconds")
-    assert r["say"] == "Yes. I will prepare and run a 10-second Checkout load test with 3 virtual users."
+    assert r["say"] == "Preparing and running a 10-second Checkout load test with 3 virtual users."
     done = final(rt, r["command_id"], timeout=120)
     assert done["final_reply"].startswith("The performance test completed successfully. P95 response time was ")
     assert "The load test has started." in spoken(rt, r["command_id"])

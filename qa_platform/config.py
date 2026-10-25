@@ -65,7 +65,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "defects": {"creation_mode": "review"},  # review | automatic | disabled
     "performance": {"jmeter_home": "", "java_home": ""},
-    "playback": {"visual_cursor": True, "highlight": True},
+    # Visible playback: the tactical cursor moves to each element, the element is highlighted, then Playwright acts.
+    "playback": {"visual_cursor": True, "highlight": True, "cursor_speed_ms": 450, "click_sound": True,
+                 "click_volume": 0.35},
     "voice": {
         # builtin = the bundled offline recognizer (Vosk model in runtime/speech, works offline);
         # local = a whisper.cpp / OpenAI-compatible speech server on this PC or network (works offline);
@@ -82,6 +84,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # radio = replies sound like a pilot on the radio (Windows voice through a radio filter, squelch, static)
         "reply_style": "radio",
         "radio_voice": "",
+        # Voice & Command Agent: names are settings, never code. The display name may be in any script (e.g. Arabic);
+        # the command name is what the recognizer listens for and the voice says, in Latin letters.
+        "agent_display_name": "HAMI",
+        "agent_command_name": "Hami",
+        "voice_enabled": True,  # microphone input on/off (typed commands always work)
+        "listen_mode": "push_to_talk",  # push_to_talk | wake_name (hands-free: say the command name first)
+        "phrase_style": "standard",  # standard ("OK, I will do your task now.") | tactical ("Command received.")
+        "radio_intensity": 0.5,  # 0 = clean voice .. 1 = strong radio processing
+        "wireless_tone": True,  # radio-open and radio-close beeps
+        "static_volume": 0.25,  # wireless/static texture under the voice
+        "ambience_enabled": False,  # low tactical command-center ambience
+        "ambience_volume": 0.2,
+        "voice_volume": 0.9,
     },
 }
 

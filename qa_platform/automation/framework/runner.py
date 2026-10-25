@@ -99,6 +99,10 @@ class FrameworkRunner:
             "QA_RUN_ID": run_id, "QA_EVENTS_FILE": str(events_file), "QA_EVIDENCE_DIR": str(evidence_dir),
             "HEADLESS": "1" if headless else "0", "QA_VISUAL": "1" if visual else "0",
             "QA_VISUAL_DELAY_MS": str(int(playback.get("visual_delay_ms", 350))),
+            "QA_CURSOR_SPEED_MS": str(int(playback.get("cursor_speed_ms", 450))),
+            "QA_HIGHLIGHT": "1" if playback.get("highlight", True) else "0",
+            "QA_CLICK_SOUND": "1" if playback.get("click_sound", True) else "0",
+            "QA_CLICK_VOLUME": str(float(playback.get("click_volume", 0.35))),
             "QA_TRACE": "1" if playback.get("trace") else "0", "QA_VIDEO": "1" if playback.get("video") else "0",
             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8",
         })

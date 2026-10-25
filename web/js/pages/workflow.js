@@ -1,55 +1,12 @@
 // Agent Workflow: robot cards driven only by runtime events, plus Live Agent Activity.
 
 import { api } from "../api.js";
-import { state, subscribe } from "../store.js";
-import { robotSvg } from "../robots.js";
-import { esc, timeOf, elapsed, toast, isRepeat } from "../util.js";
+import { state, subscribe, onTick } from "../store.js";
+import { cardHtml, refreshCards } from "../agent-card.js";
+import { esc, timeOf, toast, isRepeat } from "../util.js";
 
 let unsub = null;
-let ticker = null;
-
-function cardHtml(a) {
-  const pct = a.progress ?? 0;
-  return `
-  <article class="agent-card ${esc(a.status)}" data-agent="${esc(a.id)}" aria-live="polite">
-    <div class="agent-head">
-      <div class="agent-robot">${robotSvg(a.robot, a.name)}</div>
-      <div>
-        <div class="agent-name">${esc(a.name)}</div>
-        <span class="pill ${esc(a.status)}" data-f="status">${esc(a.status)}</span>
-      </div>
-    </div>
-    <div class="agent-activity" data-f="activity">${esc(a.activity || (a.status === "WAITING" ? waitingText(a) : ""))}</div>
-    <div class="progress" title="Progress"><span data-f="bar" style="width:${pct}%"></span></div>
-    <div class="agent-meta">
-      <span data-f="source" title="Runtime component">${esc(a.source || "")}</span>
-      <span data-f="time">${timeText(a)}</span>
-    </div>
-  </article>`;
-}
-
-function waitingText(a) {
-  return a.stage > 1 ? `Idle. Capability delivered in build stage ${a.stage}.` : "Idle. Waiting for work.";
-}
-
-function timeText(a) {
-  if (a.status === "RUNNING") return `${a.progress != null ? a.progress + "% · " : ""}${elapsed(a.started_at)}`;
-  if (a.finished_at) return `took ${elapsed(a.started_at, a.finished_at)}`;
-  return "";
-}
-
-function updateCard(a) {
-  const el = document.querySelector(`.agent-card[data-agent="${CSS.escape(a.id)}"]`);
-  if (!el) return;
-  el.className = `agent-card ${a.status}`;
-  const f = (k) => el.querySelector(`[data-f="${k}"]`);
-  f("status").className = `pill ${a.status}`;
-  f("status").textContent = a.status;
-  f("activity").textContent = a.activity || (a.status === "WAITING" ? waitingText(a) : "");
-  f("bar").style.width = `${a.progress ?? 0}%`;
-  f("source").textContent = a.source || "";
-  f("time").textContent = timeText(a);
-}
+let stopTick = null;
 
 function feedItemHtml(ev) {
   const cls = ev.name === "agent.failed" ? "failed" : ev.name === "agent.completed" ? "passed" : "";
@@ -61,7 +18,7 @@ export async function mount(view) {
   const agents = [...state.agents.values()];
   view.innerHTML = `
     <div class="row" style="margin-bottom:14px">
-      <p class="muted" style="margin:0">Cards change only when an agent reports real work. Nothing here runs on a timer.</p>
+      <p class="muted" style="margin:0">Cards change only when an agent reports real work: READY, WAITING (queued in the same run), RUNNING, PAUSED (waiting for you), COMPLETED or FAILED.</p>
       <span class="spacer"></span>
       <button class="btn primary" id="runDiag">Run system diagnostics</button>
     </div>
@@ -91,7 +48,7 @@ export async function mount(view) {
     if (c.type === "snapshot") {
       view.querySelector("#agentsGrid").innerHTML = [...state.agents.values()].map(cardHtml).join("");
     } else if (c.type === "event") {
-      if (c.agent) updateCard(c.agent);
+      if (c.agent) refreshCards(view); // a start or finish can move pipeline peers to WAITING or READY
       const prev = state.events[state.events.length - 2];
       if (isRepeat(prev, c.event)) return;
       const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
@@ -101,18 +58,12 @@ export async function mount(view) {
       if (atBottom) feed.scrollTop = feed.scrollHeight;
     }
   });
-  // Refresh only the elapsed-time text of cards that are genuinely RUNNING.
-  ticker = setInterval(() => {
-    for (const a of state.agents.values()) {
-      if (a.status !== "RUNNING") continue;
-      const t = document.querySelector(`.agent-card[data-agent="${CSS.escape(a.id)}"] [data-f="time"]`);
-      if (t) t.textContent = timeText(a);
-    }
-  }, 1000);
+  // Elapsed time and the COMPLETED -> READY hold come from the shared ticker.
+  stopTick = onTick(() => refreshCards(view));
 }
 
 export function unmount() {
   if (unsub) unsub();
-  if (ticker) clearInterval(ticker);
-  unsub = ticker = null;
+  if (stopTick) stopTick();
+  unsub = stopTick = null;
 }

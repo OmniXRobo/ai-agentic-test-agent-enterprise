@@ -3,9 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Agentic Test Agent Enterprise</title>
+  <meta name="application-name" content="AI Agentic Test Agent Enterprise">
+  <title>QA Enterprise AI · Command Center</title>
   <link rel="icon" href="img/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/hud.css">
   <script>
     // Apply the saved theme before first paint to avoid a flash.
     try { const t = localStorage.getItem("qa.theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
@@ -15,19 +17,22 @@
   <div class="shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <img src="img/favicon.svg" alt="" width="28" height="28">
+        <svg class="brand-logo" viewBox="0 0 40 40" aria-hidden="true"><path d="M20 3 37 34 20 26 3 34Z" fill="none" stroke="#38d6ff" stroke-width="2.4" stroke-linejoin="round"/><path d="M20 11 29 28 20 23 11 28Z" fill="#38d6ff" opacity=".85"/></svg>
         <div>
-          <div class="brand-title">AI Agentic Test Agent</div>
-          <div class="brand-sub">Enterprise</div>
+          <div class="brand-title">QA Enterprise AI</div>
+          <div class="brand-sub">Automated quality. Defended.</div>
         </div>
       </div>
       <nav id="nav" aria-label="Main navigation"></nav>
+      <div class="side-foot">Command agent <b id="agentNameFoot">—</b><br><span id="appVersion"></span></div>
     </aside>
     <div class="main">
       <header class="topbar">
         <button class="icon-btn menu-btn" id="menuBtn" aria-label="Toggle navigation">&#9776;</button>
         <h1 id="pageTitle">Dashboard</h1>
+        <div class="sys-strip" id="sysStrip" aria-label="System status"></div>
         <div class="topbar-actions">
+          <span class="sys-clock" id="sysClock" title="Windows system time"></span>
           <span class="conn" id="connState" title="Live runtime connection">Connecting</span>
           <div class="bell-wrap">
             <button class="icon-btn" id="voiceBtn" aria-label="Speak a command" title="Voice command"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12Z"/></svg></button>

@@ -181,7 +181,15 @@ export function workItemPage(config) {
       filters.addEventListener("input", debounce((e) => { if (e.target.tagName === "INPUT") loadList(); }, 400));
       filters.addEventListener("submit", (e) => { e.preventDefault(); loadList(); });
       view.querySelector("#createBtn")?.addEventListener("click", () => editForm(null));
-      const q = new URLSearchParams(location.hash.split("?")[1] || "").get("id");
+      const hashParams = new URLSearchParams(location.hash.split("?")[1] || "");
+      const q = hashParams.get("id");
+      // Filters given in the address (e.g. by a voice search: sprint, state, words in the title) are applied.
+      for (const k of ["state", "iteration", "q"]) {
+        const v = hashParams.get(k), el = filters.elements[k];
+        if (!v || !el) continue;
+        if (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === v)) el.add(new Option(v, v));
+        el.value = v;
+      }
       await loadList();
       if (q) openDetail(Number(q));
     },

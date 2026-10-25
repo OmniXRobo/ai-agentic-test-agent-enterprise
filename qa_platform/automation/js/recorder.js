@@ -3,7 +3,9 @@
 (() => {
   if (window.__qaRecorderInstalled || !window.__qaFp) return;
   window.__qaRecorderInstalled = true;
-  const send = (step) => { try { window.__qaRecord(step); } catch (e) { /* binding not ready */ } };
+  // Paused while a voice command records a rule step itself (e.g. "select tomorrow" -> Current Date + 1 day),
+  // so the literal calendar clicks are not recorded as well.
+  const send = (step) => { if (window.__qaRecordPaused) return; try { window.__qaRecord(step); } catch (e) { /* binding not ready */ } };
   const target = (el) => window.__qaFp.fingerprint(el);
   const isOverlay = (el) => el && el.closest && el.closest("#__qa_overlay_host");
   const editable = (el) => el && (el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && !["button", "submit", "reset", "checkbox", "radio", "file", "image"].includes(el.type)) || el.isContentEditable);
@@ -27,6 +29,9 @@
       send({ action: "fill", target: target(el), value: el.type === "password" ? "__PASSWORD__" : (el.value ?? el.innerText) });
     }
   }, true);
+
+  // The field the person (or a voice command) used last: "select tomorrow" without a field name means this one.
+  document.addEventListener("focusin", (e) => { if (!isOverlay(e.target) && (editable(e.target) || e.target.tagName === "SELECT")) window.__qaLastField = e.target; }, true);
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || isOverlay(e.target)) return;

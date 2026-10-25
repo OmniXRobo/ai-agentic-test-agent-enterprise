@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-BASE_PAGE_METHODS = {"open", "url_for", "expect_url", "expect_title", "click", "double_click", "fill", "select", "check",
+BASE_PAGE_METHODS = {"open", "url_for", "expect_url", "expect_title", "click", "double_click", "fill", "select", "pick_date", "check",
                      "uncheck", "hover", "press", "expect_visible", "expect_hidden", "expect_text", "expect_value",
                      "screenshot", "page", "URL"}
 

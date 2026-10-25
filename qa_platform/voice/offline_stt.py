@@ -92,6 +92,16 @@ class OfflineRecognizer:
                 self._model, self._model_path = vosk.Model(str(model_dir)), model_dir
             return self._model
 
+    def warm(self) -> bool:
+        """Load the model now (once per session) so the first spoken command is not slow. False if it cannot load."""
+        if self._model is not None:
+            return True
+        try:
+            self._load()
+        except QAError:
+            return False
+        return True
+
     def transcribe(self, audio: bytes) -> str:
         """16 kHz mono 16-bit WAV (what the dashboard records) -> text."""
         model = self._load()

@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { state, subscribe, start } from "./store.js";
+import { state, subscribe, start, onTick, loadHealth } from "./store.js";
 import { esc, toast, dateTimeOf } from "./util.js";
 import * as dashboard from "./pages/dashboard.js";
 import * as workflow from "./pages/workflow.js";
@@ -20,11 +20,13 @@ import { defectReview, perfDefects } from "./pages/defect-review.js";
 import * as voicePage from "./pages/voice.js";
 import * as reports from "./pages/reports.js";
 import * as analytics from "./pages/analytics.js";
-import { voice, onVoice, listen, loadSettings } from "./voice.js";
+import * as commandCenter from "./pages/command-center.js";
+import { voice, onVoice, listen, loadSettings, agentName } from "./voice.js";
 
 // route -> { title, page }
 const NAV = [
-  ["Overview", [
+  ["Mission Control", [
+    ["command-center", "AI Voice Command Center", commandCenter],
     ["dashboard", "Dashboard", dashboard],
     ["workflow", "Agent Workflow", workflow],
     ["notifications", "Notifications", notifications],
@@ -66,7 +68,7 @@ const NAV = [
     ["tfs-settings", "TFS Connection", tfsSettings],
     ["ai-settings", "AI Runtime", aiSettings],
     ["app-credentials", "Application Credentials", appCredentials],
-    ["voice", "Voice Commands", voicePage],
+    ["voice", "Voice & Command Agent", voicePage],
   ]],
 ];
 
@@ -95,7 +97,7 @@ async function navigate() {
   current = entry;
   document.querySelectorAll(".nav-link").forEach((a) => a.classList.toggle("active", a.dataset.route === entry.route));
   document.getElementById("pageTitle").textContent = entry.title;
-  document.title = `${entry.title} · AI Agentic Test Agent Enterprise`;
+  document.title = `${entry.title} · QA Enterprise AI`;
   document.getElementById("sidebar").classList.remove("open");
   const view = document.getElementById("view");
   view.innerHTML = "";
@@ -189,14 +191,14 @@ function initVoice() {
   let hideTimer = null;
   const show = () => {
     const last = voice.log.slice(-3);
-    const status = voice.status === "listening" ? "Listening… speak now" : voice.status === "thinking" ? "Working…" : voice.error || "";
-    pop.innerHTML = `${status ? `<div class="vstatus">${esc(status)}</div>` : ""}${last.map((m) => `<div class="vmsg ${m.who}"><span class="vwho">${m.who === "you" ? "You" : "Voice Agent"}</span><span class="vtext">${esc(m.text)}</span></div>`).join("")}
-      <a class="popover-foot" href="#/voice">Open Voice Commands</a>`;
+    const status = { listening: "Listening… speak now", transcribing: "Transcribing…", thinking: "Understanding…", executing: "Executing…" }[voice.status] || voice.error || "";
+    pop.innerHTML = `${status ? `<div class="vstatus">${esc(status)}</div>` : ""}${last.map((m) => `<div class="vmsg ${m.who}"><span class="vwho">${m.who === "you" ? "You" : esc(agentName())}</span><span class="vtext">${esc(m.text)}</span></div>`).join("")}
+      <a class="popover-foot" href="#/command-center">Open Command Center</a>`;
     btn.classList.toggle("listening", voice.status === "listening");
-    if (location.hash.startsWith("#/voice")) { pop.hidden = true; return; } // the page shows the conversation
+    if (location.hash.startsWith("#/command-center")) { pop.hidden = true; return; } // the page shows the conversation
     pop.hidden = !status && !last.length;
     clearTimeout(hideTimer);
-    if (voice.status === "idle") hideTimer = setTimeout(() => { pop.hidden = true; }, 9000);
+    if (!["listening", "transcribing", "thinking"].includes(voice.status)) hideTimer = setTimeout(() => { pop.hidden = true; }, 9000);
   };
   onVoice(show);
   btn.addEventListener("click", async (e) => {
@@ -208,7 +210,52 @@ function initVoice() {
     } catch (err) { show(); toast(err.message, "error"); }
   });
   document.addEventListener("click", (e) => { if (!pop.hidden && !pop.contains(e.target)) pop.hidden = true; });
-  window.addEventListener("hashchange", () => { if (location.hash.startsWith("#/voice")) pop.hidden = true; });
+  window.addEventListener("hashchange", () => { if (location.hash.startsWith("#/command-center")) pop.hidden = true; });
+}
+
+// ---- command-center status strip, Windows clock and agent name ----
+const STRIP_ORDER = ["tfs", "ai", "playwright", "speech"];
+function renderStrip() {
+  const el = document.getElementById("sysStrip");
+  const items = state.health?.items || [];
+  const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
+  const mic = voice.status === "listening" ? { status: "RUNNING", value: "Live" }
+    : voice.micError ? { status: "FAIL", value: "Blocked" } : { status: voice.settings?.voice_enabled === false ? "NOT_CONFIGURED" : "PASS", value: voice.settings?.voice_enabled === false ? "Off" : "Standby" };
+  el.innerHTML = STRIP_ORDER.map((k) => byKey[k]).filter(Boolean).map((i) =>
+    `<span class="sys-chip" title="${esc(i.label + ": " + i.detail)}"><span class="lamp ${esc(i.status)}"></span>${esc(i.label)} <b>${esc(i.value)}</b></span>`).join("")
+    + `<span class="sys-chip" title="${esc(voice.micError || "Microphone")}"><span class="lamp ${mic.status}"></span>Mic <b>${mic.value}</b></span>`
+    + `<button class="sys-chip" id="stripRefresh" title="Check again now" style="cursor:pointer">&#8635;</button>`;
+  el.querySelector("#stripRefresh").addEventListener("click", () => loadHealth(true));
+}
+
+function initStrip() {
+  let lastForced = 0, ticks = 0;
+  const clock = document.getElementById("sysClock");
+  const showClock = () => {
+    const d = new Date();
+    clock.textContent = `${d.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" })}  ${d.toLocaleTimeString([], { hour12: false })}`;
+  };
+  showClock();
+  onTick(() => {
+    showClock();
+    if (++ticks % 300 === 0) loadHealth(); // the runtime answers from its 5-minute cache
+  });
+  subscribe((c) => {
+    if (c.type === "health") renderStrip();
+    // A real failure reported by TFS or the AI re-checks at once (at most once a minute).
+    if (c.type === "event" && (c.event.name === "tfs.unavailable" || c.event.name === "ai.unavailable") && Date.now() - lastForced > 60000) {
+      lastForced = Date.now();
+      loadHealth(true);
+    }
+  });
+  onVoice(() => renderStrip());
+  renderStrip();
+  loadHealth();
+  loadSettings().then(() => {
+    document.getElementById("agentNameFoot").textContent = agentName();
+    renderStrip();
+  }).catch(() => {});
+  api("/api/health").then((h) => { document.getElementById("appVersion").textContent = `Version ${h.version}`; }).catch(() => {});
 }
 
 document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
@@ -217,5 +264,6 @@ initTheme();
 initBell();
 initConnection();
 initVoice();
+initStrip();
 window.addEventListener("hashchange", navigate);
 start().then(navigate);

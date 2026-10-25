@@ -54,6 +54,7 @@ RUNTIME_FILES = {
     "utilities/healing.py": AUTOMATION / "healing.py",
     "utilities/js/fingerprint.js": AUTOMATION / "js" / "fingerprint.js",
     "utilities/js/overlay.js": AUTOMATION / "js" / "overlay.js",
+    "utilities/js/calendar.js": AUTOMATION / "js" / "calendar.js",
 }
 # Created once, then owned by the user and the Automation Engineering Agent.
 SEED_FILES = {

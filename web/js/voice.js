@@ -1,20 +1,28 @@
 // Voice client: listen (built-in offline recognizer, local speech server or browser recognition), send the command,
 // speak the agent's replies with the PC's own (offline) voices, as radio transmissions by default, and follow up on
 // background results.
+//
+// Listening is half-duplex: the microphone never records while the agent is speaking (plus a short tail), so the
+// agent cannot hear and transcribe itself. Radio effects and ambience only go to the speakers.
 
 import { api } from "./api.js";
 import { subscribe } from "./store.js";
-import { playRadio, radioAround } from "./radio.js";
+import { playRadio, radioAround, ackTone, micTone, stopRadio, setAmbience, duck } from "./radio.js";
 
 const listeners = new Set();
 export const voice = {
-  status: "idle", // idle | listening | thinking
+  // idle | listening | transcribing | thinking | executing | speaking | completed | failed
+  status: "idle",
   speaking: false,
   level: 0, // microphone level 0..1 while listening
   settings: null,
   log: [], // {who: "you"|"agent", text, kind}
   pending: null,
   error: null,
+  micError: null, // why the microphone cannot be used (permission, no device, disconnected)
+  wake: false, // wake-name listening is on
+  executing: null, // {command_id, command, owner} while a background task runs
+  lastHeard: "",
 };
 
 function emit() {
@@ -22,7 +30,15 @@ function emit() {
 }
 export function onVoice(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
-function setStatus(status) { voice.status = status; emit(); }
+let settle = null;
+function setStatus(status) {
+  clearTimeout(settle);
+  voice.status = status;
+  duck(status === "listening" ? "user" : voice.speaking ? "agent" : "none");
+  // Completed and Failed are shown for a moment, then the agent is idle again.
+  if (status === "completed" || status === "failed") settle = setTimeout(() => { if (voice.status === status) setStatus(voice.executing ? "executing" : "idle"); }, 4000);
+  emit();
+}
 
 export const conversationId = (() => {
   const make = () => `conv-${(crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now()).replace(/[^\w-]/g, "").slice(0, 40)}`;
@@ -37,9 +53,17 @@ export async function loadSettings(force = false) {
   if (!voice.settings || force) {
     const { ok, ...s } = await api("/api/voice/settings");
     voice.settings = s;
+    applyAmbience();
   }
   return voice.settings;
 }
+
+export function applyAmbience(s = voice.settings) {
+  try { setAmbience(Boolean(s?.ambience_enabled), s?.ambience_volume); } catch { /* audio is a convenience */ }
+}
+
+/** The agent's display name (any language, set under Voice & Command Agent). */
+export function agentName() { return voice.settings?.agent_display_name || "HAMI"; }
 
 // ---- speaking ----
 
@@ -63,14 +87,15 @@ function pickVoice(s, male) {
 
 function browserSpeak(text, s, radio) {
   if (!("speechSynthesis" in window)) return Promise.resolve();
-  const chosen = pickVoice(s, radio);
+  const chosen = pickVoice(s, true);
   if (!chosen) return Promise.resolve(); // no installed voice: the reply is still shown on screen
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text);
     u.voice = chosen;
     u.lang = chosen.lang;
-    u.rate = (Number(s.tts_rate) || 1) * (radio ? 1.08 : 1);
-    if (radio) u.pitch = 0.7;
+    u.rate = (Number(s.tts_rate) || 1) * (radio ? 0.98 : 1); // calm, measured delivery
+    u.pitch = radio ? 0.8 : 0.9;
+    u.volume = Math.max(0, Math.min(1, Number(s.voice_volume ?? 0.9)));
     const done = () => { clearTimeout(guard); resolve(); };
     const guard = setTimeout(done, 4000 + text.length * 120); // some browsers never fire onend
     u.onend = done;
@@ -102,17 +127,23 @@ export function prepare(text) {
   if (voice.settings?.speak_replies && voice.settings.reply_style === "radio") radioWav(text);
 }
 
-async function speakNow(text, s) {
-  voice.speaking = true; emit();
+let speakEndedAt = 0;
+let speechGen = 0; // bumped by Stop Speaking so queued replies are dropped
+
+async function speakNow(text, s, gen) {
+  if (gen !== speechGen) return;
+  voice.speaking = true; duck("agent"); emit();
   try {
     if (s.reply_style !== "radio") return await browserSpeak(text, s, false);
     const wav = await radioWav(text);
+    if (gen !== speechGen) return;
     if (wav) {
-      try { return await playRadio(wav); } catch { /* fall back to the browser voice */ }
+      try { return await playRadio(wav, s); } catch { /* fall back to the browser voice */ }
     }
-    await radioAround(() => browserSpeak(text, s, true));
+    await radioAround(() => browserSpeak(text, s, true), s);
   } finally {
-    voice.speaking = false; emit();
+    voice.speaking = false; speakEndedAt = performance.now();
+    duck(voice.status === "listening" ? "user" : "none"); emit();
   }
 }
 
@@ -120,46 +151,28 @@ let speechQueue = Promise.resolve();
 
 /** Speak a reply after the ones already queued. Resolves when it has been spoken. */
 export function speak(text, s = voice.settings) {
-  if (!text || !s?.speak_replies) return Promise.resolve();
-  speechQueue = speechQueue.then(() => speakNow(text, s)).catch((err) => console.error(err));
+  if (!text || !s?.speak_replies || s.voice_enabled === false) return Promise.resolve();
+  const gen = speechGen;
+  speechQueue = speechQueue.then(() => speakNow(text, s, gen)).catch((err) => console.error(err));
   return speechQueue;
 }
 
-// What the agent says back, in radio style: acknowledge, then confirm what it is doing.
-export const ACK = "Roger, sir. Stand by.";
-const COPY = {
-  generate_test_cases: "Copy, sir. Starting test case creation.",
-  generate_automation: "Copy, sir. Starting automation test case creation.",
-  run_performance: "Copy, sir. Spinning up the JMeter performance test.",
-  run_test_case: "Copy, sir. Executing the test.",
-  run_all_tests: "Copy, sir. Executing all automated tests.",
-  create_defects: "Copy, sir. Preparing the defect reports.",
-  analyze_failure: "Copy, sir. Analyzing the failure.",
-  start_recording: "Copy, sir. Opening the browser recorder.",
-  stop_run: "Copy, sir. Aborting the run.",
-  open_page: "Copy, sir.",
-  open_work_item: "Copy, sir.",
-};
-
-function radioStyle() { return voice.settings?.reply_style === "radio"; }
-
-export function replyLine(r) {
-  if (!radioStyle()) return r.say;
-  switch (r.status) {
-    case "unsupported": return `Say again, sir. ${r.say}`;
-    case "failed": return `Negative, sir. ${r.say}`;
-    case "needs_confirmation": return `Sir, request your confirmation. ${r.say} Over.`;
-    case "needs_input": return `Sir, I need one more detail. ${r.say} Over.`;
-    default: return `${COPY[r.command] || "Copy that, sir."} ${r.say}`;
-  }
+/** Stop Speaking: cut the current transmission and drop queued replies. */
+export function stopSpeaking() {
+  speechGen += 1;
+  stopRadio();
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
 }
 
-function eventLine(name, text) {
-  if (!radioStyle()) return text;
-  if (name === "voice.command.completed") return `Mission complete, sir. ${text} Over.`;
-  if (name === "voice.command.failed") return `Be advised, sir. ${text}`;
-  return text;
+/** Resolves once the agent has finished speaking and the echo tail has passed. */
+async function quietMic(tail = 300) {
+  await speechQueue;
+  const wait = tail - (performance.now() - speakEndedAt);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
+
+// The runtime composes each spoken line ("OK, I will do your task now. …"); older runtimes send only `say`.
+export function replyLine(r) { return r.speak || r.say; }
 
 // ---- commands ----
 
@@ -169,29 +182,43 @@ function pageContext() {
 }
 
 const expectedHash = new Map(); // command id -> page shown when it was accepted
+const navStack = [];
+
+function go(hash) {
+  if (hash === "back") { if (navStack.length) location.hash = navStack.pop(); else history.back(); return; }
+  if (location.hash !== hash) { navStack.push(location.hash || "#/command-center"); if (navStack.length > 20) navStack.shift(); location.hash = hash; }
+}
 
 export async function sendCommand(text, source = "typed") {
   text = (text || "").trim();
   if (!text) return null;
   voice.log.push({ who: "you", text });
+  voice.error = null;
   setStatus("thinking");
+  let final = "idle";
   try {
     await loadSettings().catch(() => null);
     const r = await api("/api/voice/commands", { method: "POST", body: { text, source, conversation_id: conversationId, page: pageContext() } });
     voice.pending = r.context?.pending || null;
     const line = replyLine(r);
     voice.log.push({ who: "agent", text: line, kind: r.status });
-    if (r.navigate && location.hash !== r.navigate) location.hash = r.navigate;
-    if (r.status === "accepted") expectedHash.set(r.command_id, r.navigate || location.hash);
+    if (r.navigate) go(r.navigate);
+    if (r.status === "accepted") {
+      expectedHash.set(r.command_id, r.navigate || location.hash);
+      voice.executing = { command_id: r.command_id, command: r.command, owner: r.owner || null };
+      final = "executing";
+    } else if (r.status === "completed") final = "completed";
+    else if (r.status === "failed" || r.status === "unsupported") final = "failed";
     speak(line);
     return r;
   } catch (err) {
-    const line = radioStyle() ? `Negative, sir. ${err.message}` : err.message;
+    const line = `${voice.settings?.phrase_style === "tactical" ? "Command unsuccessful." : "Unable to complete the command."} ${err.message}`;
     voice.log.push({ who: "agent", text: line, kind: "failed" });
     speak(line);
+    final = "failed";
     throw err;
   } finally {
-    setStatus("idle");
+    setStatus(final);
   }
 }
 
@@ -200,50 +227,87 @@ subscribe((change) => {
   if (change.type !== "event") return;
   const d = change.event.details || {};
   if (d.conversation_id !== conversationId || !d.speak) return;
-  const line = eventLine(change.event.name, d.speak);
-  voice.log.push({ who: "agent", text: line, kind: change.event.name === "voice.command.failed" ? "failed" : "progress" });
-  speak(line);
+  const name = change.event.name;
+  const done = name === "voice.command.completed" || name === "voice.command.failed";
+  voice.log.push({ who: "agent", text: d.speak, kind: name === "voice.command.failed" ? "failed" : done ? "completed" : "progress" });
+  speak(d.speak);
   // Open the result only if the person is still looking at the page the command opened.
-  const done = change.event.name === "voice.command.completed" || change.event.name === "voice.command.failed";
-  if (done && d.navigate && expectedHash.get(d.command_id) === location.hash) location.hash = d.navigate;
-  if (done) expectedHash.delete(d.command_id);
+  if (done && d.navigate && expectedHash.get(d.command_id) === location.hash) go(d.navigate);
+  if (done) {
+    expectedHash.delete(d.command_id);
+    if (voice.executing?.command_id === d.command_id) voice.executing = null;
+    if (["executing", "idle", "completed", "failed"].includes(voice.status)) setStatus(name === "voice.command.failed" ? "failed" : "completed");
+  }
   emit();
 });
 
 // ---- listening ----
 
-let active = null; // {stop: () => void}
+let active = null; // {stop: () => void, cancel?: () => void}
 
 export function isListening() { return voice.status === "listening"; }
 
+/** Stop listening now and use what was heard so far. */
 export function stopListening() { active?.stop(); }
 
-/** Listen once and send what was heard. Resolves with the command reply, or null if nothing was heard. */
+/** Cancel listening and throw away what was heard. */
+export function cancelListening() { (active?.cancel || active?.stop)?.(); }
+
+function micMessage(err) {
+  const n = err?.name || "";
+  if (n === "NotAllowedError" || n === "SecurityError") return "Microphone access is blocked. Allow the microphone for this page in the browser's site settings, then try again.";
+  if (n === "NotFoundError" || n === "OverconstrainedError") return "No microphone was found. Connect a headset or microphone and try again.";
+  if (n === "NotReadableError" || n === "AbortError") return "The microphone is in use by another application or was disconnected.";
+  return err?.message || "The microphone could not be opened.";
+}
+
+async function openMic() {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser cannot use the microphone on this address. Open the dashboard on http://127.0.0.1.");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    voice.micError = null;
+    return stream;
+  } catch (err) {
+    voice.micError = micMessage(err);
+    emit();
+    throw new Error(voice.micError);
+  }
+}
+
+if (navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", () => { voice.micError = null; emit(); });
+}
+
+/** Listen once (push-to-talk) and send what was heard. Resolves with the command reply, or null if nothing was heard. */
 export async function listen() {
   if (active) { active.stop(); return null; }
   const s = await loadSettings();
   voice.error = null;
+  if (voice.speaking) stopSpeaking(); // pressing the mic while the agent talks interrupts it
   let text;
-  prepare(ACK);
   try {
-    if (s.stt_engine === "browser") {
-      text = await listenBrowser(s);
-      if (text) speak(ACK);
-    } else if (s.stt_engine === "local" || s.stt_engine === "builtin") text = await listenLocal(s);
-    else throw new Error("Voice input is off. Turn it on under Voice Commands, or type the command.");
+    if (s.voice_enabled === false || s.stt_engine === "off") throw new Error("Voice input is off. Turn it on under Voice & Command Agent, or type the command.");
+    await quietMic(300);
+    if (s.stt_engine === "browser") text = await listenBrowser(s);
+    else if (s.stt_engine === "local" || s.stt_engine === "builtin") {
+      const stream = await openMic();
+      try { text = await captureAndTranscribe(stream, s, { maxMs: 15000, noSpeechMs: 8000 }); }
+      finally { stream.getTracks().forEach((t) => t.stop()); }
+    } else throw new Error("Choose a speech recognition engine under Voice & Command Agent.");
   } catch (err) {
     voice.error = err.message;
     voice.level = 0;
-    setStatus("idle");
-    if (radioStyle()) speak(`Say again, sir. ${err.message}`);
+    setStatus("failed");
     throw err;
   }
-  return text ? sendCommand(text, "speech") : null;
+  if (!text) { setStatus("idle"); return null; }
+  ackTone(s);
+  return sendCommand(text, "speech");
 }
 
 function listenBrowser(s) {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return Promise.reject(new Error("This browser has no speech recognition. Use the local speech server instead."));
+  if (!SR) return Promise.reject(new Error("This browser has no speech recognition. Use the built-in offline recognizer instead."));
   return new Promise((resolve, reject) => {
     const rec = new SR();
     rec.lang = s.language || "en";
@@ -251,60 +315,134 @@ function listenBrowser(s) {
     rec.maxAlternatives = 1;
     let heard = "";
     rec.onresult = (e) => { heard = e.results[0][0].transcript; };
-    rec.onerror = (e) => { active = null; reject(new Error(e.error === "network" ? "Browser speech recognition needs Internet. Use the local speech server on offline PCs." : `Speech recognition error: ${e.error}`)); };
+    rec.onerror = (e) => {
+      active = null;
+      if (e.error === "not-allowed") voice.micError = "Microphone access is blocked for this page.";
+      reject(new Error(e.error === "network" ? "Browser speech recognition needs Internet. Use the built-in offline recognizer on offline PCs." : `Speech recognition error: ${e.error}`));
+    };
     rec.onend = () => { active = null; resolve(heard); };
-    active = { stop: () => rec.stop() };
+    active = { stop: () => rec.stop(), cancel: () => { heard = ""; rec.abort(); } };
     setStatus("listening");
+    micTone(true, s);
     rec.start();
   });
 }
 
 const TARGET_RATE = 16000;
+const SPEECH_RMS = 0.02;
+const SILENCE_MS = 1200;
 
-async function listenLocal(s) {
-  if (s.stt_engine === "local" && !s.stt_url) throw new Error("Set the local speech server URL under Voice Commands first.");
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser cannot use the microphone on this address.");
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+/**
+ * Record one utterance from an open microphone stream and turn it into text with the local recognizer.
+ * Ends after SILENCE_MS of quiet following speech, after maxMs, or when stopped. Returns "" when nothing was said.
+ */
+async function captureAndTranscribe(stream, s, { maxMs, noSpeechMs, quietStatus = false }) {
   const ctx = new AudioContext();
   const source = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
+  const sink = ctx.createGain();
+  sink.gain.value = 0; // the processor must be connected to run; nothing is played back
   const chunks = [];
-  let spoke = false, quietSince = 0;
+  let spoke = false, quietSince = 0, cancelled = false, unplugged = false;
   const started = performance.now();
+  const track = stream.getAudioTracks()[0];
   const audio = await new Promise((resolve) => {
+    let finished = false;
     const finish = () => {
+      if (finished) return;
+      finished = true;
       node.disconnect(); source.disconnect();
-      stream.getTracks().forEach((t) => t.stop());
+      if (track) track.onended = null;
       active = null;
       resolve(chunks);
     };
+    if (track) track.onended = () => { unplugged = true; finish(); };
     node.onaudioprocess = (e) => {
+      if (voice.speaking) return; // half-duplex: never record the agent's own voice
       const data = e.inputBuffer.getChannelData(0);
-      chunks.push(new Float32Array(data));
       let sum = 0;
       for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
       const rms = Math.sqrt(sum / data.length), t = performance.now();
       voice.level = Math.min(1, rms * 8);
+      if (spoke || rms > SPEECH_RMS) chunks.push(new Float32Array(data));
+      else { chunks.length = 0; chunks.push(new Float32Array(data)); } // keep a little lead-in before speech starts
       emit();
-      if (rms > 0.02) { spoke = true; quietSince = 0; } else if (spoke && !quietSince) quietSince = t;
-      // stop after 1.2 s of quiet following speech, or after 15 s
-      if ((spoke && quietSince && t - quietSince > 1200) || t - started > 15000) finish();
+      if (rms > SPEECH_RMS) { spoke = true; quietSince = 0; } else if (spoke && !quietSince) quietSince = t;
+      if ((spoke && quietSince && t - quietSince > SILENCE_MS) || t - started > maxMs || (!spoke && noSpeechMs && t - started > noSpeechMs)) finish();
     };
-    active = { stop: finish };
+    active = { stop: finish, cancel: () => { cancelled = true; finish(); } };
     source.connect(node);
-    node.connect(ctx.destination);
-    setStatus("listening");
+    node.connect(sink).connect(ctx.destination);
+    if (!quietStatus) { setStatus("listening"); micTone(true, s); }
   });
   const rate = ctx.sampleRate;
   ctx.close();
   voice.level = 0;
-  if (!spoke) { setStatus("idle"); return ""; }
-  setStatus("thinking");
-  speak(ACK); // acknowledge at once; recognition and analysis follow
+  if (unplugged) { voice.micError = "The microphone was disconnected. Reconnect it and try again."; throw new Error(voice.micError); }
+  if (!quietStatus) micTone(false, s);
+  if (cancelled || !spoke) { if (!quietStatus) setStatus("idle"); return ""; }
+  setStatus("transcribing");
   const wav = encodeWav(downsample(audio, rate));
-  const r = await api("/api/voice/transcribe", { method: "POST", rawBody: wav, contentType: "audio/wav" });
-  return r.text;
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 25000);
+  try {
+    const r = await api("/api/voice/transcribe", { method: "POST", rawBody: wav, contentType: "audio/wav", signal: abort.signal });
+    voice.lastHeard = r.text || "";
+    return r.text || "";
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("Speech recognition took too long. Try a shorter command.");
+    throw err;
+  } finally { clearTimeout(timer); }
 }
+
+// ---- wake-name mode: the microphone stays open, and only sentences that start with the agent's command name are sent ----
+
+let wakeLoop = null;
+
+function normalizeWords(t) { return (t || "").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim(); }
+
+/** True if the sentence starts with the command name ("Hami, run test case 12", "hey Hami …"). */
+export function addressed(text, s = voice.settings) {
+  const name = normalizeWords(s?.agent_command_name || "Hami");
+  const t = normalizeWords(text).replace(/^(hey|ok|okay|hi)\s+/, "");
+  return Boolean(name) && (t === name || t.startsWith(name + " "));
+}
+
+export function wakeActive() { return Boolean(wakeLoop); }
+
+/** Start or stop wake-name listening (built-in or local recognizer only). */
+export async function setWake(on) {
+  if (!on) { wakeLoop?.stop(); return; }
+  if (wakeLoop) return;
+  const s = await loadSettings();
+  if (s.voice_enabled === false || !["builtin", "local"].includes(s.stt_engine)) throw new Error("Wake-name listening needs the built-in offline recognizer or a local speech server.");
+  const stream = await openMic();
+  let running = true;
+  wakeLoop = { stop: () => { running = false; active?.cancel?.(); } };
+  voice.wake = true; emit();
+  (async () => {
+    try {
+      while (running && stream.getAudioTracks()[0]?.readyState === "live") {
+        await quietMic(300);
+        if (!running) break;
+        if (voice.status === "thinking" || voice.status === "transcribing") { await new Promise((r) => setTimeout(r, 300)); continue; }
+        let text = "";
+        try { text = await captureAndTranscribe(stream, s, { maxMs: 12000, noSpeechMs: 0, quietStatus: true }); }
+        catch (err) { voice.error = err.message; if (voice.micError) break; continue; }
+        if (!running) break;
+        if (text && addressed(text, s)) { ackTone(s); await sendCommand(text, "speech").catch(() => null); }
+        else if (voice.status === "transcribing") setStatus(voice.executing ? "executing" : "idle");
+      }
+    } finally {
+      stream.getTracks().forEach((t) => t.stop());
+      wakeLoop = null; voice.wake = false; voice.level = 0;
+      if (voice.status === "listening" || voice.status === "transcribing") setStatus("idle");
+      emit();
+    }
+  })();
+}
+
+window.addEventListener("pagehide", () => { wakeLoop?.stop(); active?.cancel?.(); });
 
 function downsample(chunks, rate) {
   const length = chunks.reduce((n, c) => n + c.length, 0);

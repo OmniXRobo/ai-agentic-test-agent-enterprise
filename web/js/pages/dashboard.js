@@ -1,9 +1,19 @@
 import { api } from "../api.js";
-import { state, subscribe } from "../store.js";
+import { state, subscribe, onTick } from "../store.js";
+import { cardHtml, refreshCards } from "../agent-card.js";
 import { esc } from "../util.js";
 
 let unsub = null;
+let stopTick = null;
 let refreshTimer = null;
+
+// The QA lifecycle squadron shown on the dashboard (all agents are on Agent Workflow).
+export const SQUADRON = ["requirements", "test_planning", "test_case_design", "test_data", "automation_engineering",
+  "guided_browser", "test_execution", "reporting", "voice_command"];
+
+function squadHtml() {
+  return SQUADRON.map((id) => state.agents.get(id)).filter(Boolean).map((a) => cardHtml(a, { compact: true })).join("");
+}
 
 function kpi(label, value, note = "") {
   return `<div class="card"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${esc(value)}</div><div class="kpi-note">${esc(note)}</div></div>`;
@@ -13,6 +23,7 @@ const pct = (v) => (v === null || v === undefined ? "—" : `${v}%`);
 const link = (href, html) => `<a href="${href}" style="text-decoration:none;color:inherit">${html}</a>`;
 
 async function render(view) {
+  view = view.querySelector("#kpiArea");
   let summary, a;
   try {
     [summary, a] = await Promise.all([api("/api/dashboard/summary"), api("/api/analytics/summary")]);
@@ -74,18 +85,28 @@ async function render(view) {
 }
 
 export async function mount(view) {
+  view.innerHTML = `
+    <section class="card" style="margin-bottom:16px">
+      <div class="row"><h2 style="margin:0">Agent Squadron</h2><span class="spacer"></span><a href="#/workflow" class="small">All agents and live activity</a></div>
+      <div class="squad" id="squad" style="margin-top:10px">${squadHtml()}</div>
+    </section>
+    <div id="kpiArea"><p class="muted">Loading…</p></div>`;
   await render(view);
-  // Re-render only when a run finishes, debounced, instead of on a timer.
+  // Agent cards update in place from runtime events; figures reload only when work finishes (debounced).
   unsub = subscribe((c) => {
+    if (c.type === "snapshot") { view.querySelector("#squad").innerHTML = squadHtml(); return; }
     if (c.type !== "event") return;
-    if (!["agent.completed", "agent.failed", "agent.started", "defect.created"].includes(c.event.name)) return;
+    if (c.agent) refreshCards(view.querySelector("#squad"));
+    if (!["agent.completed", "agent.failed", "defect.created"].includes(c.event.name)) return;
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => render(view), 600);
+    refreshTimer = setTimeout(() => render(view), 1500);
   });
+  stopTick = onTick(() => refreshCards(view.querySelector("#squad")));
 }
 
 export function unmount() {
   if (unsub) unsub();
+  if (stopTick) stopTick();
   clearTimeout(refreshTimer);
-  unsub = null;
+  unsub = stopTick = null;
 }
