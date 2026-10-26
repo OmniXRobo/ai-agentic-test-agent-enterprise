@@ -12,6 +12,8 @@ import { workItemPage } from "./pages/workitems.js";
 import * as aiSettings from "./pages/ai-settings.js";
 import * as testDesign from "./pages/test-design.js";
 import * as testData from "./pages/test-data.js";
+import * as testSuites from "./pages/test-suites.js";
+import * as testCases from "./pages/test-cases.js";
 import * as scriptStudio from "./pages/script-studio.js";
 import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
 import * as appCredentials from "./pages/app-credentials.js";
@@ -39,8 +41,8 @@ const NAV = [
     ["test-design", "AI Test Design", testDesign],
     ["acceptance-criteria", "Acceptance Criteria", workItemPage({ category: "requirement", focus: "acceptance_criteria" })],
     ["test-plans", "Test Plans", testPlans],
-    ["test-suites", "Test Suites", testPlans],
-    ["test-cases", "Test Cases", workItemPage({ category: "testcase", createLabel: "New test case" })],
+    ["test-suites", "Test Suites", testSuites],
+    ["test-cases", "Test Cases", testCases],
     ["test-data", "Test Data", testData],
   ]],
   ["Automation Studio", [

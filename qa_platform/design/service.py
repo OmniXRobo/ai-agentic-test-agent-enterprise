@@ -185,6 +185,8 @@ class DesignService:
         self.case_design = TestCaseDesignAgent(bus)
         self.data = TestDataAgent(bus)
         self.suite = TestSuiteDesignAgent(bus)
+        self.cases: Any = None  # SuiteCaseService, attached by the runtime
+        self.datasets: Any = None  # TestDataService, attached by the runtime
 
     # ---- pipeline ----------------------------------------------------------------
 

@@ -233,6 +233,44 @@ class AzureDevOpsClient:
             # The legacy API answers with a list of the created suites.
             return (created.get("value") or [created])[0] if isinstance(created, dict) else created[0]
 
+    def update_test_plan(self, plan_id: int, changes: dict[str, Any]) -> dict[str, Any]:
+        """changes: name, iteration, areaPath, state, description (only the keys given are changed)."""
+        try:
+            return self.request("PATCH", f"_apis/testplan/plans/{int(plan_id)}", json=changes)
+        except QAError as exc:
+            if exc.error_code != "TFS_NOT_FOUND":
+                raise
+            legacy = {k: v for k, v in changes.items() if k != "areaPath"}
+            if changes.get("areaPath"):
+                legacy["area"] = {"name": changes["areaPath"]}
+            return self.request("PATCH", f"_apis/test/plans/{int(plan_id)}", json=legacy, api_version="5.0")
+
+    def delete_test_plan(self, plan_id: int) -> None:
+        try:
+            self.request("DELETE", f"_apis/testplan/plans/{int(plan_id)}")
+        except QAError as exc:
+            if exc.error_code != "TFS_NOT_FOUND":
+                raise
+            self.request("DELETE", f"_apis/test/plans/{int(plan_id)}", api_version="5.0")
+
+    def update_test_suite(self, plan_id: int, suite_id: int, name: str) -> dict[str, Any]:
+        try:
+            return self.request("PATCH", f"_apis/testplan/Plans/{int(plan_id)}/suites/{int(suite_id)}",
+                                json={"name": name})
+        except QAError as exc:
+            if exc.error_code != "TFS_NOT_FOUND":
+                raise
+            return self.request("PATCH", f"_apis/test/plans/{int(plan_id)}/suites/{int(suite_id)}",
+                                json={"name": name}, api_version="5.0")
+
+    def delete_test_suite(self, plan_id: int, suite_id: int) -> None:
+        try:
+            self.request("DELETE", f"_apis/testplan/Plans/{int(plan_id)}/suites/{int(suite_id)}")
+        except QAError as exc:
+            if exc.error_code != "TFS_NOT_FOUND":
+                raise
+            self.request("DELETE", f"_apis/test/plans/{int(plan_id)}/suites/{int(suite_id)}", api_version="5.0")
+
     def suite_test_cases(self, plan_id: int, suite_id: int) -> list[dict[str, Any]]:
         try:
             return self.request("GET", f"_apis/testplan/Plans/{int(plan_id)}/Suites/{int(suite_id)}/TestCase").get("value", [])

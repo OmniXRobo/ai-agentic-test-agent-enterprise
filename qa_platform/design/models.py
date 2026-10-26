@@ -63,3 +63,97 @@ class DataSet(BaseModel):
 
 class TestDataSet(BaseModel):
     datasets: list[DataSet]
+
+
+# ---- suite-aware, acceptance-criterion traceable test cases --------------------------------------------
+
+
+class Condition(BaseModel):
+    id: str = Field(description="<criterion id>.<n>, e.g. AC-01.1")
+    text: str
+
+
+class CriterionAnalysis(BaseModel):
+    ac_id: str = Field(description="The criterion id exactly as given")
+    conditions: list[Condition] = []
+    actors: list[str] = []
+    clarification: str | None = Field(default=None, description="Question to ask when the criterion is too unclear "
+                                                                "to write a valid test")
+    applicable: bool = Field(default=True, description="False when this testing type cannot test the criterion")
+    not_applicable_reason: str | None = None
+
+
+class SuiteAnalysis(BaseModel):
+    criteria: list[CriterionAnalysis] = []
+    business_rules: list[str] = Field(default=[], description="Rules stated in the story; never invented ones")
+    gaps: list[str] = Field(default=[], description="Missing or ambiguous information")
+
+
+class NotApplicable(BaseModel):
+    ac_id: str
+    reason: str
+
+
+class Clarification(BaseModel):
+    ac_id: str | None = None
+    question: str
+
+
+class SuiteTestCase(BaseModel):
+    ref: str = Field(description="Short id such as TC1")
+    title: str
+    ac_ids: list[str] = Field(default=[], description="Criterion ids this case verifies")
+    condition_ids: list[str] = Field(default=[], description="Condition ids this case verifies")
+    objective: str = ""
+    preconditions: str | None = None
+    dependencies: list[str] = []
+    test_data: list[str] = Field(default=[], description="Input values used, e.g. \"username = standard_user\"")
+    steps: list[TestStep] = Field(min_length=1)
+    priority: int = Field(ge=1, le=4, default=2)
+    risk: Literal["high", "medium", "low"] = "medium"
+    risk_rationale: str = ""
+    scenario: Literal["positive", "negative", "boundary", "edge", "error", "security", "performance", "usability",
+                      "integration", "other"] = "positive"
+    automation: Literal["automatable", "partial", "manual"] = "automatable"
+    automation_reason: str | None = None
+    gaps: list[str] = Field(default=[], description="Assumptions or missing requirements a reviewer must check")
+
+
+class SuiteCaseSet(BaseModel):
+    test_cases: list[SuiteTestCase] = []
+    not_applicable: list[NotApplicable] = []
+    clarifications: list[Clarification] = []
+
+
+# ---- suite-aware test data ------------------------------------------------------------------------------
+
+
+class DataField(BaseModel):
+    name: str
+    type: Literal["string", "integer", "decimal", "boolean", "date", "datetime", "time", "email", "phone", "secret",
+                  "enum", "other"] = "string"
+    required: bool | None = None
+    rule: str | None = Field(default=None, description="Format, length, range or allowed values")
+    source: Literal["specified", "assumed"] = Field(default="assumed",
+                                                    description="specified = stated in the story/test case")
+
+
+class DataRow(BaseModel):
+    name: str
+    scenario: Literal["valid", "invalid", "boundary", "outside_boundary", "missing", "empty", "null", "whitespace",
+                      "duplicate", "date_time", "role", "relationship", "unicode", "special_characters", "pairwise",
+                      "volume", "security", "other"] = "valid"
+    intended_valid: bool = True
+    violated_rule: str | None = Field(default=None, description="For an invalid row: the rule it breaks on purpose")
+    expected_outcome: str = Field(description="Observable result the test case expects with this row")
+    ac_ids: list[str] = []
+    values: dict[str, str | int | float | bool | None]
+
+
+class TestDataDesign(BaseModel):
+    fields: list[DataField] = []
+    rows: list[DataRow] = []
+    not_applicable: list[str] = Field(default=[], description="Data scenarios that do not apply, with the reason")
+    gaps: list[str] = Field(default=[], description="Missing or conflicting rules; never invented")
+    preconditions: list[str] = []
+    cleanup: list[str] = []

@@ -571,7 +571,7 @@ class TfsService:
                 "id": p["id"], "name": p.get("name"), "state": p.get("state"),
                 "iteration": p.get("iteration"), "area_path": (p.get("area") or {}).get("name") or p.get("areaPath"),
                 "owner": _identity(p.get("owner")), "start_date": p.get("startDate"), "end_date": p.get("endDate"),
-                "root_suite_id": (p.get("rootSuite") or {}).get("id"),
+                "root_suite_id": (p.get("rootSuite") or {}).get("id"), "description": p.get("description"),
             } for p in c.test_plans()]
 
         return self.cache.get_or_set(("plans", self.active_mode()), lambda: self._with_client(run))
@@ -583,6 +583,49 @@ class TfsService:
         self.invalidate()
         return {"id": created["id"], "name": created.get("name") or name,
                 "root_suite_id": (created.get("rootSuite") or {}).get("id"), "created": True}
+
+    def update_test_plan(self, plan_id: int, *, name: str | None = None, iteration: str | None = None,
+                         area_path: str | None = None, state: str | None = None,
+                         description: str | None = None) -> dict[str, Any]:
+        """Change a test plan in TFS; ``iteration=""`` moves it back to the project's root iteration (no sprint)."""
+        changes: dict[str, Any] = {}
+        if name is not None:
+            if not name.strip():
+                raise QAError("PLAN_NAME_REQUIRED", "A test plan needs a name.")
+            changes["name"] = name.strip()
+        if iteration is not None:
+            changes["iteration"] = iteration.strip() or self.profile()["project"]
+        if area_path:
+            changes["areaPath"] = area_path
+        if state:
+            changes["state"] = state
+        if description is not None:
+            changes["description"] = description
+        if not changes:
+            raise QAError("TFS_NOTHING_TO_UPDATE", "Nothing to change on this test plan.")
+        updated = self._with_client(lambda c: c.update_test_plan(plan_id, changes))
+        self.invalidate()
+        return {"id": int(updated.get("id") or plan_id), "name": updated.get("name") or changes.get("name"),
+                "iteration": updated.get("iteration"), "state": updated.get("state")}
+
+    def delete_test_plan(self, plan_id: int) -> None:
+        self._with_client(lambda c: c.delete_test_plan(plan_id))
+        self.invalidate()
+
+    def update_test_suite(self, plan_id: int, suite_id: int, name: str) -> dict[str, Any]:
+        if not (name or "").strip():
+            raise QAError("SUITE_NAME_REQUIRED", "A test suite needs a name.")
+        updated = self._with_client(lambda c: c.update_test_suite(plan_id, suite_id, name.strip()))
+        self.invalidate()
+        return {"id": int(updated.get("id") or suite_id), "name": updated.get("name") or name.strip()}
+
+    def delete_test_suite(self, plan_id: int, suite_id: int) -> None:
+        root = next((s for s in self.test_suites(plan_id) if not s.get("parent_id")), None)
+        if root and int(root["id"]) == int(suite_id):
+            raise QAError("TFS_ROOT_SUITE", "The root suite belongs to the test plan; delete the test plan instead.",
+                          status=409)
+        self._with_client(lambda c: c.delete_test_suite(plan_id, suite_id))
+        self.invalidate()
 
     def ensure_test_plan(self, name: str, *, area_path: str | None = None, iteration: str | None = None,
                          description: str | None = None) -> dict[str, Any]:

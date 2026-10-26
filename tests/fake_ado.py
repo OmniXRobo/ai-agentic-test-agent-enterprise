@@ -39,6 +39,7 @@ class FakeAzureDevOps:
         self.requests: list[httpx.Request] = []
         self.unreachable = False
         self.hierarchy = hierarchy
+        self.test_case_parameters = True  # False: a process template whose Test Case has no Parameters fields
         if hierarchy:
             self._add_hierarchy()
 
@@ -138,7 +139,8 @@ class FakeAzureDevOps:
                 if self.severity:
                     refs.append("Microsoft.VSTS.Common.Severity")
             if m.group(1) == "Test Case":
-                refs += ["Microsoft.VSTS.TCM.Steps", "Microsoft.VSTS.TCM.Parameters", "Microsoft.VSTS.TCM.LocalDataSource"]
+                refs += ["Microsoft.VSTS.TCM.Steps"] + (["Microsoft.VSTS.TCM.Parameters", "Microsoft.VSTS.TCM.LocalDataSource"]
+                                                        if self.test_case_parameters else [])
             allowed = {"Microsoft.VSTS.Common.Severity": ["1 - Critical", "2 - High", "3 - Medium", "4 - Low"]}
             expand = request.url.params.get("$expand") == "allowedValues"
             return httpx.Response(200, json={"value": [
@@ -216,11 +218,41 @@ class FakeAzureDevOps:
                                    "description": body.get("description")}
                 return httpx.Response(200, json=self.plans[pid])
             return httpx.Response(200, json={"value": list(self.plans.values())})
+        m = re.match(rf"{re.escape(proj)}/_apis/{api}/plans/(\d+)$", path, re.I)
+        if m:
+            pid = int(m.group(1))
+            if pid not in self.plans:
+                return httpx.Response(404, json={"message": "plan not found"})
+            if request.method == "DELETE":
+                self.plans.pop(pid)
+                self.suites.pop(pid, None)
+                return httpx.Response(204)
+            if request.method == "PATCH":
+                body = json.loads(request.content)
+                plan = self.plans[pid]
+                for k in ("name", "iteration", "state", "description"):
+                    if k in body:
+                        plan[k] = body[k]
+                if "areaPath" in body or "area" in body:
+                    plan["areaPath"] = body.get("areaPath") or body["area"]["name"]
+                return httpx.Response(200, json=plan)
+            return httpx.Response(200, json=self.plans[pid])
         m = re.match(rf"{re.escape(proj)}/_apis/{api}/plans/(\d+)/suites(?:/(\d+))?$", path, re.I)
         if m:
             pid = int(m.group(1))
             if pid not in self.plans:
                 return httpx.Response(404, json={"message": "plan not found"})
+            if m.group(2) and request.method in ("PATCH", "DELETE"):
+                sid = int(m.group(2))
+                suite = next((x for x in self.suites.get(pid, []) if x["id"] == sid), None)
+                if suite is None:
+                    return httpx.Response(404, json={"message": "suite not found"})
+                if request.method == "DELETE":
+                    self.suites[pid] = [x for x in self.suites[pid] if x["id"] != sid
+                                        and (x.get("parentSuite") or {}).get("id") != sid]
+                    return httpx.Response(204)
+                suite["name"] = json.loads(request.content)["name"]
+                return httpx.Response(200, json=suite)
             if request.method == "POST":
                 body = json.loads(request.content)
                 if self.legacy_test_api:

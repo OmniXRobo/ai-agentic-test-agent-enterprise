@@ -10,6 +10,13 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Test Plans, Test Suites, Test Cases and Test Data
+
+Test plans can be created with or without a sprint, and updated and deleted in TFS. Test suites cover the 11 testing
+types. Test cases are generated per suite type from a sprint's selected user stories, with acceptance-criterion
+traceability and a coverage matrix. Test data is versioned and traceable, and is written to the TFS test data tab
+or the Summary. See [docs/TEST_DESIGN_PAGES.md](docs/TEST_DESIGN_PAGES.md).
+
 ## Version 23.1.0: offline install kit for company PCs
 
 The offline package now bundles llama-server, opens a **First-Run Setup** screen that asks only for the TFS URL,
