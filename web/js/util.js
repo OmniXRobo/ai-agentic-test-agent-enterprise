@@ -78,3 +78,23 @@ export function debounce(fn, ms = 300) {
 export function isRepeat(prev, ev) {
   return !!prev && prev.agent_id === ev.agent_id && prev.activity === ev.activity && prev.run_id === ev.run_id;
 }
+
+// A simple dialog: openModal(title, bodyHtml) -> { el, close }. Escape or the backdrop closes it.
+export function openModal(title, body, { wide = false } = {}) {
+  const el = document.createElement("div");
+  el.className = "modal-backdrop";
+  el.innerHTML = `<div class="modal card ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="row"><h3 style="margin:0">${esc(title)}</h3><span class="spacer"></span>
+      <button class="icon-btn" type="button" data-close aria-label="Close">✕</button></div>
+    <div class="modal-body">${body}</div></div>`;
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  const close = () => {
+    if (!el.isConnected) return;
+    el.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  el.addEventListener("click", (e) => { if (e.target === el || e.target.closest("[data-close]")) close(); });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(el);
+  return { el, close };
+}

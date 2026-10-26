@@ -98,3 +98,105 @@ class FakeLLM:
     @staticmethod
     def _reply(content):
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": content}}]})
+
+
+# ---- suite-aware test cases and test data (replies depend on the suite's testing type) -----------------
+
+import re as _re  # noqa: E402
+
+
+def _criteria(body):
+    user = body["messages"][1]["content"]
+    block = user.split("Acceptance criteria:\n", 1)[1].split("\n\n", 1)[0]
+    return [(m.group(1), m.group(2)) for m in _re.finditer(r"^([A-Z][\w.-]*\d[\w.-]*): (.+)$", block, _re.M)]
+
+
+def _type(body):
+    return _re.search(r"(?:for|designer for|reviewer for) ([A-Za-z /-]+? Testing)", body["messages"][0]["content"]).group(1)
+
+
+def decompose(body):
+    out = []
+    for ac, text in _criteria(body):
+        parts = [p.strip() for p in _re.split(r"\band\b", text) if p.strip()] if " and " in text else [text]
+        out.append({"ac_id": ac, "conditions": [{"id": f"{ac}.{n}", "text": p} for n, p in enumerate(parts, 1)],
+                    "clarification": "What does 'appropriate' mean?" if "appropriate" in text.lower() else None})
+    return {"criteria": out, "business_rules": [], "gaps": ["Lockout limit is not stated."]}
+
+
+def _step(a, e):
+    return {"action": a, "expected": e}
+
+
+def design_cases(body):
+    t, crit = _type(body), _criteria(body)
+    if t == "Smoke Testing":
+        ac = crit[0][0]
+        return {"test_cases": [{"ref": "TC1", "title": "Critical login path is available", "ac_ids": [ac],
+                                "condition_ids": [f"{ac}.1"], "objective": "Build health", "priority": 1, "risk": "high",
+                                "steps": [_step("Open the login page", "Login form with Username and Password fields is shown"),
+                                          _step("Log in as {{SECRET:standard_user}}", "Product inventory page is shown")]}]}
+    if t == "Performance Testing":
+        return {"test_cases": [{"ref": "TC1", "title": "Login response time under concurrent users", "ac_ids": [crit[0][0]],
+                                "scenario": "performance", "automation": "partial",
+                                "steps": [_step("Run 50 concurrent logins", "Response time is recorded for every login")]}],
+                "not_applicable": [{"ac_id": ac, "reason": "Not a performance-relevant behaviour"} for ac, _ in crit[1:]]}
+    cases = []
+    for n, (ac, text) in enumerate(crit, 1):
+        cases.append({"ref": f"TC{n}", "title": f"Verify {text}", "ac_ids": [ac], "condition_ids": [f"{ac}.1"],
+                      "objective": f"Prove {ac}", "preconditions": "The login page is open.",
+                      "test_data": ["username = standard_user"], "priority": 2, "risk": "medium",
+                      "risk_rationale": "Core journey", "scenario": "negative" if "error" in text else "positive",
+                      "steps": [_step("Enter 'standard_user' in the username field.", "Username field displays 'standard_user'."),
+                                _step("Click the 'Login' button.", "works correctly" if n == 1 else "An error message 'Wrong password' is shown")]})
+    cases.append({"ref": f"TC{len(crit) + 1}", "title": "Customer logs in successfully", "ac_ids": [crit[0][0], "AC-99"],
+                  "steps": [_step("Log in", "Inventory page is shown")]})
+    return {"test_cases": cases, "clarifications": []}
+
+
+def review_cases(body):
+    user = body["messages"][1]["content"]
+    data = json.loads(user.split("Test cases:\n", 1)[1].split("\n\nIssues:", 1)[0])
+    for tc in data["test_cases"]:
+        for s in tc["steps"]:
+            if s["expected"] == "works correctly":
+                s["expected"] = "Customer is redirected to the product inventory page."
+    # cover every condition of every criterion (the review fixes partial coverage)
+    conds = _re.findall(r"^([A-Z][\w-]*\d+\.\d+) \(", user, _re.M)
+    for tc in data["test_cases"]:
+        tc["condition_ids"] = sorted(set(tc["condition_ids"]) | {c for c in conds if c.rsplit(".", 1)[0] in tc["ac_ids"]})
+    return data
+
+
+def design_data(body):
+    t = _type(body)
+    rows = [
+        {"name": "Valid user", "scenario": "valid", "intended_valid": True, "expected_outcome": "Inventory page is shown",
+         "ac_ids": ["AC-01"], "values": {"username": "valid_user", "password": "ValidPass123!", "email": "jane@gmail.com",
+                                          "account_no": "007", "start_date": "{{TODAY+3d:%d/%m/%Y}}"}},
+        {"name": "Wrong password", "scenario": "invalid", "intended_valid": False, "violated_rule": "Password must match",
+         "expected_outcome": "Error 'Wrong password' is shown", "ac_ids": ["AC-02"],
+         "values": {"username": "valid_user", "password": "wrong-pass", "email": "jane@example.com", "account_no": "007"}},
+        {"name": "Empty username", "scenario": "empty", "intended_valid": False, "expected_outcome": "Username is required",
+         "ac_ids": ["AC-01", "AC-77"], "values": {"username": "", "password": None}},
+        {"name": "Formula", "scenario": "special_characters", "intended_valid": False, "violated_rule": "Text only",
+         "expected_outcome": "Rejected", "values": {"username": "=HYPERLINK(\"x\")", "password": "{{SECRET:password}}"}},
+        {"name": "Valid user copy", "scenario": "valid", "intended_valid": True, "expected_outcome": "Inventory page is shown",
+         "ac_ids": ["AC-01"], "values": {"username": "valid_user", "password": "ValidPass123!", "email": "jane@gmail.com",
+                                          "account_no": "007", "start_date": "{{TODAY+3d:%d/%m/%Y}}"}},
+    ]
+    if t == "Performance Testing":
+        rows = [{"name": "1000 unique users", "scenario": "volume", "intended_valid": True,
+                 "expected_outcome": "Response times are recorded", "values": {"users": 1000, "username": "user_{{UNIQUE}}"}}]
+    return {"fields": [{"name": "username", "type": "string", "required": True, "source": "specified"},
+                       {"name": "password", "type": "secret", "required": True, "source": "specified"}],
+            "rows": rows, "gaps": ["Maximum username length is not stated."],
+            "not_applicable": ["Volume data: not needed for functional checks"] if t != "Performance Testing" else []}
+
+
+REPLIES.update({
+    "acceptance-criteria decomposition analyst": decompose,
+    "suite-aware test case designer": design_cases,
+    "test case reviewer": review_cases,
+    "suite-aware test data designer": design_data,
+})

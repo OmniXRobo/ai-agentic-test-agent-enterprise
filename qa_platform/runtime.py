@@ -13,7 +13,9 @@ from .automation.service import AutomationService
 from .config import Paths, Settings
 from .credentials import SecretBackend, SecretStore
 from .defects.service import DefectService
+from .design.data_agent import TestDataService
 from .design.service import DesignService
+from .design.suite_cases import SuiteCaseService
 from .events import names
 from .events.bus import EventBus
 from .events.state import AgentStateManager
@@ -98,6 +100,8 @@ def build_runtime(
     tfs = TfsService(settings, secrets, bus, transport=tfs_transport)
     ai = AIGateway(settings, bus, transport=ai_transport, secrets=secrets)
     design = DesignService(bus, db, runs, tfs, ai)
+    design.cases = SuiteCaseService(design)  # suite-aware, acceptance-criterion traceable test cases
+    design.datasets = TestDataService(design, design.cases)  # suite-aware, versioned test data rows
     automation = AutomationService(paths, settings, bus, db, runs, secrets, tfs, ai)
     performance = PerformanceService(paths, settings, bus, db, runs, ai, automation.discovery)
     defects = DefectService(settings, bus, db, tfs, automation, performance)

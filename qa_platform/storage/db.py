@@ -342,6 +342,73 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_qak_app ON qa_knowledge(application, created_at);
     """,
+    # 11: testing type of each TFS test suite, suite-aware test case generations, acceptance-criterion
+    #     traceability (application-level: TFS has no per-criterion links) and versioned test data rows
+    """
+    CREATE TABLE IF NOT EXISTS suite_types (
+        project TEXT NOT NULL,
+        plan_id INTEGER NOT NULL,
+        suite_id INTEGER NOT NULL,
+        testing_type TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project, suite_id)
+    );
+    CREATE TABLE IF NOT EXISTS case_generations (
+        run_id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        plan_id INTEGER,
+        suite_id INTEGER,
+        testing_type TEXT NOT NULL,
+        story_ids TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        result TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ac_trace (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project TEXT NOT NULL,
+        user_story_id TEXT NOT NULL,
+        ac_id TEXT NOT NULL,
+        ac_text TEXT NOT NULL,
+        ac_hash TEXT NOT NULL,
+        condition_ids TEXT,
+        plan_id INTEGER,
+        suite_id INTEGER,
+        testing_type TEXT NOT NULL,
+        tfs_test_case_id INTEGER NOT NULL,
+        test_case_title TEXT,
+        run_id TEXT,
+        status TEXT NOT NULL DEFAULT 'current',
+        review_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_ac_trace_story ON ac_trace(project, user_story_id);
+    CREATE INDEX IF NOT EXISTS ix_ac_trace_tc ON ac_trace(tfs_test_case_id);
+    ALTER TABLE test_data ADD COLUMN dataset_key TEXT;
+    ALTER TABLE test_data ADD COLUMN row_key TEXT;
+    ALTER TABLE test_data ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE test_data ADD COLUMN scenario TEXT;
+    ALTER TABLE test_data ADD COLUMN intended_valid INTEGER;
+    ALTER TABLE test_data ADD COLUMN violated_rule TEXT;
+    ALTER TABLE test_data ADD COLUMN expected_outcome TEXT;
+    ALTER TABLE test_data ADD COLUMN ac_ids TEXT;
+    ALTER TABLE test_data ADD COLUMN suite_id INTEGER;
+    ALTER TABLE test_data ADD COLUMN testing_type TEXT;
+    ALTER TABLE test_data ADD COLUMN iteration TEXT;
+    ALTER TABLE test_data ADD COLUMN meta TEXT;
+    ALTER TABLE test_data ADD COLUMN user_edited INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE test_data ADD COLUMN review_reason TEXT;
+    CREATE INDEX IF NOT EXISTS ix_test_data_story ON test_data(user_story_id);
+    CREATE TABLE IF NOT EXISTS test_data_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        test_data_id INTEGER NOT NULL,
+        row_key TEXT,
+        version INTEGER NOT NULL,
+        change TEXT NOT NULL,
+        snapshot TEXT NOT NULL,
+        at TEXT NOT NULL
+    );
+    """,
 ]
 
 
