@@ -17,6 +17,16 @@ types. Test cases are generated per suite type from a sprint's selected user sto
 traceability and a coverage matrix. Test data is versioned and traceable, and is written to the TFS test data tab
 or the Summary. See [docs/TEST_DESIGN_PAGES.md](docs/TEST_DESIGN_PAGES.md).
 
+## Version 23.2.0: test case and test data fixes
+
+Large user stories are generated two acceptance criteria per AI call with a separate generation timeout, so a local
+model no longer times out; a criterion that still fails is reported and the rest are kept. Steps must name the page,
+field or button and the value used. Cases are tagged with their testing type and user story, several suites can be
+generated at once, and the Test Cases list can edit, delete, select all and delete selected. Test Data loads the data
+already in the TFS Test Data tab, writes a Test Data Matrix there, generates for selected cases or several stories,
+and coverage recognises test cases created outside the application. Updating from 23.1.0 needs only the patch zip
+(see [docs/PATCH_23.2.0.md](docs/PATCH_23.2.0.md)).
+
 ## Version 23.1.0: offline install kit for company PCs
 
 The offline package now bundles llama-server, opens a **First-Run Setup** screen that asks only for the TFS URL,

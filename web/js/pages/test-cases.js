@@ -6,11 +6,11 @@ import { subscribe } from "../store.js";
 import { esc, toast, timeOf, openModal } from "../util.js";
 import { workItemPage } from "./workitems.js";
 
-const list = workItemPage({ category: "testcase", createLabel: "New test case" });
+const list = workItemPage({ category: "testcase", createLabel: "New test case", manage: true });
 const STATUS_PILL = { "Covered": "PASS", "Partially Covered": "WARN", "Not Covered": "FAIL", "Not Applicable": "WAITING", "Needs Clarification": "WARN" };
 let unsub = null;
-let timer = null;
-let runId = null;
+const timers = new Map();
+let runIds = [];
 
 function params() {
   return new URLSearchParams(location.hash.split("?")[1] || "");
@@ -19,8 +19,8 @@ function params() {
 function stop() {
   if (unsub) unsub();
   unsub = null;
-  clearTimeout(timer);
-  timer = null;
+  timers.forEach((t) => clearTimeout(t));
+  timers.clear();
 }
 
 function ul(items) {
@@ -39,7 +39,7 @@ function matrixHtml(story) {
     </tbody></table>`;
 }
 
-function caseHtml(story, tc) {
+function caseHtml(story, tc, typeName) {
   const sid = story.story.id;
   const issues = story.validation.per_case[tc.ref] || [];
   const dups = story.validation.duplicates.filter((d) => d.ref === tc.ref && d.kind === "existing");
@@ -47,6 +47,7 @@ function caseHtml(story, tc) {
   return `<details class="tc" open>
     <summary><label><input type="checkbox" class="sel" data-story="${sid}" value="${esc(tc.ref)}" ${tc.published_id || issues.some((i) => i.level === "error") ? "" : "checked"} ${tc.published_id ? "disabled" : ""}></label>
       <strong>${esc(tc.ref)}</strong> ${esc(tc.title)}
+      <span class="tag type">${esc(typeName)}</span> <span class="tag">US${esc(sid)}</span>
       ${tc.published_id ? `<a class="pill PASS" href="#/test-cases?id=${tc.published_id}">TFS #${tc.published_id}</a>` : ""}
       ${tc.edited ? '<span class="pill WAITING">edited</span>' : ""}
       <span class="muted">P${tc.priority} · ${esc(tc.risk)} risk · ${esc(tc.scenario)} · ${esc(tc.automation)}</span></summary>
@@ -70,7 +71,7 @@ function caseHtml(story, tc) {
   </details>`;
 }
 
-function storyHtml(story) {
+function storyHtml(story, typeName) {
   const s = story.story;
   return `<div class="card" style="margin-top:12px" data-story-card="${s.id}">
     <div class="row"><h3 style="margin:0">US${s.id} ${esc(s.title)}</h3><span class="spacer"></span>
@@ -82,14 +83,14 @@ function storyHtml(story) {
     ${story.clarifications.length ? `<h4>Clarifications needed</h4>${ul(story.clarifications.map((q) => (q.ac_id ? q.ac_id + ": " : "") + q.question))}` : ""}
     ${story.analysis?.gaps?.length ? `<h4>Requirement gaps</h4>${ul(story.analysis.gaps)}` : ""}
     ${story.not_applicable.length ? `<h4>Not applicable to this testing type</h4>${ul(story.not_applicable.map((n) => `${n.ac_id}: ${n.reason}`))}` : ""}
-    ${story.notes?.length ? ul(story.notes) : ""}
+    ${story.notes?.length ? `<div class="pill WARN" style="display:inline-block">Not finished</div>${ul(story.notes)}` : ""}
     ${matrixHtml(story)}
     <h4>Test cases</h4>
-    ${story.test_cases.length ? story.test_cases.map((tc) => caseHtml(story, tc)).join("") : '<p class="muted">No applicable test cases for this testing type.</p>'}
+    ${story.test_cases.length ? story.test_cases.map((tc) => caseHtml(story, tc, typeName)).join("") : '<p class="muted">No applicable test cases for this testing type.</p>'}
   </div>`;
 }
 
-function editCase(view, story, tc) {
+function editCase(view, runId, story, tc) {
   const m = openModal(`Edit ${tc.ref}`, `<form class="settings">
       <label>Title<input name="title" required value="${esc(tc.title)}"></label>
       <label>Acceptance criteria (comma-separated)<input name="ac_ids" value="${esc(tc.ac_ids.join(", "))}"></label>
@@ -109,7 +110,7 @@ function editCase(view, story, tc) {
         title: f.get("title"), ac_ids: String(f.get("ac_ids")).split(",").map((x) => x.trim()).filter(Boolean),
         preconditions: f.get("preconditions") || null, steps, priority: Number(f.get("priority")) } } });
       m.close();
-      showResult(view);
+      showResult(view, runId);
     } catch (err) { toast(err.message, "error"); }
   });
 }
@@ -121,57 +122,96 @@ async function traceDialog(storyId) {
     m.el.querySelector(".modal-body").innerHTML = `<p class="muted">${esc(t.note)}</p>
       ${t.impact.length ? `<p class="pill WARN" style="display:inline-block">Needs review</p>${ul(t.impact.map((i) => `#${i.tfs_test_case_id}: ${i.reason}`))}` : ""}
       <table class="data"><thead><tr><th>AC</th><th>Criterion</th><th>Linked test cases by testing type</th></tr></thead><tbody>
-      ${t.matrix.map((r) => `<tr><td>${esc(r.ac_id)}</td><td>${esc(r.text)}</td><td>${Object.keys(r.by_testing_type).length ? Object.entries(r.by_testing_type).map(([k, v]) => `<strong>${esc(k)}:</strong> ${v.map((x) => `<a href="#/test-cases?id=${x.id}">#${x.id}</a>${x.status === "review" ? ' <span class="pill WARN">review</span>' : ""}`).join(", ")}`).join("<br>") : '<span class="muted">none</span>'}</td></tr>`).join("")}
-      </tbody></table>`;
+      ${t.matrix.map((r) => `<tr><td>${esc(r.ac_id)}</td><td>${esc(r.text)}</td><td>${Object.keys(r.by_testing_type).length ? Object.entries(r.by_testing_type).map(([k, v]) => `<strong>${esc(k)}:</strong> ${v.map((x) => `<a href="#/test-cases?id=${x.id}">#${x.id}</a>${x.status === "review" ? ' <span class="pill WARN">review</span>' : ""}${x.source === "inferred" ? ' <span class="muted" title="Created outside this application; matched to the criterion by its title and steps">(inferred)</span>' : ""}`).join(", ")}`).join("<br>") : '<span class="muted">none</span>'}</td></tr>`).join("")}
+      </tbody></table>
+      ${t.unmapped?.length ? `<p class="muted">Linked to the story but not matched to a criterion: ${t.unmapped.map((u) => `<a href="#/test-cases?id=${u.tfs_test_case_id}">#${u.tfs_test_case_id}</a> ${esc(u.title)}`).join(", ")}</p>` : ""}`;
   } catch (err) { m.el.querySelector(".modal-body").innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`; }
 }
 
-async function showResult(view) {
-  const box = view.querySelector("#genResult");
-  const body = await api(`/api/design/suite-runs/${encodeURIComponent(runId)}`);
-  if (body.status === "RUNNING") { timer = setTimeout(() => showResult(view), 1500); return; }
-  stop();
+function runBox(view, runId) {
+  let box = view.querySelector(`[data-run="${CSS.escape(runId)}"]`);
+  if (!box) {
+    box = document.createElement("div");
+    box.dataset.run = runId;
+    box.innerHTML = '<div class="card" style="margin-top:12px"><p class="pill RUNNING">Waiting for the AI…</p></div>';
+    view.querySelector("#genResult").appendChild(box);
+  }
+  return box;
+}
+
+async function showResult(view, runId) {
+  const box = runBox(view, runId);
+  let body;
+  try { body = await api(`/api/design/suite-runs/${encodeURIComponent(runId)}`); } catch (err) {
+    box.innerHTML = `<div class="card"><p class="pill FAIL">${esc(err.message)}</p></div>`;
+    return;
+  }
+  if (body.status === "RUNNING") {
+    box.querySelector(".pill.RUNNING")?.replaceChildren(document.createTextNode("Generating… (progress in Activity)"));
+    timers.set(runId, setTimeout(() => showResult(view, runId), 2000));
+    return;
+  }
+  timers.delete(runId);
+  if (!timers.size) view.querySelector("#genProgress").hidden = true;
   const r = body.result;
-  view.querySelector("#genProgress").hidden = true;
-  if (body.status === "FAILED" || !r?.stories) {
-    box.innerHTML = `<div class="card"><p class="pill FAIL">Generation failed</p><p>${esc(r?.error || "See the activity log.")}</p>
-      <p class="muted">Test cases are only generated by your configured AI. <a href="#/ai-settings">Check the AI settings</a>.</p></div>`;
+  const failedBanner = r?.error ? `<p class="pill FAIL">Generation stopped</p><p>${esc(r.error)}</p>
+      <p class="muted">Each AI call has the generation timeout set in <a href="#/ai-settings">AI settings</a>; criteria are sent a few at a time so a local model answers in time.</p>` : "";
+  if (!r?.stories?.length) {
+    box.innerHTML = `<div class="card" style="margin-top:12px">${failedBanner || '<p class="pill FAIL">Generation failed</p><p>See the activity log.</p>'}
+      <p class="muted">Test cases are only generated by your configured AI.</p></div>`;
     return;
   }
   const m = r.meta || {};
-  box.innerHTML = `<div class="card" style="margin-top:12px"><div class="row"><h3 style="margin:0">${esc(r.suite.testing_type_name)} · suite "${esc(r.suite.name)}"</h3><span class="spacer"></span>
-      <label class="row" style="gap:6px"><input type="checkbox" id="selAll" checked> Select all</label>
-      <button class="btn primary" id="publish">Create selected test cases in this suite</button></div>
+  box.innerHTML = `<div class="card" style="margin-top:12px"><div class="row"><h3 style="margin:0"><span class="tag type">${esc(r.suite.testing_type_name)}</span> suite "${esc(r.suite.name)}"</h3><span class="spacer"></span>
+      <label class="row" style="gap:6px"><input type="checkbox" data-sel-all checked> Select all</label>
+      <button class="btn primary" data-publish>Create selected test cases in this suite</button></div>
+      ${failedBanner}
       <p class="muted">Generated by ${esc(m.agent || "")} (${esc(m.agent_version || "")}, prompt ${esc(m.prompt_version || "")}) with ${esc(m.model?.label || "")} ${esc(m.model?.model || "")} · ${esc(timeOf(m.generated_at))}.
-      Each case is checked with explicit rules (source links, specific expected results, cleanup, thresholds, duplicates), not by a confidence score.
-      TFS links each test case to its user story; acceptance-criterion links are kept by this application and written into the test case Summary.</p></div>
-    ${r.stories.map(storyHtml).join("")}
-    <div id="published"></div>`;
-  box.querySelector("#selAll").addEventListener("change", (e) => box.querySelectorAll(".sel:not(:disabled)").forEach((c) => (c.checked = e.target.checked)));
+      Each case is checked with explicit rules (source links, concrete steps, specific expected results, cleanup, thresholds, duplicates), not by a confidence score.
+      Created test cases are tagged with their testing type and user story. TFS links each test case to its user story; acceptance-criterion links are kept by this application and written into the test case Summary.</p></div>
+    ${r.stories.map((st) => storyHtml(st, r.suite.testing_type_name)).join("")}`;
+  box.querySelector("[data-sel-all]").addEventListener("change", (e) => box.querySelectorAll(".sel:not(:disabled)").forEach((c) => (c.checked = e.target.checked)));
   box.querySelectorAll("[data-trace]").forEach((b) => b.addEventListener("click", () => traceDialog(b.dataset.trace)));
   box.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
     const [sid, ref] = b.dataset.edit.split("|");
-    const story = r.stories.find((s) => String(s.story.id) === sid);
-    editCase(view, story, story.test_cases.find((t) => t.ref === ref));
+    const story = r.stories.find((x) => String(x.story.id) === sid);
+    editCase(view, runId, story, story.test_cases.find((t) => t.ref === ref));
   }));
-  box.querySelector("#publish").addEventListener("click", async (e) => {
+  box.querySelector("[data-publish]").addEventListener("click", async (e) => {
     const selection = {};
     box.querySelectorAll(".sel:checked").forEach((c) => (selection[c.dataset.story] ||= []).push(c.value));
     if (!Object.keys(selection).length) { toast("Select at least one test case.", "warning"); return; }
     const reuse = {};
-    box.querySelectorAll("select.reuse").forEach((s) => { if (s.value) reuse[s.dataset.key] = Number(s.value); });
+    box.querySelectorAll("select.reuse").forEach((x) => { if (x.value) reuse[x.dataset.key] = Number(x.value); });
     e.target.disabled = true;
     e.target.textContent = "Creating in TFS…";
     try {
       const p = await api(`/api/design/suite-runs/${encodeURIComponent(runId)}/publish`, { method: "POST", body: { selection, reuse } });
       toast(`${p.created.filter((c) => c.action === "created").length} created, ${p.created.filter((c) => c.action === "reused").length} reused in suite "${p.suite}"`, "success");
-      await showResult(view);
+      await showResult(view, runId);
+      list.mount(view.querySelector("#tcList"));
     } catch (err) {
       toast(err.message, "error");
       e.target.disabled = false;
       e.target.textContent = "Create selected test cases in this suite";
     }
   });
+}
+
+function watch(view, ids) {
+  stop();
+  runIds = ids;
+  const prog = view.querySelector("#genProgress");
+  prog.hidden = false;
+  prog.querySelector(".feed").innerHTML = "";
+  view.querySelector("#genResult").innerHTML = "";
+  unsub = subscribe((c) => {
+    if (c.type !== "event" || !runIds.includes(c.event.run_id)) return;
+    const feed = prog.querySelector(".feed");
+    feed.insertAdjacentHTML("beforeend", `<div class="feed-item"><span class="feed-time">${esc(timeOf(c.event.timestamp))}</span><span>${esc((c.event.agent_name ? c.event.agent_name + " · " : "") + (c.event.activity || c.event.name))}</span></div>`);
+    feed.scrollTop = feed.scrollHeight;
+  });
+  ids.forEach((id) => { runBox(view, id); timers.set(id, setTimeout(() => showResult(view, id), 1500)); });
 }
 
 async function generator(view) {
@@ -182,36 +222,43 @@ async function generator(view) {
       api("/api/tfs/meta"), api("/api/tfs/test-plans"), api("/api/tfs/testing-types")]);
   } catch { card.hidden = true; return; }
   const p = params();
+  const wanted = new Set((p.get("suites") || p.get("suite") || "").split(",").filter(Boolean));
   card.innerHTML = `<form id="genForm">
     <div class="row" style="flex-wrap:wrap">
       <strong>Generate test cases with AI</strong>
       <select name="plan" aria-label="Test plan" required><option value="">Test plan…</option>${plans.map((x) => `<option value="${x.id}" ${String(x.id) === p.get("plan") ? "selected" : ""}>#${x.id} ${esc(x.name)}</option>`).join("")}</select>
-      <select name="suite" aria-label="Test suite" required><option value="">Test suite…</option></select>
-      <select name="type" aria-label="Testing type" hidden><option value="">Testing type…</option>${types.map((t) => `<option value="${t.key}">${esc(t.name)}</option>`).join("")}</select>
       <select name="iteration" aria-label="Sprint" required><option value="">Sprint…</option>${meta.iterations.map((i) => `<option ${i === p.get("iteration") ? "selected" : ""}>${esc(i)}</option>`).join("")}</select>
-      <label class="row" style="gap:6px">Max per story <input name="max" type="number" value="8" min="1" max="30" style="width:70px"></label>
+      <label class="row" style="gap:6px" title="The agent writes up to this many test cases for each acceptance criterion">Cases per criterion <input name="per" type="number" value="2" min="1" max="6" style="width:60px"></label>
       <span class="spacer"></span><button class="btn primary" type="submit">Generate test cases</button>
     </div>
-    <p class="muted" id="suiteInfo" style="margin:6px 0 0">Choose the suite: its testing type decides which kind of test cases are written.</p>
+    <div id="suites" style="margin-top:8px"><p class="muted">Choose the test plan to list its suites.</p></div>
+    <label class="row" style="gap:6px;margin-top:6px" id="typeRow" hidden>Testing type for suites without one
+      <select name="type" aria-label="Testing type"><option value="">Testing type…</option>${types.map((t) => `<option value="${t.key}">${esc(t.name)}</option>`).join("")}</select></label>
     <div id="stories" style="margin-top:8px"></div>
   </form>`;
   const form = card.querySelector("#genForm");
   let suites = [];
+  const checkedSuites = () => [...form.querySelectorAll('[name="suite"]:checked')].map((c) => suites.find((s) => String(s.id) === c.value));
+  const suiteInfo = () => {
+    form.querySelector("#typeRow").hidden = !checkedSuites().some((s) => !s.testing_type);
+  };
   const loadSuites = async () => {
-    const sel = form.elements.suite;
-    sel.innerHTML = '<option value="">Test suite…</option>';
-    if (!form.elements.plan.value) return;
+    const box = form.querySelector("#suites");
+    if (!form.elements.plan.value) { box.innerHTML = '<p class="muted">Choose the test plan to list its suites.</p>'; return; }
+    box.innerHTML = '<p class="muted">Loading suites…</p>';
     try {
       ({ suites } = await api(`/api/tfs/test-plans/${form.elements.plan.value}/suites`));
-      sel.innerHTML += suites.filter((s) => s.parent_id).map((s) => `<option value="${s.id}" ${String(s.id) === p.get("suite") ? "selected" : ""}>${esc(s.name)}${s.testing_type_name ? ` (${esc(s.testing_type_name)})` : ""}</option>`).join("");
+      const children = suites.filter((s) => s.parent_id);
+      box.innerHTML = children.length ? `<div class="row"><strong>Test suites</strong> <span class="muted">each checked suite gets its own test cases of its testing type</span>
+          <button class="link-btn" type="button" data-sall>Check all</button> · <button class="link-btn" type="button" data-snone>Uncheck all</button></div>
+        <div class="choices" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr))">${children.map((s) => `<label class="choice"><input type="checkbox" name="suite" value="${s.id}" ${wanted.has(String(s.id)) ? "checked" : ""}>
+          <span><strong>${esc(s.name)}</strong><span class="muted">${s.testing_type_name ? esc(s.testing_type_name) : "no testing type yet"}</span></span></label>`).join("")}</div>`
+        : '<p class="muted">This plan has no suites. <a href="#/test-suites">Create suites</a> first.</p>';
+      box.querySelector("[data-sall]")?.addEventListener("click", () => { box.querySelectorAll('[name="suite"]').forEach((c) => (c.checked = true)); suiteInfo(); });
+      box.querySelector("[data-snone]")?.addEventListener("click", () => { box.querySelectorAll('[name="suite"]').forEach((c) => (c.checked = false)); suiteInfo(); });
+      box.querySelectorAll('[name="suite"]').forEach((c) => c.addEventListener("change", suiteInfo));
       suiteInfo();
-    } catch (err) { toast(err.message, "error"); }
-  };
-  const suiteInfo = () => {
-    const s = suites.find((x) => String(x.id) === form.elements.suite.value);
-    const t = s && types.find((x) => x.key === s.testing_type);
-    form.elements.type.hidden = !(s && !s.testing_type);
-    card.querySelector("#suiteInfo").textContent = t ? `${t.name}: ${t.focus}` : s ? "This suite has no testing type yet: choose one." : "Choose the suite: its testing type decides which kind of test cases are written.";
+    } catch (err) { box.innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`; }
   };
   const loadStories = async () => {
     const box = card.querySelector("#stories");
@@ -229,32 +276,27 @@ async function generator(view) {
     } catch (err) { box.innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`; }
   };
   form.elements.plan.addEventListener("change", loadSuites);
-  form.elements.suite.addEventListener("change", suiteInfo);
   form.elements.iteration.addEventListener("change", loadStories);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(form);
     const ids = f.getAll("story").map(Number);
+    const suiteIds = f.getAll("suite").map(Number);
+    if (!suiteIds.length) { toast("Check at least one test suite.", "warning"); return; }
     if (!ids.length) { toast("Check at least one user story.", "warning"); return; }
+    if (checkedSuites().some((s) => !s.testing_type) && !f.get("type")) { toast("Choose a testing type for the suites that have none.", "warning"); return; }
+    const btn = form.querySelector("button[type=submit]");
+    btn.disabled = true;
     try {
       const r = await api("/api/design/suite-runs", { method: "POST", body: {
-        plan_id: Number(f.get("plan")), suite_id: Number(f.get("suite")), user_story_ids: ids,
-        testing_type: f.get("type") || null, max_cases: Number(f.get("max")) } });
-      runId = r.run_id;
-      history.replaceState(null, "", `#/test-cases?plan=${f.get("plan")}&suite=${f.get("suite")}&run=${runId}`);
-      const prog = view.querySelector("#genProgress");
-      prog.hidden = false;
-      prog.querySelector(".feed").innerHTML = "";
-      view.querySelector("#genResult").innerHTML = "";
-      stop();
-      unsub = subscribe((c) => {
-        if (c.type !== "event" || c.event.run_id !== runId) return;
-        const feed = prog.querySelector(".feed");
-        feed.insertAdjacentHTML("beforeend", `<div class="feed-item"><span class="feed-time">${esc(timeOf(c.event.timestamp))}</span><span>${esc((c.event.agent_name ? c.event.agent_name + " · " : "") + (c.event.activity || c.event.name))}</span></div>`);
-        feed.scrollTop = feed.scrollHeight;
-      });
-      timer = setTimeout(() => showResult(view), 1500);
+        plan_id: Number(f.get("plan")), suite_ids: suiteIds, user_story_ids: ids,
+        testing_type: f.get("type") || null, cases_per_criterion: Number(f.get("per")) || 2 } });
+      const ids_ = r.runs.map((x) => x.run_id);
+      history.replaceState(null, "", `#/test-cases?plan=${f.get("plan")}&suites=${suiteIds.join(",")}&runs=${ids_.join(",")}`);
+      toast(`Generating for ${r.runs.length} suite(s): ${r.runs.map((x) => x.testing_type).join(", ")}`, "success");
+      watch(view, ids_);
     } catch (err) { toast(err.message, "error"); }
+    btn.disabled = false;
   });
   await loadSuites();
   if (form.elements.iteration.value) loadStories();
@@ -267,8 +309,11 @@ export async function mount(view) {
     <div id="genResult" style="margin-bottom:12px"></div>
     <div id="tcList"></div>`;
   await generator(view);
-  runId = params().get("run");
-  if (runId) showResult(view);
+  const ids = (params().get("runs") || params().get("run") || "").split(",").filter(Boolean);
+  if (ids.length) {
+    runIds = ids;
+    ids.forEach((id) => showResult(view, id));
+  }
   await list.mount(view.querySelector("#tcList"));
 }
 

@@ -39,6 +39,9 @@ class FakeAzureDevOps:
         self.requests: list[httpx.Request] = []
         self.unreachable = False
         self.hierarchy = hierarchy
+        self.recycled: dict[int, dict] = {}
+        self.deleted_test_cases: list[int] = []
+        self.work_item_fields: dict[str, list[tuple[str, str]]] = {}  # type -> extra (referenceName, name)
         self.test_case_parameters = True  # False: a process template whose Test Case has no Parameters fields
         if hierarchy:
             self._add_hierarchy()
@@ -141,10 +144,14 @@ class FakeAzureDevOps:
             if m.group(1) == "Test Case":
                 refs += ["Microsoft.VSTS.TCM.Steps"] + (["Microsoft.VSTS.TCM.Parameters", "Microsoft.VSTS.TCM.LocalDataSource"]
                                                         if self.test_case_parameters else [])
+            extra = self.work_item_fields.get(m.group(1), [])
+            refs += [r for r, _ in extra]
+            names_ = dict(extra)
             allowed = {"Microsoft.VSTS.Common.Severity": ["1 - Critical", "2 - High", "3 - Medium", "4 - Low"]}
             expand = request.url.params.get("$expand") == "allowedValues"
             return httpx.Response(200, json={"value": [
-                {"referenceName": r, **({"allowedValues": allowed.get(r, [])} if expand else {})} for r in refs]})
+                {"referenceName": r, "name": names_.get(r, r.rsplit(".", 1)[-1]),
+                 **({"allowedValues": allowed.get(r, [])} if expand else {})} for r in refs]})
         if path == f"{proj}/_apis/wit/attachments" and request.method == "POST":
             aid = f"att-{len(self.attachments) + 1}"
             self.attachments[request.url.params["fileName"]] = request.content
@@ -168,6 +175,12 @@ class FakeAzureDevOps:
             i = int(m.group(1))
             if i not in self.items:
                 return httpx.Response(404, json={"message": "not found"})
+            if request.method == "DELETE":
+                if self.items[i]["System.WorkItemType"] == "Test Case":
+                    return httpx.Response(400, json={"message": "TF401320: test cases can only be deleted with the "
+                                                                "test management API"})
+                self.recycled[i] = self.items.pop(i)
+                return httpx.Response(204)
             if request.method == "PATCH":
                 for op in json.loads(request.content):
                     if op["path"] == "/relations/-":
@@ -266,6 +279,16 @@ class FakeAzureDevOps:
                 suites = [{k: v for k, v in s.items() if k != "parentSuite"} | ({"parent": s["parentSuite"]} if "parentSuite" in s else {})
                           for s in suites]
             return httpx.Response(200, json={"value": suites})
+        m = re.match(rf"{re.escape(proj)}/_apis/{api}/testcases/(\d+)$", path, re.I)
+        if m and request.method == "DELETE":
+            i = int(m.group(1))
+            if i not in self.items:
+                return httpx.Response(404, json={"message": "test case not found"})
+            self.items.pop(i)
+            self.deleted_test_cases.append(i)
+            for members in self.suite_members.values():
+                members[:] = [x for x in members if x != i]
+            return httpx.Response(204)
         m = re.match(rf"{re.escape(proj)}/_apis/testplan/plans/(\d+)/suites/(\d+)/testcase$", path, re.I)
         if m and request.method == "POST":
             ids = [w["workItem"]["id"] for w in json.loads(request.content)]

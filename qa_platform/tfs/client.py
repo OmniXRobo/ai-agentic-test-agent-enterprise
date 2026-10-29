@@ -271,6 +271,20 @@ class AzureDevOpsClient:
                 raise
             self.request("DELETE", f"_apis/test/plans/{int(plan_id)}/suites/{int(suite_id)}", api_version="5.0")
 
+    def delete_test_case(self, test_case_id: int) -> None:
+        """Permanently deletes the test case (and its results). Test cases cannot be deleted with the work item
+        API, only with the Test Plans API (Azure DevOps / Server 2020+) or the legacy Test API."""
+        try:
+            self.request("DELETE", f"_apis/testplan/testcases/{int(test_case_id)}")
+        except QAError as exc:
+            if exc.error_code != "TFS_NOT_FOUND":
+                raise
+            self.request("DELETE", f"_apis/test/testcases/{int(test_case_id)}", api_version="5.0-preview.1")
+
+    def delete_work_item(self, item_id: int) -> None:
+        """Moves the work item to the project's Recycle Bin (it can be restored there)."""
+        self.request("DELETE", f"_apis/wit/workitems/{int(item_id)}", project_scoped=False)
+
     def suite_test_cases(self, plan_id: int, suite_id: int) -> list[dict[str, Any]]:
         try:
             return self.request("GET", f"_apis/testplan/Plans/{int(plan_id)}/Suites/{int(suite_id)}/TestCase").get("value", [])

@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _choice(value: Any, allowed: tuple[str, ...], default: str) -> Any:
+    """Small local models often answer 'Positive' or 'happy path'; map such values onto the allowed ones."""
+    if not isinstance(value, str):
+        return value
+    v = value.strip().lower().replace("-", "_").replace(" ", "_")
+    if v in allowed:
+        return v
+    return next((a for a in allowed if a in v or v in a), default) if v else default
 
 
 class Requirement(BaseModel):
@@ -118,6 +128,20 @@ class SuiteTestCase(BaseModel):
     automation_reason: str | None = None
     gaps: list[str] = Field(default=[], description="Assumptions or missing requirements a reviewer must check")
 
+    @field_validator("scenario", "risk", "automation", mode="before")
+    @classmethod
+    def _lenient(cls, value: Any, info: Any) -> Any:
+        field = cls.model_fields[info.field_name]
+        return _choice(value, get_args(field.annotation), str(field.default))
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _priority(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            digits = "".join(ch for ch in value if ch.isdigit())
+            return min(4, max(1, int(digits))) if digits else 2
+        return min(4, max(1, value)) if isinstance(value, int) else value
+
 
 class SuiteCaseSet(BaseModel):
     test_cases: list[SuiteTestCase] = []
@@ -148,6 +172,11 @@ class DataRow(BaseModel):
     expected_outcome: str = Field(description="Observable result the test case expects with this row")
     ac_ids: list[str] = []
     values: dict[str, str | int | float | bool | None]
+
+    @field_validator("scenario", mode="before")
+    @classmethod
+    def _lenient(cls, value: Any) -> Any:
+        return _choice(value, get_args(cls.model_fields["scenario"].annotation), "other")
 
 
 class TestDataDesign(BaseModel):

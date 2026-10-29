@@ -181,7 +181,7 @@ def test_sprint_stories_then_functional_generation_traceable_and_validated(env):
     cov204 = {r["ac_id"]: r for r in s204["coverage"]}
     assert [x["id"] for x in cov204["AC1"]["conditions"]] == ["AC1.1", "AC1.2"]
     assert cov204["AC1"]["status"] == "Covered"
-    assert "What does 'appropriate' mean?" in cov204["AC2"]["clarifications"]
+    assert cov204["AC2"]["clarifications"][0].startswith("What does 'appropriate' mean?")
     assert cov204["AC2"]["status"] == "Needs Clarification"  # a linked case does not make an unclear criterion covered
     meta = result["meta"]
     assert meta["agent_version"] == suite_cases.AGENT_VERSION and meta["prompt_version"] == suite_cases.PROMPT_VERSION
@@ -329,7 +329,11 @@ def test_generate_test_data_rules_traceability_and_filters(env):
 
     cov = c.get("/api/test-data/coverage/201").json()["matrix"]
     status = {r["ac_id"]: r["status"] for r in cov}
-    assert status["AC-02"] in ("Data covered", "Missing data coverage") and status["AC-01"] == "Missing test case coverage"
+    assert status["AC-02"] in ("Data covered", "Missing data coverage")
+    # #1268 was created outside the application (no stored criterion link): matched to AC-01 by its wording
+    ac01 = next(r for r in cov if r["ac_id"] == "AC-01")
+    assert status["AC-01"] == "Missing data coverage"
+    assert [(t["test_case_id"], t["link"]) for t in ac01["test_cases"]] == [(1268, "inferred")]
 
 
 def test_test_data_edit_versioning_regenerate_keeps_edits_and_delete_selected(env):
@@ -379,7 +383,8 @@ def test_write_test_data_to_tfs_uses_test_data_tab_else_summary(env):
     c.post("/api/tfs/cache/clear")
     r = c.post(f"/api/test-data/tfs/{tc}", json={"target": "auto"}).json()
     assert r["target"] == "Summary", r
-    assert "<h3>Test Data</h3>" in ado.items[tc]["System.Description"]
+    desc = ado.items[tc]["System.Description"]
+    assert "<h3>Test Data Matrix</h3>" in desc and "<strong>Combination 1: " in desc and "Expected Result:" in desc
 
 
 def test_export_import_round_trip_and_formula_safety(env):

@@ -84,7 +84,7 @@ class FakeLLM:
             system = body["messages"][0]["content"]
             if body["messages"][0]["role"] == "user":
                 return self._reply("READY")
-            for marker, reply in {**self.extra, **REPLIES}.items():
+            for marker, reply in [*self.extra.items(), *((k, v) for k, v in REPLIES.items() if k not in self.extra)]:
                 if marker in system:
                     if callable(reply):  # a reply that depends on the request (e.g. which Test Case)
                         reply = reply(body)

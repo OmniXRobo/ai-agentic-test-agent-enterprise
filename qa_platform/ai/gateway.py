@@ -97,6 +97,8 @@ class AIGateway:
             "base_url": (active.get("base_url") or "").rstrip("/"),
             "model": active.get("model") or "",
             "timeout_seconds": float(ai.get("timeout_seconds") or 120),
+            # Test case and test data generation write long answers; a local CPU model needs minutes per call.
+            "generation_timeout_seconds": float(ai.get("generation_timeout_seconds") or 600),
             "temperature": float(ai.get("temperature", 0.2)),
             "max_tokens": int(ai.get("max_tokens", 4096)),
             "on_premise": {"base_url": (ai.get("base_url") or "").rstrip("/"), "model": ai.get("model") or ""},
@@ -190,13 +192,14 @@ class AIGateway:
         log.info(f"AI completion in {time.monotonic() - started:.1f}s", extra={"operation": "ai.chat"})
         return content or ""
 
-    def complete_json(self, system: str, user: str, model: type[T], *, max_tokens: int | None = None) -> T:
+    def complete_json(self, system: str, user: str, model: type[T], *, max_tokens: int | None = None,
+                      timeout: float | None = None) -> T:
         schema = json.dumps(model.model_json_schema(), separators=(",", ":"))
         messages = [
             {"role": "system", "content": f"{system}\n\nReply with one JSON object only, matching this JSON schema:\n{schema}"},
             {"role": "user", "content": user},
         ]
-        reply = self.chat(messages, json_mode=True, max_tokens=max_tokens)
+        reply = self.chat(messages, json_mode=True, max_tokens=max_tokens, timeout=timeout)
         try:
             return model.model_validate(extract_json(reply))
         except (ValueError, ValidationError) as first_error:
@@ -205,7 +208,7 @@ class AIGateway:
                 {"role": "user", "content": f"That reply was not valid for the schema ({str(first_error)[:400]}). "
                                             "Reply again with only the corrected JSON object."},
             ]
-            reply = self.chat(messages, json_mode=True, max_tokens=max_tokens)
+            reply = self.chat(messages, json_mode=True, max_tokens=max_tokens, timeout=timeout)
             try:
                 return model.model_validate(extract_json(reply))
             except (ValueError, ValidationError) as exc:

@@ -7,8 +7,9 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from ..design import testing_types
-from ..design.service import DEFAULT_SUITES, plan_name
+from ..automation.generator import parse_tfs_steps
+from ..design import models, testing_types
+from ..design.service import DEFAULT_SUITES, plan_name, steps_xml
 from ..errors import QAError
 from ..runtime import Runtime
 from .deps import runtime
@@ -83,7 +84,8 @@ def work_items(
 
 @router.get("/work-items/{item_id}")
 def work_item(item_id: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    return {"ok": True, "item": rt.tfs.detail(item_id)}
+    item = rt.tfs.detail(item_id)
+    return {"ok": True, "item": {**item, "step_list": parse_tfs_steps(item.get("steps"))}}
 
 
 @router.post("/work-items", status_code=201)
@@ -91,12 +93,48 @@ def create_work_item(body: WorkItemIn, category: str | None = None, rt: Runtime 
     type_name = body.type or (rt.tfs.default_type(category) if category else None)
     if not type_name:
         raise QAError("TFS_TYPE_REQUIRED", "Give a work item type or a category.")
-    return {"ok": True, **rt.tfs.create(type_name, body.fields)}
+    return {"ok": True, **rt.tfs.create(type_name, _with_steps(body.fields))}
 
 
 @router.patch("/work-items/{item_id}")
 def update_work_item(item_id: int, body: WorkItemIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    return {"ok": True, **rt.tfs.update(item_id, body.fields)}
+    return {"ok": True, **rt.tfs.update(item_id, _with_steps(body.fields))}
+
+
+def _with_steps(fields: dict[str, Any]) -> dict[str, Any]:
+    """'steps': [{action, expected}] -> the test case's Steps field."""
+    steps = fields.pop("steps", None)
+    if isinstance(steps, list):
+        rows = [models.TestStep(action=str(s.get("action") or "").strip(), expected=str(s.get("expected") or "").strip())
+                for s in steps if isinstance(s, dict) and str(s.get("action") or "").strip()]
+        if not rows:
+            raise QAError("STEPS_REQUIRED", "A test case needs at least one step with an action.")
+        fields["Microsoft.VSTS.TCM.Steps"] = steps_xml(rows)
+    return fields
+
+
+@router.delete("/work-items/{item_id}")
+def delete_work_item(item_id: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    result = rt.tfs.delete(item_id)
+    rt.design.cases.forget_case(item_id)
+    return {"ok": True, **result}
+
+
+class DeleteItemsIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+@router.post("/work-items/delete")
+def delete_work_items(body: DeleteItemsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Delete several work items; each one is reported, so one failure does not hide the others."""
+    deleted, failed = [], []
+    for i in dict.fromkeys(body.ids):
+        try:
+            deleted.append(rt.tfs.delete(i))
+            rt.design.cases.forget_case(i)
+        except QAError as exc:
+            failed.append({"id": i, "error": exc.message})
+    return {"ok": not failed, "deleted": deleted, "failed": failed}
 
 
 @router.get("/test-plans")

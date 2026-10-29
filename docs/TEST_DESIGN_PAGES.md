@@ -25,26 +25,34 @@ static suite (reused if one with the same name exists). The suite's testing type
 
 ## Test Cases (`#/test-cases`)
 
-1. Choose the **test plan** and **suite**. The suite's testing type decides what gets generated.
+1. Choose the **test plan** and check one or more **suites**. Each checked suite gets its own run with test cases of
+   its testing type; the runs are generated one after the other because a single local model serves them.
 2. Choose the **sprint**. Its user stories are listed with check boxes.
 3. **Generate**: for each story the Test Case Design Agent does the following.
    * Reads the title, description and acceptance criteria. Existing criterion ids (`AC1`, `AC-02`, `Criterion 3`)
      are kept. Other criteria get `AC-01`, `AC-02` and so on, and those ids stay stable across generations: unchanged
      text keeps its id, edited text keeps the id of the criterion it replaced, and a new criterion gets the next free number.
      A Given/When/Then scenario counts as one criterion.
-   * Breaks each criterion into conditions (`AC-01.1`, `AC-01.2`) with the AI. If the AI can't, each criterion
-     becomes a single condition.
-   * Writes the cases for that testing type only, in the Title, User Story, Precondition and Step / Action /
-     Expected Result format.
-   * **Validates** them with explicit rules (see below), sends the issues back to the AI once to refine the cases,
-     and validates again. A confidence score is never used as proof.
+   * Breaks each criterion into conditions (`AC-01.1`, `AC-01.2`) by its clauses ("A and B", "A; B"), without an AI
+     call. Unclear words such as "appropriate" or "quickly" become a clarification question.
+   * Writes the cases for that testing type only, **two criteria per AI call** (`design.criteria_per_call`), up to
+     *Cases per criterion* each, in the Title, User Story, Precondition and Step / Action / Expected Result format.
+     Small calls keep a local model on a CPU within its time: each call may take up to the **generation timeout**
+     (AI settings, default 600 s). When a call times out, its criteria are retried one by one; a criterion that still
+     fails is reported ("Generate again") and the other criteria keep their test cases. A story with 11 criteria is
+     6 small calls instead of one large one.
+   * Steps must be concrete: one action per step naming the page, field or button and the value used, and an
+     observable expected result. The prompt carries an example of the format.
+   * **Validates** them with explicit rules (see below), sends the issues back to the AI once per call to refine the
+     cases, and validates again. A confidence score is never used as proof.
    * Builds the **coverage matrix** per criterion, judged per condition. The statuses are Covered, Partially Covered,
      Not Covered, Not Applicable and Needs Clarification. This is requirement coverage and is never an execution result.
 4. Review the cases, edit any of them (an edit is re-validated), and choose **Reuse existing #id** for duplicate
    candidates. Then **Create selected test cases in this suite**.
 
 Validation rules: `SOURCE_LINK` (every case links to a criterion of this story; unknown ids are dropped),
-`STEP_ACTION` / `EXPECTED_RESULT` (no empty or vague results such as "works correctly"), `CLEANUP` (cases that
+`STEP_ACTION` (no empty actions, no single summary step such as "Complete the purchase workflow", more than one step),
+`EXPECTED_RESULT` (no empty or vague results such as "works correctly"), `CLEANUP` (cases that
 change data need a restore step), `THRESHOLD` (performance and security cases without a stated target or policy are
 flagged as not decidable yet), `DUPLICATE` (generated cases that overlap each other or existing linked cases).
 
@@ -68,13 +76,31 @@ With a **Performance Testing** suite, the same story gives one workload case mar
 stated", and the other criteria are marked *Not Applicable* with a reason. A **Smoke Testing** suite gives one
 critical-path check, plus the limitation that business criticality wasn't supplied.
 
+Created test cases are tagged `AI Generated; <testing type>; US<story>; <criterion ids>` (for example
+`Functional Testing; US118`), the same tags the project's existing test cases use.
+
+Test cases created elsewhere (by hand or by an earlier version) have no stored criterion link. Coverage and
+Traceability then read criterion ids from the case's tags, title or Summary, or match the case to the criterion
+whose wording its title and steps share, marked *inferred*. Cases that match nothing are listed as unmapped.
+
+The **test case list** has check boxes, *Select all*, *Delete selected*, and Edit / Delete on every row. Edit changes
+the title, state, sprint, tags, priority, Summary and the steps (one line per step: `Action || Expected Result`).
+Deleting a test case uses the Test Plans API (`DELETE _apis/testplan/testcases/{id}`, legacy
+`_apis/test/testcases/{id}`): TFS deletes test cases permanently, so the page asks for confirmation and lists them.
+Other work item types go to the Recycle Bin.
+
 ## Test Data (`#/test-data`)
 
 You filter by **sprint → user story → test case**. The list shows the user story, test case, row, scenario, values
 (with the dynamic-date preview), expected outcome and criteria.
 
-* **Generate test data** works for the chosen test case, for the selected rows' test cases, or for every test case
-  of the chosen story. The Test Data Intelligence Agent reads the steps, the story's criteria and the suite's testing
+* Choosing a user story or a test case **loads the test data already in TFS**: the test case's Test Data tab
+  (a custom field named "Test Data", in the *Test Data Matrix* layout of `Combination N: name`, `Field: value` and
+  `Expected Result:` lines, or a table), its Parameter values, or a Test Data section of its Summary. Passwords in
+  valid rows are stored here as `{{SECRET:password}}`; keep the real value in Credentials. **Load from TFS** reads
+  TFS again. Edited rows are kept; data this application wrote itself is recognised and not loaded twice.
+* **Generate test data** opens a choice: the checked test cases of the chosen story, or every test case of the
+  checked user stories of the sprint. The Test Data Intelligence Agent reads the steps, the story's criteria and the suite's testing
   type, then generates valid, invalid, boundary, empty/null, duplicate, date/time, role, Unicode and pairwise rows as
   they apply. It never invents business rules or credentials; missing rules are listed as gaps.
 * The generated rows go through explicit rules: plain-text secrets in valid rows become `{{SECRET:name}}`, real
@@ -87,8 +113,9 @@ You filter by **sprint → user story → test case**. The list shows the user s
 * **Edit** marks a row as user-edited, raises its version and keeps the earlier values in its history. Regenerating
   archives unedited rows and keeps edited ones, flagged for review. **Delete selected** removes the checked rows,
   and they stay in the history.
-* **Write to TFS** writes to the test case's test data tab if its type has one. That is a custom "Test Data" field
-  or the Parameter values grid. Otherwise it writes to the Summary.
+* **Write to TFS** writes a *Test Data Matrix* (Combination 1, 2, … with each field and the Expected Result) into the
+  test case's Test Data tab, and the dataset key into its "Test Data ID" field when there is one. Without a Test Data
+  field it writes the Parameter values grid, otherwise the matrix goes into the Summary.
 * **Export / Import** support CSV and JSON. CSV keeps leading zeros, writes null as `<null>` and neutralises
   formula injection with a leading `'`.
 * **Coverage matrix** shows Criterion → Test Case → Rows, and reports missing data separately from missing test
