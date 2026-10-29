@@ -62,6 +62,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "base_url": "http://127.0.0.1:8080/v1",
         "model": "",
         "timeout_seconds": 120,
+        "generation_timeout_seconds": 600,
     },
     "defects": {"creation_mode": "review"},  # review | automatic | disabled
     "performance": {"jmeter_home": "", "java_home": ""},

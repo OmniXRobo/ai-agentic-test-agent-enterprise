@@ -136,6 +136,10 @@ a.btn { text-decoration: none; display: inline-block; }
 .pill.PASSED, .pill.PASS { background: var(--ok-soft); color: var(--ok); }
 .pill.FAILED, .pill.FAIL { background: var(--fail-soft); color: var(--fail); }
 .pill.WARN { background: var(--warn-soft); color: var(--warn); }
+.tag { display: inline-block; font-size: 11px; padding: 1px 7px; margin: 1px 0; border-radius: 4px; border: 1px solid var(--border);
+  background: var(--surface-2); white-space: nowrap; }
+.tag.type { border-color: var(--accent); color: var(--accent); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; align-items: start; }
 .split .detail { position: sticky; top: 76px; max-height: calc(100vh - 100px); overflow-y: auto; }
@@ -486,3 +490,5 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
   .gen-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .agent-dot.on { animation: none; } }
+.gen-scope > label.row { margin: 10px 0 4px; }
+.gen-scope .choices { margin-bottom: 6px; }

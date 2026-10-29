@@ -59,6 +59,8 @@ EDITABLE_FIELDS = {
     "acceptance_criteria": "Microsoft.VSTS.Common.AcceptanceCriteria",
 }
 
+TEST_PARAMETER_FIELDS = ("Microsoft.VSTS.TCM.Parameters", "Microsoft.VSTS.TCM.LocalDataSource")
+
 RELATION_NAMES = {
     "System.LinkTypes.Hierarchy-Forward": "Child",
     "System.LinkTypes.Hierarchy-Reverse": "Parent",
@@ -485,6 +487,9 @@ class TfsService:
                 "acceptance_criteria": fields.get("Microsoft.VSTS.Common.AcceptanceCriteria"),
                 "repro_steps": fields.get("Microsoft.VSTS.TCM.ReproSteps"),
                 "steps": fields.get("Microsoft.VSTS.TCM.Steps"),
+                # Process-specific fields (e.g. a custom 'Test Data' tab) and the test case's Parameter values.
+                "extra_fields": {k: v for k, v in fields.items() if k in TEST_PARAMETER_FIELDS
+                                 or not k.startswith(("System.", "Microsoft.VSTS.", "WEF_"))},
                 "created_by": _identity(fields.get("System.CreatedBy")),
                 "created": fields.get("System.CreatedDate"),
                 "links": links,
@@ -562,6 +567,20 @@ class TfsService:
         updated = self._with_client(lambda c: c.update_work_item(item_id, patch))
         self.invalidate()
         return {"item": simplify(updated), "skipped_fields": skipped}
+
+    def delete(self, item_id: int) -> dict[str, Any]:
+        """Delete a work item. A test case is deleted permanently with the test management API; any other type goes
+        to the Recycle Bin."""
+        item = self.detail(item_id)
+        test_types = (self.meta()["categories"].get("testcase") or {}).get("types", [])
+        if item["type"] in test_types:
+            self._with_client(lambda c: c.delete_test_case(item_id))
+            how = "deleted permanently"
+        else:
+            self._with_client(lambda c: c.delete_work_item(item_id))
+            how = "moved to the Recycle Bin"
+        self.invalidate()
+        return {"id": int(item_id), "title": item["title"], "type": item["type"], "result": how}
 
     # ---- test management ---------------------------------------------------------
 

@@ -29,11 +29,12 @@ from ..events import names
 from ..logging_setup import get_logger
 from ..storage.db import dumps, loads
 from . import models, testing_types
+from ..automation.generator import parse_tfs_steps
 from .service import DesignService, html_to_text, steps_xml
 
 log = get_logger("design.suite_cases")
 
-AGENT_VERSION = "suite-aware-test-case-design/1.0"
+AGENT_VERSION = "suite-aware-test-case-design/1.1"
 
 _EXPLICIT_ID = re.compile(r"^\s*\(?((?:AC|A\.C\.|Criteri(?:on|a))[\s#_-]*\d+(?:\.\d+)?[a-z]?)\)?\s*[:.)\-–]\s*(.+)$", re.I)
 _GHERKIN_CONT = re.compile(r"^\s*(and|but|when|then)\b", re.I)
@@ -49,35 +50,104 @@ _NUMBER = re.compile(r"\d")
 _POLICY = re.compile(r"\b(role|permission|authori[sz]|authenticat|password|session|token|encrypt|mask|lock|policy|"
                      r"owasp|access)\w*", re.I)
 
-ANALYSIS_PROMPT = (
-    "You are an acceptance-criteria decomposition analyst. For each acceptance criterion (keep its id exactly as "
-    "given) list the individually testable conditions with ids <criterion id>.1, <criterion id>.2 and so on, and the "
-    "actors involved. Use only the story text: never invent business rules, values or expected results. When a "
-    "criterion is too ambiguous or incomplete to write a valid test, put the question in clarification. When the "
-    "testing type '{type}' cannot meaningfully test a criterion, set applicable to false with the reason. List the "
-    "business rules the story states and any gaps (missing actors, permissions, inputs, limits, error behaviour).")
-
 CASES_PROMPT = (
     "You are a suite-aware test case designer for {type}. Focus of this suite: {focus}\n"
-    "Write test cases ONLY of this testing type; do not write generic functional cases with a new title. "
-    "Rules: every case lists the criterion ids (ac_ids) and the condition ids it verifies; numbered steps each have "
-    "one concrete action and one specific, observable expected result (never 'works correctly' or 'as expected'); "
-    "use realistic synthetic input values in the actions; put credentials as {{{{SECRET:name}}}} references, never "
-    "real passwords; when a case changes data add final cleanup or restoration steps; give priority 1-4, risk with a "
-    "short rationale, scenario (positive, negative, boundary, ...), automation suitability and the reason when manual "
+    "Write test cases ONLY of this testing type for the acceptance criteria listed below; do not write generic "
+    "functional cases with a new title. Every case lists the criterion ids (ac_ids) and the condition ids it verifies.\n"
+    "Steps must be concrete and executable by a tester who has never seen the story:\n"
+    "- one action per step, starting with a verb and naming the page, field, button or link it uses (Open, Enter, "
+    "Select, Click, Navigate) and the exact input value in quotes;\n"
+    "- each expected result states what the tester can see on the screen (page, message text, field value, list "
+    "content), never 'works correctly', 'as expected', 'successfully completes' or 'the workflow is completed';\n"
+    "- never write a single summary step such as 'Complete the purchase workflow': break it into its screens;\n"
+    "- usually 3 to 8 steps; start from the precondition state.\n"
+    "Example of the required format (an example only; use the story's own pages and rules):\n"
+    "Title: Login with valid credentials shows the product inventory\n"
+    "Precondition: The login page is open and the account 'standard_user' exists.\n"
+    "1. Enter 'standard_user' in the Username field. => The Username field shows 'standard_user'.\n"
+    "2. Enter {{{{SECRET:standard_user_password}}}} in the Password field. => The Password field shows masked characters.\n"
+    "3. Click the Login button. => The Products page opens and lists the available products.\n"
+    "Use realistic synthetic input values; credentials only as {{{{SECRET:name}}}} references, never real passwords; "
+    "when a case changes data add final cleanup or restoration steps; give priority 1-4, risk with a short "
+    "rationale, scenario (positive, negative, boundary, ...), automation suitability and the reason when manual "
     "review is needed. Never invent business rules, thresholds or security policies: put missing information in the "
     "case's gaps. Do not repeat existing test cases listed below. List criteria this testing type cannot test in "
     "not_applicable with a reason, and questions that block a valid test in clarifications. "
-    "Generate at most {max_cases} cases; only applicable cases.")
+    "Generate at most {max_cases} cases for these criteria; only applicable cases.")
 
 REVIEW_PROMPT = (
     "You are a test case reviewer for {type}. Fix the test cases so every issue listed is resolved: link each case "
-    "to valid criterion ids and condition ids, replace vague expected results with specific observable results, add "
-    "cleanup steps where data is changed, and add cases for uncovered conditions when this testing type applies "
-    "(otherwise list the criterion in not_applicable with the reason). Keep refs and everything that is already "
-    "correct. Never invent business rules or thresholds. Return the complete corrected set.")
+    "to valid criterion ids and condition ids, split summary steps into concrete actions on named pages, fields and "
+    "buttons, replace vague expected results with specific observable results, add cleanup steps where data is "
+    "changed, and add cases for uncovered conditions when this testing type applies (otherwise list the criterion "
+    "in not_applicable with the reason). Keep refs and everything that is already correct. Never invent business "
+    "rules or thresholds. Return the complete corrected set.")
 
-PROMPT_VERSION = hashlib.sha256((AGENT_VERSION + ANALYSIS_PROMPT + CASES_PROMPT + REVIEW_PROMPT).encode()).hexdigest()[:12]
+PROMPT_VERSION = hashlib.sha256((AGENT_VERSION + CASES_PROMPT + REVIEW_PROMPT).encode()).hexdigest()[:12]
+
+# Words that make a criterion untestable until someone states what they mean.
+_UNCLEAR = re.compile(r"\b(appropriate(ly)?|reasonabl[ey]|quick(ly)?|fast|slow|user[- ]friendly|intuitive|easy|easily|"
+                      r"simple|efficient(ly)?|robust|seamless(ly)?|timely|soon|adequate(ly)?|sufficient(ly)?|"
+                      r"acceptable|as needed|etc\.?|and so on|normal(ly)?|good|nice)\b", re.I)
+_CLAUSE = re.compile(r"\s*;\s*|\s*,?\s+and\s+(?:then\s+)?|\s*,\s*then\s+", re.I)
+_SUMMARY_ACTION = re.compile(r"^\s*(complete|perform|execute|carry out|do|run through|go through|test|verify|validate|"
+                             r"check)\b.{0,60}\b(workflow|process|flow|functionality|feature|scenario|journey|steps?)\b",
+                             re.I)
+_WORD = re.compile(r"[a-z0-9]+")
+_STOP = {"the", "a", "an", "to", "of", "and", "or", "in", "on", "for", "with", "is", "are", "be", "can", "should",
+         "must", "will", "after", "before", "user", "customer", "system", "that", "this", "it", "as", "by", "from",
+         "testing", "test", "verify", "functional", "smoke", "sanity", "regression", "integration", "end", "api",
+         "database", "ui", "usability", "performance", "security", "case", "successfully", "successful", "their",
+         "his", "her", "when", "then", "given", "able", "page", "displays", "displayed", "shown"}
+
+
+def _stem(word: str) -> str:
+    for suffix in ("ing", "ed", "es", "s"):
+        if len(word) > len(suffix) + 2 and word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
+def keywords(text: str) -> set[str]:
+    return {_stem(w) for w in _WORD.findall((text or "").lower()) if w not in _STOP and len(w) > 2}
+
+
+def overlap(a: str | set[str], b: str | set[str]) -> float:
+    ka = a if isinstance(a, set) else keywords(a)
+    kb = b if isinstance(b, set) else keywords(b)
+    if not ka or not kb:
+        return 0.0
+    return len(ka & kb) / min(len(ka), len(kb))
+
+
+def ac_key(ac_id: str) -> str:
+    """AC3, AC03, AC-03 and Criterion 3 name the same criterion."""
+    m = re.search(r"\d+", ac_id or "")
+    return str(int(m.group(0))) if m else (ac_id or "").upper()
+
+
+_AC_REF = re.compile(r"\b(?:AC|A\.C\.|Criterion)[\s#_-]*\d+\b(?!\.\d)", re.I)
+
+
+def decompose(criteria: list[dict[str, Any]]) -> models.SuiteAnalysis:
+    """Deterministic condition breakdown (no AI call): a criterion is split into its clauses ('A and B', 'A; B') when
+    each clause is a statement of its own; unclear wording becomes a clarification question."""
+    out = []
+    for c in criteria:
+        text = c["text"].strip().rstrip(".")
+        parts = [p.strip(" ,.") for p in _CLAUSE.split(text) if p and p.strip(" ,.")]
+        if len(parts) < 2 or len(parts) > 4 or any(len(p.split()) < 3 for p in parts):
+            parts = [text]
+        word = _UNCLEAR.search(text)
+        out.append(models.CriterionAnalysis(
+            ac_id=c["id"], conditions=[models.Condition(id=f"{c['id']}.{n}", text=p) for n, p in enumerate(parts, 1)],
+            clarification=f"What does '{word.group(0)}' mean? State a measurable value." if word else None))
+    return models.SuiteAnalysis(criteria=out)
+
+
+def chunks(items: list[Any], size: int) -> list[list[Any]]:
+    size = max(1, size)
+    return [items[i:i + size] for i in range(0, len(items), size)]
 
 
 def _hash(text: str) -> str:
@@ -172,9 +242,16 @@ def validate(case_set: models.SuiteCaseSet, criteria: list[dict[str, Any]], anal
         if not case.ac_ids:
             issues.append({"rule": "SOURCE_LINK", "level": "error",
                            "message": "Not linked to any acceptance criterion of this user story"})
+        if len(case.steps) < 2 and ttype["key"] not in ("performance",):
+            issues.append({"rule": "STEP_ACTION", "level": "warning",
+                           "message": "Only one step: break the case into the actions a tester performs"})
         for n, step in enumerate(case.steps, start=1):
             if not step.action.strip():
                 issues.append({"rule": "STEP_ACTION", "level": "error", "message": f"Step {n} has no action"})
+            elif _SUMMARY_ACTION.search(step.action):
+                issues.append({"rule": "STEP_ACTION", "level": "warning",
+                               "message": f"Step {n} summarises a whole flow ('{step.action}'): name the page, field "
+                                          "or button and the value used"})
             if not step.expected.strip():
                 issues.append({"rule": "EXPECTED_RESULT", "level": "error", "message": f"Step {n} has no expected result"})
             elif _VAGUE.search(step.expected):
@@ -240,6 +317,9 @@ def coverage(criteria: list[dict[str, Any]], analysis: models.SuiteAnalysis, cas
             covered.update(ids)
             if not ids and len(conds) == 1:
                 covered.add(conds[0]["id"])
+            elif not ids:  # no condition ids given: a condition counts when the case's steps clearly exercise it
+                text = keywords(" ".join([t.title, *(f"{s.action} {s.expected}" for s in t.steps)]))
+                covered.update(x["id"] for x in conds if overlap(text, x["text"]) >= 0.6)
         missing = [x for x in conds if x["id"] not in covered]
         clar = ([a.clarification] if a and a.clarification else []) + questions.get(c["id"], [])
         reason = None
@@ -261,6 +341,12 @@ def coverage(criteria: list[dict[str, Any]], analysis: models.SuiteAnalysis, cas
             "reason": reason, "clarifications": clar,
         })
     return rows
+
+
+def case_tags(type_name: str, story_id: Any, ac_ids: list[str]) -> str:
+    """TFS tags: the testing type (e.g. 'Functional Testing') and the user story (e.g. 'US118') as in the
+    project's existing test cases, then the criterion ids."""
+    return "; ".join(dict.fromkeys(["AI Generated", type_name, f"US{story_id}", *ac_ids]))
 
 
 def case_summary_html(case: dict[str, Any], story: dict[str, Any], criteria: list[dict[str, Any]],
@@ -429,24 +515,75 @@ class SuiteCaseService:
                                 (reason, now_iso(), r["id"]))
         return out
 
+    def case_links(self, story_id: Any, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Criterion links of every test case of the story. Links stored when this application published the case
+        come first. For test cases made elsewhere (by hand, or by an earlier version) the criterion ids written in
+        the case's tags, title or Summary are used; otherwise the criterion whose wording the case's title and steps
+        match best, marked 'inferred'. Cases that match no criterion are returned as unmapped."""
+        data = data or self.read_story(int(story_id))
+        criteria = data["criteria"]
+        by_key = {ac_key(c["id"]): c["id"] for c in criteria}
+        links = [{"ac_id": r["ac_id"], "tfs_test_case_id": int(r["tfs_test_case_id"]), "title": r["test_case_title"],
+                  "testing_type": r["testing_type"], "status": r["status"], "review_reason": r["review_reason"],
+                  "conditions": loads(r["condition_ids"]) if r["condition_ids"] else [], "source": "stored"}
+                 for r in self._trace(story_id)]
+        traced = {x["tfs_test_case_id"] for x in links}
+        unmapped = []
+        for e in data["existing"]:
+            if int(e["id"]) in traced:
+                continue
+            try:
+                item = self.tfs.detail(int(e["id"]))
+            except QAError:
+                continue
+            tags = item.get("tags") or ""
+            ttype = next((t for t in (testing_types.from_suite_name(x) for x in [*tags.split(";"), item["title"]]) if t),
+                         None)
+            text = f"{tags} {item['title']} {html_to_text(item.get('description'))}"
+            ids = list(dict.fromkeys(by_key[ac_key(m)] for m in _AC_REF.findall(text) if ac_key(m) in by_key))
+            source = "tagged"
+            if not ids:
+                steps = parse_tfs_steps(item.get("steps"))
+                words = keywords(" ".join([item["title"], *(f"{x['action']} {x['expected']}" for x in steps)]))
+                scored = sorted(((overlap(words, c["text"]), len(words & keywords(c["text"])), c["id"]) for c in criteria),
+                                reverse=True)
+                if scored and scored[0][0] >= 0.5:
+                    ids = [cid for score, _, cid in scored[:2] if score >= max(0.5, scored[0][0] - 0.05)]
+                source = "inferred"
+            if not ids:
+                unmapped.append({"tfs_test_case_id": int(e["id"]), "title": item["title"]})
+                continue
+            for ac in ids:
+                links.append({"ac_id": ac, "tfs_test_case_id": int(e["id"]), "title": item["title"],
+                              "testing_type": ttype["key"] if ttype else None, "status": "current", "review_reason": None,
+                              "conditions": [], "source": source})
+        return {"links": links, "unmapped": unmapped}
+
     def traceability(self, story_id: int) -> dict[str, Any]:
         data = self.read_story(story_id)
         impact = self.impact(story_id, data["criteria"])
-        rows = self._trace(story_id)
+        found = self.case_links(story_id, data)
         matrix = []
         for c in data["criteria"]:
-            links = [r for r in rows if r["ac_id"] == c["id"]]
+            links = [r for r in found["links"] if r["ac_id"] == c["id"]]
             by_type: dict[str, list[dict[str, Any]]] = {}
             for r in links:
-                by_type.setdefault(testing_types.BY_KEY.get(r["testing_type"], {}).get("name", r["testing_type"]), []).append(
-                    {"id": r["tfs_test_case_id"], "title": r["test_case_title"], "status": r["status"],
-                     "conditions": loads(r["condition_ids"]) if r["condition_ids"] else [],
-                     "review_reason": r["review_reason"]})
+                name = testing_types.BY_KEY.get(r["testing_type"] or "", {}).get("name", r["testing_type"] or "Not set")
+                by_type.setdefault(name, []).append(
+                    {"id": r["tfs_test_case_id"], "title": r["title"], "status": r["status"], "source": r["source"],
+                     "conditions": r["conditions"], "review_reason": r["review_reason"]})
             matrix.append({"ac_id": c["id"], "text": c["text"], "by_testing_type": by_type,
                            "status": "Linked" if links else "No linked test cases"})
         return {"story": data["story"], "criteria": data["criteria"], "matrix": matrix, "impact": impact,
+                "unmapped": found["unmapped"],
                 "note": "Coverage shows which test cases are linked to each criterion; it is not an execution result. "
-                        "Criterion-level links are kept by this application (TFS links test cases to the user story)."}
+                        "Criterion-level links are kept by this application (TFS links test cases to the user story). "
+                        "For test cases created elsewhere the criterion is read from the case's tags or Summary, or "
+                        "inferred from its title and steps (marked 'inferred')."}
+
+    def forget_case(self, tfs_test_case_id: int) -> None:
+        self.db.execute("DELETE FROM ac_trace WHERE project = ? AND tfs_test_case_id = ?",
+                        (self.project(), int(tfs_test_case_id)))
 
     # ---- generation ----------------------------------------------------------------------------------
 
@@ -462,42 +599,71 @@ class SuiteCaseService:
             "generated_at": now_iso(),
         }
 
-    def _context(self, data: dict[str, Any], ttype: dict[str, Any]) -> str:
+    def _call_timeout(self) -> float:
+        cfg = self.ai.config()
+        return max(cfg["timeout_seconds"], cfg.get("generation_timeout_seconds") or 600)
+
+    def _per_call(self) -> int:
+        return int((self.ai.settings.section("design") or {}).get("criteria_per_call") or 2)
+
+    def _design_chunk(self, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
+                      ttype: dict[str, Any], budget: int) -> tuple[models.SuiteCaseSet, str]:
+        """One AI call for a few criteria: a small prompt and a short answer, so a local model answers in time."""
         s = data["story"]
-        crit = "\n".join(f"{c['id']}: {c['text']}" for c in data["criteria"]) or "(none)"
+        ids = {c["id"] for c in crit}
+        conds = "\n".join(f"{x.id} ({a.ac_id}): {x.text}" for a in analysis.criteria if a.ac_id in ids for x in a.conditions)
         existing = "\n".join(f"#{e['id']} {e['title']}" for e in data["existing"]) or "(none)"
-        return (f"User story US{s['id']}: {s['title']}\nState: {s['state']}; Iteration: {s['iteration']}\n\n"
-                f"Description:\n{s['description'] or '(none)'}\n\nAcceptance criteria:\n{crit}\n\n"
-                f"Selected suite testing type: {ttype['name']}\n\nExisting test cases linked to this story:\n{existing}")
+        others = [c for c in data["criteria"] if c["id"] not in ids]
+        ctx = (f"User story US{s['id']}: {s['title']}\nState: {s['state']}; Iteration: {s['iteration']}\n\n"
+               f"Description:\n{s['description'] or '(none)'}\n\n"
+               "Acceptance criteria:\n" + "\n".join(f"{c['id']}: {c['text']}" for c in crit) + "\n\n"
+               + ("Other criteria of the story (context only, covered separately):\n"
+                  + "\n".join(f"- {c['text']}" for c in others) + "\n\n" if others else "")
+               + f"Selected suite testing type: {ttype['name']}\n\nConditions:\n{conds}\n\n"
+               f"Existing test cases linked to this story:\n{existing}")
+        return self.ai.complete_json(CASES_PROMPT.format(type=ttype["name"], focus=ttype["focus"], max_cases=budget),
+                                     ctx, models.SuiteCaseSet, max_tokens=min(1400 * len(crit), 4096),
+                                     timeout=self._call_timeout()), ctx
 
-    def _analyse(self, context: str, data: dict[str, Any], ttype: dict[str, Any]) -> tuple[models.SuiteAnalysis, list[str]]:
-        notes: list[str] = []
+    def _review_chunk(self, ctx: str, case_set: models.SuiteCaseSet, issues: list[str],
+                      ttype: dict[str, Any]) -> models.SuiteCaseSet:
+        return self.ai.complete_json(
+            REVIEW_PROMPT.format(type=ttype["name"]),
+            ctx + "\n\nTest cases:\n" + case_set.model_dump_json() + "\n\nIssues:\n" + "\n".join(issues),
+            models.SuiteCaseSet, max_tokens=min(1400 * max(1, len(case_set.test_cases)), 4096),
+            timeout=self._call_timeout())
+
+    def _chunk(self, story_id: Any, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
+               ttype: dict[str, Any], per_ac: int, act: Any, label: str) -> tuple[models.SuiteCaseSet, bool]:
+        """Generate, validate and (when the explicit rules find issues) refine the cases of a few criteria."""
+        budget = per_ac * len(crit)
+        act.progress(None, f"US{story_id}: writing {ttype['name']} test cases for {label}")
+        case_set, ctx = self._design_chunk(data, crit, analysis, ttype, budget)
+        case_set.test_cases = case_set.test_cases[:budget]
+        sub = analysis.model_copy(update={"criteria": [a for a in analysis.criteria if a.ac_id in {c["id"] for c in crit}]})
+        check = validate(case_set, crit, sub, ttype, data["existing"])
+        matrix = coverage(crit, sub, case_set, ttype)
+        issues = [f"{ref}: {i['message']}" for ref, lst in check["per_case"].items() for i in lst
+                  if i["level"] in ("error", "warning")]
+        issues += [f"{r['ac_id']} is {r['status']}: missing {', '.join(r['missing']) or 'all conditions'}"
+                   for r in matrix if r["status"] in ("Not Covered", "Partially Covered")]
+        if not issues:
+            return case_set, False
+        act.progress(None, f"US{story_id}: reviewing {label} ({len(issues)} issues found by the rules)")
         try:
-            analysis = self.ai.complete_json(ANALYSIS_PROMPT.format(type=ttype["name"]), context, models.SuiteAnalysis)
-        except QAError:
-            raise
-        except Exception as exc:  # pragma: no cover - defensive: keep generating with the deterministic fallback
-            analysis = models.SuiteAnalysis()
-            notes.append(f"Condition breakdown was not available ({exc}); each criterion is treated as one condition.")
-        known = {c["id"] for c in data["criteria"]}
-        analysis.criteria = [a for a in analysis.criteria if a.ac_id in known]
-        have = {a.ac_id for a in analysis.criteria}
-        for c in data["criteria"]:
-            if c["id"] not in have:
-                analysis.criteria.append(models.CriterionAnalysis(ac_id=c["id"]))
-        for a in analysis.criteria:
-            conds = [x for x in a.conditions if x.text.strip()]
-            for n, x in enumerate(conds, start=1):
-                if not x.id.startswith(a.ac_id + "."):
-                    x.id = f"{a.ac_id}.{n}"
-            if not conds:
-                text = next(c["text"] for c in data["criteria"] if c["id"] == a.ac_id)
-                conds = [models.Condition(id=f"{a.ac_id}.1", text=text)]
-            a.conditions = conds
-        return analysis, notes
+            refined = self._review_chunk(ctx, case_set, issues, ttype)
+        except QAError as exc:
+            log.info(f"Refinement skipped: {exc.message}", extra={"operation": "design.suite_cases"})
+            return case_set, False
+        if not refined.test_cases and case_set.test_cases:
+            return case_set, False
+        refined.test_cases = refined.test_cases[:budget]
+        if validate(refined.model_copy(deep=True), crit, sub, ttype, data["existing"])["errors"] > check["errors"]:
+            return case_set, False
+        return refined, True
 
-    def generate_story(self, story_id: int, suite: dict[str, Any], *, max_cases: int, run_id: str,
-                       act: Any) -> dict[str, Any]:
+    def generate_story(self, story_id: int, suite: dict[str, Any], *, max_cases: int | None = None, run_id: str,
+                       act: Any, cases_per_criterion: int = 2) -> dict[str, Any]:
         ttype = testing_types.get(suite["testing_type"])
         data = self.read_story(story_id)
         impact = self.impact(story_id, data["criteria"])
@@ -508,49 +674,56 @@ class SuiteCaseService:
                                                      "generating test cases."}],
                     "coverage": [], "validation": {"per_case": {}, "duplicates": [], "errors": 0, "warnings": 0},
                     "impact": impact, "limitations": [], "refined": False, "notes": []}
-        context = self._context(data, ttype)
-        act.progress(None, f"US{story_id}: breaking {len(data['criteria'])} acceptance criteria into conditions")
-        analysis, notes = self._analyse(context, data, ttype)
-        conds = "\n".join(f"{x.id} ({a.ac_id}): {x.text}" for a in analysis.criteria for x in a.conditions)
-        prompt_ctx = context + "\n\nConditions:\n" + conds + (
-            "\n\nBusiness rules stated:\n" + "\n".join(analysis.business_rules) if analysis.business_rules else "")
-        act.progress(None, f"US{story_id}: generating {ttype['name']} test cases")
-        case_set = self.ai.complete_json(CASES_PROMPT.format(type=ttype["name"], focus=ttype["focus"], max_cases=max_cases),
-                                         prompt_ctx, models.SuiteCaseSet, max_tokens=6000)
-        case_set.test_cases = case_set.test_cases[:max_cases]
-        check = validate(case_set, data["criteria"], analysis, ttype, data["existing"])
-        matrix = coverage(data["criteria"], analysis, case_set, ttype)
-        needs_fix = check["errors"] or check["warnings"] or any(r["status"] in ("Not Covered",) for r in matrix)
-        refined = False
-        if needs_fix:
-            issues = [f"{ref}: {i['message']}" for ref, lst in check["per_case"].items() for i in lst
-                      if i["level"] in ("error", "warning")]
-            issues += [f"{r['ac_id']} is {r['status']}: missing {', '.join(r['missing']) or 'all conditions'}"
-                       for r in matrix if r["status"] in ("Not Covered", "Partially Covered")]
-            act.progress(None, f"US{story_id}: reviewing and refining ({len(issues)} issues found)")
+        analysis = decompose(data["criteria"])
+        notes: list[str] = []
+        merged = models.SuiteCaseSet()
+        refined_any = False
+        failed: list[dict[str, Any]] = []
+        groups = chunks(data["criteria"], self._per_call())
+        act.progress(None, f"US{story_id}: {len(data['criteria'])} acceptance criteria, {len(groups)} AI calls")
+        queue = [(g, f"{g[0]['id']}" + (f" to {g[-1]['id']}" if len(g) > 1 else "")) for g in groups]
+        while queue:
+            crit, label = queue.pop(0)
             try:
-                refined_set = self.ai.complete_json(
-                    REVIEW_PROMPT.format(type=ttype["name"]),
-                    prompt_ctx + "\n\nTest cases:\n" + case_set.model_dump_json() + "\n\nIssues:\n" + "\n".join(issues),
-                    models.SuiteCaseSet, max_tokens=6000)
-                if refined_set.test_cases or not case_set.test_cases:
-                    refined_set.test_cases = refined_set.test_cases[:max_cases]
-                    check2 = validate(refined_set, data["criteria"], analysis, ttype, data["existing"])
-                    if check2["errors"] <= check["errors"]:
-                        case_set, check, refined = refined_set, check2, True
-                        matrix = coverage(data["criteria"], analysis, case_set, ttype)
+                part, refined = self._chunk(story_id, data, crit, analysis, ttype, cases_per_criterion, act, label)
             except QAError as exc:
-                notes.append(f"Refinement step failed ({exc.message}); the first draft is shown with its issues.")
+                if len(crit) > 1 and exc.error_code in ("AI_TIMEOUT", "AI_OUTPUT_INVALID"):
+                    # Too much for one answer: retry these criteria one by one.
+                    queue[:0] = [([c], c["id"]) for c in crit]
+                    continue
+                if exc.error_code in ("AI_UNREACHABLE", "AI_NOT_CONFIGURED", "AI_REQUEST_FAILED") and not merged.test_cases:
+                    raise
+                failed += crit
+                notes.append(f"{label}: no test cases were written ({exc.message}). Generate again for this story, or "
+                             "raise the generation timeout under AI settings.")
+                continue
+            refined_any = refined_any or refined
+            merged.not_applicable += part.not_applicable
+            merged.clarifications += part.clarifications
+            for case in part.test_cases:
+                case.ref = f"TC{len(merged.test_cases) + 1}"
+                merged.test_cases.append(case)
+            act.progress(None, f"US{story_id}: {label} done, {len(part.test_cases)} test cases")
+        if failed and len(failed) == len(data["criteria"]):
+            raise QAError("AI_TIMEOUT", f"No test cases could be generated for US{story_id}: " + " ".join(notes), status=504)
+        if max_cases:
+            merged.test_cases = merged.test_cases[:max_cases]
+        check = validate(merged, data["criteria"], analysis, ttype, data["existing"])
+        matrix = coverage(data["criteria"], analysis, merged, ttype)
+        failed_ids = {c["id"] for c in failed}
+        for row in matrix:
+            if row["ac_id"] in failed_ids and not row["test_cases"]:
+                row["reason"] = "Generation did not finish for this criterion; generate again."
         limitations = [ttype["needs_context"]] if ttype.get("needs_context") else []
         return {**data, "testing_type": ttype["key"], "analysis": analysis.model_dump(),
-                "test_cases": [c.model_dump() for c in case_set.test_cases],
-                "not_applicable": [n.model_dump() for n in case_set.not_applicable],
-                "clarifications": [q.model_dump() for q in case_set.clarifications],
+                "test_cases": [c.model_dump() for c in merged.test_cases],
+                "not_applicable": [n.model_dump() for n in merged.not_applicable],
+                "clarifications": [q.model_dump() for q in merged.clarifications],
                 "coverage": matrix, "validation": check, "impact": impact, "limitations": limitations,
-                "refined": refined, "notes": notes}
+                "refined": refined_any, "notes": notes, "failed_criteria": sorted(failed_ids)}
 
     def run(self, plan_id: int, suite_id: int, story_ids: list[int], *, testing_type: str | None = None,
-            max_cases: int = 8, run_id: str | None = None) -> dict[str, Any]:
+            max_cases: int | None = None, cases_per_criterion: int = 2, run_id: str | None = None) -> dict[str, Any]:
         if not story_ids:
             raise QAError("STORY_REQUIRED", "Select at least one user story.")
         run_id = run_id or new_run_id("TCGEN")
@@ -566,13 +739,17 @@ class SuiteCaseService:
                 act.event(names.TESTCASE_STARTED, "Suite-aware test case generation started")
                 for n, sid in enumerate(story_ids):
                     act.progress(int(n * 100 / len(story_ids)), f"Reading User Story #{sid}")
-                    result["stories"].append(self.generate_story(sid, suite, max_cases=max_cases, run_id=run_id, act=act))
+                    result["stories"].append(self.generate_story(sid, suite, max_cases=max_cases, run_id=run_id,
+                                                                 act=act, cases_per_criterion=cases_per_criterion))
+                    self._save(result)  # finished stories survive a later failure
                 total = sum(len(s["test_cases"]) for s in result["stories"])
                 act.event(names.TESTCASE_COMPLETED, f"Test cases generated: {total}")
                 act.complete(f"{suite['testing_type_name']}: {total} test cases for {len(story_ids)} user stories")
             result["meta"] = self._meta(result["stories"])
         except Exception as exc:
             result["error"] = exc.message if isinstance(exc, QAError) else str(exc)
+            if result["stories"]:
+                result["meta"] = self._meta(result["stories"])
             self._save(result)
             self.runs.finish(run_id, "FAILED", {"error": result["error"]})
             raise
@@ -629,7 +806,7 @@ class SuiteCaseService:
         """selection: {story_id: [refs]}; reuse: {"<story_id>:<ref>": existing TFS test case id} links an existing
         test case to the suite and criteria instead of creating a duplicate."""
         result = self.get(run_id)
-        if result.get("error"):
+        if result.get("error") and not any(st["test_cases"] for st in result.get("stories", [])):
             raise QAError("GENERATION_INCOMPLETE", "This generation failed; nothing to publish.", status=409)
         reuse = reuse or {}
         suite = result["suite"]
@@ -659,7 +836,7 @@ class SuiteCaseService:
                         values = {
                             "title": case["title"], "priority": case["priority"],
                             "iteration_path": story["story"].get("iteration"), "area_path": story["story"].get("area_path"),
-                            "tags": "; ".join(["AI Generated", suite["testing_type_name"], *case["ac_ids"]]),
+                            "tags": case_tags(suite["testing_type_name"], sid, case["ac_ids"]),
                             "Microsoft.VSTS.TCM.Steps": steps_xml([models.TestStep(**s) for s in case["steps"]]),
                             "description": case_summary_html(case, story["story"], story["criteria"], suite, meta),
                         }

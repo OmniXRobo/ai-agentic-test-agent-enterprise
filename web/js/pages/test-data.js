@@ -91,16 +91,45 @@ function editRow(view, d) {
   });
 }
 
+let stories = [];
+let cases = [];
+
 async function generate(view) {
-  const ids = filters.test_case_id ? [Number(filters.test_case_id)]
-    : [...new Set(items.filter((d) => selected(view).includes(d.id)).map((d) => d.tfs_test_case_id).filter(Boolean))];
-  if (!ids.length && !filters.user_story_id) { toast("Choose a user story or a test case first.", "warning"); return; }
+  const sel = [...new Set(items.filter((d) => selected(view).includes(d.id)).map((d) => d.tfs_test_case_id).filter(Boolean))];
+  if (!filters.iteration && !filters.user_story_id && !sel.length) { toast("Choose a sprint or a user story first.", "warning"); return; }
+  const caseList = cases.length ? cases : sel.map((id) => ({ id, title: "" }));
+  const pre = new Set(filters.test_case_id ? [Number(filters.test_case_id)] : sel);
+  const m = openModal("Generate test data", `<form class="gen-scope">
+      ${filters.user_story_id || caseList.length ? `<label class="row" style="gap:6px"><input type="radio" name="scope" value="cases" ${filters.user_story_id || sel.length ? "checked" : ""}>
+        <strong>Test cases${filters.user_story_id ? ` of US${esc(filters.user_story_id)}` : ""}</strong></label>
+      <div class="row" style="margin-left:22px"><button class="link-btn" type="button" data-on="tc">Check all</button> · <button class="link-btn" type="button" data-off="tc">Uncheck all</button></div>
+      <div class="choices" style="margin-left:22px;grid-template-columns:1fr">${caseList.map((t) => `<label class="choice"><input type="checkbox" name="tc" value="${t.id}" ${!pre.size || pre.has(t.id) ? "checked" : ""}><span>#${t.id} ${esc(t.title)}</span></label>`).join("")}</div>` : ""}
+      ${stories.length ? `<label class="row" style="gap:6px"><input type="radio" name="scope" value="stories" ${filters.user_story_id || sel.length ? "" : "checked"}>
+        <strong>Every test case of these user stories in ${esc((filters.iteration || "").split("\\").pop())}</strong></label>
+      <div class="row" style="margin-left:22px"><button class="link-btn" type="button" data-on="us">Check all</button> · <button class="link-btn" type="button" data-off="us">Uncheck all</button></div>
+      <div class="choices" style="margin-left:22px;grid-template-columns:1fr">${stories.map((st) => `<label class="choice"><input type="checkbox" name="us" value="${st.id}" ${String(st.id) === String(filters.user_story_id || "") || !filters.user_story_id ? "checked" : ""}><span>US${st.id} ${esc(st.title)}</span></label>`).join("")}</div>` : ""}
+      <p class="muted">Each test case gets data for its suite's testing type, written as a Test Data Matrix (Combination 1, 2, …) when you write it to TFS.</p>
+      <div class="row"><button class="btn primary" type="submit">Generate</button><button class="btn" type="button" data-close>Cancel</button></div></form>`, { wide: true });
+  m.el.querySelectorAll("[data-on]").forEach((b) => b.addEventListener("click", () => m.el.querySelectorAll(`[name="${b.dataset.on}"]`).forEach((c) => (c.checked = true))));
+  m.el.querySelectorAll("[data-off]").forEach((b) => b.addEventListener("click", () => m.el.querySelectorAll(`[name="${b.dataset.off}"]`).forEach((c) => (c.checked = false))));
+  m.el.querySelector("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const scope = f.get("scope") || (stories.length ? "stories" : "cases");
+    const body = { max_rows: Number(view.querySelector("#maxRows").value) || 12,
+      seed: view.querySelector("#seed").value ? Number(view.querySelector("#seed").value) : null };
+    if (scope === "cases") body.test_case_ids = f.getAll("tc").map(Number);
+    else body.user_story_ids = f.getAll("us").map(Number);
+    if (!(body.test_case_ids || body.user_story_ids).length) { toast("Check at least one item.", "warning"); return; }
+    m.close();
+    run(view, body);
+  });
+}
+
+async function run(view, body) {
   const out = view.querySelector("#genOut");
   try {
-    const r = await api("/api/test-data/generate", { method: "POST", body: {
-      test_case_ids: ids.length ? ids : null, user_story_id: filters.user_story_id ? Number(filters.user_story_id) : null,
-      max_rows: Number(view.querySelector("#maxRows").value) || 12,
-      seed: view.querySelector("#seed").value ? Number(view.querySelector("#seed").value) : null } });
+    const r = await api("/api/test-data/generate", { method: "POST", body });
     out.innerHTML = `<div class="card"><p class="pill RUNNING">Generating test data for ${r.test_case_ids.length} test case(s)…</p><p class="muted">Progress appears on Agent Workflow.</p></div>`;
     const poll = async () => {
       const s = await api(`/api/test-data/generate/${r.run_id}`);
@@ -117,12 +146,34 @@ async function generate(view) {
   } catch (err) { toast(err.message, "error"); }
 }
 
+async function syncFromTfs(view, refresh = false) {
+  const body = filters.test_case_id ? { test_case_ids: [Number(filters.test_case_id)] }
+    : filters.user_story_id ? { user_story_ids: [Number(filters.user_story_id)] } : null;
+  if (!body) {
+    if (refresh) toast("Choose a user story or a test case to load its test data from TFS.", "warning");
+    return;
+  }
+  const note = view.querySelector("#syncNote");
+  note.textContent = "Reading the test data already in TFS…";
+  try {
+    const r = await api("/api/test-data/sync", { method: "POST", body: { ...body, refresh } });
+    const imported = r.results.filter((x) => x.status === "imported");
+    const found = r.results.filter((x) => x.source);
+    note.textContent = found.length
+      ? `TFS: ${found.length} test case(s) have test data (${[...new Set(found.map((x) => x.source.replace(/ \(.*\)/, "")))].join(", ")})${imported.length ? `; ${r.imported} row(s) loaded now` : ", already loaded"}.`
+      : "TFS: no test data found in these test cases yet.";
+    imported.flatMap((x) => x.notes || []).slice(0, 3).forEach((n) => toast(n, "info"));
+    r.results.filter((x) => x.status === "error").forEach((x) => toast(`#${x.test_case_id}: ${x.error}`, "error"));
+  } catch (err) { note.textContent = ""; toast(err.message, "error"); }
+}
+
 async function loadStories(view) {
   const sel = view.querySelector('[name="user_story_id"]');
   sel.innerHTML = '<option value="">All user stories</option>';
+  stories = [];
   if (!filters.iteration) return;
   try {
-    const { stories } = await api(`/api/design/sprint-stories?iteration=${encodeURIComponent(filters.iteration)}`);
+    ({ stories } = await api(`/api/design/sprint-stories?iteration=${encodeURIComponent(filters.iteration)}`));
     sel.innerHTML += stories.map((s) => `<option value="${s.id}">US${s.id} ${esc(s.title)}</option>`).join("");
   } catch (err) { toast(err.message, "error"); }
 }
@@ -130,9 +181,11 @@ async function loadStories(view) {
 async function loadCases(view) {
   const sel = view.querySelector('[name="test_case_id"]');
   sel.innerHTML = '<option value="">All test cases</option>';
+  cases = [];
   if (!filters.user_story_id) return;
   try {
     const { item } = await api(`/api/tfs/work-items/${filters.user_story_id}`);
+    cases = item.traceability.test_cases;
     sel.innerHTML += item.traceability.test_cases.map((t) => `<option value="${t.id}">#${t.id} ${esc(t.title)}</option>`).join("");
   } catch (err) { toast(err.message, "error"); }
 }
@@ -154,7 +207,8 @@ export async function mount(view) {
       </div>
       <div class="row" style="flex-wrap:wrap;margin-top:8px">
         <button class="btn danger" id="del" type="button">Delete selected</button>
-        <button class="btn" id="tfs" type="button" title="Writes to the test case's test data tab (Parameters) when it has one, otherwise to its Summary">Write to TFS</button>
+        <button class="btn" id="load" type="button" title="Read the test data already written in the TFS test cases (Test Data tab, Parameter values or Summary)">Load from TFS</button>
+        <button class="btn" id="tfs" type="button" title="Writes a Test Data Matrix to the test case's Test Data tab when it has one, otherwise to its Parameter values or Summary">Write to TFS</button>
         <button class="btn" id="cov" type="button">Coverage matrix</button>
         <button class="btn" id="bind" type="button">Check parameter binding</button>
         <span class="spacer"></span>
@@ -162,6 +216,7 @@ export async function mount(view) {
         <button class="btn" id="json" type="button">Export JSON</button>
         <label class="btn" style="cursor:pointer">Import CSV/JSON<input id="imp" type="file" accept=".csv,.json" hidden></label>
       </div>
+      <p class="muted" id="syncNote" style="margin:6px 0 0"></p>
       <p class="muted" style="margin:6px 0 0">Generation uses the test case's steps, its user story's acceptance criteria and its suite's testing type. Nothing is inserted into any database or sent to any API: rows are only saved here and written to TFS when you ask. Passwords and tokens are stored as secret references.</p>
     </div>
     <div id="genOut" style="margin-bottom:12px"></div>
@@ -176,9 +231,11 @@ export async function mount(view) {
   f("user_story_id").addEventListener("change", async (e) => {
     filters = { iteration: filters.iteration, user_story_id: e.target.value };
     await loadCases(view);
+    await syncFromTfs(view);
     render(view);
   });
-  f("test_case_id").addEventListener("change", (e) => { filters.test_case_id = e.target.value; render(view); });
+  f("test_case_id").addEventListener("change", async (e) => { filters.test_case_id = e.target.value; await syncFromTfs(view); render(view); });
+  view.querySelector("#load").addEventListener("click", async () => { await syncFromTfs(view, true); render(view); });
   view.querySelector("#gen").addEventListener("click", () => generate(view));
   view.querySelector("#del").addEventListener("click", async () => {
     const ids = selected(view);
@@ -211,8 +268,9 @@ export async function mount(view) {
       const c = await api(`/api/test-data/coverage/${filters.user_story_id}`);
       m.el.querySelector(".modal-body").innerHTML = `<p class="muted">Missing data coverage (a test case without rows) is shown separately from missing test case coverage.</p>
         <table class="data"><thead><tr><th>AC</th><th>Criterion</th><th>Test cases → rows</th><th>Status</th></tr></thead><tbody>
-        ${c.matrix.map((r) => `<tr><td>${esc(r.ac_id)}</td><td>${esc(r.text)}</td><td>${r.test_cases.map((t) => `#${t.test_case_id}: ${t.rows.length} rows (${t.valid} valid, ${t.invalid} invalid) ${esc(t.scenarios.join(", "))}`).join("<br>") || "—"}</td>
-          <td><span class="pill ${r.status === "Data covered" ? "PASS" : r.status === "Missing data coverage" ? "WARN" : "FAIL"}">${esc(r.status)}</span></td></tr>`).join("")}</tbody></table>`;
+        ${c.matrix.map((r) => `<tr><td>${esc(r.ac_id)}</td><td>${esc(r.text)}</td><td>${r.test_cases.map((t) => `<a href="#/test-cases?id=${t.test_case_id}" title="${esc(t.title || "")}">#${t.test_case_id}</a>${t.link === "inferred" ? ' <span class="muted" title="Created outside this application; matched to the criterion by its title and steps">(inferred)</span>' : ""}: ${t.rows.length} rows (${t.valid} valid, ${t.invalid} invalid) ${esc(t.scenarios.join(", "))}`).join("<br>") || "—"}</td>
+          <td><span class="pill ${r.status === "Data covered" ? "PASS" : r.status === "Missing data coverage" ? "WARN" : "FAIL"}">${esc(r.status)}</span></td></tr>`).join("")}</tbody></table>
+        ${c.unmapped?.length ? `<p class="muted">Linked to the story but not matched to a criterion: ${c.unmapped.map((u) => `#${u.tfs_test_case_id} ${esc(u.title)} (${u.rows} rows)`).join(", ")}</p>` : ""}`;
     } catch (err) { m.el.querySelector(".modal-body").innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`; }
   });
   view.querySelector("#bind").addEventListener("click", async () => {

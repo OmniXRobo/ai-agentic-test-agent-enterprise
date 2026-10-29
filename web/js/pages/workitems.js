@@ -2,7 +2,7 @@
 // One factory serves TFS Explorer, User Stories, Acceptance Criteria, Test Cases and Defects.
 
 import { api } from "../api.js";
-import { esc, safeHtml, toast, debounce, dateTimeOf } from "../util.js";
+import { esc, safeHtml, toast, debounce, dateTimeOf, openModal } from "../util.js";
 
 const SECTIONS = [
   ["acceptance_criteria", "Acceptance Criteria"],
@@ -12,7 +12,8 @@ const SECTIONS = [
 ];
 
 export function workItemPage(config) {
-  // config: { category: string|null, explorer?: bool, focus?: "acceptance_criteria", createLabel?: string }
+  // config: { category: string|null, explorer?: bool, focus?: "acceptance_criteria", createLabel?: string,
+  //           manage?: bool (check boxes, select all, per-row Edit / Delete and Delete selected) }
   let meta = null;
   let selectedId = null;
   let view = null;
@@ -62,16 +63,70 @@ export function workItemPage(config) {
     list.innerHTML = '<p class="muted">Loading…</p>';
     try {
       const { items, truncated } = await api(`/api/tfs/work-items?${params}`);
+      const m = config.manage;
+      const tags = (t) => (t || "").split(";").map((x) => x.trim()).filter(Boolean).map((x) => `<span class="tag">${esc(x)}</span>`).join(" ");
       list.innerHTML = items.length ? `
-        <table class="data"><thead><tr><th>ID</th><th>Title</th><th>Type</th><th>State</th><th>Assigned To</th><th>Sprint</th></tr></thead><tbody>
-        ${items.map((i) => `<tr class="clickable${i.id === selectedId ? " selected" : ""}" data-id="${i.id}"><td>${i.id}</td><td>${esc(i.title)}</td><td>${esc(i.type)}</td>
-          <td>${esc(i.state)}</td><td>${esc(i.assigned_to || "")}</td><td>${esc((i.iteration_path || "").split("\\").pop())}</td></tr>`).join("")}
+        ${m ? `<div class="row" style="margin-bottom:8px"><label class="row" style="gap:6px"><input type="checkbox" id="wiAll"> Select all</label>
+          <span class="muted" id="wiCount">0 selected</span><span class="spacer"></span>
+          <button class="btn danger" type="button" id="wiDel" disabled>Delete selected</button></div>` : ""}
+        <table class="data"><thead><tr>${m ? '<th><span class="sr-only">Select</span></th>' : ""}<th>ID</th><th>Title</th>${m ? "<th>Tags</th>" : "<th>Type</th>"}<th>State</th><th>Assigned To</th><th>Sprint</th>${m ? "<th></th>" : ""}</tr></thead><tbody>
+        ${items.map((i) => `<tr class="clickable${i.id === selectedId ? " selected" : ""}" data-id="${i.id}">${m ? `<td><input type="checkbox" class="wiSel" value="${i.id}" aria-label="Select #${i.id}"></td>` : ""}<td>${i.id}</td><td>${esc(i.title)}</td>${m ? `<td>${tags(i.tags)}</td>` : `<td>${esc(i.type)}</td>`}
+          <td>${esc(i.state)}</td><td>${esc(i.assigned_to || "")}</td><td>${esc((i.iteration_path || "").split("\\").pop())}</td>
+          ${m ? `<td style="white-space:nowrap"><button class="link-btn" type="button" data-wi-edit="${i.id}">Edit</button> · <button class="link-btn" type="button" data-wi-del="${i.id}">Delete</button></td>` : ""}</tr>`).join("")}
         </tbody></table>${truncated ? '<p class="muted">Showing the most recent 200. Narrow the filters to see more.</p>' : ""}`
         : '<p class="muted">No work items match these filters.</p>';
-      list.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => openDetail(Number(tr.dataset.id))));
+      list.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", (e) => {
+        if (e.target.closest("input, button")) return;
+        openDetail(Number(tr.dataset.id));
+      }));
+      if (m) manageList(list, items);
     } catch (err) {
       list.innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`;
     }
+  }
+
+  function manageList(list, items) {
+    const boxes = () => [...list.querySelectorAll(".wiSel")];
+    const picked = () => boxes().filter((c) => c.checked).map((c) => Number(c.value));
+    const sync = () => {
+      const n = picked().length;
+      list.querySelector("#wiCount").textContent = `${n} selected`;
+      list.querySelector("#wiDel").disabled = !n;
+      list.querySelector("#wiAll").checked = n > 0 && n === boxes().length;
+    };
+    list.querySelector("#wiAll").addEventListener("change", (e) => { boxes().forEach((c) => (c.checked = e.target.checked)); sync(); });
+    boxes().forEach((c) => c.addEventListener("change", sync));
+    list.querySelectorAll("[data-wi-edit]").forEach((b) => b.addEventListener("click", async () => {
+      selectedId = Number(b.dataset.wiEdit);
+      try {
+        const { item } = await api(`/api/tfs/work-items/${selectedId}`);
+        editForm(item);
+      } catch (err) { toast(err.message, "error"); }
+    }));
+    list.querySelectorAll("[data-wi-del]").forEach((b) => b.addEventListener("click", () => confirmDelete([Number(b.dataset.wiDel)], items)));
+    list.querySelector("#wiDel").addEventListener("click", () => confirmDelete(picked(), items));
+  }
+
+  function confirmDelete(ids, items) {
+    const titles = ids.map((id) => items.find((i) => i.id === id)).filter(Boolean);
+    const testCases = config.category === "testcase";
+    const m = openModal(ids.length === 1 ? `Delete #${ids[0]}?` : `Delete ${ids.length} work items?`, `
+      <p>This deletes ${ids.length === 1 ? "this work item" : `these ${ids.length} work items`} from project <strong>${esc(meta.project)}</strong> in TFS.
+      ${testCases ? "Test cases are deleted <strong>permanently</strong> with their test results and suite memberships; TFS cannot restore them." : "They go to the project's Recycle Bin, where they can be restored."}</p>
+      <ul style="max-height:240px;overflow:auto">${titles.map((i) => `<li>#${i.id} ${esc(i.title)}</li>`).join("")}</ul>
+      <div class="row"><button class="btn danger" type="button" data-yes>Delete in TFS</button><button class="btn" type="button" data-close>Cancel</button></div>`);
+    m.el.querySelector("[data-yes]").addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = "Deleting…";
+      try {
+        const r = await api("/api/tfs/work-items/delete", { method: "POST", body: { ids } });
+        if (r.deleted.length) toast(`${r.deleted.length} deleted in TFS`, "success");
+        r.failed.forEach((f) => toast(`#${f.id}: ${f.error}`, "error"));
+        m.close();
+        if (ids.includes(selectedId)) view.querySelector("#detail").innerHTML = '<p class="muted">Select a work item to see its details.</p>';
+        await loadList();
+      } catch (err) { toast(err.message, "error"); e.target.disabled = false; e.target.textContent = "Delete in TFS"; }
+    });
   }
 
   function linkRow(l) {
@@ -91,12 +146,16 @@ export function workItemPage(config) {
         <p class="muted">${esc(item.type)} · ${esc(item.state)} · ${esc(item.assigned_to || "Unassigned")} · ${esc(item.iteration_path || "")}</p>
         <div class="row" style="margin-bottom:8px">
           <button class="btn" id="editBtn">Edit</button>
+          ${config.manage ? '<button class="btn danger" id="delBtn">Delete</button>' : ""}
           ${(meta.categories.requirement?.types || []).includes(item.type) ? `<a class="btn primary" href="#/test-design?story=${item.id}">Generate test design</a>` : ""}
           ${item.web_url ? `<a class="btn" href="${esc(item.web_url)}" target="_blank" rel="noopener">Open in TFS</a>` : ""}
         </div>
         ${item.acceptance_criteria ? `<h3>Acceptance Criteria</h3><div class="rich">${safeHtml(item.acceptance_criteria)}</div>` : ""}
         ${item.description ? `<h3>Description</h3><div class="rich">${safeHtml(item.description)}</div>` : ""}
         ${item.repro_steps ? `<h3>Repro Steps</h3><div class="rich">${safeHtml(item.repro_steps)}</div>` : ""}
+        ${item.step_list?.length ? `<h3>Steps</h3><table class="data"><thead><tr><th>Step</th><th>Action</th><th>Expected Result</th></tr></thead><tbody>
+          ${item.step_list.map((st, n) => `<tr><td>${n + 1}</td><td>${esc(st.action)}</td><td>${esc(st.expected)}</td></tr>`).join("")}</tbody></table>` : ""}
+        ${item.tags ? `<p>${item.tags.split(";").map((x) => x.trim()).filter(Boolean).map((x) => `<span class="tag">${esc(x)}</span>`).join(" ")}</p>` : ""}
         <h3>Traceability</h3>
         ${SECTIONS.map(([k, label]) => `<div><strong>${label}</strong> <span class="muted">(${t[k].length})</span>
           ${t[k].length ? `<ul>${t[k].map(linkRow).join("")}</ul>` : '<p class="muted" style="margin:2px 0 8px">None linked.</p>'}</div>`).join("")}
@@ -104,6 +163,7 @@ export function workItemPage(config) {
         ${item.created ? `<p class="muted">Created ${esc(dateTimeOf(item.created))}${item.created_by ? " by " + esc(item.created_by) : ""}${item.changed ? " · changed " + esc(dateTimeOf(item.changed)) : ""}</p>` : ""}`;
       panel.querySelectorAll("[data-open]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); openDetail(Number(a.dataset.open)); }));
       panel.querySelector("#editBtn").addEventListener("click", () => editForm(item));
+      panel.querySelector("#delBtn")?.addEventListener("click", () => confirmDelete([item.id], [item]));
     } catch (err) {
       panel.innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`;
     }
@@ -116,6 +176,7 @@ export function workItemPage(config) {
     const type = item?.type || meta.categories[config.category]?.default || types[0];
     const states = meta.states[type] || [];
     const bugLike = (meta.categories.bug?.types || []).includes(type);
+    const testCaseLike = (meta.categories.testcase?.types || []).includes(type);
     panel.innerHTML = `
       <form class="settings" id="wiForm">
         <h2>${isNew ? `New ${esc(type)}` : `Edit #${item.id}`}</h2>
@@ -127,12 +188,13 @@ export function workItemPage(config) {
           ${meta.iterations.map((i) => `<option ${i === item?.iteration_path ? "selected" : ""}>${esc(i)}</option>`).join("")}</select></label>
         <label>Tags<input name="tags" value="${esc(item?.tags || "")}" placeholder="tag1; tag2"></label>
         <label>Priority<select name="priority"><option value="">(none)</option>${[1, 2, 3, 4].map((p) => `<option ${p === item?.priority ? "selected" : ""}>${p}</option>`).join("")}</select></label>
-        <label>${bugLike ? "Repro Steps" : "Description"}<textarea name="${bugLike ? "repro_steps" : "description"}" rows="6"></textarea></label>
+        ${testCaseLike ? `<label>Steps, one per line: Action || Expected Result<textarea name="steps" rows="8" placeholder="Enter 'standard_user' in the Username field. || The Username field shows 'standard_user'.">${esc((item?.step_list || []).map((st) => `${st.action} || ${st.expected}`).join("\n"))}</textarea></label>` : ""}
+        <label>${bugLike ? "Repro Steps" : testCaseLike ? "Summary" : "Description"}<textarea name="${bugLike ? "repro_steps" : "description"}" rows="6"></textarea></label>
         ${config.category === "requirement" ? '<label>Acceptance Criteria<textarea name="acceptance_criteria" rows="5"></textarea></label>' : ""}
         <p class="muted">Fields that this work item type does not have in your process template are skipped, not rejected.</p>
         <div class="row"><button class="btn primary" type="submit">${isNew ? "Create in TFS" : "Save to TFS"}</button><button class="btn" type="button" id="cancelBtn">Cancel</button></div>
       </form>`;
-    const ta = panel.querySelector("textarea");
+    const ta = panel.querySelector(`textarea[name="${bugLike ? "repro_steps" : "description"}"]`);
     if (item) ta.value = (bugLike ? item.repro_steps : item.description) || "";
     const ac = panel.querySelector('textarea[name="acceptance_criteria"]');
     if (ac && item) ac.value = item.acceptance_criteria || "";
@@ -141,7 +203,13 @@ export function workItemPage(config) {
       e.preventDefault();
       const f = new FormData(e.target);
       const fields = {};
-      for (const [k, v] of f.entries()) if (k !== "type" && v !== "") fields[k] = k === "priority" ? Number(v) : v;
+      for (const [k, v] of f.entries()) if (k !== "type" && k !== "steps" && v !== "") fields[k] = k === "priority" ? Number(v) : v;
+      if (testCaseLike && f.get("steps") !== null && (String(f.get("steps")).trim() || item?.step_list?.length)) {
+        fields.steps = String(f.get("steps")).split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+          const [action, ...rest] = l.split("||");
+          return { action: action.trim(), expected: rest.join("||").trim() };
+        });
+      }
       try {
         const r = isNew
           ? await api("/api/tfs/work-items", { method: "POST", body: { type: f.get("type"), fields } })

@@ -27,6 +27,7 @@ class AISettingsIn(BaseModel):
     api_key: str | None = Field(default=None, max_length=4000, description="Cloud AI API key (Credential Manager)")
     clear_api_key: bool = False
     timeout_seconds: float | None = Field(default=None, ge=5, le=1800)
+    generation_timeout_seconds: float | None = Field(default=None, ge=30, le=3600)
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=256, le=32768)
 
@@ -201,30 +202,53 @@ def sprint_stories(iteration: str, rt: Runtime = Depends(runtime)) -> dict[str, 
 
 class SuiteRunIn(BaseModel):
     plan_id: int
-    suite_id: int
+    suite_id: int | None = None
+    suite_ids: list[int] | None = Field(default=None, max_length=20, description="Generate for each of these suites")
     user_story_ids: list[int] = Field(min_length=1, max_length=50)
     testing_type: str | None = None
-    max_cases: int = Field(default=8, ge=1, le=30)
+    cases_per_criterion: int = Field(default=2, ge=1, le=6)
+    max_cases: int | None = Field(default=None, ge=1, le=200, description="Optional cap per user story")
 
 
 @router.post("/design/suite-runs", status_code=202)
 async def start_suite_run(body: SuiteRunIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """One run per selected suite; the runs are generated one after the other (one local model)."""
     if _busy(rt):
         raise QAError("ALREADY_RUNNING", "A test design run is already in progress.", status=409)
-    suite = rt.design.cases.suite_info(body.plan_id, body.suite_id, body.testing_type)  # fail fast, before the run
-    run_id = new_run_id("TCGEN")
-    rt.runs.start(run_id, "design", f"{suite['testing_type_name']} test cases for {len(body.user_story_ids)} user "
-                  "stories", user_story_id=str(body.user_story_ids[0]))
+    suite_ids = list(dict.fromkeys([*(body.suite_ids or []), *([body.suite_id] if body.suite_id else [])]))
+    if not suite_ids:
+        raise QAError("SUITE_REQUIRED", "Choose at least one test suite.")
+    # fail fast, before any run starts; the type override only applies to suites without a testing type
+    suites = [rt.design.cases.suite_info(body.plan_id, sid, body.testing_type) if len(suite_ids) == 1
+              else _suite_or_override(rt, body.plan_id, sid, body.testing_type) for sid in suite_ids]
+    runs = []
+    for suite in suites:
+        run_id = new_run_id("TCGEN")
+        rt.runs.start(run_id, "design", f"{suite['testing_type_name']} test cases for {len(body.user_story_ids)} user "
+                      "stories", user_story_id=str(body.user_story_ids[0]))
+        runs.append({"run_id": run_id, "suite_id": suite["id"], "suite": suite["name"],
+                     "testing_type": suite["testing_type_name"], "override": suite["testing_type"]})
 
     def work() -> None:
-        try:
-            rt.design.cases.run(body.plan_id, body.suite_id, body.user_story_ids, testing_type=body.testing_type,
-                                max_cases=body.max_cases, run_id=run_id)
-        except Exception:
-            log.info("Suite test case generation failed", extra={"run_id": run_id})
+        for r in runs:
+            try:
+                rt.design.cases.run(body.plan_id, r["suite_id"], body.user_story_ids, testing_type=r["override"],
+                                    max_cases=body.max_cases, cases_per_criterion=body.cases_per_criterion,
+                                    run_id=r["run_id"])
+            except Exception:
+                log.info("Suite test case generation failed", extra={"run_id": r["run_id"]})
 
     asyncio.get_running_loop().run_in_executor(None, work)
-    return {"ok": True, "run_id": run_id, "testing_type": suite["testing_type_name"]}
+    return {"ok": True, "run_id": runs[0]["run_id"], "testing_type": runs[0]["testing_type"], "runs": runs}
+
+
+def _suite_or_override(rt: Runtime, plan_id: int, suite_id: int, override: str | None) -> dict[str, Any]:
+    try:
+        return rt.design.cases.suite_info(plan_id, suite_id)
+    except QAError as exc:
+        if exc.error_code != "TESTING_TYPE_REQUIRED" or not override:
+            raise
+        return rt.design.cases.suite_info(plan_id, suite_id, override)
 
 
 @router.get("/design/suite-runs")
@@ -306,25 +330,36 @@ def test_data(
 class GenerateDataIn(BaseModel):
     test_case_ids: list[int] | None = None
     user_story_id: int | None = None
+    user_story_ids: list[int] | None = Field(default=None, max_length=100, description="Every test case of these stories")
     seed: int | None = Field(default=None, ge=0, le=2_000_000_000)
     max_rows: int = Field(default=12, ge=1, le=60)
 
 
+def _story_cases(rt: Runtime, story_id: int) -> list[int]:
+    story = rt.tfs.detail(story_id)
+    ids = [t["id"] for t in story["traceability"]["test_cases"]]
+    return ids + [r["tfs_test_case_id"] for r in rt.design.cases._trace(story_id) if r["tfs_test_case_id"] not in ids]
+
+
+def _case_ids(rt: Runtime, test_case_ids: list[int] | None, story_ids: list[int]) -> list[int]:
+    ids = list(test_case_ids or [])
+    if not ids:
+        for sid in story_ids:
+            ids += [i for i in _story_cases(rt, sid) if i not in ids]
+    return ids
+
+
 @router.post("/test-data/generate", status_code=202)
 async def generate_test_data(body: GenerateDataIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    ids = list(body.test_case_ids or [])
-    if not ids and body.user_story_id:
-        story = rt.tfs.detail(body.user_story_id)
-        ids = [t["id"] for t in story["traceability"]["test_cases"]]
-        ids += [r["tfs_test_case_id"] for r in rt.design.cases._trace(body.user_story_id)
-                if r["tfs_test_case_id"] not in ids]
+    stories = list(dict.fromkeys([*(body.user_story_ids or []), *([body.user_story_id] if body.user_story_id else [])]))
+    ids = _case_ids(rt, body.test_case_ids, stories)
     if not ids:
         raise QAError("TEST_CASE_REQUIRED", "Select at least one test case, or a user story with linked test cases.")
     if any(s["status"] == "RUNNING" for s in rt.state.snapshot() if s["agent_id"] == "test_data"):
         raise QAError("ALREADY_RUNNING", "Test data is already being generated.", status=409)
     run_id = new_run_id("TDATA")
     rt.runs.start(run_id, "design", f"Test data for {len(ids)} test cases",
-                  user_story_id=str(body.user_story_id) if body.user_story_id else None)
+                  user_story_id=str(stories[0]) if stories else None)
 
     def work() -> None:
         try:
@@ -335,6 +370,21 @@ async def generate_test_data(body: GenerateDataIn, rt: Runtime = Depends(runtime
 
     asyncio.get_running_loop().run_in_executor(None, work)
     return {"ok": True, "run_id": run_id, "test_case_ids": ids}
+
+
+class SyncDataIn(BaseModel):
+    test_case_ids: list[int] | None = None
+    user_story_ids: list[int] | None = Field(default=None, max_length=100)
+    refresh: bool = Field(default=False, description="Read TFS again instead of the short-lived cache")
+
+
+@router.post("/test-data/sync")
+def sync_test_data(body: SyncDataIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Load the test data already written in the TFS test cases (Test Data tab, Parameter values or Summary)."""
+    ids = _case_ids(rt, body.test_case_ids, list(body.user_story_ids or []))
+    if not ids:
+        return {"ok": True, "results": [], "imported": 0}
+    return {"ok": True, **rt.design.datasets.sync_from_tfs(ids, refresh=body.refresh)}
 
 
 @router.get("/test-data/generate/{run_id}")

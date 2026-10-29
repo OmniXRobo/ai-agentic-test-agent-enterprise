@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import html
 import io
 import json
 import random
@@ -137,6 +138,114 @@ def _from_csv_cell(text: str) -> Any:
     return text
 
 
+# ---- the TFS 'Test Data Matrix' format ---------------------------------------------------------------------
+#
+#   Test Data Matrix
+#   Combination 1: Valid representative data
+#   Username: valid_user
+#   Password: {{SECRET:password}}
+#   Expected Result: The customer is logged in and the Products page is shown.
+
+_MARKER = re.compile(r"Dataset ((?:DS|TFS)-[\w.-]+) v(\d+)")
+_COMBINATION = re.compile(r"^(?:combination|data\s*set|dataset|row|test\s*data)\s*#?\s*(\d+)\s*(?:[:.)\-–]\s*(.*))?$", re.I)
+_KEY_VALUE = re.compile(r"^([^:]{1,60}?)\s*:\s*(.*)$")
+_EXPECTED_KEYS = ("expected result", "expected outcome", "expected", "expected results")
+_RULE_KEYS = ("violated rule", "rule broken", "broken rule", "rule violated")
+_INVALID_WORDS = re.compile(r"\b(invalid|negative|wrong|incorrect|empty|missing|blank|error|fail(ed|s|ure)?|locked|"
+                            r"expired|null|rejected?|not allowed|unauthori[sz]ed)\b", re.I)
+_DATA_FIELD_NAME = re.compile(r"test\s*_?data", re.I)
+
+
+def _label(key: str) -> str:
+    text = re.sub(r"[_]+", " ", str(key)).strip()
+    return text[:1].upper() + text[1:] if text else str(key)
+
+
+def matrix_html(rows: list[dict[str, Any]], marker: str | None = None) -> str:
+    """Rows -> the 'Test Data Matrix' layout used in the project's test cases (one Combination per row)."""
+    e = html.escape
+    parts = ["<h3>Test Data Matrix</h3>"]
+    for n, r in enumerate(rows, start=1):
+        vals = r["dataset"] if isinstance(r.get("dataset"), dict) else (r.get("values") or {})
+        lines = [f"<strong>Combination {n}: {e(str(r.get('name') or r.get('scenario') or 'Data set'))}</strong>"]
+        lines += [f"<strong>{e(_label(k))}:</strong> {e('' if v is None else str(v))}" for k, v in vals.items()]
+        if r.get("intended_valid") is False and r.get("violated_rule"):
+            lines.append(f"<strong>Violated rule:</strong> {e(r['violated_rule'])}")
+        if r.get("expected_outcome"):
+            lines.append(f"<strong>Expected Result:</strong> {e(r['expected_outcome'])}")
+        parts.append("<p>" + "<br>".join(lines) + "</p>")
+    if marker:
+        parts.append(f"<p><em>{e(marker)}</em></p>")
+    return "".join(parts)
+
+
+def parse_matrix(value: str | None) -> list[dict[str, Any]]:
+    """Read test data written in a test case: 'Combination N: name' blocks of 'Field: value' lines, or a table whose
+    first row holds the field names. Returns [{name, values, expected_outcome, violated_rule}]."""
+    if not value or not value.strip():
+        return []
+    if re.search(r"<table", value, re.I):
+        rows = parse_table(value)
+        if rows:
+            return rows
+    out: list[dict[str, Any]] = []
+    cur: dict[str, Any] | None = None
+    for line in html_to_text(value).splitlines():
+        line = line.strip().lstrip("-•* ").strip()
+        if not line or line.lower().rstrip(":") in ("test data matrix", "test data") or _MARKER.search(line):
+            continue
+        m = _COMBINATION.match(line)
+        if m:
+            cur = {"name": (m.group(2) or "").strip() or f"Combination {m.group(1)}", "values": {},
+                   "expected_outcome": None, "violated_rule": None}
+            out.append(cur)
+            continue
+        kv = _KEY_VALUE.match(line)
+        if not kv:
+            continue
+        key, val = kv.group(1).strip(), kv.group(2).strip()
+        if cur is None:
+            cur = {"name": "Combination 1", "values": {}, "expected_outcome": None, "violated_rule": None}
+            out.append(cur)
+        if key.lower() in _EXPECTED_KEYS:
+            cur["expected_outcome"] = val
+        elif key.lower() in _RULE_KEYS:
+            cur["violated_rule"] = val
+        else:
+            cur["values"][key] = None if val == NULL_TOKEN else val
+    return [r for r in out if r["values"] or r["expected_outcome"]]
+
+
+def parse_table(value: str) -> list[dict[str, Any]]:
+    cell = lambda c: html.unescape(re.sub(r"<[^>]+>", " ", c)).strip()  # noqa: E731
+    rows = [[cell(c) for c in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", tr, re.S | re.I)]
+            for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", value, re.S | re.I)]
+    rows = [r for r in rows if any(r)]
+    if len(rows) < 2:
+        return []
+    head = [h.strip() for h in rows[0]]
+    out = []
+    for n, r in enumerate(rows[1:], start=1):
+        rec = dict(zip(head, r))
+        name = rec.pop("Data set", None) or rec.pop("Name", None) or f"Combination {n}"
+        rec.pop("#", None)
+        kind = rec.pop("Type", None)
+        expected = next((rec.pop(k) for k in list(rec) if k.lower() in _EXPECTED_KEYS), None)
+        out.append({"name": name, "values": {k: v for k, v in rec.items() if k}, "expected_outcome": expected,
+                    "violated_rule": None, "kind": kind})
+    return out
+
+
+def parse_parameters(local_data_source: str | None) -> list[dict[str, Any]]:
+    """The Parameter values grid (Microsoft.VSTS.TCM.LocalDataSource) -> rows."""
+    out = []
+    for n, block in enumerate(re.findall(r"<Table1>(.*?)</Table1>", local_data_source or "", re.S), start=1):
+        values = {k: html.unescape(v) for k, v in re.findall(r"<(\w+)>(.*?)</\1>", block, re.S)}
+        if values:
+            out.append({"name": f"Combination {n}", "values": values, "expected_outcome": None, "violated_rule": None})
+    return out
+
+
 class TestDataService:
     def __init__(self, design: DesignService, cases: SuiteCaseService) -> None:
         self.design = design
@@ -155,17 +264,137 @@ class TestDataService:
         story_link = next((l for l in item["links"] if l.get("relation") == "Tests"), None)
         trace = self.cases.trace_for_case(tc_id)
         story_id = (story_link or {}).get("id") or (int(trace[0]["user_story_id"]) if trace else None)
-        story, criteria = None, []
+        story, criteria, links = None, [], []
         if story_id:
             data = self.cases.read_story(int(story_id))
             story, criteria = data["story"], data["criteria"]
-        key = trace[0]["testing_type"] if trace else None
-        t = testing_types.BY_KEY.get(key) if key else testing_types.from_suite_name(item.get("title"))
+            links = [x for x in self.cases.case_links(story_id, data)["links"] if x["tfs_test_case_id"] == int(tc_id)]
+        key = next((x["testing_type"] for x in links if x["testing_type"]), None)
+        t = testing_types.BY_KEY.get(key) if key else self._type_of(item)
         t = t or testing_types.BY_KEY["functional"]
-        linked_ac = sorted({r["ac_id"] for r in trace}) or [c["id"] for c in criteria]
+        linked_ac = sorted({x["ac_id"] for x in links}) or [c["id"] for c in criteria]
         return {"item": item, "steps": parse_tfs_steps(item.get("steps")), "story": story, "criteria": criteria,
                 "testing_type": t, "suite_id": trace[0]["suite_id"] if trace else None, "ac_ids": linked_ac,
                 "iteration": item.get("iteration_path") or (story or {}).get("iteration")}
+
+    @staticmethod
+    def _type_of(item: dict[str, Any]) -> dict[str, Any] | None:
+        names_ = [*(item.get("tags") or "").split(";"), item.get("title")]
+        return next((t for t in (testing_types.from_suite_name(n) for n in names_) if t), None)
+
+    def _data_fields(self, type_name: str) -> list[dict[str, Any]]:
+        """Fields of the test case type that hold test data: a custom 'Test Data' field (the 'Test Data' tab), its
+        'Test Data ID', and so on. Cached per type."""
+        def load() -> list[dict[str, Any]]:
+            fields = self.tfs._with_client(lambda c: c.work_item_type_fields(type_name))
+            return [f for f in fields if not f["referenceName"].startswith(("System.", "Microsoft.VSTS."))
+                    and _DATA_FIELD_NAME.search(f"{f.get('name') or ''} {f['referenceName']}")]
+
+        key = ("test-data-fields", self.tfs.active_mode(), self.tfs.profile()["project"], type_name)
+        return self.tfs.meta_cache.get_or_set(key, load)
+
+    def _data_field(self, type_name: str) -> tuple[str | None, str | None]:
+        """(test data field, test data id field) reference names."""
+        fields = self._data_fields(type_name)
+        is_id = lambda f: re.search(r"\bid\b|_?id$", (f.get("name") or f["referenceName"]).strip(), re.I)  # noqa: E731
+        exact = [f for f in fields if re.sub(r"\W", "", (f.get("name") or "").lower()) == "testdata"]
+        data = next(iter(exact), None) or next((f for f in fields if not is_id(f)), None)
+        ident = next((f for f in fields if is_id(f)), None)
+        return (data or {}).get("referenceName"), (ident or {}).get("referenceName")
+
+    # ---- existing test data in TFS ---------------------------------------------------------------------
+
+    def _tfs_rows(self, item: dict[str, Any]) -> tuple[str, list[dict[str, Any]], str]:
+        """(where it was found, rows, raw text) of the test data already in a TFS test case."""
+        extra = item.get("extra_fields") or {}
+        data_ref, _ = self._data_field(item["type"])
+        if data_ref and extra.get(data_ref):
+            rows = parse_matrix(extra[data_ref])
+            if rows:
+                return f"Test Data field ({data_ref})", rows, extra[data_ref]
+        lds = extra.get("Microsoft.VSTS.TCM.LocalDataSource")
+        rows = parse_parameters(lds)
+        if rows:
+            return "Parameter values", rows, lds or ""
+        desc = item.get("description") or ""
+        m = re.search(r"<h\d>\s*Test Data(?: Matrix)?\s*</h\d>.*", desc, re.S | re.I)
+        if m:
+            rows = parse_matrix(m.group(0))
+            if rows:
+                return "Summary", rows, m.group(0)
+        return "", [], ""
+
+    def sync_from_tfs(self, test_case_ids: list[int], *, refresh: bool = False) -> dict[str, Any]:
+        """Load the test data already written in TFS test cases (their Test Data tab, Parameter values or Summary)
+        so it is listed, edited and covered like generated rows. Data this application wrote itself is recognised
+        by its 'Dataset DS-… vN' line and not imported twice. Rows the user edited here are kept."""
+        if refresh:
+            self.tfs.invalidate()
+        out = []
+        for tc in dict.fromkeys(int(x) for x in test_case_ids):
+            try:
+                item = self.tfs.detail(tc)
+                where, rows, raw = self._tfs_rows(item)
+            except QAError as exc:
+                out.append({"test_case_id": tc, "status": "error", "error": exc.message})
+                continue
+            if not rows:
+                out.append({"test_case_id": tc, "status": "none"})
+                continue
+            mark = _MARKER.search(html_to_text(raw))
+            if mark and self.db.query_one(
+                    "SELECT 1 FROM test_data WHERE dataset_key = ? LIMIT 1", (mark.group(1),)):
+                out.append({"test_case_id": tc, "status": "in sync", "source": where, "rows": len(rows)})
+                continue
+            out.append({"test_case_id": tc, "source": where, **self._store_tfs_rows(item, where, rows, raw)})
+        return {"results": out, "imported": sum(r.get("rows", 0) for r in out if r.get("status") == "imported")}
+
+    def _store_tfs_rows(self, item: dict[str, Any], where: str, rows: list[dict[str, Any]], raw: str) -> dict[str, Any]:
+        tc = int(item["id"])
+        key = f"TFS-{tc}"
+        digest = hashlib.sha256(raw.encode()).hexdigest()[:16]
+        current = self.db.query("SELECT * FROM test_data WHERE dataset_key = ?", (key,))
+        if current and all((loads(r["meta"]) if r.get("meta") else {}).get("tfs_hash") == digest
+                           for r in current if not r["user_edited"]):
+            return {"status": "unchanged", "rows": len(rows)}
+        version = max([int(r.get("version") or 1) for r in current] or [0]) + 1
+        for r in current:
+            if r["user_edited"]:
+                continue
+            self._history(r, "reloaded from TFS")
+            self.db.execute("DELETE FROM test_data WHERE id = ?", (r["id"],))
+        story_link = next((l for l in item["links"] if l.get("relation") == "Tests"), None)
+        story_id = str(story_link["id"]) if story_link else None
+        t = self._type_of(item)
+        ac_ids: list[str] = []
+        if story_id:
+            try:
+                ac_ids = sorted({x["ac_id"] for x in self.cases.case_links(story_id)["links"]
+                                 if x["tfs_test_case_id"] == tc})
+            except QAError:
+                ac_ids = []
+        ts = now_iso()
+        notes = []
+        for n, row in enumerate(rows, start=1):
+            values = dict(row["values"])
+            text = f"{row['name']} {row.get('expected_outcome') or ''} {row.get('kind') or ''}"
+            valid = not _INVALID_WORDS.search(text)
+            for k, v in list(values.items()):
+                if valid and is_secret_field(k) and isinstance(v, str) and v.strip() and not SECRET_REF.match(v):
+                    values[k] = "{{SECRET:" + re.sub(r"\W+", "_", k).strip("_").lower() + "}}"
+                    notes.append(f"{row['name']}: '{k}' is stored as {values[k]}; keep the real value in Credentials.")
+            meta = {"source": "tfs", "tfs_location": where, "tfs_hash": digest, "loaded_at": ts,
+                    "dataset": {"key": key, "version": version, "name": f"Test data in TFS for #{tc}"},
+                    "preview": preview(values, n)}
+            self.db.execute(
+                "INSERT INTO test_data (user_story_id, test_case_ref, tfs_test_case_id, name, kind, dataset, created_at,"
+                " updated_at, dataset_key, row_key, version, scenario, intended_valid, violated_rule, expected_outcome,"
+                " ac_ids, testing_type, iteration, meta, user_edited) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)",
+                (story_id, f"TC{tc}", tc, row["name"], "valid" if valid else "invalid", dumps(values), ts, ts, key,
+                 f"{key}-R{n:02d}", version, "valid" if valid else "invalid", int(valid), row.get("violated_rule"),
+                 row.get("expected_outcome"), dumps(ac_ids), t["key"] if t else None, item.get("iteration_path"),
+                 dumps(meta)))
+        return {"status": "imported", "rows": len(rows), "notes": notes}
 
     def _prompt_context(self, ctx: dict[str, Any]) -> str:
         item, story = ctx["item"], ctx["story"]
@@ -365,34 +594,41 @@ class TestDataService:
     # ---- write to TFS ------------------------------------------------------------------------------------
 
     def write_to_tfs(self, tc_id: int) -> dict[str, Any]:
-        """Write the rows into the test case's test data tab when the type has one (a custom 'Test Data' field, or
-        the Parameter values grid), otherwise into its Summary."""
-        rows = self.list(test_case_ids=[tc_id])
+        """Write the rows into the test case's Test Data tab (a custom 'Test Data' field) in the 'Test Data Matrix'
+        layout; without such a field into the Parameter values grid, otherwise into the Summary."""
+        rows = [r for r in self.list(test_case_ids=[tc_id]) if (r.get("meta") or {}).get("source") != "tfs"] \
+            or self.list(test_case_ids=[tc_id])
         if not rows:
             raise QAError("TEST_DATA_EMPTY", f"Test Case #{tc_id} has no saved test data to write.", status=409)
+        rows = list(reversed(rows))
+        keys = sorted({r.get("dataset_key") or f"DS-{tc_id}" for r in rows})
+        version = max(int(r.get("version") or 1) for r in rows)
+        marker = (f"Dataset {', '.join(keys)} v{version} · {len(rows)} combinations · written by QA Enterprise AI on "
+                  f"{now_iso()[:10]}. Passwords and tokens are secret references.")
         datasets = [{"name": r.get("row_key") or r["name"], "kind": r.get("scenario") or r.get("kind"),
-                     "values": r["dataset"] if isinstance(r["dataset"], dict) else {}} for r in reversed(rows)]
+                     "values": r["dataset"] if isinstance(r["dataset"], dict) else {}} for r in rows]
         item = self.tfs.detail(tc_id)
-        fields = self.tfs._with_client(lambda c: c.work_item_type_fields(item["type"]))
-        custom = next((f["referenceName"] for f in fields
-                       if re.search(r"test\s*_?data", f"{f.get('name', '')} {f['referenceName']}", re.I)), None)
-        refs = {f["referenceName"] for f in fields}
-        from .service import _TEST_DATA_HEADING, parameters_xml, test_data_html
-        if custom:
-            values = {custom: test_data_html(datasets)}
-            target = f"Test Data field ({custom})"
+        refs = self.tfs.type_field_refs(item["type"])
+        data_ref, id_ref = self._data_field(item["type"])
+        from .service import _TEST_DATA_HEADING, parameters_xml
+        if data_ref:
+            values = {data_ref: matrix_html(rows, marker)}
+            if id_ref:
+                values[id_ref] = ", ".join(keys)
+            target = f"Test Data tab ({data_ref})"
         elif {"Microsoft.VSTS.TCM.Parameters", "Microsoft.VSTS.TCM.LocalDataSource"} <= refs and parameters_xml(datasets):
             params = parameters_xml(datasets)
             values = {"Microsoft.VSTS.TCM.Parameters": params[0], "Microsoft.VSTS.TCM.LocalDataSource": params[1]}
             target = "Parameter values (test data tab)"
         else:
             current = _TEST_DATA_HEADING.sub("", item.get("description") or "")
-            values = {"description": current + test_data_html(datasets)}
+            current = re.sub(r"<h3>\s*Test Data Matrix\s*</h3>.*", "", current, flags=re.S | re.I)
+            values = {"description": current + matrix_html(rows, marker)}
             target = "Summary"
         with self.design.data.activity(f"Writing test data to Test Case #{tc_id} in TFS", test_case_id=str(tc_id)) as act:
             updated = self.tfs.update(tc_id, values)
-            act.complete(f"Test data written to Test Case #{tc_id} ({target}): {len(datasets)} rows")
-        return {"test_case_id": tc_id, "rows": len(datasets), "target": target, "skipped_fields": updated["skipped_fields"]}
+            act.complete(f"Test data written to Test Case #{tc_id} ({target}): {len(rows)} rows")
+        return {"test_case_id": tc_id, "rows": len(rows), "target": target, "skipped_fields": updated["skipped_fields"]}
 
     # ---- import / export -----------------------------------------------------------------------------------
 
@@ -460,28 +696,35 @@ class TestDataService:
     # ---- coverage ------------------------------------------------------------------------------------------
 
     def coverage(self, user_story_id: int) -> dict[str, Any]:
-        """Criterion -> linked test cases -> data rows; data gaps are reported separately from test case gaps."""
-        story = self.cases.read_story(user_story_id)
-        trace = self.cases._trace(user_story_id)
+        """Criterion -> linked test cases -> data rows; data gaps are reported separately from test case gaps.
+        Test cases created outside this application are matched to criteria by their tags/Summary or wording."""
+        data = self.cases.read_story(user_story_id)
+        found = self.cases.case_links(user_story_id, data)
         rows = self.list(user_story_id=str(user_story_id))
         out = []
-        for c in story["criteria"]:
-            cases = sorted({r["tfs_test_case_id"] for r in trace if r["ac_id"] == c["id"]})
+        for c in data["criteria"]:
+            links = {}
+            for x in found["links"]:
+                if x["ac_id"] == c["id"]:
+                    links.setdefault(x["tfs_test_case_id"], x)
             per_case = []
-            for tc in cases:
+            for tc, x in sorted(links.items()):
                 tc_rows = [r for r in rows if r["tfs_test_case_id"] == tc and (not r["ac_ids"] or c["id"] in r["ac_ids"])]
-                per_case.append({"test_case_id": tc, "rows": [r.get("row_key") or r["id"] for r in tc_rows],
+                per_case.append({"test_case_id": tc, "title": x["title"], "link": x["source"],
+                                 "rows": [r.get("row_key") or r["id"] for r in tc_rows],
                                  "scenarios": sorted({r.get("scenario") or r.get("kind") or "" for r in tc_rows}),
                                  "valid": sum(1 for r in tc_rows if r.get("intended_valid") is not False),
                                  "invalid": sum(1 for r in tc_rows if r.get("intended_valid") is False)})
-            if not cases:
+            if not per_case:
                 status = "Missing test case coverage"
             elif any(not p["rows"] for p in per_case):
                 status = "Missing data coverage"
             else:
                 status = "Data covered"
             out.append({"ac_id": c["id"], "text": c["text"], "test_cases": per_case, "status": status})
-        return {"story": story["story"], "matrix": out}
+        unmapped = [{**u, "rows": sum(1 for r in rows if r["tfs_test_case_id"] == u["tfs_test_case_id"])}
+                    for u in found["unmapped"]]
+        return {"story": data["story"], "matrix": out, "unmapped": unmapped}
 
 
 def secret_free(rows: list[dict[str, Any]]) -> bool:

@@ -47,6 +47,7 @@ export async function mount(view) {
       </fieldset>
       <datalist id="modelList"></datalist>
       <label>Timeout (seconds)<input name="timeout_seconds" type="number" min="5" max="1800" value="${esc(cfg.timeout_seconds)}"></label>
+      <label>Generation timeout per AI call (seconds) <span class="muted">test cases and test data; a local model on a CPU needs several minutes</span><input name="generation_timeout_seconds" type="number" min="30" max="3600" value="${esc(cfg.generation_timeout_seconds ?? 600)}"></label>
       <label>Temperature<input name="temperature" type="number" step="0.1" min="0" max="2" value="${esc(cfg.temperature)}"></label>
       <label>Max output tokens<input name="max_tokens" type="number" min="256" max="32768" value="${esc(cfg.max_tokens)}"></label>
       <div class="row"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="diag">Run diagnostics</button></div>
@@ -64,7 +65,8 @@ export async function mount(view) {
     const body = {
       mode: f.get("mode"), base_url: f.get("base_url"), model: f.get("model"),
       cloud_base_url: f.get("cloud_base_url"), cloud_model: f.get("cloud_model"),
-      timeout_seconds: Number(f.get("timeout_seconds")), temperature: Number(f.get("temperature")),
+      timeout_seconds: Number(f.get("timeout_seconds")),
+      generation_timeout_seconds: Number(f.get("generation_timeout_seconds")), temperature: Number(f.get("temperature")),
       max_tokens: Number(f.get("max_tokens")),
     };
     if (f.get("api_key")) body.api_key = f.get("api_key");
