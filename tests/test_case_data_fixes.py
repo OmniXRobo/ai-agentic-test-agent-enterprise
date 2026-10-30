@@ -8,7 +8,7 @@ import httpx
 from qa_platform.design import models, suite_cases, testing_types
 from qa_platform.design.data_agent import matrix_html, parse_matrix, parse_parameters
 from tests.fake_llm import design_cases
-from tests.test_suite_cases import _gen_data, _generate, _suite, _wait, env  # noqa: F401  (env is a fixture)
+from tests.test_suite_cases import _gen_data, _generate, _published_case, _suite, _wait, env  # noqa: F401  (env is a fixture)
 
 BIG_STORY = 118
 CRITERIA = ["AC01: Customer can log in using valid credentials.",
@@ -268,3 +268,31 @@ def test_pages_load_new_scripts_after_an_update(env):
     js = c.get(f"/r{__version__}/js/app.js")
     assert js.status_code == 200 and js.headers["cache-control"] == "no-cache"
     assert c.get("/js/app.js").status_code == 200  # old cached pages still find the scripts
+
+
+def test_test_data_is_written_a_few_rows_per_call_with_the_generation_timeout(env):
+    c, _, llm = env
+    tc = _published_case(c)
+    marker = "suite-aware test data designer"
+    res = _gen_data(c, test_case_ids=[tc], seed=1)[0]
+    calls = _calls(llm, marker)
+    assert len(calls) == 2  # 4 rows, then the 5th (the fake has 5)
+    assert "At most 4 rows" in calls[0]["messages"][0]["content"]
+    assert "- Valid user (valid)" in calls[1]["messages"][1]["content"]  # the second call knows the first rows
+    assert {i["rule"] for i in res["issues"]} >= {"DUPLICATE_ROW"}
+
+    # a later call that times out keeps the rows already written and says so
+    from tests.fake_llm import design_data
+    state = {"n": 0}
+
+    def slow_second(body):
+        state["n"] += 1
+        if state["n"] > 1:
+            raise httpx.ReadTimeout("model is busy")
+        return design_data(body)
+
+    llm.extra[marker] = slow_second
+    res = _gen_data(c, test_case_ids=[tc], seed=1)[0]
+    rows = c.get("/api/test-data", params={"test_case_ids": str(tc)}).json()["items"]
+    assert len([r for r in rows if r["version"] == 2]) == 4
+    assert any("stopped after 4 rows" in g for g in rows[0]["meta"]["gaps"])
