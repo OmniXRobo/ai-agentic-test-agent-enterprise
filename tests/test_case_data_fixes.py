@@ -217,3 +217,54 @@ def test_generate_for_several_user_stories(env):
     c, _, _ = env
     results = _gen_data(c, user_story_ids=[201, 202])
     assert {x["test_case_id"] for x in results} == {1268, 1269}
+
+
+def test_generated_cases_are_created_in_the_suite_when_done(env):
+    c, ado, _ = env
+    suite = _suite(c, "functional")
+    r = c.post("/api/design/suite-runs", json={"plan_id": 7, "suite_id": suite, "user_story_ids": [201]})
+    body = _wait(c, f"/api/design/suite-runs/{r.json()['run_id']}")
+    assert body["status"] == "PASSED", body
+    result = body["result"]  # only returned once the cases are in TFS too
+    story = result["stories"][0]
+    errors = {ref for ref, lst in story["validation"]["per_case"].items() if any(i["level"] == "error" for i in lst)}
+    ready = [tc for tc in story["test_cases"] if tc["ref"] not in errors]
+    assert ready and all(tc.get("published_id") for tc in ready)
+    ap = result["auto_publish"]
+    assert ap["created"] + ap["reused"] == len(ready) and ap["held"] == len(errors)
+    # the duplicate of the existing linked test case #1268 is reused, not created again
+    dups = {d["ref"] for d in story["validation"]["duplicates"] if d["kind"] == "existing"}
+    assert dups and all(tc["published_id"] == 1268 for tc in story["test_cases"] if tc["ref"] in dups)
+    assert ap["reused"] == len(dups)
+    new_ids = [tc["published_id"] for tc in ready if tc["published_id"] != 1268]
+    assert set(new_ids) | {1268} <= set(ado.suite_cases)
+    assert all(ado.items[i]["System.Tags"].startswith("AI Generated; Functional Testing; US201") for i in new_ids)
+
+
+def test_warnings_alone_do_not_trigger_the_slow_review_unless_thorough(env):
+    c, ado, llm = env
+
+    def one_step(body):  # valid cases whose only issue is a single step (a warning)
+        out = design_cases(body)
+        out["test_cases"] = [tc for tc in out["test_cases"] if tc["title"].startswith("Verify")]
+        for tc in out["test_cases"]:
+            tc["steps"] = tc["steps"][:1]
+        return out
+
+    llm.extra["suite-aware test case designer"] = one_step
+    reviews = lambda: len(_calls(llm, "You are a test case reviewer"))  # noqa: E731
+    _generate(c, _suite(c, "functional"), [201])
+    assert reviews() == 0
+    _generate(c, _suite(c, "regression"), [201], thorough_review=True)
+    assert reviews() > 0
+
+
+def test_pages_load_new_scripts_after_an_update(env):
+    from qa_platform import __version__
+    c, _, _ = env
+    page = c.get("/")
+    assert f'src="r{__version__}/js/' in page.text and 'src="js/' not in page.text
+    assert page.headers["cache-control"] == "no-cache"
+    js = c.get(f"/r{__version__}/js/app.js")
+    assert js.status_code == 200 and js.headers["cache-control"] == "no-cache"
+    assert c.get("/js/app.js").status_code == 200  # old cached pages still find the scripts

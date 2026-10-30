@@ -167,6 +167,8 @@ def design_result(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]
     if run is None:
         raise QAError("RUN_NOT_FOUND", f"Run {run_id} does not exist.", status=404, run_id=run_id)
     result = None
+    if run_id in _publishing:
+        return {"ok": True, "status": "RUNNING", "result": None}
     if run["status"] != "RUNNING":
         try:
             result = rt.design.get(run_id)
@@ -208,6 +210,8 @@ class SuiteRunIn(BaseModel):
     testing_type: str | None = None
     cases_per_criterion: int = Field(default=2, ge=1, le=6)
     max_cases: int | None = Field(default=None, ge=1, le=200, description="Optional cap per user story")
+    auto_publish: bool = Field(default=True, description="Create the cases without errors in the suite when done")
+    thorough_review: bool = Field(default=False, description="Also send cases with warnings back to the AI (slower)")
 
 
 @router.post("/design/suite-runs", status_code=202)
@@ -229,17 +233,31 @@ async def start_suite_run(body: SuiteRunIn, rt: Runtime = Depends(runtime)) -> d
         runs.append({"run_id": run_id, "suite_id": suite["id"], "suite": suite["name"],
                      "testing_type": suite["testing_type_name"], "override": suite["testing_type"]})
 
+    if body.auto_publish:  # the run shows as running until its cases are in the suite too
+        _publishing.update(r["run_id"] for r in runs)
+
     def work() -> None:
         for r in runs:
             try:
                 rt.design.cases.run(body.plan_id, r["suite_id"], body.user_story_ids, testing_type=r["override"],
                                     max_cases=body.max_cases, cases_per_criterion=body.cases_per_criterion,
-                                    run_id=r["run_id"])
+                                    run_id=r["run_id"], thorough_review=body.thorough_review)
             except Exception:
                 log.info("Suite test case generation failed", extra={"run_id": r["run_id"]})
+            if not body.auto_publish:
+                continue
+            try:  # a run that failed part-way still creates the cases it finished
+                rt.design.cases.publish_ready(r["run_id"])
+            except Exception as exc:
+                log.info(f"Creating the generated test cases in TFS failed: {exc}", extra={"run_id": r["run_id"]})
+            finally:
+                _publishing.discard(r["run_id"])
 
     asyncio.get_running_loop().run_in_executor(None, work)
     return {"ok": True, "run_id": runs[0]["run_id"], "testing_type": runs[0]["testing_type"], "runs": runs}
+
+
+_publishing: set[str] = set()
 
 
 def _suite_or_override(rt: Runtime, plan_id: int, suite_id: int, override: str | None) -> dict[str, Any]:

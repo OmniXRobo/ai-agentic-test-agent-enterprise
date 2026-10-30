@@ -90,6 +90,8 @@ _UNCLEAR = re.compile(r"\b(appropriate(ly)?|reasonabl[ey]|quick(ly)?|fast|slow|u
                       r"simple|efficient(ly)?|robust|seamless(ly)?|timely|soon|adequate(ly)?|sufficient(ly)?|"
                       r"acceptable|as needed|etc\.?|and so on|normal(ly)?|good|nice)\b", re.I)
 _CLAUSE = re.compile(r"\s*;\s*|\s*,?\s+and\s+(?:then\s+)?|\s*,\s*then\s+", re.I)
+# warnings worth a second (slow) AI pass without a thorough review: summary steps and vague expected results
+_REVIEW_RULES = {"STEP_ACTION", "EXPECTED_RESULT"}
 _SUMMARY_ACTION = re.compile(r"^\s*(complete|perform|execute|carry out|do|run through|go through|test|verify|validate|"
                              r"check)\b.{0,60}\b(workflow|process|flow|functionality|feature|scenario|journey|steps?)\b",
                              re.I)
@@ -243,7 +245,7 @@ def validate(case_set: models.SuiteCaseSet, criteria: list[dict[str, Any]], anal
             issues.append({"rule": "SOURCE_LINK", "level": "error",
                            "message": "Not linked to any acceptance criterion of this user story"})
         if len(case.steps) < 2 and ttype["key"] not in ("performance",):
-            issues.append({"rule": "STEP_ACTION", "level": "warning",
+            issues.append({"rule": "STEP_COUNT", "level": "warning",
                            "message": "Only one step: break the case into the actions a tester performs"})
         for n, step in enumerate(case.steps, start=1):
             if not step.action.strip():
@@ -634,8 +636,10 @@ class SuiteCaseService:
             timeout=self._call_timeout())
 
     def _chunk(self, story_id: Any, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
-               ttype: dict[str, Any], per_ac: int, act: Any, label: str) -> tuple[models.SuiteCaseSet, bool]:
-        """Generate, validate and (when the explicit rules find issues) refine the cases of a few criteria."""
+               ttype: dict[str, Any], per_ac: int, act: Any, label: str,
+               thorough: bool = False) -> tuple[models.SuiteCaseSet, bool]:
+        """Generate, validate and refine the cases of a few criteria. The review call (as slow as the first one on a
+        local model) runs for errors and uncovered criteria; warnings alone only trigger it in a thorough review."""
         budget = per_ac * len(crit)
         act.progress(None, f"US{story_id}: writing {ttype['name']} test cases for {label}")
         case_set, ctx = self._design_chunk(data, crit, analysis, ttype, budget)
@@ -643,11 +647,13 @@ class SuiteCaseService:
         sub = analysis.model_copy(update={"criteria": [a for a in analysis.criteria if a.ac_id in {c["id"] for c in crit}]})
         check = validate(case_set, crit, sub, ttype, data["existing"])
         matrix = coverage(crit, sub, case_set, ttype)
+        found = [i for lst in check["per_case"].values() for i in lst if i["level"] in ("error", "warning")]
         issues = [f"{ref}: {i['message']}" for ref, lst in check["per_case"].items() for i in lst
                   if i["level"] in ("error", "warning")]
-        issues += [f"{r['ac_id']} is {r['status']}: missing {', '.join(r['missing']) or 'all conditions'}"
-                   for r in matrix if r["status"] in ("Not Covered", "Partially Covered")]
-        if not issues:
+        gaps = [f"{r['ac_id']} is {r['status']}: missing {', '.join(r['missing']) or 'all conditions'}"
+                for r in matrix if r["status"] in ("Not Covered", "Partially Covered")]
+        issues += gaps
+        if not issues or not (thorough or gaps or any(i["level"] == "error" or i["rule"] in _REVIEW_RULES for i in found)):
             return case_set, False
         act.progress(None, f"US{story_id}: reviewing {label} ({len(issues)} issues found by the rules)")
         try:
@@ -663,7 +669,7 @@ class SuiteCaseService:
         return refined, True
 
     def generate_story(self, story_id: int, suite: dict[str, Any], *, max_cases: int | None = None, run_id: str,
-                       act: Any, cases_per_criterion: int = 2) -> dict[str, Any]:
+                       act: Any, cases_per_criterion: int = 2, thorough_review: bool = False) -> dict[str, Any]:
         ttype = testing_types.get(suite["testing_type"])
         data = self.read_story(story_id)
         impact = self.impact(story_id, data["criteria"])
@@ -685,7 +691,8 @@ class SuiteCaseService:
         while queue:
             crit, label = queue.pop(0)
             try:
-                part, refined = self._chunk(story_id, data, crit, analysis, ttype, cases_per_criterion, act, label)
+                part, refined = self._chunk(story_id, data, crit, analysis, ttype, cases_per_criterion, act, label,
+                                            thorough_review)
             except QAError as exc:
                 if len(crit) > 1 and exc.error_code in ("AI_TIMEOUT", "AI_OUTPUT_INVALID"):
                     # Too much for one answer: retry these criteria one by one.
@@ -723,7 +730,8 @@ class SuiteCaseService:
                 "refined": refined_any, "notes": notes, "failed_criteria": sorted(failed_ids)}
 
     def run(self, plan_id: int, suite_id: int, story_ids: list[int], *, testing_type: str | None = None,
-            max_cases: int | None = None, cases_per_criterion: int = 2, run_id: str | None = None) -> dict[str, Any]:
+            max_cases: int | None = None, cases_per_criterion: int = 2, run_id: str | None = None,
+            thorough_review: bool = False) -> dict[str, Any]:
         if not story_ids:
             raise QAError("STORY_REQUIRED", "Select at least one user story.")
         run_id = run_id or new_run_id("TCGEN")
@@ -740,7 +748,8 @@ class SuiteCaseService:
                 for n, sid in enumerate(story_ids):
                     act.progress(int(n * 100 / len(story_ids)), f"Reading User Story #{sid}")
                     result["stories"].append(self.generate_story(sid, suite, max_cases=max_cases, run_id=run_id,
-                                                                 act=act, cases_per_criterion=cases_per_criterion))
+                                                                 act=act, cases_per_criterion=cases_per_criterion,
+                                                                 thorough_review=thorough_review))
                     self._save(result)  # finished stories survive a later failure
                 total = sum(len(s["test_cases"]) for s in result["stories"])
                 act.event(names.TESTCASE_COMPLETED, f"Test cases generated: {total}")
@@ -801,6 +810,42 @@ class SuiteCaseService:
         return story
 
     # ---- publish to TFS ------------------------------------------------------------------------------
+
+    def publish_ready(self, run_id: str) -> dict[str, Any]:
+        """Create every generated case without an error-level issue in the suite (run automatically after generation).
+        A case the rules found to duplicate an existing TFS test case reuses that test case instead of a new one."""
+        result = self.get(run_id)
+        selection: dict[str, list[str]] = {}
+        reuse: dict[str, int] = {}
+        held = 0
+        for story in result.get("stories", []):
+            sid = str(story["story"]["id"])
+            per_case = (story.get("validation") or {}).get("per_case") or {}
+            existing = {d["ref"]: d["duplicate_of"] for d in (story.get("validation") or {}).get("duplicates", [])
+                        if d.get("kind") == "existing"}
+            for case in story["test_cases"]:
+                if case.get("published_id"):
+                    continue
+                if any(i["level"] == "error" for i in per_case.get(case["ref"], [])):
+                    held += 1
+                    continue
+                selection.setdefault(sid, []).append(case["ref"])
+                if case["ref"] in existing:
+                    reuse[f"{sid}:{case['ref']}"] = int(existing[case["ref"]])
+        if not selection:
+            out = {"created": [], "held": held, "suite": result["suite"]["name"]}
+        else:
+            try:
+                out = {**self.publish(run_id, selection, reuse), "held": held}
+            except Exception as exc:
+                result["auto_publish"] = {"at": now_iso(), "error": exc.message if isinstance(exc, QAError) else str(exc)}
+                self._save(result)
+                raise
+            result = self.get(run_id)
+        result["auto_publish"] = {"at": now_iso(), "created": sum(1 for c in out["created"] if c["action"] == "created"),
+                                  "reused": sum(1 for c in out["created"] if c["action"] == "reused"), "held": held}
+        self._save(result)
+        return out
 
     def publish(self, run_id: str, selection: dict[str, list[str]], reuse: dict[str, int] | None = None) -> dict[str, Any]:
         """selection: {story_id: [refs]}; reuse: {"<story_id>:<ref>": existing TFS test case id} links an existing

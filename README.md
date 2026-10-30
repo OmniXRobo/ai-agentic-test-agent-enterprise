@@ -17,6 +17,14 @@ types. Test cases are generated per suite type from a sprint's selected user sto
 traceability and a coverage matrix. Test data is versioned and traceable, and is written to the TFS test data tab
 or the Summary. See [docs/TEST_DESIGN_PAGES.md](docs/TEST_DESIGN_PAGES.md).
 
+## Version 23.2.1: generated test cases are created in TFS
+
+Generated test cases without errors are now created in the selected suite as soon as generation ends (option
+**Create in TFS when done**); before, they waited for a click on *Create selected test cases in this suite*. The slow
+second AI pass only runs for errors, uncovered criteria, summary steps and vague results, unless **Thorough review**
+is checked. The browser now always loads the pages of the installed version after a patch. See
+[docs/PATCH_23.2.1.md](docs/PATCH_23.2.1.md).
+
 ## Version 23.2.0: test case and test data fixes
 
 Large user stories are generated two acceptance criteria per AI call with a separate generation timeout, so a local
