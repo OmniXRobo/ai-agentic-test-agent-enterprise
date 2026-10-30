@@ -43,15 +43,20 @@ static suite (reused if one with the same name exists). The suite's testing type
      6 small calls instead of one large one.
    * Steps must be concrete: one action per step naming the page, field or button and the value used, and an
      observable expected result. The prompt carries an example of the format.
-   * **Validates** them with explicit rules (see below), sends the issues back to the AI once per call to refine the
-     cases, and validates again. A confidence score is never used as proof.
+   * **Validates** them with explicit rules (see below). Errors, uncovered criteria, summary steps and vague expected
+     results are sent back to the AI once per call to refine the cases, and validated again. Other warnings (a single
+     step, a missing cleanup step, a duplicate) only trigger that second pass with **Thorough review (slower)**, since
+     each pass takes minutes on a local model. A confidence score is never used as proof.
    * Builds the **coverage matrix** per criterion, judged per condition. The statuses are Covered, Partially Covered,
      Not Covered, Not Applicable and Needs Clarification. This is requirement coverage and is never an execution result.
-4. Review the cases, edit any of them (an edit is re-validated), and choose **Reuse existing #id** for duplicate
-   candidates. Then **Create selected test cases in this suite**.
+4. With **Create in TFS when done** (checked by default) every case without an error is created in the suite as soon
+   as generation ends, tagged and linked to its user story; a duplicate of an existing linked test case reuses that
+   test case. Cases with errors wait: edit them (an edit is re-validated) and click **Create selected test cases in
+   this suite**. With the option unchecked, review first, choose **Reuse existing #id** or a new case for duplicate
+   candidates, and create the selected cases yourself.
 
 Validation rules: `SOURCE_LINK` (every case links to a criterion of this story; unknown ids are dropped),
-`STEP_ACTION` (no empty actions, no single summary step such as "Complete the purchase workflow", more than one step),
+`STEP_ACTION` (no empty actions, no single summary step such as "Complete the purchase workflow"), `STEP_COUNT` (more than one step),
 `EXPECTED_RESULT` (no empty or vague results such as "works correctly"), `CLEANUP` (cases that
 change data need a restore step), `THRESHOLD` (performance and security cases without a stated target or policy are
 flagged as not decidable yet), `DUPLICATE` (generated cases that overlap each other or existing linked cases).

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -49,6 +51,26 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app.include_router(voice.router)
     app.include_router(reports.router)
     app.include_router(setup.router)
+    @app.middleware("http")
+    async def revalidate_pages(request, call_next):  # type: ignore[no-untyped-def]
+        # Browsers keep ES modules they loaded before; make them ask again (unchanged files answer 304).
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    # The page loads its scripts and styles from /r<version>/..., so after an update or patch every module has a new
+    # address and no browser can keep running the previous version's pages.
+    asset_prefix = f"r{__version__}"
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/index.html", include_in_schema=False)
+    def index() -> HTMLResponse:
+        page = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        page = re.sub(r'(href|src)="((?:css|js|img)/)', rf'\1="{asset_prefix}/\2', page)
+        return HTMLResponse(page)
+
+    app.mount(f"/{asset_prefix}", StaticFiles(directory=WEB_ROOT), name="web-versioned")
     app.mount("/", StaticFiles(directory=WEB_ROOT, html=True), name="web")
     return app
 

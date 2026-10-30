@@ -146,8 +146,9 @@ def _suite(c, key):
     return c.post("/api/tfs/test-plans/7/suites", json={"testing_types": [key]}).json()["suites"][0]["id"]
 
 
-def _generate(c, suite_id, stories):
-    r = c.post("/api/design/suite-runs", json={"plan_id": 7, "suite_id": suite_id, "user_story_ids": stories})
+def _generate(c, suite_id, stories, **options):
+    options.setdefault("auto_publish", False)  # these tests publish (and review) the cases themselves
+    r = c.post("/api/design/suite-runs", json={"plan_id": 7, "suite_id": suite_id, "user_story_ids": stories, **options})
     assert r.status_code == 202, r.json()
     body = _wait(c, f"/api/design/suite-runs/{r.json()['run_id']}")
     assert body["status"] == "PASSED", body
