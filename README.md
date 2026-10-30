@@ -17,6 +17,12 @@ types. Test cases are generated per suite type from a sprint's selected user sto
 traceability and a coverage matrix. Test data is versioned and traceable, and is written to the TFS test data tab
 or the Summary. See [docs/TEST_DESIGN_PAGES.md](docs/TEST_DESIGN_PAGES.md).
 
+## Version 23.2.2: test data no longer times out
+
+Test data used the short 2-minute AI timeout and asked a local model for all rows in one answer. It now asks for four
+rows per call, each with the generation timeout, and keeps the rows already written when a later call times out. See
+[docs/PATCH_23.2.2.md](docs/PATCH_23.2.2.md).
+
 ## Version 23.2.1: generated test cases are created in TFS
 
 Generated test cases without errors are now created in the selected suite as soon as generation ends (option

@@ -107,7 +107,10 @@ You filter by **sprint → user story → test case**. The list shows the user s
 * **Generate test data** opens a choice: the checked test cases of the chosen story, or every test case of the
   checked user stories of the sprint. The Test Data Intelligence Agent reads the steps, the story's criteria and the suite's testing
   type, then generates valid, invalid, boundary, empty/null, duplicate, date/time, role, Unicode and pairwise rows as
-  they apply. It never invents business rules or credentials; missing rules are listed as gaps.
+  they apply. It never invents business rules or credentials; missing rules are listed as gaps. The rows are asked
+  for four at a time (setting `design.data_rows_per_call`), each call with the **generation timeout**, and every
+  later call lists the rows already written so the model adds new scenarios. If a later call times out, the rows
+  already written are kept and a gap says so; if even the first call times out it is retried for a single row.
 * The generated rows go through explicit rules: plain-text secrets in valid rows become `{{SECRET:name}}`, real
   e-mail domains become `example.com`, identical rows are dropped, invalid rows without a violated rule are flagged,
   and unknown criterion ids are removed.

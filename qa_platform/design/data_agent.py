@@ -423,6 +423,57 @@ class TestDataService:
             act.complete(f"Data rows built: {rows} for {len(out)} test cases")
         return {"results": out}
 
+    def _design_rows(self, tc_id: int, t: dict[str, Any], context: str, max_rows: int, act: Any) -> models.TestDataDesign:
+        """Ask for the rows a few at a time: a local model on a CPU writes a dozen rows in one answer slower than any
+        sensible timeout. Each call has the generation timeout; a later call that fails keeps the rows already made."""
+        cfg = self.ai.config()
+        timeout = max(cfg["timeout_seconds"], cfg.get("generation_timeout_seconds") or 600)
+        per_call = max(1, int((self.ai.settings.section("design") or {}).get("data_rows_per_call") or 4))
+        design = models.TestDataDesign()
+        seen: set[str] = set()
+        while len(design.rows) < max_rows:
+            batch = min(per_call, max_rows - len(design.rows))
+            system = DATA_PROMPT.format(type=t["name"], focus=t["data"], max_rows=batch)
+            user = context
+            if design.rows:
+                user += ("\n\nRows already written (do not repeat them; add rows for scenarios not covered yet, or "
+                         "return no rows when the scenarios that apply are covered):\n"
+                         + "\n".join(f"- {r.name} ({r.scenario})" for r in design.rows))
+            act.progress(None, f"Test case #{tc_id}: writing {t['name']} data rows {len(design.rows) + 1} to "
+                         f"{len(design.rows) + batch} of up to {max_rows}")
+            try:
+                part = self.ai.complete_json(system, user, models.TestDataDesign,
+                                             max_tokens=min(6000, 1200 + 600 * batch), timeout=timeout)
+            except QAError as exc:
+                if exc.error_code not in ("AI_TIMEOUT", "AI_OUTPUT_INVALID"):
+                    raise
+                if design.rows:
+                    design.gaps.append(f"Generation stopped after {len(design.rows)} rows ({exc.message}); generate "
+                                       "again for more rows, or raise the generation timeout under AI settings.")
+                    break
+                if per_call > 1:  # nothing yet: try once more with the smallest answer
+                    per_call = 1
+                    continue
+                raise QAError(exc.error_code, f"{exc.message} Even one data row took longer than the generation timeout "
+                              f"({int(timeout)} s); raise it under AI settings.", status=exc.status) from exc
+            new = []
+            for r in part.rows[:batch]:
+                key = f"{r.name.lower()}|{dumps(r.values)}"
+                if key not in seen:
+                    seen.add(key)
+                    new.append(r)
+            if not design.rows:
+                design = part.model_copy(update={"rows": []})
+            else:
+                names = {f.name for f in design.fields}
+                design.fields += [f for f in part.fields if f.name not in names]
+                for attr in ("not_applicable", "gaps", "preconditions", "cleanup"):
+                    getattr(design, attr).extend(x for x in getattr(part, attr) if x not in getattr(design, attr))
+            design.rows += new
+            if not new or len(part.rows) < batch:
+                break
+        return design
+
     def _generate_one(self, tc_id: int, seed: int | None, max_rows: int, act: Any) -> dict[str, Any]:
         ctx = self._case_context(tc_id)
         t = ctx["testing_type"]
@@ -430,8 +481,7 @@ class TestDataService:
         ac_hash = hashlib.sha256("|".join(c["hash"] for c in ctx["criteria"]).encode()).hexdigest()[:16]
         seed = seed if seed is not None else int(hashlib.sha256(f"{tc_id}|{ac_hash}".encode()).hexdigest()[:8], 16) % 1_000_000
         act.progress(None, f"Test case #{tc_id}: generating {t['name']} data")
-        design = self.ai.complete_json(DATA_PROMPT.format(type=t["name"], focus=t["data"], max_rows=max_rows),
-                                       self._prompt_context(ctx), models.TestDataDesign, max_tokens=6000)
+        design = self._design_rows(tc_id, t, self._prompt_context(ctx), max_rows, act)
         rows, issues = check_rows(design.rows[:max_rows], {c["id"] for c in ctx["criteria"]})
         cfg = self.ai.config()
         dataset_key = f"DS-{tc_id}-{t['key']}"

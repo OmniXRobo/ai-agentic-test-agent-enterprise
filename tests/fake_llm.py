@@ -188,6 +188,11 @@ def design_data(body):
     if t == "Performance Testing":
         rows = [{"name": "1000 unique users", "scenario": "volume", "intended_valid": True,
                  "expected_outcome": "Response times are recorded", "values": {"users": 1000, "username": "user_{{UNIQUE}}"}}]
+    # like a model asked for a few rows at a time: at most the requested count, never the rows already written
+    limit = _re.search(r"At most (\d+) rows", body["messages"][0]["content"])
+    written = body["messages"][1]["content"].split("Rows already written", 1)[1] if "Rows already written" in \
+        body["messages"][1]["content"] else ""
+    rows = [r for r in rows if f"- {r['name']} (" not in written][:int(limit.group(1)) if limit else None]
     return {"fields": [{"name": "username", "type": "string", "required": True, "source": "specified"},
                        {"name": "password", "type": "secret", "required": True, "source": "specified"}],
             "rows": rows, "gaps": ["Maximum username length is not stated."],
