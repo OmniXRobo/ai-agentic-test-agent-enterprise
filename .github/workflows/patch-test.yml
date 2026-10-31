@@ -44,11 +44,14 @@ jobs:
           Unblock-File .\qa-enterprise-ai-patch-23.2.2-cumulative.zip
           Expand-Archive .\qa-enterprise-ai-patch-23.2.2-cumulative.zip -DestinationPath .\qa-patch-23.2.2 -Force
           powershell -ExecutionPolicy Bypass -File .\qa-patch-23.2.2\APPLY_PATCH.ps1 *>&1 | Tee-Object -FilePath out1.txt
+          Write-Host "::notice title=apply1::$(((Get-Content out1.txt) -join '%0A'))"
           if (-not (Select-String -Path out1.txt -Pattern 'version 23.2.2' -Quiet)) { throw "not running 23.2.2" }
           if (-not (Select-String -Path out1.txt -Pattern 'Offline voice agent: READY' -Quiet)) { throw "voice not ready" }
       - name: Verify
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
+          & { 
           $root = "$env:LOCALAPPDATA\Programs\AIAgenticTestAgent"; $app = "$root\app"
           (Invoke-RestMethod http://127.0.0.1:8765/api/health) | ConvertTo-Json
           Get-Content "$root\data\settings.json"
@@ -58,10 +61,14 @@ jobs:
           & "$app\.venv\Scripts\python.exe" -c "import wave,io,sys; b=io.BytesIO(); w=wave.open(b,'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(32000)); w.close(); open('silence.wav','wb').write(b.getvalue())"
           $r = Invoke-WebRequest -Method Post -Uri http://127.0.0.1:8765/api/voice/transcribe -ContentType 'audio/wav' -InFile silence.wav -SkipHttpErrorCheck
           "transcribe: $($r.StatusCode) $($r.Content)"
-          if ($r.StatusCode -ne 200) { throw "offline transcription failed" }
+          } *>&1 | Tee-Object -FilePath verify.txt
+          Write-Host "::notice title=verify::$(((Get-Content verify.txt) -join '%0A'))"
+          if (-not (Select-String -Path verify.txt -Pattern 'transcribe: 200' -Quiet)) { throw "offline transcription failed" }
+          if (Select-String -Path verify.txt -Pattern 'AssertionError' -Quiet) { throw "manifest" }
       - name: Apply again on 23.2.2 (rerun is safe)
         shell: powershell
         run: |
           cd $env:USERPROFILE\Downloads
           powershell -ExecutionPolicy Bypass -File .\qa-patch-23.2.2\APPLY_PATCH.ps1 *>&1 | Tee-Object -FilePath out2.txt
+          Write-Host "::notice title=apply2::$(((Get-Content out2.txt) -join '%0A'))"
           if (-not (Select-String -Path out2.txt -Pattern 'version 23.2.2' -Quiet)) { throw "rerun failed" }
