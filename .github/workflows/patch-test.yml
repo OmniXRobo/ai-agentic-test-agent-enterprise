@@ -1,0 +1,67 @@
+name: patch-test
+on:
+  push:
+    branches: ['patch-test/**']
+jobs:
+  apply:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13' }
+      - name: Simulate a 23.1.0 offline install (without vosk, without a speech model)
+        shell: pwsh
+        run: |
+          $root = "$env:LOCALAPPDATA\Programs\AIAgenticTestAgent"; $app = "$root\app"
+          New-Item -ItemType Directory -Force $app, "$root\data" | Out-Null
+          git archive d9135db qa_platform web docs README.md requirements.txt START_QA_PLATFORM.cmd -o base.zip
+          Expand-Archive base.zip $app
+          '{}' | Set-Content "$app\INSTALLED.json"
+          Set-Content "$root\START_QA_PLATFORM.cmd" "@echo off`r`ncall `"%~dp0app\START_QA_PLATFORM.cmd`" %*"
+          python -m venv "$app\.venv"
+          Get-Content "$app\requirements.txt" | Where-Object { $_ -notmatch '^vosk' } | Set-Content req.txt
+          & "$app\.venv\Scripts\python.exe" -m pip install -q -r req.txt
+          Push-Location $app
+          & "$app\.venv\Scripts\python.exe" -c "from pathlib import Path; from qa_platform.offline import manifest as mf; mf.write(Path('.'), {'name':'t','version':'23.1.0'})"
+          Pop-Location
+          '{"server":{"port":8765},"voice":{"stt_engine":"browser"}}' | Set-Content "$root\data\settings.json"
+          Invoke-WebRequest https://huggingface.co/rhasspy/vosk-models/resolve/main/en/vosk-model-small-en-us-0.15.zip -OutFile "$env:USERPROFILE\Downloads\vosk-model-small-en-us-0.15.zip"
+          (Get-FileHash "$env:USERPROFILE\Downloads\vosk-model-small-en-us-0.15.zip").Hash
+      - name: Start 23.1.0
+        shell: pwsh
+        run: |
+          Start-Process "$env:LOCALAPPDATA\Programs\AIAgenticTestAgent\START_QA_PLATFORM.cmd"
+          for ($i=0; $i -lt 60; $i++) { Start-Sleep 2; try { $h = Invoke-RestMethod http://127.0.0.1:8765/api/health; break } catch {} }
+          $h | ConvertTo-Json
+          if ($h.version -ne '23.1.0') { throw "23.1.0 did not start" }
+      - name: Apply the cumulative patch with Windows PowerShell 5.1, as the user will
+        shell: powershell
+        run: |
+          cd $env:USERPROFILE\Downloads
+          Copy-Item "$env:GITHUB_WORKSPACE\patchtest\qa-enterprise-ai-patch-23.2.2-cumulative.zip" .
+          Unblock-File .\qa-enterprise-ai-patch-23.2.2-cumulative.zip
+          Expand-Archive .\qa-enterprise-ai-patch-23.2.2-cumulative.zip -DestinationPath .\qa-patch-23.2.2 -Force
+          powershell -ExecutionPolicy Bypass -File .\qa-patch-23.2.2\APPLY_PATCH.ps1 *>&1 | Tee-Object -FilePath out1.txt
+          if (-not (Select-String -Path out1.txt -Pattern 'version 23.2.2' -Quiet)) { throw "not running 23.2.2" }
+          if (-not (Select-String -Path out1.txt -Pattern 'Offline voice agent: READY' -Quiet)) { throw "voice not ready" }
+      - name: Verify
+        shell: pwsh
+        run: |
+          $root = "$env:LOCALAPPDATA\Programs\AIAgenticTestAgent"; $app = "$root\app"
+          (Invoke-RestMethod http://127.0.0.1:8765/api/health) | ConvertTo-Json
+          Get-Content "$root\data\settings.json"
+          Push-Location $app
+          & "$app\.venv\Scripts\python.exe" -c "from pathlib import Path; from qa_platform.offline import manifest as mf; d=mf.verify(Path('.')); print(d); assert not d['missing'] and not d['changed'], d"
+          Pop-Location
+          & "$app\.venv\Scripts\python.exe" -c "import wave,io,sys; b=io.BytesIO(); w=wave.open(b,'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(32000)); w.close(); open('silence.wav','wb').write(b.getvalue())"
+          $r = Invoke-WebRequest -Method Post -Uri http://127.0.0.1:8765/api/voice/transcribe -ContentType 'audio/wav' -InFile silence.wav -SkipHttpErrorCheck
+          "transcribe: $($r.StatusCode) $($r.Content)"
+          if ($r.StatusCode -ne 200) { throw "offline transcription failed" }
+      - name: Apply again on 23.2.2 (rerun is safe)
+        shell: powershell
+        run: |
+          cd $env:USERPROFILE\Downloads
+          powershell -ExecutionPolicy Bypass -File .\qa-patch-23.2.2\APPLY_PATCH.ps1 *>&1 | Tee-Object -FilePath out2.txt
+          if (-not (Select-String -Path out2.txt -Pattern 'version 23.2.2' -Quiet)) { throw "rerun failed" }
