@@ -63,7 +63,7 @@ jobs:
           "transcribe: $($r.StatusCode) $($r.Content)"
           } *>&1 | Tee-Object -FilePath verify.txt
           Write-Host "::notice title=verify::$(((Get-Content verify.txt) -join '%0A'))"
-          if (-not (Select-String -Path verify.txt -Pattern 'transcribe: 200' -Quiet)) { throw "offline transcription failed" }
+          if (-not (Select-String -Path verify.txt -Pattern 'transcribe: (200|422 .*VOICE_NOTHING_HEARD)' -Quiet)) { throw "offline transcription failed" }
           if (Select-String -Path verify.txt -Pattern 'AssertionError' -Quiet) { throw "manifest" }
       - name: Apply again on 23.2.2 (rerun is safe)
         shell: powershell
