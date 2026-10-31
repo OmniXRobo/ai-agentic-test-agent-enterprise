@@ -56,7 +56,7 @@ jobs:
           (Invoke-RestMethod http://127.0.0.1:8765/api/health) | ConvertTo-Json
           Get-Content "$root\data\settings.json"
           Push-Location $app
-          & "$app\.venv\Scripts\python.exe" -c "from pathlib import Path; from qa_platform.offline import manifest as mf; d=mf.verify(Path('.')); print(d); assert not d['missing'] and not d['changed'], d"
+          & "$app\.venv\Scripts\python.exe" -c "from pathlib import Path; from qa_platform.offline import manifest as mf; d=mf.verify(Path('.')); print({k: len(v) for k, v in d.items()}, [e for e in d['extra'] if not e.startswith('.venv')]); assert not d['missing'] and not d['changed'], d"
           Pop-Location
           & "$app\.venv\Scripts\python.exe" -c "import wave,io,sys; b=io.BytesIO(); w=wave.open(b,'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(32000)); w.close(); open('silence.wav','wb').write(b.getvalue())"
           $r = Invoke-WebRequest -Method Post -Uri http://127.0.0.1:8765/api/voice/transcribe -ContentType 'audio/wav' -InFile silence.wav -SkipHttpErrorCheck
