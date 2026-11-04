@@ -281,7 +281,7 @@ def test_mute_stop_and_persistence_across_refresh(browser, server):
     page.click("#vaOrb")
     page.click("#vaMute")
     h.wait_state("muted")
-    assert page.locator("#voiceAgent.mic-live").count() == 0  # microphone released
+    expect(page.locator("#voiceAgent.mic-live")).to_have_count(0)  # microphone released (asynchronously)
     page.reload()
     h.wait_state("muted")  # mute lasts for this browser session
     page.click("#vaOrb"); page.click("#vaMute")
