@@ -1,8 +1,5 @@
-23.3.22 (4 Nov 2026): full suite 402 passed, 64 failed. 63 of those fail the same way on the untouched 23.3.21 in
-  this Linux test environment (functional browser runs, AI stand-ins, design generation); the 64th
-  (test_studio.py::test_edit_validation_versions_compare_restore) failed once under load and passes when run again
-  on its own. Targeted run after the version bump (upgrade, api, first run, offline, performance, schedules, reports,
-  voice UI and the new tests): 77 passed.
+23.3.22 (4 Nov 2026): full suite 466 passed, 0 failed (Linux, real JMeter 5.6.3, Chromium), after merging the
+  23.3.21 test-suite fixes. test_regression_pages.py now lists Performance Scenarios as a new page.
   new: test_perf_foundation_23322.py (10 tests, real JMeter 5.6.3 + Java 21 against the local test site): scenarios
   create / edit / clone / archive / search; hosts, users and duration limits block a run before any request; JMX
   validation and version reading; earlier plans and runs upgraded (scenario per plan, state and verdict split,
