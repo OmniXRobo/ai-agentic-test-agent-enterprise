@@ -18,7 +18,7 @@ import * as scriptStudio from "./pages/script-studio.js";
 import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
 import { scheduledRuns, emailSettings } from "./pages/schedules.js";
 import * as appCredentials from "./pages/app-credentials.js";
-import { perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
+import { perfScenarios, perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
 import { defectReview, perfDefects } from "./pages/defect-review.js";
 import * as voicePage from "./pages/voice.js";
 import * as reports from "./pages/reports.js";
@@ -55,6 +55,7 @@ const NAV = [
     ["scheduled-runs", "Scheduled Runs", scheduledRuns],
   ]],
   ["Performance Testing", [
+    ["perf-scenarios", "Performance Scenarios", perfScenarios],
     ["perf-plans", "Performance Test Plans", perfPlans],
     ["perf-load", "Load Tests", perfLoad],
     ["perf-stress", "Stress Tests", perfStress],
