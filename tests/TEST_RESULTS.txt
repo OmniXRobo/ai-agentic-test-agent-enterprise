@@ -1,3 +1,20 @@
+23.3.22 (4 Nov 2026): full suite 402 passed, 64 failed. 63 of those fail the same way on the untouched 23.3.21 in
+  this Linux test environment (functional browser runs, AI stand-ins, design generation); the 64th
+  (test_studio.py::test_edit_validation_versions_compare_restore) failed once under load and passes when run again
+  on its own. Targeted run after the version bump (upgrade, api, first run, offline, performance, schedules, reports,
+  voice UI and the new tests): 77 passed.
+  new: test_perf_foundation_23322.py (10 tests, real JMeter 5.6.3 + Java 21 against the local test site): scenarios
+  create / edit / clone / archive / search; hosts, users and duration limits block a run before any request; JMX
+  validation and version reading; earlier plans and runs upgraded (scenario per plan, state and verdict split,
+  RUNNING -> Interrupted with partial results, QUEUED -> Skipped); a simulated crash where JMeter is left running
+  is ended on the next start while an unrelated process is left alone; queue order, positions and cancel;
+  Completed / Target not specified and Completed / Targets missed; config.json snapshot; generator monitoring;
+  graceful and emergency stop keep partial results with an Inconclusive verdict; closing the application interrupts
+  a running test; generator saturation flag.
+  browser (Chromium, by hand with Playwright): Performance Scenarios list, scenario editor with Check before run and
+  run history, Performance Results queue, live run page with Stop / Emergency stop, completed run with state,
+  verdict, pre-run checks and load generator charts.
+
 23.3.16 (3 Nov 2026): 121 passed (115 on 23.3.15 + 6 new). The same 12 failed and 4 errors occur on 23.3.15 in
   this Linux test environment (Faster-Whisper stand-ins, tests that start Chromium from Python, folder layout);
   test_voice_ui.py not run here (browser-only).
