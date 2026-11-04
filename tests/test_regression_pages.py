@@ -1,10 +1,29 @@
 """AC30 smoke: every page of the dashboard loads in 23.3.0 with no new script errors compared with 23.2.2."""
-import json, os, subprocess, sys, time
+import io, json, os, subprocess, sys, tarfile, time
 from pathlib import Path
 import httpx, pytest
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
+APP = Path(os.environ.get("APP_DIR", ROOT / "app"))
+# The 23.2.2 application to compare with: a base-app folder next to the patch, BASE_APP_DIR, or (in the repository)
+# the 23.2.2 baseline commit taken from git.
+BASE_COMMIT = "97210e9a94cf99291d397abbbe0763179700d98a"
+
+
+def base_app(tmp_path: Path) -> Path:
+    for p in (os.environ.get("BASE_APP_DIR"), ROOT / "base-app"):
+        if p and Path(p).is_dir():
+            return Path(p)
+    repo = Path(__file__).resolve().parents[1]
+    if subprocess.run(["git", "cat-file", "-e", f"{BASE_COMMIT}^{{commit}}"], cwd=repo, capture_output=True).returncode:
+        subprocess.run(["git", "fetch", "--depth", "1", "origin", BASE_COMMIT], cwd=repo, check=True, capture_output=True)
+    dest = tmp_path / "base-app"
+    dest.mkdir()
+    archive = subprocess.run(["git", "archive", "--format=tar", BASE_COMMIT], cwd=repo, check=True, capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(dest, filter="data")
+    return dest
 sys.path.insert(0, str(Path(__file__).parent))
 from test_voice_ui import FAKE_MEDIA, free_port  # noqa: E402
 
@@ -44,8 +63,8 @@ def crawl(base):
 
 
 def test_every_page_loads_like_before(tmp_path):
-    p1, base_old = start(ROOT / "base-app", tmp_path / "old")
-    p2, base_new = start(ROOT / "app", tmp_path / "new")
+    p1, base_old = start(base_app(tmp_path), tmp_path / "old")
+    p2, base_new = start(APP, tmp_path / "new")
     try:
         old, new = crawl(base_old), crawl(base_new)
     finally:

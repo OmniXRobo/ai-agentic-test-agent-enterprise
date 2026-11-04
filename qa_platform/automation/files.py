@@ -187,7 +187,11 @@ def read_table(file_name: str, content: bytes, sheet: str | None = None) -> dict
         try:
             dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
         except csv.Error:
-            dialect = csv.excel
+            # Some Python releases cannot sniff short files (a blank row is enough): take the separator that the
+            # header row uses most.
+            header = next((line for line in text.splitlines() if line.strip()), "")
+            sep = max(",;\t|", key=header.count)
+            dialect = type("Sep", (csv.excel,), {"delimiter": sep if header.count(sep) else ","})
         rows = [list(r) for r in csv.reader(io.StringIO(text), dialect)]
         chosen = None
     elif ext == ".xls":

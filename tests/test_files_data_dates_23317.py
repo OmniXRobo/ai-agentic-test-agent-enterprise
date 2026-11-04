@@ -146,8 +146,12 @@ def test_ai_driven_test_data_dates_become_rules():
     values = json.loads(changes["test_data/x.json"])["combinations"][0]["values"]
     assert values["travel_date"] == "{{TODAY+2d:%d/%m/%Y}}" and values["dob"] == "01/01/1980"
     # the framework's own resolver reads the rule
-    sys.path.insert(0, str(APP / "qa_platform" / "automation" / "framework" / "template"))
-    from utilities import runtime_values
+    # loaded from its file: a "utilities" package left on sys.path would be found by the script checks of later tests
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "template_runtime_values", APP / "qa_platform" / "automation" / "framework" / "template" / "utilities" / "runtime_values.py")
+    runtime_values = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime_values)
     assert runtime_values.resolve(values["travel_date"]) == (today + timedelta(days=2)).strftime("%d/%m/%Y")
 
 

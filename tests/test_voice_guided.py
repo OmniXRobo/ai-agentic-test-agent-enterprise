@@ -1,5 +1,5 @@
 """Milestone 7: Guided Browser Automation by voice. A real recording session (Playwright, Chromium) on a small local
-shop site (tests/site): async page loads, a login with saved credentials, links, dropdowns, a checkbox, radio buttons,
+shop site (tests/site_shop): async page loads, a login with saved credentials, links, dropdowns, a checkbox, radio buttons,
 values the agent asks for, and a check of the confirmation message. The recorded script is checked afterwards."""
 
 import functools
@@ -23,7 +23,7 @@ PASSWORD = "S3cret!pw-9"
 
 @pytest.fixture(scope="module")
 def site():
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(Path(__file__).parent / "site"))
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(Path(__file__).parent / "site_shop"))
     handler.log_message = lambda *a, **k: None
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()

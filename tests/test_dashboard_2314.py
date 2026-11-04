@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
+APP = Path(os.environ.get("APP_DIR", ROOT / "app"))
 
 
 def free_port():
@@ -14,8 +15,8 @@ def free_port():
 def test_insights_and_pages(tmp_path):
     port = free_port()
     (tmp_path / "settings.json").write_text(json.dumps({"server": {"host": "127.0.0.1", "port": port}}))
-    env = {**os.environ, "QA_HOME": str(tmp_path), "PYTHONPATH": str(ROOT / "app")}
-    proc = subprocess.Popen([sys.executable, "-m", "qa_platform"], cwd=ROOT / "app", env=env,
+    env = {**os.environ, "QA_HOME": str(tmp_path), "PYTHONPATH": str(APP)}
+    proc = subprocess.Popen([sys.executable, "-m", "qa_platform"], cwd=APP, env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     base = f"http://127.0.0.1:{port}"
     try:
@@ -44,7 +45,7 @@ def test_insights_and_pages(tmp_path):
 
 
 def test_web_files():
-    web = ROOT / "app" / "web" / "js"
+    web = APP / "web" / "js"
     dash = (web / "pages" / "dashboard.js").read_text()
     assert "Agent Squadron" not in dash and "recentRuns" not in dash and "QA progress" in dash
     cc = (web / "pages" / "command-center.js").read_text()
