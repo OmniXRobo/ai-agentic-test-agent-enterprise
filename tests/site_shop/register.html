@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Register</title></head><body>
+<h1>Create your account</h1>
+<form id="reg">
+  <label for="cn">Customer name</label><input id="cn" required>
+  <label for="country">Country</label><select id="country"><option value="">Select country</option><option>India</option><option>United Arab Emirates</option></select>
+  <label for="zip">ZIP code</label><input id="zip" required pattern="\d{5}">
+  <fieldset><legend>Delivery</legend>
+    <label><input type="radio" name="d" value="std"> Standard delivery</label>
+    <label><input type="radio" name="d" value="exp"> Express delivery</label></fieldset>
+  <button type="submit">Submit</button>
+</form>
+<div id="done"></div>
+<button id="terms-btn" type="button">Show terms</button>
+<button id="del" type="button">Delete account</button>
+<a href="help.html" target="_blank">Help</a>
+<dialog id="terms"><h2>Terms</h2><p>Accept the terms?</p><button id="agree" type="button">I agree</button><button type="button" id="close">Close</button></dialog>
+<script>
+const $ = (id) => document.getElementById(id);
+$("reg").onsubmit = (e) => { e.preventDefault(); setTimeout(() => { $("done").className = "success"; $("done").textContent = "Registration complete for " + $("cn").value; }, 300); };
+$("del").onclick = () => { $("done").className = "message"; $("done").textContent = confirm("Delete this account?") ? "Account deleted" : "Kept"; };
+$("terms-btn").onclick = () => $("terms").showModal();
+$("agree").onclick = () => { $("terms").close(); $("done").className = "message"; $("done").textContent = "Terms accepted"; };
+$("close").onclick = () => $("terms").close();
+</script></body></html>

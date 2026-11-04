@@ -9,7 +9,10 @@ Runtime values (resolved at execution time, from the Windows system clock only):
 
     {{TODAY}}                  today, default format %Y-%m-%d
     {{TODAY+3d:%d/%m/%Y}}      offset in d/w/m/y with an optional strftime format
+    {{TODAY-2d:%d/%m/%Y}}      a past date
     {{NOW:%H:%M}}              current time
+    {{NOW+1h+30min:%H:%M}}     current time + 1 hour 30 minutes (h hours, min minutes; offsets combine)
+    {{NOW-4h:%H:%M}}           a past time
     {{RANDOM:6}}               6 random digits
     {{UNIQUE}}                 run-unique token
     {{DATA:field}}             value from the selected test dataset
@@ -31,13 +34,21 @@ from pydantic import BaseModel, Field
 from ..clock import now
 
 ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
-           "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot")
+           "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
+           "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
+           "right_click", "drag_to", "dialog")  # 23.3.21
 
 Action = Literal["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
-                 "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot"]
+                 "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
+                 "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
+                 "right_click", "drag_to", "dialog"]
 
 NEEDS_TARGET = {"click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "hover",
-                "expect_visible", "expect_hidden", "expect_text", "expect_value"}
+                "expect_visible", "expect_hidden", "expect_text", "expect_value", "upload_file", "download_file",
+                "right_click", "drag_to"}
+
+# 23.3.17: checks on the file the last download_file step saved (no element needed).
+FILE_CHECKS = {"expect_file_name", "expect_file_text", "expect_excel_cell"}
 
 
 class Target(BaseModel):
@@ -57,6 +68,8 @@ class Target(BaseModel):
     input_type: str | None = None
     classes: list[str] = []
     href: str | None = None
+    # 23.3.21: the element is inside these iframes (outermost first, each a selector in its parent document)
+    frames: list[str] = []
 
 
 class Step(BaseModel):
@@ -66,6 +79,20 @@ class Step(BaseModel):
     description: str | None = None
     timeout_ms: int = Field(default=10000, ge=100, le=300000)
     optional: bool = False
+    # 23.3.17: the value as it was recorded, when a date or time was turned into a rule such as {{TODAY+2d}}
+    original_value: str | None = None
+    # 23.3.21: the browser tab the step happens in (0 = the first tab; 1 = the first tab a click opened, ...)
+    tab: int | None = Field(default=None, ge=0, le=50)
+
+
+class DataTable(BaseModel):
+    """23.3.17: test data imported from Excel or CSV; every row is one run, columns are {{DATA:column}}."""
+
+    source: str | None = None
+    sheet: str | None = None
+    imported_at: str | None = None
+    columns: list[str] = []
+    rows: list[dict[str, str]] = []
 
 
 class Script(BaseModel):
@@ -83,6 +110,7 @@ class Script(BaseModel):
     created_at: str | None = None
     updated_at: str | None = None
     notes: str | None = None
+    data_table: DataTable | None = None
 
 
 def describe(step: Step) -> str:
@@ -100,6 +128,12 @@ def describe(step: Step) -> str:
         "expect_hidden": f"Verify {what} is hidden", "expect_text": f"Verify {what} shows '{v}'",
         "expect_value": f"Verify {what} has value '{v}'", "expect_url": f"Verify the URL contains '{v}'",
         "screenshot": "Take a screenshot",
+        "upload_file": f"Upload {v or 'a file'} in {what}", "download_file": f"Download the file from {what}",
+        "expect_file_name": f"Verify the downloaded file name contains '{v}'",
+        "expect_file_text": f"Verify the downloaded file contains '{v}'",
+        "expect_excel_cell": f"Verify the downloaded Excel has {v}",
+        "right_click": f"Right-click {what}", "drag_to": f"Drag {what} to {v}",
+        "dialog": "Cancel the next pop-up" if v == "dismiss" else "OK on the next pop-up",
     }.get(step.action, step.action)
 
 
@@ -109,7 +143,8 @@ def new_script_id() -> str:
 
 # ---- runtime values -------------------------------------------------------------
 
-_PLACEHOLDER = re.compile(r"\{\{\s*([A-Z]+)(?:([+-]\d+)([dwmy]))?(?::([^}]*))?\s*\}\}")
+_PLACEHOLDER = re.compile(r"\{\{\s*([A-Z]+)((?:\s*[+-]\s*\d+\s*(?:min|[dwmyh]))*)\s*(?::([^}]*))?\s*\}\}")
+_OFFSET = re.compile(r"([+-])\s*(\d+)\s*(min|[dwmyh])")
 
 
 def _add_months(d: date, months: int) -> date:
@@ -121,6 +156,10 @@ def _add_months(d: date, months: int) -> date:
 
 
 def shift(base: datetime, amount: int, unit: str) -> datetime:
+    if unit == "h":
+        return base + timedelta(hours=amount)
+    if unit == "min":
+        return base + timedelta(minutes=amount)
     if unit == "d":
         return base + timedelta(days=amount)
     if unit == "w":
@@ -152,14 +191,15 @@ class ValueResolver:
         return _PLACEHOLDER.sub(self._one, text)
 
     def _one(self, m: re.Match[str]) -> str:
-        kind, amount, unit, arg = m.group(1), m.group(2), m.group(3), m.group(4)
+        kind, offsets, arg = m.group(1), m.group(2) or "", m.group(3)
         current = self.clock()
-        if kind in ("TODAY", "DATE"):
-            value = shift(current, int(amount), unit) if amount else current
-            return value.strftime(arg or "%Y-%m-%d")
-        if kind == "NOW":
-            value = shift(current, int(amount), unit) if amount else current
-            return value.strftime(arg or "%Y-%m-%d %H:%M")
+        if kind in ("TODAY", "DATE", "NOW"):
+            value = current
+            for sign, n, unit in _OFFSET.findall(offsets):
+                value = shift(value, int(n) * (-1 if sign == "-" else 1), unit)
+            return value.strftime(arg or ("%Y-%m-%d %H:%M" if kind == "NOW" else "%Y-%m-%d"))
+        if offsets:
+            return m.group(0)
         if kind == "RANDOM":
             n = int(arg) if arg and arg.isdigit() else 6
             return "".join(random.choice("0123456789") for _ in range(max(1, min(n, 32))))
@@ -168,7 +208,11 @@ class ValueResolver:
         if kind == "DATA":
             if arg not in self.data:
                 raise KeyError(f"Test data field '{arg}' is not in the selected dataset.")
-            return str(self.data[arg])
+            text = str(self.data[arg])
+            # 23.3.17: a data cell may hold a rule itself ({{TODAY+1d:%d/%m/%Y}}); one level, never another DATA
+            if "{{" in text and "{{DATA" not in text.replace(" ", ""):
+                return _PLACEHOLDER.sub(self._one, text)
+            return text
         if kind == "CRED":
             if not arg or "." not in arg or self.credentials is None:
                 raise KeyError(f"Credential reference '{arg}' is invalid.")
@@ -223,6 +267,13 @@ def to_playwright_python(script: Script) -> str:
             lines.append(f"    page.goto({_py(step.value)})")
         elif a in ("click", "dblclick", "hover", "check", "uncheck"):
             lines.append(f"    {loc}.{a}()")
+        elif a == "right_click":
+            lines.append(f"    {loc}.click(button=\"right\")")
+        elif a == "drag_to":
+            lines.append(f"    {loc}.drag_to(page.locator({_py(step.value)}))")
+        elif a == "dialog":
+            how = "dismiss" if step.value == "dismiss" else "accept"
+            lines.append(f"    page.once(\"dialog\", lambda d: d.{how}())")
         elif a in ("fill", "type"):
             lines.append(f"    {loc}.fill({_py(step.value)})")
         elif a == "select":

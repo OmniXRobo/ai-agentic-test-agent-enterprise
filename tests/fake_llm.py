@@ -105,9 +105,16 @@ class FakeLLM:
 import re as _re  # noqa: E402
 
 
+# 23.3.11 moved the criteria of a test case call to the end of the prompt under a new heading.
+_CRITERIA_HEADING = _re.compile(r"(?:Write test cases now only for these acceptance criteria|Acceptance criteria):\n")
+
+
+def criteria_block(user):
+    return _CRITERIA_HEADING.split(user, 1)[1].split("\n\n", 1)[0]
+
+
 def _criteria(body):
-    user = body["messages"][1]["content"]
-    block = user.split("Acceptance criteria:\n", 1)[1].split("\n\n", 1)[0]
+    block = criteria_block(body["messages"][1]["content"])
     return [(m.group(1), m.group(2)) for m in _re.finditer(r"^([A-Z][\w.-]*\d[\w.-]*): (.+)$", block, _re.M)]
 
 

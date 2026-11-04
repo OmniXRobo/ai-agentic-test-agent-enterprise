@@ -42,9 +42,10 @@ from ...storage.db import Database, dumps, loads
 from ...tfs.service import TfsService
 from ..generator import AutomationEngineeringAgent, parse_tfs_steps
 from . import codegen, registry, validator
+from .focus import focus_inventory, known_selectors, case_keywords
 from .builder import CaseContext, FrameworkBuilder, Inventory, MappedTest
 from .runner import FrameworkRunner
-from .workspace import FrameworkWorkspace, sha256
+from .workspace import DELETED_FOLDER, FrameworkWorkspace, sha256
 
 log = get_logger("automation.studio")
 
@@ -53,6 +54,8 @@ METHOD_NAMES = {"ai_pom": "AI-Driven Automation", "ai": "AI-Driven Automation (s
                 "guided": "Guided Browser Automation", "discovery": "Application Discovery & Update",
                 "hybrid": "Hybrid Test Automation", "manual": "Manual Playback"}
 AI_ERRORS = {"AI_NOT_CONFIGURED", "AI_UNREACHABLE", "AI_TIMEOUT", "AI_REQUEST_FAILED", "AI_INVALID_RESPONSE"}
+# 23.3.15: errors a smaller request can fix (the step mapping is asked once more with fewer elements)
+RETRY_SMALLER = {"AI_TIMEOUT", "AI_CONTEXT_EXCEEDED", "AI_OUTPUT_TRUNCATED"}
 _SCRIPT_ID = re.compile(r"^FWS-[A-Z0-9]{10}$")
 _JOB_ID = re.compile(r"^GEN-[0-9]{8}-[0-9]{6}-[A-F0-9]{6}$")
 
@@ -65,7 +68,7 @@ SYSTEM_PROMPT = (
     "that form a reusable business process (for example login, add product to cart, checkout) with the same "
     "business_flow name; reuse an EXISTING FLOW name when the steps do the same thing. Put test data values in "
     "test_data and refer to them as {{DATA:field}}; use {{CRED:role.username}} and {{CRED:role.password}} for login "
-    "fields and never write a password. For relative dates use {{TODAY+7d:%d/%m/%Y}} or {{NOW+2h:%H:%M}}. List the "
+    "fields and never write a password. Never write a fixed date or time: use {{TODAY+7d:%d/%m/%Y}}, {{TODAY-1d:%d/%m/%Y}} or {{NOW+2h:%H:%M}}. List the "
     "ids of the Acceptance Criteria the test covers.")
 
 
@@ -447,23 +450,49 @@ class ScriptStudio:
         flows = "\n".join(f"- {f.name}: {f.doc}" for f in reg.flows.values()) or "(none yet)"
         ac_text = "\n".join(f"{c['id']}: {c['title']}" for c in criteria) or "(none recorded)"
         data_text = "\n".join(f"{d['name']}: {json.dumps(d['values'], ensure_ascii=False)}" for d in datasets) or "(none)"
-        user = (f"User Story: {('US' + story_id + ' - ' + story['title']) if story else '(not linked)'}\n"
-                f"Acceptance Criteria:\n{ac_text}\n\nTest Case: TC{tc} - {case['title']}\nStart URL: {req.base_url}\n"
-                f"Credential role: {req.credential_role or '(choose a role name)'}\n\nManual test steps:\n{manual}\n\n"
-                f"Test Data:\n{data_text}\n\nEXISTING FLOWS:\n{flows}\n\n"
-                f"ELEMENT INVENTORY (selector | role | name):\n{inventory.text()}")
         known = self._knowledge_text(tc, req.application)
         if known:
             note("Unified QA Knowledge found for this Test Case (requirement to application mapping)")
-            user += f"\n\nUNIFIED QA KNOWLEDGE (from Intelligent Discovery; prefer these mapped elements):\n{known}"
-        note(f"Asking the {self._ai_label()} to map the steps")
-        try:
-            mapped = self.ai.complete_json(SYSTEM_PROMPT, user, MappedTest, max_tokens=6000)
-        except QAError as exc:
-            if exc.error_code in AI_ERRORS:
-                raise QAError("AI_UNAVAILABLE", f"{self._ai_label()} unavailable: {exc.message}", status=503,
-                              details=exc.details) from exc
-            raise
+        head = (f"User Story: {('US' + story_id + ' - ' + story['title']) if story else '(not linked)'}\n"
+                f"Acceptance Criteria:\n{ac_text}\n\nTest Case: TC{tc} - {case['title']}\nStart URL: {req.base_url}\n"
+                f"Credential role: {req.credential_role or '(choose a role name)'}\n\nManual test steps:\n{manual}\n\n"
+                f"Test Data:\n{data_text}\n\nEXISTING FLOWS:\n{flows}\n\n")
+        # 23.3.15: only the elements this Test Case needs (all pages stay listed), a generation timeout instead of the
+        # 2-minute request timeout, an answer limit that fits the number of steps and the answer shape enforced by
+        # the AI server. If the AI still does not answer in time, it is asked once more with fewer elements.
+        auto = self.settings.section("automation") or {}
+        limits = [int(auto.get("ai_max_selectors") or 60)]
+        limits.append(max(10, min(limits[0] // 2, int(auto.get("ai_retry_selectors") or 25))))
+        words = case_keywords(case["title"], steps, datasets, known)
+        prefer = known_selectors(known)
+        cfg = self.ai.config()
+        timeout = max(cfg["timeout_seconds"], cfg.get("generation_timeout_seconds") or 600)
+        answer = min(6000, max(1200, 600 + 450 * len(steps)))
+        schema = _mapping_schema(len(steps))
+        mapped = None
+        for attempt, limit in enumerate(limits):
+            focus = focus_inventory(inventory.lines, words, start_url=req.base_url, prefer=prefer, limit=limit)
+            user = head + f"ELEMENT INVENTORY (selector | role | name):\n{focus.text}"
+            if known:
+                user += f"\n\nUNIFIED QA KNOWLEDGE (from Intelligent Discovery; prefer these mapped elements):\n{known}"
+            tokens = self.ai.estimate_tokens(SYSTEM_PROMPT + user)
+            note(f"Elements for this Test Case: {focus.shown} of {focus.total} selectors on {focus.pages} page(s); "
+                 f"prompt about {tokens} tokens, answer limit {answer} tokens, waiting up to {int(timeout // 60)} min")
+            note(f"Asking the {self._ai_label()} to map the steps" + (" (again, with fewer elements)" if attempt else ""))
+            try:
+                mapped = self.ai.complete_json(SYSTEM_PROMPT, user, MappedTest, max_tokens=answer, timeout=timeout,
+                                               enforce_schema=schema)
+                break
+            except QAError as exc:
+                retry = exc.error_code in RETRY_SMALLER and attempt + 1 < len(limits) and focus.shown > limits[-1]
+                if retry and not stop.is_set():
+                    note(f"{exc.message} Asking again with fewer elements.")
+                    continue
+                if exc.error_code in AI_ERRORS:
+                    raise QAError("AI_UNAVAILABLE", f"{self._ai_label()} unavailable: {exc.message}", status=503,
+                                  details=exc.details) from exc
+                raise
+        assert mapped is not None
         note(f"Mapped {len(mapped.steps)} automation step(s)")
         if stop.is_set():
             raise QAError("GENERATION_STOPPED", "Generation stopped by the user.")
@@ -481,6 +510,8 @@ class ScriptStudio:
             if target:  # keep the script's files; merge the user's data edits
                 changes = self._retarget(changes, build, target)
                 test_rel, data_rel = target["file"], target["data_file"]
+            for field, found in _dynamic_dates(changes, data_rel):  # 23.3.17: no fixed dates or times
+                note(f"Test data {field}: {found['original']} is now {found['label']} ({found['rule']})")
             for comp in build.components:
                 note(f"{comp['type'].replace('_', ' ').title()} {comp['name']}: {comp['change']}"
                      + (f" ({', '.join(comp['added'])})" if comp["added"] else ""))
@@ -1118,9 +1149,42 @@ class ScriptStudio:
                          on_existing="regenerate")
         return self.start_job(req, action="regenerate", script_id=script_id)
 
-    def archive(self, script_id: str) -> None:
-        self._record(script_id)
-        self.db.execute("UPDATE framework_scripts SET archived = 1, updated_at = ? WHERE id = ?", (now_iso(), script_id))
+    def archive(self, script_id: str) -> dict[str, Any]:
+        """Delete a script from the inventory (23.3.16).
+
+        The test file and its test data file leave tests/ and test_data/ (so Download framework and the test run no
+        longer include them) and are kept under .deleted/<script id>-<time>/; versions and evidence are kept.
+        Shared Page Objects and flows stay, because other scripts may use them. A running script is not deleted.
+        """
+        rec = self._record(script_id)
+        if rec["archived"]:
+            raise QAError("SCRIPT_NOT_FOUND", f"Script {script_id} was already deleted.", status=404)
+        if rec["last_result"] == "RUNNING":
+            raise QAError("SCRIPT_RUNNING", f"{Path(rec['file']).name} is running. Stop it or wait until it ends, "
+                          "then delete it.", status=409)
+        ws = self.workspace()
+        stamp = now_iso().replace(":", "").replace("-", "").replace(".", "")[:15]
+        kept_in = f"{DELETED_FOLDER}/{script_id}-{stamp}"
+        moved: list[str] = []
+        with self._write_lock:
+            others = {r["data_file"] for r in self.db.query(
+                "SELECT data_file FROM framework_scripts WHERE archived = 0 AND id != ?", (script_id,))}
+            files = [rec["file"]] + ([rec["data_file"]] if rec["data_file"] and rec["data_file"] not in others else [])
+            for rel in files:
+                try:
+                    source = ws.path(rel)
+                except QAError:
+                    continue
+                if not source.is_file():
+                    continue
+                target = ws.root / kept_in / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(target)
+                moved.append(rel)
+            self.db.execute("UPDATE framework_scripts SET archived = 1, updated_at = ? WHERE id = ?",
+                            (now_iso(), script_id))
+        log.info("script %s deleted; files kept in %s: %s", script_id, kept_in, ", ".join(moved) or "none")
+        return {"id": script_id, "file": rec["file"], "kept_in": kept_in, "moved": moved}
 
     # ---- shared components ------------------------------------------------------------------------
 
@@ -1159,7 +1223,7 @@ class ScriptStudio:
     # ---- execution ---------------------------------------------------------------------------------
 
     def run(self, script_id: str, *, combination: str | None = None, headless: bool | None = None,
-            background: bool = True) -> str | dict[str, Any]:
+            background: bool = True, browser: str | None = None, run_id: str | None = None) -> str | dict[str, Any]:
         rec = self._record(script_id)
         if not self.workspace().exists(rec["file"]):
             raise QAError("SCRIPT_FILE_MISSING", f"{rec['file']} does not exist; regenerate or restore the script.",
@@ -1179,7 +1243,7 @@ class ScriptStudio:
             secrets = [password]
         source = self.ws.read(rec["file"])
         locators = self._locator_index(source)
-        run_id = new_run_id("RUN")
+        run_id = run_id or new_run_id("RUN")
         payload = {**rec, "flow_steps": self.flow_logic(rec, source), "locators": locators}
 
         def finish(result: dict[str, Any]) -> None:
@@ -1189,7 +1253,7 @@ class ScriptStudio:
         def work() -> dict[str, Any]:
             with self.automation._exec_lock:  # one browser run at a time keeps playback visible and evidence clean
                 return self.runner.run(payload, run_id, workspace=self.ws.root, env_extra=env, secrets=secrets,
-                                       combination=combination, headless=headless, on_finish=finish)
+                                       combination=combination, headless=headless, on_finish=finish, browser=browser)
 
         self.db.execute("UPDATE framework_scripts SET last_result = 'RUNNING', last_run_id = ?, last_run_at = ? WHERE id = ?",
                         (run_id, now_iso(), script_id))
@@ -1358,11 +1422,33 @@ class ScriptStudio:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for path in sorted(ws.root.rglob("*")):
                 rel = path.relative_to(ws.root)
-                if not path.is_file() or rel.parts[0] in (".versions", ".staging", "execution-results") or \
+                if not path.is_file() or rel.parts[0] in (".versions", ".staging", DELETED_FOLDER, "execution-results") or \
                         "__pycache__" in rel.parts or rel.name == ".framework.json" or rel.name.endswith(".tmp"):
                     continue
                 zf.write(path, f"automation-workspace/{rel.as_posix()}")
         return buf.getvalue()
+
+
+def _dynamic_dates(changes: dict[str, str], data_rel: str | None) -> list[tuple[str, dict[str, str]]]:
+    """23.3.17: fixed dates and times in the generated test data become rules ({{TODAY+2d:%d/%m/%Y}},
+    {{NOW+1h:%H:%M}}) resolved from the system clock when the test runs. Returns (combination.field, change)."""
+    from ..date_rules import convert_values
+
+    if not data_rel or data_rel not in changes:
+        return []
+    try:
+        data = json.loads(changes[data_rel])
+    except ValueError:
+        return []
+    out: list[tuple[str, dict[str, str]]] = []
+    for combo in data.get("combinations") or []:
+        values = combo.get("values")
+        if isinstance(values, dict):
+            for field, found in convert_values(values).items():
+                out.append((f"{combo.get('name') or 'combination'}.{field}", found))
+    if out:
+        changes[data_rel] = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    return out
 
 
 def _sprint(iteration_path: str | None) -> str | None:
@@ -1383,3 +1469,14 @@ def _criteria(story: dict[str, Any]) -> list[dict[str, str]]:
 def _variant_of(file: str) -> int:
     m = re.search(r"_v(\d+)\.py$", file or "")
     return int(m.group(1)) if m else 1
+
+
+def _mapping_schema(manual_steps: int) -> dict[str, Any]:
+    """The MappedTest schema the AI server enforces (23.3.15), with an upper bound on the number of automation steps
+    so a small model cannot keep adding steps until the answer limit."""
+    from ...ai.gateway import _compact_schema
+    schema = _compact_schema(MappedTest.model_json_schema())
+    steps = (schema.get("properties") or {}).get("steps")
+    if isinstance(steps, dict):
+        steps["maxItems"] = max(6, 4 * manual_steps + 2)
+    return schema

@@ -11,6 +11,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .intents_automation import automation_intent
+from .intents_guided import launch_intent
+from .intents_plans import plan_intent
+
 # The full list, with parameters and which commands need confirmation, is in registry.py.
 
 # route, label, spoken aliases (longest alias wins)
@@ -137,12 +141,31 @@ def parse(text: str) -> Intent | None:
         return Intent("confirm")
     if re.fullmatch(r"(no|nope|cancel|never mind|nevermind|forget it|don't)( please| that| it)?", t):
         return Intent("cancel")
-    if re.search(r"\b(help|what can (you|i) (do|say)|which commands)\b", t):
+    if re.search(r"\b(help|what can (you|i) (do|say)|which commands)\b", t) and not re.match(r"(click|press|tap|hit)\b", t):
         return Intent("help")
+    from .commands_safety import interruption_intent
+    interrupted = interruption_intent(t)  # "stop", "wait", "repeat that", "continue", "what are you doing"
+    if interrupted:
+        return interrupted
     if re.search(r"\b(stop|abort|halt|cancel)\b.*\b(test|run|load|jmeter|execution|playback|everything|it)\b", t):
         return Intent("stop_run")
 
-    if re.fullmatch(r"(please )?(go |take me )?back( please)?|(go to |open )?(the )?previous (page|screen)", t):
+    launched = launch_intent(t)  # "launch my application": the guided browser session
+    if launched:
+        return launched
+    # AI-Driven Automation: run settings, scripts for the current plan or suite, validate, run, regenerate
+    automated = automation_intent(t)
+    if automated:
+        return automated
+    # Test plans, test suites and "open it" / "show me more details" (intents_plans.py)
+    planned = plan_intent(t)
+    if planned:
+        return planned
+    # "go back to the dashboard", "return to test plans": a named page, not the previous one
+    m = re.fullmatch(r"(?:please\s+)?(?:go|take me|get|return|head)\s+(?:back\s+)?to\s+(?:the\s+)?(?!previous\b|last page\b)(.+?)(?:\s+please)?", t)
+    if m and match_page(m.group(1)):
+        return Intent("open_page", {"route": match_page(m.group(1))})
+    if re.fullmatch(r"(please )?(go |take me |get )?back( please)?|(go to |open |return to |go back to )?(the )?(previous|last) (page|screen)", t):
         return Intent("go_back")
     m = re.fullmatch(r"(?:select|choose|pick|open|take|use)\s+(?:the\s+)?(first|second|third|fourth|fifth|last|\d+(?:st|nd|rd|th)?)"
                      r"(?:\s+(?:one|1|item|result|row|entry|test|test case|story|user story))?", t)
@@ -345,7 +368,8 @@ def browser_action(t: str) -> Intent | None:
     if re.fullmatch(r"(?:enter|type)\s+(?:this|that|the)\s+value", t):
         return Intent("browser_action", {"action": "fill"})
     m = re.fullmatch(r"(?:select|choose|pick)\s+(.+?)(?:\s+(?:in|from)\s+(?:the\s+)?(.+?))?", t)
-    if m:
+    # "choose the country" / "select the express option" are for the guided grammar (intents_guided.py)
+    if m and not re.match(r"(the|a|an|your)\s", m.group(1)) and not re.search(r"\s(option|radio button|radio)$", m.group(1)):
         return Intent("browser_action", {"action": "select", "value": m.group(1), **({"target": m.group(2)} if m.group(2) else {})})
     m = re.fullmatch(r"(?:click|press|tap|hit)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\s+button|\s+link)?", t)
     if m:

@@ -418,13 +418,19 @@ class DesignService:
         params = parameters_xml(datasets) if parameters else None
         if params:
             values["Microsoft.VSTS.TCM.Parameters"], values["Microsoft.VSTS.TCM.LocalDataSource"] = params
+        # 23.3.13: also the Test Data tab when the test case type has one.
+        from .tfs_test_data import tab_values, write_with_fallback
+        tab = tab_values(self.tfs, item["type"], datasets, f"DS-{test_case_id}") if datasets else {}
+        values.update(tab)
         if not values:
             raise QAError("TEST_DATA_EMPTY", f"Test Case #{test_case_id} has no saved test data to write.", status=409)
         with self.data.activity(f"Writing test data to Test Case #{test_case_id} in TFS",
                                 test_case_id=str(test_case_id)) as act:
-            updated = self.tfs.update(test_case_id, values)
-            act.complete(f"Test data written to Test Case #{test_case_id}: {len(datasets)} data set(s)")
-        return {"test_case_id": test_case_id, "datasets": len(datasets), "skipped_fields": updated["skipped_fields"]}
+            updated, left_out = write_with_fallback(lambda v: self.tfs.update(test_case_id, v), values, list(tab))
+            act.complete(f"Test data written to Test Case #{test_case_id}: {len(datasets)} data set(s)"
+                         + (" (and the Test Data tab)" if tab and not left_out else ""))
+        return {"test_case_id": test_case_id, "datasets": len(datasets),
+                "skipped_fields": updated["skipped_fields"] + left_out}
 
     # ---- test data store ----------------------------------------------------------------
 

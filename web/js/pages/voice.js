@@ -4,12 +4,12 @@
 
 import { api } from "../api.js";
 import { esc, toast } from "../util.js";
-import { voice, loadSettings, localVoices, speak, stopSpeaking, applyAmbience, agentName } from "../voice.js";
+import { voice, loadSettings, localVoices, speak, stopSpeaking, applyAmbience, agentName, settingsChanged } from "../voice.js";
 import { testRadio } from "../radio.js";
 
 const ENGINES = {
   builtin: ["Built-in offline recognizer (recommended)", "Speech is recognized on this PC by the bundled offline model (Vosk). No Internet and no speech server are needed."],
-  local: ["Local speech server", "A whisper.cpp or OpenAI-compatible speech server on this PC or your network turns speech into text. Nothing leaves your network."],
+  local: ["Local speech server (Faster-Whisper)", "Faster-Whisper, started with the application on this PC, turns speech into text (most accurate, offline). A whisper.cpp or OpenAI-compatible server on your network also works. Nothing leaves your network."],
   browser: ["Browser speech recognition", "Chrome and Edge send the audio to their online service, so this needs Internet. Do not use it on offline PCs."],
   off: ["Off (typed commands only)", "The microphone is not used. Type commands on the Command Center."],
 };
@@ -18,7 +18,14 @@ const pct = (v, d) => Math.round((Number.isFinite(Number(v)) ? Number(v) : d) * 
 const check = (name, on, label) => `<label><span><input type="checkbox" name="${name}" ${on ? "checked" : ""}> ${label}</span></label>`;
 const range = (name, value, label) => `<label>${label} <span class="range"><input type="range" name="${name}" min="0" max="100" step="5" value="${value}"><output>${value}%</output></span></label>`;
 
-function formHtml(s, radio, pb) {
+function fwLine(fw) {
+  if (!fw.installed) return "Faster-Whisper is not installed on this PC. Run the 23.3.7 patch.";
+  if (!fw.models.length) return "No Faster-Whisper model is installed. Run the 23.3.7 patch with the model zip, or with Internet.";
+  const st = { RUNNING: "running", LOADING: "loading the model", STARTING: "starting", STOPPED: "stopped", FAILED: "failed" }[fw.state] || String(fw.state || "").toLowerCase();
+  return `${fw.model} at ${fw.url}: ${st}.${fw.error ? ` ${fw.error}` : ""} It starts and stops with the application.`;
+}
+
+function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
   const voices = localVoices();
   return `
     <form class="settings" id="vset" style="max-width:none">
@@ -30,15 +37,28 @@ function formHtml(s, radio, pb) {
           <label>Command name <input name="agent_command_name" value="${esc(s.agent_command_name || "Hami")}" maxlength="30" pattern="[A-Za-z][A-Za-z' \\-]*" required></label>
           <p class="muted">The word you say to address the agent ("${esc(s.agent_command_name || "Hami")}, run test case 310"). Use Latin letters so the offline recognizer can hear it.</p>
           <label>Reply wording <select name="phrase_style">
-            <option value="standard" ${s.phrase_style !== "tactical" ? "selected" : ""}>Standard: "OK, I will do your task now."</option>
+            <option value="conversational" ${s.phrase_style === "conversational" ? "selected" : ""}>Conversational: "Understood, Boss. I'm opening Test Plans now."</option>
+            <option value="standard" ${s.phrase_style === "standard" ? "selected" : ""}>Standard: "OK, I will do your task now."</option>
             <option value="tactical" ${s.phrase_style === "tactical" ? "selected" : ""}>Tactical: "Command received. Executing now."</option></select></label>
+          <label>Address me as <input name="address_as" value="${esc(s.address_as ?? "Boss")}" maxlength="20" pattern="[A-Za-z' \-]*" placeholder="leave empty for none"></label>
+          <p class="muted">Used in replies such as "Yes, ${esc(s.address_as || "Boss")}. I'm listening."</p>
+          <label>Approved test applications <input name="approved_test_apps" value="${esc((s.approved_test_apps || []).join(", "))}" placeholder="none: always ask"></label>
+          <p class="muted">In the guided browser, submitting, paying, ordering, deleting and similar actions are confirmed by you first. In the test applications listed here (names as in Application Credentials, comma-separated) the agent does them without asking.</p>
+          <label>Voice permissions <select name="voice_role">
+            ${[["full", "Full: everything (deletions still ask first)"], ["tester", "Tester: no deletions"], ["viewer", "Viewer: look up and navigate only"]]
+              .map(([v, l]) => `<option value="${v}" ${(s.voice_role || "full") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          ${check("keep_transcripts", s.keep_transcripts !== false, "Keep what I say in the voice history (passwords and codes are always masked)")}
+          <label>Delete voice history after (days, 0 = keep) <input type="number" name="transcript_days" min="0" max="3650" step="1" value="${esc(s.transcript_days ?? 0)}" style="width:90px"></label>
+          <p class="row"><a class="btn" href="/api/voice/audit?format=csv" download>Download command audit log</a>
+            <button class="btn" type="button" id="deleteHistory">Delete voice history</button></p>
         </section>
         <section class="ck-panel">
           <h3>Listening</h3>
           ${check("voice_enabled", s.voice_enabled !== false, "Voice on (microphone and spoken replies)")}
-          <label>Listening mode <select name="listen_mode">
-            <option value="push_to_talk" ${s.listen_mode !== "wake_name" ? "selected" : ""}>Push-to-talk: press the mic, speak, it stops on silence</option>
-            <option value="wake_name" ${s.listen_mode === "wake_name" ? "selected" : ""}>Wake name: the mic stays open; only sentences that start with the command name are used</option></select></label>
+          ${check("wake_listening", s.wake_listening !== false, `Listen for the command name on every page, starting when the dashboard opens`)}
+          <p class="muted">Say "${esc(s.agent_command_name || "Hami")}" and wait for "I'm listening", or say it all at once ("${esc(s.agent_command_name || "Hami")}, open Test Plans"). The browser asks once for the microphone. The assistant at the top right shows when the microphone is on and can mute it. Without this, press the mic to talk.</p>
+          <label>Follow-up time (seconds) <input type="number" name="follow_up_seconds" min="3" max="30" step="1" value="${esc(s.follow_up_seconds ?? 8)}" style="width:90px"></label>
+          <p class="muted">After "${esc(s.agent_command_name || "Hami")}" alone, or a question from the agent, your next sentence within this time needs no name.</p>
           <label>Speech recognition <select name="stt_engine">${Object.entries(ENGINES).map(([k, [l]]) => `<option value="${k}" ${k === s.stt_engine ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
           <p class="muted" id="engineHelp">${esc(ENGINES[s.stt_engine]?.[1] || "")}</p>
           <div data-builtin ${s.stt_engine === "builtin" ? "" : "hidden"}>
@@ -46,9 +66,14 @@ function formHtml(s, radio, pb) {
           </div>
           <div data-local ${s.stt_engine === "local" ? "" : "hidden"}>
             <label>Server type <select name="stt_api">
+              <option value="faster_whisper" ${s.stt_api === "faster_whisper" ? "selected" : ""}>Faster-Whisper on this PC (started with the application)</option>
               <option value="whisper_cpp" ${s.stt_api === "whisper_cpp" ? "selected" : ""}>whisper.cpp server (/inference)</option>
               <option value="openai" ${s.stt_api === "openai" ? "selected" : ""}>OpenAI-compatible (/audio/transcriptions)</option></select></label>
-            <label>Server URL <input name="stt_url" value="${esc(s.stt_url)}" placeholder="http://127.0.0.1:8081"></label>
+            <div data-fw ${s.stt_api === "faster_whisper" ? "" : "hidden"}>
+              <label>Faster-Whisper model <select name="fw_model">${(fw.models.length ? fw.models : [s.fw_model || "small.en"]).map((m) => `<option value="${esc(m)}" ${m === (fw.model || s.fw_model) ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></label>
+              <p class="muted" id="fwState">${esc(fwLine(fw))}</p>
+            </div>
+            <label data-url ${s.stt_api === "faster_whisper" ? "hidden" : ""}>Server URL <input name="stt_url" value="${esc(s.stt_url)}" placeholder="http://127.0.0.1:8081"></label>
             <label data-openai ${s.stt_api === "openai" ? "" : "hidden"}>Model name <input name="stt_model" value="${esc(s.stt_model)}" placeholder="as the server lists it"></label>
           </div>
           <label>Language <input name="language" value="${esc(s.language)}" maxlength="5" style="width:90px"></label>
@@ -102,8 +127,15 @@ function readForm(form) {
   return {
     voice: {
       agent_display_name: f("agent_display_name").value.trim(), agent_command_name: f("agent_command_name").value.trim(),
-      phrase_style: f("phrase_style").value, voice_enabled: f("voice_enabled").checked, listen_mode: f("listen_mode").value,
+      phrase_style: f("phrase_style").value, voice_enabled: f("voice_enabled").checked,
+      listen_mode: f("wake_listening").checked ? "wake_name" : "push_to_talk", wake_listening: f("wake_listening").checked,
+      follow_up_seconds: Math.max(3, Math.min(30, Math.round(Number(f("follow_up_seconds").value) || 8))),
+      address_as: f("address_as").value.trim(),
+      approved_test_apps: f("approved_test_apps").value.split(",").map((x) => x.trim()).filter(Boolean),
+      voice_role: f("voice_role").value, keep_transcripts: f("keep_transcripts").checked,
+      transcript_days: Math.max(0, Math.min(3650, Math.round(Number(f("transcript_days").value) || 0))),
       stt_engine: f("stt_engine").value, stt_api: f("stt_api").value, stt_url: f("stt_url").value, stt_model: f("stt_model").value,
+      ...(f("fw_model")?.value ? { fw_model: f("fw_model").value } : {}),
       stt_model_dir: f("stt_model_dir").value.trim(), language: f("language").value.trim() || "en",
       speak_replies: f("speak_replies").checked, reply_style: f("reply_style").value, radio_voice: f("radio_voice").value,
       tts_voice: f("tts_voice").value, tts_rate: Number(f("tts_rate").value) || 1, voice_volume: frac("voice_volume"),
@@ -120,9 +152,10 @@ function readForm(form) {
 
 async function render(view) {
   const s = await loadSettings(true);
-  const [radio, all] = await Promise.all([
+  const [radio, all, fw] = await Promise.all([
     api("/api/voice/radio-voices").catch(() => ({ available: false, voices: [] })),
     api("/api/settings").catch(() => ({ settings: { playback: {} } })),
+    api("/api/voice/faster-whisper").catch(() => ({ installed: false, models: [] })),
   ]);
   view.innerHTML = `
     <div class="cockpit">
@@ -132,7 +165,7 @@ async function render(view) {
         <a class="btn primary" href="#/command-center" style="margin-left:auto">Tactical Voice Command</a>
       </header>
       <p class="muted" style="margin:0">Voice &amp; Command Agent settings. Everything runs on this PC: offline recognition, installed voices and locally generated radio effects.</p>
-      ${formHtml(s, radio, all.settings.playback || {})}
+      ${formHtml(s, radio, all.settings.playback || {}, fw)}
     </div>`;
 
   const form = view.querySelector("#vset");
@@ -142,7 +175,11 @@ async function render(view) {
     view.querySelector("[data-local]").hidden = form.stt_engine.value !== "local";
     view.querySelector("[data-builtin]").hidden = form.stt_engine.value !== "builtin";
   });
-  form.stt_api.addEventListener("change", () => { view.querySelector("[data-openai]").hidden = form.stt_api.value !== "openai"; });
+  form.stt_api.addEventListener("change", () => {
+    view.querySelector("[data-openai]").hidden = form.stt_api.value !== "openai";
+    view.querySelector("[data-fw]").hidden = form.stt_api.value !== "faster_whisper";
+    view.querySelector("[data-url]").hidden = form.stt_api.value === "faster_whisper";
+  });
   // Ambience changes are heard at once, before saving.
   ["ambience_enabled", "ambience_volume"].forEach((n) => form.elements[n].addEventListener("input", () => {
     const v = readForm(form).voice;
@@ -155,8 +192,7 @@ async function render(view) {
     try {
       const saved = await api("/api/voice/settings", { method: "PUT", body: vpatch });
       await api("/api/settings", { method: "PATCH", body: { playback } });
-      voice.settings = (({ ok, ...rest }) => rest)(saved);
-      applyAmbience();
+      settingsChanged((({ ok, ...rest }) => rest)(saved));
       const foot = document.getElementById("agentNameFoot");
       if (foot) foot.textContent = agentName();
       toast("Voice & Command Agent settings saved", "success");
@@ -170,6 +206,11 @@ async function render(view) {
   });
   view.querySelector("#testRadio").addEventListener("click", () => testRadio(readForm(form).voice).catch((err) => toast(err.message, "error")));
   view.querySelector("#stopSpeak").addEventListener("click", stopSpeaking);
+  view.querySelector("#deleteHistory").addEventListener("click", async () => {
+    if (!confirm("Delete the voice history (what was said and replied)? Commands still running are kept. This cannot be undone.")) return;
+    try { const r = await api("/api/voice/history", { method: "DELETE" }); toast(`${r.deleted} voice command(s) deleted`, "success"); }
+    catch (err) { toast(err.message, "error"); }
+  });
   view.querySelector("#diag").addEventListener("click", async () => {
     const out = view.querySelector("#diagOut");
     out.innerHTML = '<p class="muted">Checking…</p>';

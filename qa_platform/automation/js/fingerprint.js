@@ -30,7 +30,40 @@
       const l = document.getElementById(by.split(" ")[0]);
       if (l) return clean(l.textContent);
     }
+    const group = groupLabel(el);
+    return group ? clean(group.textContent) : null;
+  }
+
+  // 23.3.18: a form group whose <label> has no "for" (e.g. OrangeHRM: <div group><label>From Date</label>...<input>):
+  // the nearest ancestor holding one label and this field gives the field its name.
+  function groupLabel(el) {
+    if (!["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) return null;
+    let node = el.parentElement;
+    for (let i = 0; node && i < 5; i += 1, node = node.parentElement) {
+      const labels = [...node.querySelectorAll("label")].filter((l) => !l.contains(el) && !l.htmlFor && clean(l.textContent)
+        && !l.closest("[class*=picker i], [class*=calendar i], [class*=dropdown i]"));
+      // an open date / time picker's own boxes (hour, minute, AM/PM) do not count
+      const fields = [...node.querySelectorAll("input:not([type=hidden]), textarea, select")]
+        .filter((x) => x === el || !x.closest("[class*=picker i], [class*=calendar i], [class*=dropdown i]"));
+      if (labels.length === 1 && fields.length === 1) return labels[0];
+      if (labels.length > 1) return null;
+    }
     return null;
+  }
+
+  function xpathCount(xp) {
+    try { return document.evaluate(`count(${xp})`, document, null, XPathResult.NUMBER_TYPE, null).numberValue; } catch (e) { return 0; }
+  }
+
+  // xpath=//label[normalize-space()="From Date"]/ancestor::*[.//input][1]//input : stable when the page has no ids.
+  function groupSelector(el) {
+    const l = groupLabel(el);
+    if (!l) return null;
+    const text = clean(l.textContent, 60);
+    if (!text || text.includes('"')) return null;
+    const tag = el.tagName.toLowerCase();
+    const xp = `//label[normalize-space()="${text}"]/ancestor::*[.//${tag}][1]//${tag}[not(ancestor::*[contains(@class,"picker") or contains(@class,"calendar")])]`;
+    return xpathCount(xp) === 1 ? `xpath=${xp}` : null;
   }
 
   function accessibleName(el) {
@@ -66,11 +99,15 @@
     if (name && !looksGenerated(name)) out.push(`${t}[name=${q(name)}]`);
     const aria = el.getAttribute("aria-label");
     if (aria) out.push(`${t}[aria-label=${q(aria)}]`);
+    const grouped = groupSelector(el);
     const ph = el.getAttribute("placeholder");
     if (ph) out.push(`${t}[placeholder=${q(ph)}]`);
     const role = implicitRole(el);
     const acc = accessibleName(el);
     const cssUnique = out.filter(unique);
+    // the group label goes before a shared placeholder ("yyyy-dd-mm" is on both From Date and To Date)
+    const firstPh = cssUnique.findIndex((x) => x.includes("[placeholder="));
+    if (grouped) cssUnique.splice(firstPh < 0 ? cssUnique.length : firstPh, 0, grouped);
     const result = [...cssUnique];
     if (role && acc && acc.length <= 60) result.push(`role=${role}[name=${q(acc)}]`);
     if (["a", "button"].includes(t) && clean(el.innerText, 60)) result.push(`text=${q(clean(el.innerText, 60))}`);
@@ -110,7 +147,7 @@
   function candidates(limit = 600) {
     const out = [];
     for (const el of document.querySelectorAll(INTERACTIVE)) {
-      if (el.closest("#__qa_overlay_host")) continue;
+      if (el.closest("#__qa_overlay_host, #__qa_rec_host")) continue;
       // A label tied to a control duplicates that control; the control itself is the candidate.
       if (el.tagName === "LABEL" && (el.control || el.htmlFor)) continue;
       if (!visible(el)) continue;

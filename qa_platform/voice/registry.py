@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..design import testing_types
 from . import intents
 
 
@@ -86,7 +87,8 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("archive_script", "archive the automated script of a test case", (_ID("test_case_id", "test case number"),),
                 destructive=True),
     CommandSpec("run_test_case", "run or play the automated test of a test case",
-                (_ID("test_case_id", "test case number"), _NAME, Param("play", "bool", "visible playback")),
+                (_ID("test_case_id", "test case number"), _NAME, Param("play", "bool", "visible playback"),
+                 Param("environment", "str", "environment the user named, e.g. test or UAT")),
                 examples=("run test case 310", "run it again")),
     CommandSpec("run_all_tests", "run every automated test", examples=("run all automated tests",)),
     CommandSpec("stop_run", "stop the running test, recording or performance test", examples=("stop the current test",)),
@@ -122,6 +124,62 @@ COMMANDS: tuple[CommandSpec, ...] = (
                 (Param("mode", "enum", "TFS profile", ("online", "offline")),), destructive=True),
     CommandSpec("test_ai", "test the On-Premise AI (local LLM) and report each check", examples=("check the local AI",)),
     CommandSpec("read_notifications", "read the latest unread notifications", examples=("any notifications",)),
+    # 23.3.1: test plans and test suites by voice
+    CommandSpec("find_test_plan", "find and open a TFS test plan by ID, sprint, name or state",
+                (_ID("id", "test plan ID"), Param("sprint", "str", "sprint or iteration name"),
+                 Param("text", "str", "words of the plan name"), Param("state", "enum", "plan state", ("Active", "Inactive")),
+                 Param("which", "enum", "which plan", ("current", "last"))),
+                examples=("find the test plan for sprint 24", "open the last test plan")),
+    CommandSpec("open_current", "open the item just found, created or selected ('open it')", ai=False),
+    CommandSpec("show_details", "show and read the details of the current test plan", examples=("show me more details",)),
+    CommandSpec("list_suites", "say which suites the current test plan has", examples=("which suites does it have",)),
+    CommandSpec("create_test_plan", "create a new TFS test plan for a sprint (reused if one with the same name exists)",
+                (Param("sprint", "str", "sprint or iteration name"), Param("name", "str", "plan name the user gave"),
+                 Param("default_suites", "bool", "also add the default suites")),
+                examples=("create a new test plan for sprint 25",)),
+    CommandSpec("update_test_plan", "rename the current test plan, set it active or inactive, or move it to a sprint",
+                (Param("name", "str", "new plan name"), Param("state", "enum", "plan state", ("Active", "Inactive")),
+                 Param("sprint", "str", "sprint or iteration name")), destructive=True,
+                examples=("rename the test plan to checkout regression",)),
+    CommandSpec("select_suites", "check and uncheck testing-type suites of the current test plan and save them", ai=False,
+                examples=("select functional and regression and uncheck performance",)),
+    CommandSpec("save_suites", "save the current suite selection of the test plan", examples=("update the test suites",)),
+    # 23.3.2: test cases and test data by voice
+    CommandSpec("generate_suite_cases", "generate test cases from the acceptance criteria for the suites of the current "
+                                        "test plan or of a sprint's test plan",
+                (Param("sprint", "str", "sprint or iteration name"),), examples=("generate test cases for sprint 25",)),
+    CommandSpec("explain_test_case", "read out a test case: title, steps and expected result",
+                (_ID("test_case_id", "test case number"),), examples=("explain test case 105",)),
+    CommandSpec("generate_test_data", "generate test data rows for one or more test cases",
+                (Param("rows", "int", "rows per test case"),), ai=False,
+                examples=("generate test data for test cases 105, 106 and 107",)),
+    CommandSpec("delete_suite", "delete one testing-type suite from the current test plan",
+                (Param("testing_type", "enum", "testing type", tuple(testing_types.BY_KEY)),), destructive=True),
+    # 23.3.3: AI-Driven Automation by voice
+    CommandSpec("automation_settings", "read or change the automation run settings: browser, element timeout, "
+                                       "screenshots, video, trace, background (headless) runs",
+                (Param("browser", "enum", "browser", ("chromium", "chrome", "msedge", "firefox", "webkit")),
+                 Param("timeout_seconds", "int", "element timeout in seconds"),
+                 Param("step_screenshots", "bool", "screenshot after every step"), Param("video", "bool", "record video"),
+                 Param("trace", "bool", "save a Playwright trace"), Param("headless", "bool", "run in the background")),
+                ai=False, examples=("change the browser to Chrome", "set timeout to 30 seconds")),
+    CommandSpec("automate_selection", "generate Python Playwright automation scripts for the current test plan, a "
+                                      "suite of it, or the test cases just saved",
+                (Param("which", "enum", "what to automate", ("plan", "suite", "these")),
+                 Param("suite", "enum", "testing type of the suite", tuple(testing_types.BY_KEY))),
+                examples=("generate the automation script", "generate scripts for the regression suite")),
+    CommandSpec("validate_script", "check the Python syntax and static rules of the current automation script",
+                (_ID("test_case_id", "test case number"),), examples=("validate the script",)),
+    CommandSpec("show_failure", "explain why the current automation script failed in its last run",
+                (_ID("test_case_id", "test case number"),), examples=("show me the failure",)),
+    # 23.3.6: interruptions and follow-ups
+    CommandSpec("interrupt", "stop: drop the pending question and stop what can be stopped safely", ai=False),
+    CommandSpec("repeat", "repeat the last reply", ai=False),
+    CommandSpec("continue_work", "continue after a pause", ai=False),
+    CommandSpec("explain_activity", "explain what the agent is doing now", ai=False),
+    CommandSpec("regenerate_script", "rediscover the application and regenerate the current automation script, "
+                                     "for example to fix a locator",
+                (_ID("test_case_id", "test case number"),), examples=("fix the locator and regenerate",)),
 )
 
 BY_ID: dict[str, CommandSpec] = {c.id: c for c in COMMANDS}

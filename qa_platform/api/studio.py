@@ -95,8 +95,7 @@ def script(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 
 @router.delete("/scripts/{script_id}")
 def archive(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    rt.studio.archive(script_id)
-    return {"ok": True}
+    return {"ok": True, "deleted": True, **rt.studio.archive(script_id)}
 
 
 class SourceIn(BaseModel):

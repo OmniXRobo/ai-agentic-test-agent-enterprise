@@ -1,0 +1,95 @@
+<!doctype html>
+<!-- 23.3.18 test page: a copy of the kind of date and time pickers OrangeHRM 5 uses (oxd components). The field is
+     set by script (no change event), the format is yyyy-dd-mm, the labels have no "for", there are no ids. -->
+<html><head><meta charset="utf-8"><style>
+body{font-family:sans-serif} .oxd-input-group{margin:10px;width:260px;display:inline-block;vertical-align:top}
+.oxd-date-wrapper,.oxd-time-wrapper{position:relative} .oxd-date-input,.oxd-time-input{display:flex}
+.oxd-date-input-calendar,.oxd-time-picker{position:absolute;top:34px;left:0;background:#fff;border:1px solid #ccc;padding:6px;z-index:5}
+.oxd-calendar-header{display:flex;gap:4px;align-items:center} .oxd-calendar-selector{display:flex;gap:6px;list-style:none;padding:0;margin:0}
+.oxd-calendar-dropdown{position:absolute;background:#fff;border:1px solid #999;list-style:none;padding:2px;max-height:150px;overflow:auto;margin:0}
+.oxd-calendar-dates-grid{display:grid;grid-template-columns:repeat(7,30px)} .oxd-calendar-date{padding:4px;cursor:pointer}
+i{cursor:pointer;font-style:normal} button{cursor:pointer}
+</style></head><body>
+<div class="oxd-form">
+  <div class="oxd-input-group"><div class="oxd-input-group__label-wrapper"><label class="oxd-label">From Date</label></div>
+    <div><div class="oxd-date-wrapper"><div class="oxd-date-input"><input class="oxd-input oxd-input--active" placeholder="yyyy-dd-mm"><i class="oxd-icon bi-calendar oxd-date-input-icon">📅</i></div></div></div></div>
+  <div class="oxd-input-group"><div class="oxd-input-group__label-wrapper"><label class="oxd-label">To Date</label></div>
+    <div><div class="oxd-date-wrapper"><div class="oxd-date-input"><input class="oxd-input oxd-input--active" placeholder="yyyy-dd-mm"><i class="oxd-icon bi-calendar oxd-date-input-icon">📅</i></div></div></div></div>
+  <div class="oxd-input-group"><div class="oxd-input-group__label-wrapper"><label class="oxd-label">Start Time</label></div>
+    <div><div class="oxd-time-wrapper"><div class="oxd-time-input"><input class="oxd-input" placeholder="hh:mm a"><i class="oxd-icon bi-clock oxd-time-input--clock">🕑</i></div></div></div></div>
+  <div><button type="button" class="oxd-button" onclick="search()">Search</button></div>
+  <p class="result"></p>
+</div>
+<script>
+const FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const pad = (n) => String(n).padStart(2, "0");
+const fmt = (d) => `${d.getFullYear()}-${pad(d.getDate())}-${pad(d.getMonth() + 1)}`;   // yyyy-dd-mm
+function closeAll() { document.querySelectorAll(".oxd-date-input-calendar,.oxd-time-picker").forEach((e) => e.remove()); }
+function openCal(wrapper) {
+  closeAll();
+  const input = wrapper.querySelector("input");
+  let view = new Date(); view.setDate(1);
+  const cal = document.createElement("div"); cal.className = "oxd-date-input-calendar";
+  wrapper.appendChild(cal);
+  const draw = (dropdown) => {
+    const days = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+    cal.innerHTML = `<div class="oxd-calendar-wrapper"><div class="oxd-calendar-header">
+      <button type="button" class="oxd-icon-button"><i class="oxd-icon bi-chevron-left"></i>‹</button>
+      <ul class="oxd-calendar-selector">
+        <li class="oxd-calendar-selector-month"><div class="oxd-calendar-selector-month-selected"><p class="oxd-text">${FULL[view.getMonth()]}</p><i class="oxd-icon bi-caret-down-fill"></i></div>
+          ${dropdown === "m" ? `<ul class="oxd-calendar-dropdown">${FULL.map((m, i) => `<li class="oxd-calendar-dropdown--option" data-m="${i}">${m}</li>`).join("")}</ul>` : ""}</li>
+        <li class="oxd-calendar-selector-year"><div class="oxd-calendar-selector-year-selected"><p class="oxd-text">${view.getFullYear()}</p><i class="oxd-icon bi-caret-down-fill"></i></div>
+          ${dropdown === "y" ? `<ul class="oxd-calendar-dropdown">${Array.from({ length: 11 }, (_, k) => view.getFullYear() - 5 + k).map((y) => `<li class="oxd-calendar-dropdown--option" data-y="${y}">${y}</li>`).join("")}</ul>` : ""}</li>
+      </ul>
+      <button type="button" class="oxd-icon-button"><i class="oxd-icon bi-chevron-right"></i>›</button></div>
+      <div class="oxd-calendar-week-grid">${["S","M","T","W","T","F","S"].map((d) => `<span>${d}</span>`).join("")}</div>
+      <div class="oxd-calendar-dates-grid">${Array.from({ length: days }, (_, k) => `<div class="oxd-calendar-date-wrapper"><div class="oxd-calendar-date">${k + 1}</div></div>`).join("")}</div>
+      <div class="oxd-date-input-links"><div class="oxd-date-input-link --today">Today</div></div></div>`;
+    const btns = cal.querySelectorAll(".oxd-icon-button");
+    btns[0].onclick = (e) => { e.stopPropagation(); view.setMonth(view.getMonth() - 1); draw(); };
+    btns[1].onclick = (e) => { e.stopPropagation(); view.setMonth(view.getMonth() + 1); draw(); };
+    cal.querySelector(".oxd-calendar-selector-month-selected").onclick = (e) => { e.stopPropagation(); draw("m"); };
+    cal.querySelector(".oxd-calendar-selector-year-selected").onclick = (e) => { e.stopPropagation(); draw("y"); };
+    cal.querySelectorAll("[data-m]").forEach((li) => li.onclick = (e) => { e.stopPropagation(); view.setMonth(Number(li.dataset.m)); draw(); });
+    cal.querySelectorAll("[data-y]").forEach((li) => li.onclick = (e) => { e.stopPropagation(); view.setFullYear(Number(li.dataset.y)); draw(); });
+    cal.querySelectorAll(".oxd-calendar-date").forEach((d) => d.onclick = (e) => {
+      e.stopPropagation();
+      input.value = fmt(new Date(view.getFullYear(), view.getMonth(), Number(d.textContent)));  // set by script: no change event
+      setTimeout(closeAll, 50);
+    });
+  };
+  draw();
+}
+function openTime(wrapper) {
+  closeAll();
+  const input = wrapper.querySelector("input");
+  const now = new Date(); let h = now.getHours() % 12 || 12, m = now.getMinutes(), pm = now.getHours() >= 12;
+  const p = document.createElement("div"); p.className = "oxd-time-picker";
+  const write = () => { input.value = `${pad(h)}:${pad(m)} ${pm ? "PM" : "AM"}`; };
+  p.innerHTML = `<div class="oxd-time-hour-input"><i class="oxd-icon bi-chevron-up hour-up">▲</i><input class="oxd-input oxd-time-hour-input-text"></div>
+    <div class="oxd-time-minute-input"><i class="oxd-icon bi-chevron-up minute-up">▲</i><input class="oxd-input oxd-time-minute-input-text"></div>
+    <div class="oxd-time-period-input"><label><input type="radio" name="p" ${pm ? "" : "checked"} value="am">AM</label><label><input type="radio" name="p" ${pm ? "checked" : ""} value="pm">PM</label></div>`;
+  wrapper.appendChild(p);
+  const show = () => { p.querySelector(".oxd-time-hour-input-text").value = pad(h); p.querySelector(".oxd-time-minute-input-text").value = pad(m); };
+  show();
+  p.onclick = (e) => e.stopPropagation();
+  p.querySelector(".hour-up").onclick = () => { h = h % 12 + 1; if (h === 12) pm = !pm; show(); write(); };
+  p.querySelector(".minute-up").onclick = () => { m = (m + 15) % 60; show(); write(); };
+}
+document.querySelectorAll(".oxd-date-wrapper").forEach((w) => {
+  w.querySelector("input").addEventListener("click", (e) => { e.stopPropagation(); openCal(w); });
+  w.querySelector("i").addEventListener("click", (e) => { e.stopPropagation(); openCal(w); });
+});
+document.querySelectorAll(".oxd-time-wrapper").forEach((w) => {
+  w.querySelector("input").addEventListener("click", (e) => { e.stopPropagation(); openTime(w); });
+  w.querySelector("i").addEventListener("click", (e) => { e.stopPropagation(); openTime(w); });
+});
+document.addEventListener("click", closeAll);
+function search() {
+  const v = [...document.querySelectorAll(".oxd-form > .oxd-input-group input:not(.oxd-time-hour-input-text):not(.oxd-time-minute-input-text)")].map((i) => i.value);
+  const t = new Date(), today = fmt(t);
+  const [from] = v;
+  const iso = (s) => { const [y, d, m] = s.split("-"); return `${y}-${m}-${d}`; };
+  document.querySelector(".result").textContent = !from ? "Required" : `From ${v[0]} To ${v[1]} At ${v[2]}`;
+}
+</script></body></html>

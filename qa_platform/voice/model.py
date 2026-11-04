@@ -21,6 +21,19 @@ class Conversation:
     recording_run_id: str | None = None
     last_list: list[dict[str, Any]] = field(default_factory=list)  # what "select the second one" picks from
     pending: dict[str, Any] | None = None  # {"kind": "confirm"|"input", "intent": Intent, "param": str, "at": float}
+    # 23.3.1: the test plan being worked on, what the user selected, and what "it" refers to
+    test_plan_id: int | None = None
+    test_plan_name: str | None = None
+    sprint: str | None = None
+    suite_selection: dict[str, bool] = field(default_factory=dict)  # testing type -> checked / unchecked
+    focus: str | None = None  # test_plan | test_case | user_story: what "open it" means
+    raw_text: str = ""  # the sentence as said (names keep their capitals)
+    last_command: tuple[str, float, dict[str, Any]] | None = None  # (normalized text, time, reply) for duplicates
+    last_action: str | None = None
+    case_runs: list[str] = field(default_factory=list)  # suite test case generations started by voice, for review/save
+    saved_case_ids: list[int] = field(default_factory=list)  # test cases saved to TFS by the last "save the test cases"
+    data_case_ids: list[int] = field(default_factory=list)  # test cases of the last test data generation
+    script_ids: list[str] = field(default_factory=list)  # 23.3.3: framework scripts made by the last voice generation
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -34,3 +47,4 @@ class Outcome:
     job_title: str | None = None
     failure: str = "That did not complete"
     confirm_text: str | None = None  # what a destructive command will do, asked before it runs
+    verify: dict[str, Any] | None = None  # what the dashboard checks before it reports success (e.g. {"route": ...})

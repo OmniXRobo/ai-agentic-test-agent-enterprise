@@ -2,18 +2,15 @@
 // and how that agent is doing. Every state shown here comes from the voice client or from runtime events.
 
 import { state, subscribe, onTick, loadHealth } from "../store.js";
-import { cardHtml, refreshCards, updateCard } from "../agent-card.js";
 import { agentState, activeAgent } from "../agent-state.js";
 import { esc, toast } from "../util.js";
 import {
   voice, onVoice, conversationId, sendCommand, listen, cancelListening, loadSettings, agentName, stopSpeaking,
-  setWake, wakeActive, applyAmbience, speak,
+  wakeCapable, wakeName, applyAmbience, speak, settingsChanged,
 } from "../voice.js";
 import { api } from "../api.js";
 import { testRadio } from "../radio.js";
-
-const SQUADRON = ["voice_command", "requirements", "test_planning", "test_case_design", "test_data", "automation_engineering",
-  "guided_browser", "test_execution", "jmeter_load", "reporting", "defect_intelligence"];
+import { setWakeListening, talkNow } from "../voice-agent.js";
 
 const EXAMPLES = [
   "Open user story 118", "Generate test cases for user story 118", "Automate user story 118", "Create the test plan", "Generate automation for test case 1280",
@@ -124,14 +121,14 @@ export async function mount(view) {
     } catch { /* history is a convenience */ }
   }
   // Load the offline speech model in the background so the first command is not slow.
-  if (s.stt_engine === "builtin" && s.voice_enabled !== false) api("/api/voice/warmup", { method: "POST", body: {} }).catch(() => {});
-  const wakeMode = s.listen_mode === "wake_name";
+  if ((s.stt_engine === "builtin" || (s.stt_engine === "local" && s.stt_api === "faster_whisper")) && s.voice_enabled !== false) api("/api/voice/warmup", { method: "POST", body: {} }).catch(() => {});
+  const wakeMode = wakeCapable(s) && s.wake_listening !== false;
   view.innerHTML = `
     <div class="cockpit cc">
       <header class="ck-head">
         <div class="ck-callsign"><span class="ck-wing" aria-hidden="true">&#9650;</span> TACTICAL VOICE COMMAND</div>
         <div class="ck-meta"><span>CH 07</span><span>SECURE</span><span>${s.stt_engine === "builtin" || s.stt_engine === "local" ? "OFFLINE LINK" : s.stt_engine === "browser" ? "ONLINE LINK" : "KEYBOARD ONLY"}</span>
-          <span>${wakeMode ? `WAKE NAME "${esc((s.agent_command_name || "Hami").toUpperCase())}"` : "PUSH-TO-TALK"}</span></div>
+          <span id="ccMode">${wakeMode ? `WAKE NAME "${esc((s.agent_command_name || "Hami").toUpperCase())}"` : "PUSH-TO-TALK"}</span></div>
         <div class="ck-clock" id="ccClock" title="Windows system time"></div>
       </header>
       <div class="cc-top">
@@ -144,11 +141,11 @@ export async function mount(view) {
           <div class="ck-hint" id="ccHint"></div>
           <div class="ck-meter" id="ccMeter" aria-hidden="true">${"<i></i>".repeat(BARS)}</div>
           <div class="row" style="justify-content:center">
-            ${wakeMode ? `<button class="btn" id="ccWake">Start wake-name listening</button>` : ""}
+            ${wakeCapable(s) ? `<button class="btn" id="ccWake">Start wake-name listening</button>` : ""}
             <button class="btn" id="ccCancel">Cancel</button>
           </div>
           <div class="ck-readout"><span>CALLSIGN</span><b dir="auto" id="ccName">${esc(agentName())}</b></div>
-          <div class="ck-readout"><span>RECOGNITION</span><b>${s.stt_engine === "builtin" ? "BUILT-IN OFFLINE RECOGNIZER" : s.stt_engine === "local" ? "LOCAL SPEECH SERVER" : s.stt_engine === "browser" ? "BROWSER" : "OFF"}</b></div>
+          <div class="ck-readout"><span>RECOGNITION</span><b>${s.stt_engine === "builtin" ? "BUILT-IN OFFLINE RECOGNIZER" : s.stt_engine === "local" ? (s.stt_api === "faster_whisper" ? "FASTER-WHISPER (OFFLINE)" : "LOCAL SPEECH SERVER") : s.stt_engine === "browser" ? "BROWSER" : "OFF"}</b></div>
           <div class="ck-readout"><span>REPLY</span><b>${s.speak_replies ? (s.reply_style === "radio" ? "PILOT RADIO" : "PLAIN VOICE") : "TEXT ONLY"}</b></div>
           <div class="cc-lights" id="ccLights"></div>
         </section>
@@ -162,7 +159,6 @@ export async function mount(view) {
         </section>
       </div>
       <section class="ck-panel"><h3>COMMAND HANDOFF</h3><div class="handoff" id="ccHandoff"></div></section>
-      <section class="ck-panel"><h3>AGENT SQUADRON</h3><div class="squad" id="ccSquad"></div></section>
       <div class="cc-bottom">
         <section class="ck-panel"><h3>RADIO CONFIGURATION</h3>${radioHtml(s)}</section>
         <section class="ck-panel"><h3>ORDERS YOU CAN GIVE</h3>
@@ -173,8 +169,6 @@ export async function mount(view) {
     </div>`;
 
   const $ = (sel) => view.querySelector(sel);
-  const squad = $("#ccSquad");
-  squad.innerHTML = SQUADRON.map((id) => state.agents.get(id)).filter(Boolean).map((a) => cardHtml(a, { compact: true })).join("");
   const bars = [...view.querySelectorAll("#ccMeter i")];
   let shown = {};
 
@@ -186,11 +180,11 @@ export async function mount(view) {
       const center = 1 - Math.abs(i - (BARS - 1) / 2) / (BARS / 2);
       b.style.transform = `scaleY(${Math.max(0.06, Math.min(1, level * (0.5 + center) * (0.75 + Math.random() * 0.5)))})`;
     });
-    const key = `${voice.log.length}|${vs}|${voice.error}|${voice.pending?.kind}|${voice.wake}|${voice.micError}|${voice.executing?.owner}`;
+    const key = `${voice.log.length}|${vs}|${voice.error}|${voice.pending?.kind}|${voice.wake}|${voice.wakeState}|${voice.following}|${voice.settings?.wake_listening}|${voice.micError}|${voice.executing?.owner}`;
     if (key === shown.key) return;
     shown.key = key;
     view.querySelector(".cockpit").dataset.state = vs === "speaking" ? "speaking" : vs === "idle" || vs === "completed" ? "idle" : vs === "listening" ? "listening" : "thinking";
-    $("#ccState").textContent = voice.wake && vs === "idle" ? `LISTENING FOR "${(voice.settings?.agent_command_name || "Hami").toUpperCase()}"` : label;
+    $("#ccState").textContent = voice.wakeState === "on" && vs === "idle" && !voice.following ? `LISTENING FOR "${wakeName().toUpperCase()}"` : voice.following && vs === "idle" ? "LISTENING" : label;
     $("#ccHint").textContent = voice.micError || voice.error || (voice.settings?.stt_engine === "off" ? "Voice input is off; type your instruction." : hint);
     const mic = $("#ccMic");
     mic.classList.toggle("on", vs === "listening");
@@ -200,7 +194,8 @@ export async function mount(view) {
     log.scrollTop = log.scrollHeight;
     $("#ccConfirm").hidden = voice.pending?.kind !== "confirm";
     const wake = $("#ccWake");
-    if (wake) wake.textContent = voice.wake ? "Stop wake-name listening" : "Start wake-name listening";
+    if (wake) wake.textContent = voice.settings?.wake_listening !== false ? "Stop wake-name listening" : "Start wake-name listening";
+    $("#ccMode").textContent = wakeCapable(voice.settings) && voice.settings?.wake_listening !== false ? `WAKE NAME "${wakeName().toUpperCase()}"` : "PUSH-TO-TALK";
     if (voice.executing?.owner) lastOwner = voice.executing.owner;
     $("#ccHandoff").innerHTML = handoffHtml();
     $("#ccLights").innerHTML = lightsHtml();
@@ -208,21 +203,21 @@ export async function mount(view) {
 
   cleanups.push(onVoice(update));
   cleanups.push(subscribe((c) => {
-    if (c.type === "event" && c.agent) { updateCard(squad, c.agent); $("#ccHandoff").innerHTML = handoffHtml(); }
+    if (c.type === "event" && c.agent) $("#ccHandoff").innerHTML = handoffHtml();
     if (c.type === "event" && c.event.name === "voice.handoff" && c.event.details?.to) { lastOwner = c.event.details.to; $("#ccHandoff").innerHTML = handoffHtml(); }
     if (c.type === "health") $("#ccLights").innerHTML = lightsHtml();
   }));
   const clock = $("#ccClock");
   const showClock = () => { clock.textContent = `${new Date().toLocaleTimeString([], { hour12: false })} LOCAL`; };
   showClock();
-  cleanups.push(onTick(() => { showClock(); refreshCards(squad); $("#ccHandoff").innerHTML = handoffHtml(); }));
+  cleanups.push(onTick(() => { showClock(); $("#ccHandoff").innerHTML = handoffHtml(); }));
   if (!state.health) loadHealth();
   update();
 
   const run = (fn) => fn().catch((err) => { update(); if (err?.message) toast(err.message, "error"); });
-  $("#ccMic").addEventListener("click", () => run(listen));
+  $("#ccMic").addEventListener("click", () => run(talkNow));
   $("#ccCancel").addEventListener("click", () => { cancelListening(); stopSpeaking(); if (voice.pending) run(() => sendCommand("cancel")); });
-  $("#ccWake")?.addEventListener("click", () => run(() => setWake(!wakeActive())));
+  $("#ccWake")?.addEventListener("click", () => run(() => setWakeListening(voice.settings?.wake_listening === false)));
   $("#ccTyped").addEventListener("submit", (e) => {
     e.preventDefault();
     const text = e.target.text.value;
@@ -245,7 +240,7 @@ export async function mount(view) {
   };
   form.addEventListener("input", () => applyAmbience({ ...voice.settings, ...patch() }));
   form.addEventListener("change", async () => {
-    try { voice.settings = (({ ok, ...rest }) => rest)(await api("/api/voice/settings", { method: "PUT", body: patch() })); applyAmbience(); }
+    try { settingsChanged((({ ok, ...rest }) => rest)(await api("/api/voice/settings", { method: "PUT", body: patch() }))); }
     catch (err) { toast(err.message, "error"); }
   });
   $("#ccTestVoice").addEventListener("click", () => {
@@ -258,6 +253,5 @@ export async function mount(view) {
 export function unmount() {
   for (const fn of cleanups) { try { fn(); } catch { /* ignore */ } }
   cleanups = [];
-  // Wake-name listening keeps the microphone open, so it never outlives the page that started it.
-  if (wakeActive()) setWake(false);
+  // Wake-name listening belongs to the global voice agent now: it keeps running on every page.
 }

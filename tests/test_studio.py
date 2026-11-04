@@ -668,7 +668,7 @@ def test_voice_automate_user_story_reads_requirement_discovers_app_and_creates_s
                                (r["command_id"],))
         time.sleep(0.2)
     assert done and done["status"] == "completed", done
-    assert "created 2 scripts" in done["final_reply"]
+    assert "2 Python Playwright scripts generated" in done["final_reply"]  # 23.3.x reply wording
     events = rt.db.query("SELECT agent_id, name FROM events WHERE name = 'agent.completed' ORDER BY id")
     order = [e["agent_id"] for e in events]
     for agent in ("requirements", "app_discovery", "automation_engineering"):

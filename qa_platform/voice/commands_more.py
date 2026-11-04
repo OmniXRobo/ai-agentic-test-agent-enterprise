@@ -31,7 +31,7 @@ class MoreCommands:
     # ---- navigation and lists ---------------------------------------------------------------
 
     def _cmd_go_back(self, conv: Conversation, intent: Intent) -> Outcome:
-        return Outcome("completed", "Going back.", navigate="back")
+        return Outcome("completed", "Going back.", navigate="back", verify={"route": "back", "label": "the previous page"})
 
     def _remember_list(self, conv: Conversation, items: list[dict[str, Any]]) -> None:
         conv.last_list = items[:50]
@@ -50,6 +50,10 @@ class MoreCommands:
             conv.test_case_id = int(item["id"])
         elif item.get("kind") == "run":
             conv.run_id, conv.run_kind = item["id"], item.get("run_kind")
+        elif item.get("kind") == "test plan":
+            conv.test_plan_id, conv.test_plan_name, conv.focus = int(item["id"]), item.get("name"), "test_plan"
+            return Outcome("completed", f"I'm opening {item['label']}.", navigate=item.get("navigate"),
+                           verify={"route": "test-plans", "label": item["label"].capitalize()})
         return Outcome("completed", f"Selected {item['label']}.", navigate=item.get("navigate"))
 
     def _cmd_search_work_items(self, conv: Conversation, intent: Intent) -> Outcome:
@@ -430,7 +434,7 @@ class MoreCommands:
         conv.base_url = base_url
         return Outcome("accepted", f"Reading user story {sid}, discovering {base_url} ({why}) and creating the "
                                    "automation scripts for its test cases.",
-                       job=self._studio_job([{"user_story_id": int(sid)}], base_url, f"user story {sid}"),
+                       job=self._studio_job([{"user_story_id": int(sid)}], base_url, f"user story {sid}", conv),
                        owner="requirements", job_title=f"Voice: automating User Story #{sid}",
                        failure="Automation generation failed")
 

@@ -24,6 +24,12 @@ export const voice = {
   executing: null, // {command_id, command, owner} while a background task runs
   task: null, // {since, command}: the last background task, for the agent handoff chain
   lastHeard: "",
+  // Global voice agent (23.3)
+  wakeState: "off", // off | starting | on | other-tab | blocked | error
+  wakeEnd: null, // {reason: "stopped"|"error", blocked: bool, at} when wake-name listening last ended
+  needsGesture: false, // the browser holds audio until the user clicks or presses a key once on this page
+  following: false, // the next sentence is taken without the wake name (after "<name>." alone or a question)
+  muted: false, // microphone muted for this browser session (wake listening stays enabled)
 };
 
 function emit() {
@@ -65,6 +71,27 @@ export function applyAmbience(s = voice.settings) {
 
 /** The agent's display name (any language, set under Voice & Command Agent). */
 export function agentName() { return voice.settings?.agent_display_name || "HAMI"; }
+
+/** The configured command (wake) name: a setting, never hard-coded. */
+export function wakeName() { return voice.settings?.agent_command_name || "Hami"; }
+
+/** How the agent addresses the user ("Boss"), or "" for none. */
+export function address() { return (voice.settings?.address_as ?? "Boss").trim(); }
+
+/** "Yes, Boss." / "Yes." */
+export function withAddress(word) { const a = address(); return a ? `${word}, ${a}.` : `${word}.`; }
+
+/** Wake-name listening works with the built-in offline recognizer or a local speech server. */
+export function wakeCapable(s = voice.settings) {
+  return Boolean(s) && s.voice_enabled !== false && ["builtin", "local"].includes(s.stt_engine) && (s.stt_engine !== "local" || Boolean(s.stt_url));
+}
+
+/** Tell every part of the dashboard that voice settings changed (the global assistant re-checks listening). */
+export function settingsChanged(next) {
+  if (next) voice.settings = next;
+  applyAmbience();
+  emit();
+}
 
 // ---- speaking ----
 
@@ -129,6 +156,7 @@ export function prepare(text) {
 }
 
 let speakEndedAt = 0;
+const recentSpoken = []; // {text (normalized), at}: the agent's own lines, for the echo guard
 let speechGen = 0; // bumped by Stop Speaking so queued replies are dropped
 
 async function speakNow(text, s, gen) {
@@ -153,6 +181,8 @@ let speechQueue = Promise.resolve();
 /** Speak a reply after the ones already queued. Resolves when it has been spoken. */
 export function speak(text, s = voice.settings) {
   if (!text || !s?.speak_replies || s.voice_enabled === false) return Promise.resolve();
+  recentSpoken.push({ text: normalizeWords(text), at: performance.now() });
+  if (recentSpoken.length > 6) recentSpoken.shift();
   const gen = speechGen;
   speechQueue = speechQueue.then(() => speakNow(text, s, gen)).catch((err) => console.error(err));
   return speechQueue;
@@ -185,9 +215,33 @@ function pageContext() {
 const expectedHash = new Map(); // command id -> page shown when it was accepted
 const navStack = [];
 
-function go(hash) {
-  if (hash === "back") { if (navStack.length) location.hash = navStack.pop(); else history.back(); return; }
-  if (location.hash !== hash) { navStack.push(location.hash || "#/command-center"); if (navStack.length > 20) navStack.shift(); location.hash = hash; }
+const routeOf = (hash) => (hash || "").replace(/^#\/?/, "").split("?")[0] || "dashboard";
+
+/**
+ * Wait for the dashboard router to report that a page finished loading (app.js sends "qa:route" after the page
+ * mounted, with ok=false if it failed). Resolves {ok, route, error}.
+ */
+export function waitForRoute(route, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    const done = (r) => { clearTimeout(timer); window.removeEventListener("qa:route", on); resolve(r); };
+    const on = (e) => { if (!route || e.detail?.route === route) done(e.detail); };
+    const timer = setTimeout(() => done({ ok: false, route, error: "The page did not finish loading in time." }), timeoutMs);
+    window.addEventListener("qa:route", on);
+  });
+}
+
+/** Open a page with the dashboard's own router (no reload). Resolves {ok, route, error} once it has really loaded. */
+export function go(hash) {
+  if (hash === "back") {
+    const wait = waitForRoute(null);
+    if (navStack.length) location.hash = navStack.pop(); else history.back();
+    return wait;
+  }
+  if (location.hash === hash) return Promise.resolve({ ok: true, route: routeOf(hash), already: true });
+  const wait = waitForRoute(routeOf(hash));
+  navStack.push(location.hash || "#/dashboard"); if (navStack.length > 20) navStack.shift();
+  location.hash = hash;
+  return wait;
 }
 
 export async function sendCommand(text, source = "typed") {
@@ -199,10 +253,30 @@ export async function sendCommand(text, source = "typed") {
   let final = "idle";
   try {
     await loadSettings().catch(() => null);
-    const r = await api("/api/voice/commands", { method: "POST", body: { text, source, conversation_id: conversationId, page: pageContext() } });
+    let r;
+    inFlight += 1;
+    try {
+      r = await api("/api/voice/commands", { method: "POST", body: { text, source, conversation_id: conversationId, page: pageContext() } });
+    } finally { inFlight -= 1; }
+    if (r.command_id) { answered.add(r.command_id); if (answered.size > 200) answered.delete(answered.values().next().value); }
     voice.pending = r.context?.pending || null;
     const line = replyLine(r);
     voice.log.push({ who: "agent", text: line, kind: r.status });
+    if (r.navigate && r.verify && r.status === "completed") {
+      // Acknowledge, open the page, and only then treat it as done: a page that fails to load is reported.
+      speak(line);
+      setStatus("executing");
+      const res = await go(r.navigate);
+      if (res?.ok) final = "completed";
+      else {
+        const what = r.verify.label || "The page";
+        const fail = `${voice.settings?.phrase_style === "conversational" ? withAddress("Sorry") + " " : ""}${what} did not open. ${res?.error || ""}`.trim();
+        voice.log.push({ who: "agent", text: fail, kind: "failed" });
+        speak(fail);
+        final = "failed";
+      }
+      return r;
+    }
     if (r.navigate) go(r.navigate);
     if (r.status === "accepted") {
       expectedHash.set(r.command_id, r.navigate || location.hash);
@@ -221,15 +295,39 @@ export async function sendCommand(text, source = "typed") {
     throw err;
   } finally {
     setStatus(final);
+    if (inFlight === 0) [...earlyEvents.keys()].forEach(flushEarly); // events of commands answered by now
   }
 }
 
-// Background progress and results for this conversation arrive as runtime events.
+// Background progress and results for this conversation arrive as runtime events. A fast task can finish before
+// the reply to its command has arrived; its events wait until the acknowledgement has been handled and spoken, so
+// "Done" is never said before "On it".
+let inFlight = 0;
+const earlyEvents = new Map(); // command id -> [event]
+const answered = new Set(); // command ids whose reply has been handled
+
+function flushEarly(commandId) {
+  const list = earlyEvents.get(commandId);
+  if (!list) return;
+  earlyEvents.delete(commandId);
+  setTimeout(() => list.forEach(onTaskEvent), 0);
+}
+
 subscribe((change) => {
   if (change.type !== "event") return;
   const d = change.event.details || {};
   if (d.conversation_id !== conversationId || !d.speak) return;
-  const name = change.event.name;
+  if (inFlight > 0 && d.command_id && !answered.has(d.command_id)) {
+    if (!earlyEvents.has(d.command_id)) earlyEvents.set(d.command_id, []);
+    earlyEvents.get(d.command_id).push(change.event);
+    return;
+  }
+  onTaskEvent(change.event);
+});
+
+function onTaskEvent(event) {
+  const d = event.details || {};
+  const name = event.name;
   const done = name === "voice.command.completed" || name === "voice.command.failed";
   voice.log.push({ who: "agent", text: d.speak, kind: name === "voice.command.failed" ? "failed" : done ? "completed" : "progress" });
   speak(d.speak);
@@ -241,7 +339,7 @@ subscribe((change) => {
     if (["executing", "idle", "completed", "failed"].includes(voice.status)) setStatus(name === "voice.command.failed" ? "failed" : "completed");
   }
   emit();
-});
+}
 
 // ---- listening ----
 
@@ -338,8 +436,32 @@ const SILENCE_MS = 1200;
  * Record one utterance from an open microphone stream and turn it into text with the local recognizer.
  * Ends after SILENCE_MS of quiet following speech, after maxMs, or when stopped. Returns "" when nothing was said.
  */
-async function captureAndTranscribe(stream, s, { maxMs, noSpeechMs, quietStatus = false }) {
+let gestureWaiters = [];
+function onGesture() {
+  const list = gestureWaiters; gestureWaiters = [];
+  list.forEach((fn) => fn());
+  if (voice.needsGesture) { voice.needsGesture = false; emit(); }
+}
+window.addEventListener("pointerdown", onGesture, true);
+window.addEventListener("keydown", onGesture, true);
+
+/** Resolves true once the context runs; waits for the user's first click or key press if the browser holds audio. */
+async function runningContext(ctx, isCancelled) {
+  if (ctx.state === "running") return true;
+  await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 400))]);
+  while (ctx.state !== "running") {
+    if (isCancelled()) return false;
+    voice.needsGesture = true; emit();
+    await new Promise((r) => { gestureWaiters.push(r); setTimeout(r, 1500); });
+    await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 400))]);
+  }
+  if (voice.needsGesture) { voice.needsGesture = false; emit(); }
+  return true;
+}
+
+async function captureAndTranscribe(stream, s, { maxMs, noSpeechMs, quietStatus = false, isCancelled = () => false }) {
   const ctx = new AudioContext();
+  if (!(await runningContext(ctx, isCancelled))) { ctx.close(); return ""; }
   const source = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
   const sink = ctx.createGain();
@@ -397,51 +519,156 @@ async function captureAndTranscribe(stream, s, { maxMs, noSpeechMs, quietStatus 
   } finally { clearTimeout(timer); }
 }
 
-// ---- wake-name mode: the microphone stays open, and only sentences that start with the agent's command name are sent ----
+// ---- wake-name mode: the microphone stays open, and only sentences addressed to the agent are sent ----
+//
+// "Captain, open Test Plans" is sent at once. "Captain." alone is answered ("Yes, Boss. I'm listening.") and the next
+// sentence, within follow_up_seconds, is taken without the name; so is the answer to a question the agent asked.
+// Only one browser tab listens at a time (Web Locks), the agent's own words are never taken as a command, and the
+// same sentence recognized twice in a row is sent once.
 
+const WAKE_LOCK = "qa-enterprise-voice-wake";
+const ASKS = new Set(["needs_input", "needs_confirmation", "unclear"]);
+const FILLER = new Set(["please", "now", "yes", "there", "you", "are", "listening", "the", "uh", "um"]);
 let wakeLoop = null;
+let wakeStarting = null;
+let followPending = 0; // seconds of follow-up window to open once the agent has finished speaking
+let followUntil = 0;
 
 function normalizeWords(t) { return (t || "").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim(); }
 
-/** True if the sentence starts with the command name ("Hami, run test case 12", "hey Hami …"). */
-export function addressed(text, s = voice.settings) {
-  const name = normalizeWords(s?.agent_command_name || "Hami");
-  const t = normalizeWords(text).replace(/^(hey|ok|okay|hi)\s+/, "");
-  return Boolean(name) && (t === name || t.startsWith(name + " "));
+function nameWords(s) {
+  return [s?.agent_command_name || "Hami", s?.agent_display_name].map(normalizeWords).filter((n) => n && /^[a-z]/.test(n));
 }
+
+/** The sentence without a leading "hey <name>," ("" if it was only the name). null if it was not addressed. */
+export function afterName(text, s = voice.settings) {
+  const t = normalizeWords(text).replace(/^(hey|ok|okay|hi)\s+/, "");
+  for (const n of nameWords(s).sort((x, y) => y.length - x.length)) {
+    if (t === n) return "";
+    if (t.startsWith(n + " ")) return t.slice(n.length + 1).trim();
+  }
+  return null;
+}
+
+/** True if the sentence starts with the command name ("Hami, run test case 12", "hey Hami …"). */
+export function addressed(text, s = voice.settings) { return afterName(text, s) !== null; }
+
+/** True if the sentence is only the wake name ("Captain.", "Hey Captain, are you there?"). */
+export function bareWake(text, s = voice.settings) {
+  const rest = afterName(text, s);
+  return rest !== null && rest.split(" ").filter((w) => w && !FILLER.has(w)).length === 0;
+}
+
+/** True if the recognized text is the agent's own recent reply picked up by the microphone. */
+export function isEcho(text, now = performance.now()) {
+  const t = normalizeWords(text);
+  if (t.split(" ").length < 3) return false;
+  return recentSpoken.some((r) => now - r.at < 30000 && (r.text.includes(t) || (t.includes(r.text) && r.text.length > 12)));
+}
+
+/** Open the follow-up window: the next sentence is taken without the wake name. */
+export function followUp(seconds = Number(voice.settings?.follow_up_seconds) || 8) { followPending = seconds; }
 
 export function wakeActive() { return Boolean(wakeLoop); }
 
-/** Start or stop wake-name listening (built-in or local recognizer only). */
+function setWakeState(st) { voice.wakeState = st; emit(); }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Start or stop wake-name listening (built-in or local recognizer only). Resolves once listening has started. */
 export async function setWake(on) {
   if (!on) { wakeLoop?.stop(); return; }
-  if (wakeLoop) return;
+  if (wakeLoop) return wakeStarting || undefined;
   const s = await loadSettings();
-  if (s.voice_enabled === false || !["builtin", "local"].includes(s.stt_engine)) throw new Error("Wake-name listening needs the built-in offline recognizer or a local speech server.");
-  const stream = await openMic();
-  let running = true;
-  wakeLoop = { stop: () => { running = false; active?.cancel?.(); } };
-  voice.wake = true; emit();
+  if (!wakeCapable(s)) throw new Error("Wake-name listening needs voice on and the built-in offline recognizer or a local speech server.");
+  if (wakeLoop) return wakeStarting || undefined; // started while the settings loaded
+  const ctl = { running: true, abort: new AbortController() };
+  let started, failed;
+  wakeStarting = new Promise((res, rej) => { started = res; failed = rej; });
+  wakeStarting.catch(() => {});
+  wakeLoop = { stop: () => { ctl.running = false; ctl.abort.abort(); active?.cancel?.(); } };
+  voice.wake = true; voice.wakeEnd = null; setWakeState("starting");
+  let reason = "stopped", blocked = false;
+
+  const body = async () => {
+    if (!ctl.running) return;
+    let stream;
+    try { stream = await openMic(); }
+    catch (err) {
+      reason = "error"; blocked = /blocked|allow/i.test(voice.micError || "");
+      failed(err); return;
+    }
+    setWakeState("on"); started();
+    try { await wakeLoopBody(stream, s, ctl); if (ctl.running) reason = "error"; }
+    finally { stream.getTracks().forEach((t) => t.stop()); }
+  };
+
   (async () => {
     try {
-      while (running && stream.getAudioTracks()[0]?.readyState === "live") {
-        await quietMic(300);
-        if (!running) break;
-        if (voice.status === "thinking" || voice.status === "transcribing") { await new Promise((r) => setTimeout(r, 300)); continue; }
-        let text = "";
-        try { text = await captureAndTranscribe(stream, s, { maxMs: 12000, noSpeechMs: 0, quietStatus: true }); }
-        catch (err) { voice.error = err.message; if (voice.micError) break; continue; }
-        if (!running) break;
-        if (text && addressed(text, s)) { ackTone(s); await sendCommand(text, "speech").catch(() => null); }
-        else if (voice.status === "transcribing") setStatus(voice.executing ? "executing" : "idle");
-      }
+      if (navigator.locks?.request) {
+        const held = await navigator.locks.query().then((q) => (q.held || []).some((l) => l.name === WAKE_LOCK)).catch(() => false);
+        if (held) { setWakeState("other-tab"); started(); }
+        await navigator.locks.request(WAKE_LOCK, { signal: ctl.abort.signal }, body);
+      } else await body();
+    } catch (err) {
+      if (err?.name !== "AbortError") { reason = "error"; failed(err); }
     } finally {
-      stream.getTracks().forEach((t) => t.stop());
-      wakeLoop = null; voice.wake = false; voice.level = 0;
+      wakeLoop = null; wakeStarting = null; voice.wake = false; voice.level = 0; voice.following = false; followUntil = 0;
+      voice.wakeEnd = { reason: ctl.running ? reason : "stopped", blocked, at: Date.now() };
+      voice.wakeState = blocked ? "blocked" : ctl.running && reason === "error" ? "error" : "off";
       if (voice.status === "listening" || voice.status === "transcribing") setStatus("idle");
       emit();
     }
   })();
+  return wakeStarting;
+}
+
+async function wakeLoopBody(stream, s, ctl) {
+  let lastText = "", lastAt = 0;
+  while (ctl.running && stream.getAudioTracks()[0]?.readyState === "live") {
+    await quietMic(300);
+    if (!ctl.running) break;
+    if (voice.status === "thinking" || voice.status === "transcribing") { await sleep(300); continue; }
+    if (followPending) { followUntil = performance.now() + followPending * 1000; followPending = 0; }
+    const following = performance.now() < followUntil;
+    if (voice.following !== following) { voice.following = following; emit(); }
+    let text = "";
+    try {
+      text = await captureAndTranscribe(stream, s, {
+        maxMs: 12000, noSpeechMs: following ? Math.max(1000, followUntil - performance.now()) : 0, quietStatus: !following,
+        isCancelled: () => !ctl.running,
+      });
+    } catch (err) {
+      if (voice.micError) break;
+      if (err?.code !== "VOICE_NOTHING_HEARD") voice.error = err.message;
+      if (voice.status === "transcribing") setStatus(voice.executing ? "executing" : "idle");
+      await sleep(400);
+      continue;
+    }
+    if (!ctl.running) break;
+    if (!text) { if (following && performance.now() >= followUntil) { followUntil = 0; voice.following = false; emit(); } continue; }
+    const norm = normalizeWords(text), now = performance.now();
+    const settle = () => { if (voice.status === "transcribing") setStatus(voice.executing ? "executing" : "idle"); };
+    if (isEcho(text, now)) { settle(); continue; } // the agent heard itself
+    if (norm === lastText && now - lastAt < 4000) { settle(); continue; } // the same result twice
+    lastText = norm; lastAt = now;
+    if (bareWake(text, s)) {
+      settle();
+      ackTone(s);
+      const line = `${withAddress("Yes")} I'm listening.`;
+      voice.log.push({ who: "agent", text: line, kind: "listening" });
+      emit();
+      speak(line);
+      followUp();
+      continue;
+    }
+    if (addressed(text, s) || following) {
+      followUntil = 0; voice.following = false;
+      ackTone(s);
+      const r = await sendCommand(text, "speech").catch(() => null);
+      if (r && ASKS.has(r.status)) followUp(); // the answer needs no name
+    } else settle();
+  }
 }
 
 window.addEventListener("pagehide", () => { wakeLoop?.stop(); active?.cancel?.(); });

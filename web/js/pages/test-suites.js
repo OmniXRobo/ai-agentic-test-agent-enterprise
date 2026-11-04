@@ -139,5 +139,19 @@ export async function mount(view) {
     } catch (err) { toast(err.message, "error"); }
     btn.disabled = false;
   });
+  // Testing types checked or unchecked by voice (#/test-suites?plan=12&checked=functional,regression&unchecked=performance).
+  const listed = (k) => (params().get(k) || "").split(",").filter(Boolean);
+  const on = listed("checked"), off = listed("unchecked");
+  if (on.length || off.length) {
+    form.querySelectorAll('[name="type"]').forEach((c) => {
+      if (on.includes(c.value)) c.checked = true;
+      else if (off.includes(c.value)) c.checked = false;
+      else c.checked = false;
+    });
+    const note = document.createElement("p");
+    note.className = "muted voice-note";
+    note.textContent = "Selected by voice. Suites that already exist are reused; unchecking never deletes a suite.";
+    form.querySelector(".choices").before(note);
+  }
   await loadSuites(view, current());
 }

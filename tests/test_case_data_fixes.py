@@ -7,6 +7,7 @@ import httpx
 
 from qa_platform.design import models, suite_cases, testing_types
 from qa_platform.design.data_agent import matrix_html, parse_matrix, parse_parameters
+from tests import fake_llm
 from tests.fake_llm import design_cases
 from tests.test_suite_cases import _gen_data, _generate, _published_case, _suite, _wait, env  # noqa: F401  (env is a fixture)
 
@@ -46,7 +47,7 @@ def test_large_story_is_generated_a_few_criteria_per_call(env):
     assert len(calls) == 3  # 2 + 2 + 1 criteria
     for body in calls:  # each call only carries its own criteria and a generous timeout-free small answer budget
         assert body["max_tokens"] <= 4096
-        listed = body["messages"][1]["content"].split("Acceptance criteria:\n", 1)[1].split("\n\n", 1)[0]
+        listed = fake_llm.criteria_block(body["messages"][1]["content"])
         assert 1 <= len(listed.splitlines()) <= 2
     refs = [tc["ref"] for tc in story["test_cases"]]
     assert refs == [f"TC{n}" for n in range(1, len(refs) + 1)]  # unique across calls
@@ -63,7 +64,7 @@ def test_timeout_retries_criteria_one_by_one_and_keeps_partial_results(env):
     _big_story(ado)
 
     def slow(body):
-        listed = body["messages"][1]["content"].split("Acceptance criteria:\n", 1)[1].split("\n\n", 1)[0]
+        listed = fake_llm.criteria_block(body["messages"][1]["content"])
         if len(listed.splitlines()) > 1 or listed.startswith("AC04"):
             raise httpx.ReadTimeout("model is busy")
         return design_cases(body)
@@ -203,7 +204,7 @@ def test_generated_data_is_written_to_the_test_data_tab_as_a_matrix(env):
     _test_data_tab(ado)
     _gen_data(c, test_case_ids=[1268])
     r = c.post("/api/test-data/tfs/1268", json={"target": "auto"}).json()
-    assert r["target"] == "Test Data tab (Custom.TestData)"
+    assert r["target"] == "Test Data tab (Custom.TestData) and Summary"  # 23.3.13: the Summary is written too
     written = ado.items[1268]["Custom.TestData"]
     assert written.startswith("<h3>Test Data Matrix</h3>") and "<strong>Combination 1: " in written
     assert "Expected Result:" in written and "ValidPass123!" not in written
@@ -276,8 +277,8 @@ def test_test_data_is_written_a_few_rows_per_call_with_the_generation_timeout(en
     marker = "suite-aware test data designer"
     res = _gen_data(c, test_case_ids=[tc], seed=1)[0]
     calls = _calls(llm, marker)
-    assert len(calls) == 2  # 4 rows, then the 5th (the fake has 5)
-    assert "At most 4 rows" in calls[0]["messages"][0]["content"]
+    assert len(calls) == 2  # 3 rows, then the other 2 (the fake has 5); 23.3.12 writes 3 rows per call (was 4)
+    assert "Write at most 3 rows" in calls[0]["messages"][0]["content"]
     assert "- Valid user (valid)" in calls[1]["messages"][1]["content"]  # the second call knows the first rows
     assert {i["rule"] for i in res["issues"]} >= {"DUPLICATE_ROW"}
 
@@ -294,5 +295,5 @@ def test_test_data_is_written_a_few_rows_per_call_with_the_generation_timeout(en
     llm.extra[marker] = slow_second
     res = _gen_data(c, test_case_ids=[tc], seed=1)[0]
     rows = c.get("/api/test-data", params={"test_case_ids": str(tc)}).json()["items"]
-    assert len([r for r in rows if r["version"] == 2]) == 4
-    assert any("stopped after 4 rows" in g for g in rows[0]["meta"]["gaps"])
+    assert len([r for r in rows if r["version"] == 2]) == 3
+    assert any("stopped after 3 rows" in g for g in rows[0]["meta"]["gaps"])

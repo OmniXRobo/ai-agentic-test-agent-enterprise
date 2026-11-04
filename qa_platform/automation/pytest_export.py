@@ -4,7 +4,8 @@ Each file is self-contained: it runs with ``pytest`` (one test per test data set
 ``python <file>.py``. Runtime values are resolved when the test runs, the same way the
 Enterprise QA Runtime does:
 
-    {{TODAY}} / {{TODAY+3d:%d/%m/%Y}} / {{NOW:%H:%M}}   system clock
+    {{TODAY}} / {{TODAY+3d:%d/%m/%Y}} / {{TODAY-2d}}    system clock (date, +/- days, weeks, months, years)
+    {{NOW:%H:%M}} / {{NOW+1h+30min:%H:%M}} / {{NOW-4h}}  system clock (time, +/- hours and minutes)
     {{DATA:field}}                                      the test data set of the current test
     {{CRED:role.username}} / {{CRED:role.password}}     environment variables ROLE_USERNAME / ROLE_PASSWORD
     {{RANDOM:6}} / {{UNIQUE}}                           random digits / run-unique token
@@ -29,6 +30,7 @@ _CRED = re.compile(r"\{\{\s*CRED:([^}.]+)\.(\w+)\s*\}\}")
 
 PYTEST_VERSION = "8.3.4"
 PLAYWRIGHT_VERSION = "1.56.0"
+PYPDF_VERSION = "6.21.4"
 
 
 def file_name(script: Script) -> str:
@@ -64,10 +66,17 @@ BASE_URL = os.environ.get("BASE_URL", {base_url!r})
 BROWSER = os.environ.get("BROWSER", {browser!r})
 HEADLESS = os.environ.get("HEADLESS", "0").lower() in ("1", "true", "yes")
 UNIQUE = uuid.uuid4().hex[:8]
-_VALUE = re.compile(r"\\{{\\{{\\s*([A-Z]+)(?:([+-]\\d+)([dwmy]))?(?::([^}}]*))?\\s*\\}}\\}}")
+_VALUE = re.compile(r"\\{{\\{{\\s*([A-Z]+)((?:\\s*[+-]\\s*\\d+\\s*(?:min|[dwmyh]))*)\\s*(?::([^}}]*))?\\s*\\}}\\}}")
+_OFFSET = re.compile(r"([+-])\\s*(\\d+)\\s*(min|[dwmyh])")
+FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "files", {files_folder!r})
+DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "downloads")
 
 
 def _shift(base, amount, unit):
+    if unit == "h":
+        return base + timedelta(hours=amount)
+    if unit == "min":
+        return base + timedelta(minutes=amount)
     if unit == "d":
         return base + timedelta(days=amount)
     if unit == "w":
@@ -81,10 +90,11 @@ def _shift(base, amount, unit):
 def value(text, data):
     """Resolve {{{{TODAY}}}}, {{{{DATA:field}}}}, {{{{CRED:role.password}}}} and the other runtime values."""
     def one(m):
-        kind, amount, unit, arg = m.groups()
+        kind, offsets, arg = m.groups()
         current = datetime.now()
         if kind in ("TODAY", "DATE", "NOW"):
-            current = _shift(current, int(amount), unit) if amount else current
+            for sign, n, unit in _OFFSET.findall(offsets or ""):
+                current = _shift(current, int(n) * (-1 if sign == "-" else 1), unit)
             return current.strftime(arg or ("%Y-%m-%d %H:%M" if kind == "NOW" else "%Y-%m-%d"))
         if kind == "RANDOM":
             return "".join(random.choice("0123456789") for _ in range(int(arg) if arg and arg.isdigit() else 6))
@@ -93,7 +103,8 @@ def value(text, data):
         if kind == "DATA":
             if arg not in data:
                 raise KeyError(f"Test data field '{{arg}}' is not in this data set.")
-            return str(data[arg])
+            text = str(data[arg])
+            return _VALUE.sub(one, text) if "{{{{" in text and "DATA:" not in text else text
         if kind == "CRED":
             role, field = arg.rsplit(".", 1)
             name = re.sub(r"\\W+", "_", f"{{role}}_{{field}}").upper()
@@ -150,6 +161,125 @@ if pytest is not None:
 '''
 
 
+_FILE_HELPERS = '''
+
+def upload_files(text, data):
+    names = [n.strip() for n in re.split(r"[;\\n]", value(text, data) or "") if n.strip()]
+    return [n if os.path.isabs(n) else os.path.join(FILES_DIR, n) for n in names]
+
+
+def upload(page, locator, text, data, timeout):
+    files = upload_files(text, data)
+    if locator.evaluate("el => el.tagName === 'INPUT' && el.type === 'file'"):
+        locator.set_input_files(files, timeout=timeout)
+        return
+    with page.expect_file_chooser(timeout=timeout) as chooser:
+        locator.click(timeout=timeout)
+    chooser.value.set_files(files)
+
+
+_LAST_DOWNLOAD = []
+
+
+def download(page, locator, name, timeout):
+    with page.expect_download(timeout=max(timeout, 30000)) as info:
+        locator.click(timeout=timeout)
+    os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+    path = os.path.join(DOWNLOADS_DIR, name or info.value.suggested_filename or "download")
+    info.value.save_as(path)
+    _LAST_DOWNLOAD[:] = [path]
+    return path
+
+
+def _last_download():
+    assert _LAST_DOWNLOAD, "No file was downloaded before this check."
+    return _LAST_DOWNLOAD[0]
+
+
+def _norm(text):
+    return " ".join(str(text).split()).casefold()
+
+
+def _xlsx(path):
+    import zipfile
+    from xml.etree import ElementTree as ET
+    ns = {{"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+          "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}}
+    with zipfile.ZipFile(path) as zf:
+        shared = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            for si in ET.fromstring(zf.read("xl/sharedStrings.xml")).findall("m:si", ns):
+                shared.append("".join(t.text or "" for t in si.iter("{{%s}}t" % ns["m"])))
+        wb = ET.fromstring(zf.read("xl/workbook.xml"))
+        rels = {{r.get("Id"): "xl/" + r.get("Target").lstrip("/").replace("xl/", "", 1) for r in
+                ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))}}
+        sheets = {{}}
+        for n, sh in enumerate(wb.findall("m:sheets/m:sheet", ns), start=1):
+            part = rels.get(sh.get("{{%s}}id" % ns["r"]), "xl/worksheets/sheet%d.xml" % n)
+            cells = {{}}
+            for c in ET.fromstring(zf.read(part)).iter("{{%s}}c" % ns["m"]):
+                v = c.find("m:v", ns)
+                if c.get("t") == "s" and v is not None:
+                    text = shared[int(v.text)]
+                elif c.get("t") == "inlineStr":
+                    text = "".join(x.text or "" for x in c.iter("{{%s}}t" % ns["m"]))
+                else:
+                    text = v.text if v is not None and v.text else ""
+                cells[c.get("r")] = text
+            sheets[sh.get("name")] = cells
+        return sheets
+
+
+def file_text(path):
+    if path.lower().endswith(".pdf"):
+        try:
+            from pypdf import PdfReader  # pip install pypdf
+        except ImportError:  # the copy shipped with the QA platform (RUN_TESTS.cmd sets QA_PLATFORM_VENDOR)
+            import sys
+            sys.path.append(os.environ.get("QA_PLATFORM_VENDOR", ""))
+            from pypdf import PdfReader
+        return "\\n".join(p.extract_text() or "" for p in PdfReader(path).pages)
+    if path.lower().endswith((".xlsx", ".xlsm")):
+        return "\\n".join(" ".join(cells.values()) for cells in _xlsx(path).values())
+    with open(path, "rb") as fh:
+        return fh.read().decode("utf-8", "replace")
+
+
+def expect_file_name(text, data):
+    name = os.path.basename(_last_download())
+    assert _norm(value(text, data)) in _norm(name), f"The downloaded file is {{name}}"
+
+
+def expect_file_text(text, data):
+    content = _norm(file_text(_last_download()))
+    for part in (value(text, data) or "").split("||"):
+        assert _norm(part) in content, f"The downloaded file does not contain {{part.strip()!r}}"
+
+
+def expect_excel_cell(text, data):
+    left, expected = (value(text, data) or "").split("=", 1)
+    sheet, cell = left.rsplit("!", 1) if "!" in left else (None, left)
+    book = _xlsx(_last_download())
+    cells = book[next(k for k in book if not sheet or k.lower() == sheet.strip().lower())]
+    actual = cells.get(cell.strip().upper(), "")
+    try:
+        same = abs(float(actual) - float(expected)) < 1e-9
+    except ValueError:
+        same = _norm(actual) == _norm(expected)
+    assert same, f"{{cell.strip().upper()}} is {{actual!r}}, expected {{expected.strip()!r}}"
+'''
+
+FILE_ACTIONS = {"upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell"}
+
+
+def uses_files(script: Script) -> bool:
+    return any(s.action in FILE_ACTIONS for s in script.steps)
+
+
+def files_folder(script: Script) -> str:
+    return script.id.lower().replace("-", "_")
+
+
 def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> str:
     """One pytest file for the script; ``datasets`` are [{name, values}] (one test per data set)."""
     datasets = [d for d in (datasets or []) if isinstance(d.get("values"), dict)]
@@ -183,10 +313,12 @@ def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> s
         "except ImportError:  # still runs with: python <this file>",
         "    pytest = None",
         "",
-        "# One test run per data set (from the Test Data of the TFS Test Case).",
+        "# One test run per data set (the Test Data of the TFS Test Case and the rows imported from Excel / CSV).",
         "TEST_DATA = " + _data_literal(datasets),
     ]
-    body = _RUNTIME.format(base_url=script.base_url or "", browser=script.browser)
+    body = _RUNTIME.format(base_url=script.base_url or "", browser=script.browser, files_folder=files_folder(script))
+    if uses_files(script):
+        body += _FILE_HELPERS.format()
     steps = [
         "",
         "",
@@ -246,7 +378,8 @@ def _text(value: str) -> str:
 def _step_lines(step: Any) -> list[str]:
     a = step.action
     v = f"value({step.value!r}, data)"
-    loc = f"find(page, {_locator_args(step)})" if step.target else None
+    root = "page" + "".join(f".frame_locator({f!r})" for f in (step.target.frames if step.target else []))
+    loc = f"find({root}, {_locator_args(step)})" if step.target else None  # 23.3.21: inside iframes too
     timeout = step.timeout_ms
     lines: list[str]
     if a == "goto":
@@ -259,10 +392,19 @@ def _step_lines(step: Any) -> list[str]:
         lines = [f"page.keyboard.press({v} or \"Enter\")"]
     elif a == "expect_url":
         lines = [f"expect(page).to_have_url(re.compile(re.escape({v} or \"\")), timeout={timeout})"]
+    elif a in ("expect_file_name", "expect_file_text", "expect_excel_cell"):
+        lines = [f"{a}({step.value!r}, data)"]
+    elif a == "dialog":  # 23.3.21: answer the next pop-up (alert / confirm / prompt)
+        how = "dismiss" if step.value == "dismiss" else "accept"
+        lines = [f"page.once(\"dialog\", lambda d: d.{how}())"]
     elif loc is None:
         lines = [f"pass  # '{a}' needs an element; none was recorded"]
     elif a in ("click", "dblclick", "hover", "check", "uncheck"):
         lines = [f"{loc}.{a}(timeout={timeout})"]
+    elif a == "right_click":
+        lines = [f"{loc}.click(button=\"right\", timeout={timeout})"]
+    elif a == "drag_to":
+        lines = [f"{loc}.drag_to(page.locator({step.value!r}), timeout={timeout})"]
     elif a in ("fill", "type"):
         lines = [f"{loc}.fill({v} or \"\", timeout={timeout})"]
     elif a == "select":
@@ -279,6 +421,10 @@ def _step_lines(step: Any) -> list[str]:
         lines = [f"expect({loc}).to_contain_text({v} or \"\", timeout={timeout})"]
     elif a == "expect_value":
         lines = [f"expect({loc}).to_have_value({v} or \"\", timeout={timeout})"]
+    elif a == "upload_file":
+        lines = [f"upload(page, {loc}, {step.value!r}, data, {timeout})"]
+    elif a == "download_file":
+        lines = [f"download(page, {loc}, {v}, {timeout})"]
     else:
         lines = [f"pass  # unsupported action '{a}'"]
     if step.optional:
@@ -329,6 +475,7 @@ if not defined PY (
   exit /b 1
 )
 if not defined PLAYWRIGHT_BROWSERS_PATH if exist "{browsers}" set "PLAYWRIGHT_BROWSERS_PATH={browsers}"
+if not defined QA_PLATFORM_VENDOR if exist "{vendor}" set "QA_PLATFORM_VENDOR={vendor}"
 rem set "BASE_URL=https://your-app/"
 rem set "HEADLESS=1"
 {credential_lines}%PY% -m pytest --junitxml=report.xml %*
@@ -337,7 +484,8 @@ endlocal
 """
 
 
-def bundle(scripts: list[tuple[Script, list[dict[str, Any]]]], generated: str) -> bytes:
+def bundle(scripts: list[tuple[Script, list[dict[str, Any]]]], generated: str,
+           files: dict[str, Any] | None = None) -> bytes:
     """A zip with tests/, pytest.ini, requirements.txt, README.txt and RUN_TESTS.cmd."""
     creds: list[str] = []
     names: set[str] = set()
@@ -349,9 +497,15 @@ def bundle(scripts: list[tuple[Script, list[dict[str, Any]]]], generated: str) -
                 name = name[:-3] + f"_{script.id.lower().replace('-', '_')}.py"
             names.add(name)
             zf.writestr(f"tests/{name}", to_pytest(script, datasets))
+            folder = (files or {}).get(script.id)
+            if folder is not None and uses_files(script) and folder.is_dir():  # 23.3.17: files for upload steps
+                for f in sorted(folder.iterdir()):
+                    if f.is_file():
+                        zf.write(f, f"tests/files/{files_folder(script)}/{f.name}")
             creds += [c for c in credential_variables(script) if c not in creds]
         zf.writestr("pytest.ini", "[pytest]\ntestpaths = tests\naddopts = -v\n")
-        zf.writestr("requirements.txt", f"pytest=={PYTEST_VERSION}\nplaywright=={PLAYWRIGHT_VERSION}\n")
+        zf.writestr("requirements.txt", f"pytest=={PYTEST_VERSION}\nplaywright=={PLAYWRIGHT_VERSION}\n"
+                    + (f"pypdf=={PYPDF_VERSION}\n" if any(uses_files(s) for s, _ in scripts) else ""))
         cred_text = ("  " + "\n  ".join(f"{c}{'   (secret: never saved in the files)' if 'PASSWORD' in c else ''}"
                                         for c in creds) + "\n") if creds else ""
         zf.writestr("README.txt", README.format(generated=generated, count=len(names), credentials=cred_text)
@@ -361,6 +515,9 @@ def bundle(scripts: list[tuple[Script, list[dict[str, Any]]]], generated: str) -
         cred_lines = "".join(f'rem set "{c}=..."\n' for c in creds)
         zf.writestr("RUN_TESTS.cmd", RUN_CMD.format(python=python or "python.exe-not-found",
                                                      browsers=browsers or "ms-playwright-not-found",
-                                                     credential_lines=cred_lines).replace("\n", "\r\n"))
+                                                     credential_lines=cred_lines,
+                                                     vendor=str(APP_ROOT / "qa_platform" / "vendor")
+                                                     if sys.platform == "win32" else "vendor-not-found")
+                                                     .replace("\n", "\r\n"))
     return buf.getvalue()
 

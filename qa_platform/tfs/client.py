@@ -307,6 +307,29 @@ class AzureDevOpsClient:
                                 api_version="5.0")
 
 
+    # ---- 23.3.21: test runs and outcomes -----------------------------------------------------
+
+    def test_points_for_case(self, test_case_id: int) -> list[dict[str, Any]]:
+        """Every test point (plan / suite / configuration) of a test case."""
+        body = {"pointsFilter": {"testcaseIds": [int(test_case_id)]}}
+        return self.request("POST", "_apis/test/points", json=body, api_version="5.0").get("points", []) or []
+
+    def create_test_run(self, body: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", "_apis/test/runs", json=body, api_version="5.0")
+
+    def test_run_results(self, run_id: int) -> list[dict[str, Any]]:
+        return self.request("GET", f"_apis/test/runs/{int(run_id)}/results", api_version="5.0").get("value", [])
+
+    def add_test_results(self, run_id: int, results: list[dict[str, Any]]) -> Any:
+        return self.request("POST", f"_apis/test/runs/{int(run_id)}/results", json=results, api_version="5.0")
+
+    def update_test_results(self, run_id: int, results: list[dict[str, Any]]) -> Any:
+        return self.request("PATCH", f"_apis/test/runs/{int(run_id)}/results", json=results, api_version="5.0")
+
+    def update_test_run(self, run_id: int, changes: dict[str, Any]) -> dict[str, Any]:
+        return self.request("PATCH", f"_apis/test/runs/{int(run_id)}", json=changes, api_version="5.0")
+
+
 def _server_message(resp: httpx.Response) -> str | None:
     try:
         data = resp.json()

@@ -145,7 +145,12 @@ export async function mount(view, entry, selectId) {
   view.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); deletePlan(view, byId(b.dataset.del)); }));
   view.querySelectorAll("tr[data-plan]").forEach((tr) => tr.addEventListener("click", () => {
     view.querySelectorAll("tr[data-plan]").forEach((x) => x.classList.toggle("selected", x === tr));
+    // The address names the selected plan, so the voice agent knows what "it" is (no reload: replaceState).
+    if (location.hash.startsWith("#/test-plans")) history.replaceState(null, "", `#/test-plans?id=${tr.dataset.plan}`);
     showSuites(view, byId(tr.dataset.plan));
   }));
-  if (selectId) view.querySelector(`tr[data-plan="${selectId}"]`)?.click();
+  // A plan opened by voice (#/test-plans?id=12) or by a link is selected and scrolled into view.
+  const wanted = selectId || new URLSearchParams(location.hash.split("?")[1] || "").get("id");
+  const row = wanted ? view.querySelector(`tr[data-plan="${CSS.escape(String(wanted))}"]`) : null;
+  if (row) { row.click(); row.scrollIntoView({ block: "nearest" }); }
 }

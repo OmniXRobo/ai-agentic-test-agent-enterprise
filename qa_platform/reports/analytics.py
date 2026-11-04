@@ -112,7 +112,63 @@ class AnalyticsService:
                             "sla_pass": sla.get("PASS", 0), "sla_fail": sla.get("FAIL", 0),
                             "sla_pass_rate": _rate(sla.get("PASS", 0), sla.get("PASS", 0) + sla.get("FAIL", 0))},
             "open_defect_drafts": open_drafts,
+            "insights": self.insights(tfs),
         }
+
+    def insights(self, tfs: dict[str, Any]) -> dict[str, Any]:
+        """Dashboard statistics (23.3.14): test data spread, defects, executions and runs. Recorded data only;
+        a part that cannot be read is left out (the dashboard then shows "—"), never estimated."""
+        out: dict[str, Any] = {}
+        try:
+            rows = self.db.query("SELECT tfs_test_case_id, test_case_ref, kind FROM test_data LIMIT ?", (MAX_ROWS,))
+            per_tc = Counter(str(r["tfs_test_case_id"] or r["test_case_ref"]) for r in rows)
+            with_tfs = {str(r["tfs_test_case_id"]) for r in rows if r["tfs_test_case_id"]}
+            td: dict[str, Any] = {"rows": len(rows), "test_cases": len(per_tc), "tfs_test_cases_with_data": len(with_tfs),
+                                  "valid": sum(r["kind"] == "valid" for r in rows),
+                                  "invalid": sum(r["kind"] == "invalid" for r in rows),
+                                  "top": [{"test_case": k, "rows": v} for k, v in per_tc.most_common(8)]}
+            if tfs.get("connected") and "testcase" in tfs:
+                td["tfs_test_cases_without_data"] = max(0, int(tfs["testcase"]) - len(with_tfs))
+            out["test_data"] = td
+        except Exception:  # an older database layout must not break the dashboard
+            pass
+        try:
+            drafts = Counter(r["status"] for r in self.db.query("SELECT status FROM defect_drafts LIMIT ?", (MAX_ROWS,)))
+            out["defect_drafts"] = dict(drafts)
+        except Exception:
+            pass
+        if tfs.get("connected") and "open_defects" in tfs:
+            try:
+                total = self.tfs.count("bug")
+                out["defects"] = {"total": total, "open": int(tfs["open_defects"]), "closed": max(0, total - int(tfs["open_defects"]))}
+            except Exception:
+                pass
+        try:
+            ex = self.db.query("SELECT status, started_at FROM execution_results WHERE status IN ('PASSED','FAILED')"
+                               " ORDER BY started_at DESC LIMIT ?", (MAX_ROWS,))
+            start, axis = _window(7)
+            trend = {d: {"passed": 0, "failed": 0} for d in axis}
+            for r in ex:
+                d = _day(r["started_at"])
+                if d in trend:
+                    trend[d]["passed" if r["status"] == "PASSED" else "failed"] += 1
+            passed = sum(r["status"] == "PASSED" for r in ex)
+            out["executions"] = {"total": len(ex), "passed": passed, "failed": len(ex) - passed,
+                                 "trend": [{"date": d.isoformat(), **v} for d, v in trend.items()]}
+        except Exception:
+            pass
+        try:
+            kinds: dict[str, dict[str, int]] = defaultdict(lambda: {"passed": 0, "failed": 0, "other": 0})
+            # The run ID prefix says what the run did (TCGEN, TDATA, GEN, RUN, REC, ...); the kind is the fallback.
+            for r in self.db.query("SELECT kind, status, run_id FROM runs ORDER BY started_at DESC LIMIT ?", (MAX_ROWS,)):
+                key = "passed" if r["status"] == "PASSED" else "failed" if r["status"] == "FAILED" else "other"
+                prefix = str(r["run_id"] or "").split("-", 1)[0]
+                kinds[prefix if prefix.isalpha() and prefix.isupper() else (r["kind"] or "other")][key] += 1
+            out["runs_by_kind"] = sorted(({"kind": k, **v} for k, v in kinds.items()),
+                                         key=lambda x: -(x["passed"] + x["failed"] + x["other"]))
+        except Exception:
+            pass
+        return out
 
     # ---- functional ----------------------------------------------------------------------------
 

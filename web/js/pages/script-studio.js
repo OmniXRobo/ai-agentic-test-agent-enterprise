@@ -4,6 +4,8 @@
 import { api } from "../api.js";
 import { subscribe } from "../store.js";
 import { esc, toast, dateTimeOf, elapsed } from "../util.js";
+import { confirmDelete } from "../confirm-delete.js";
+import { openRuleBuilder, previewRule } from "../date-rules.js";
 
 const BASE = "/api/automation/studio";
 const FINAL_JOB = new Set(["COMPLETED", "FAILED", "STOPPED", "INTERRUPTED"]);
@@ -82,66 +84,12 @@ function diffView(lines) {
 }
 
 // ---- date/time runtime rules (the Windows system clock) ---------------------------------------
+// 23.3.17: the rule dialog is shared with Guided Browser Automation > Edit Script (../date-rules.js).
 
-const FORMATS = [["%d/%m/%Y", "dd/mm/yyyy"], ["%Y-%m-%d", "yyyy-mm-dd"], ["%m/%d/%Y", "mm/dd/yyyy"], ["%d-%b-%Y", "dd-Mon-yyyy"],
-  ["%H:%M", "HH:MM"], ["%H:%M:%S", "HH:MM:SS"], ["%d/%m/%Y %H:%M", "dd/mm/yyyy HH:MM"]];
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const pad = (n, w = 2) => String(n).padStart(w, "0");
-
-function strftime(d, fmt) {
-  return fmt.replace(/%([dmYyHMSbB%])/g, (_, k) => ({ d: pad(d.getDate()), m: pad(d.getMonth() + 1), Y: d.getFullYear(),
-    y: pad(d.getFullYear() % 100), H: pad(d.getHours()), M: pad(d.getMinutes()), S: pad(d.getSeconds()),
-    b: MONTHS[d.getMonth()], B: d.toLocaleString("en", { month: "long" }), "%": "%" })[k]);
-}
-
-// Preview of a rule such as {{TODAY+7d:%d/%m/%Y}} or {{NOW+2h:%H:%M}} (the test resolves it the same way at run time).
-export function previewRule(text) {
-  return String(text ?? "").replace(/\{\{\s*(TODAY|DATE|NOW)((?:\s*[+-]\s*\d+\s*(?:min|[dwmyh]))*)\s*(?::([^}]*))?\}\}/g, (_, kind, offs, fmt) => {
-    const d = new Date();
-    for (const [, sign, n, unit] of offs.matchAll(/([+-])\s*(\d+)\s*(min|[dwmyh])/g)) {
-      const v = Number(n) * (sign === "-" ? -1 : 1);
-      if (unit === "d") d.setDate(d.getDate() + v);
-      else if (unit === "w") d.setDate(d.getDate() + 7 * v);
-      else if (unit === "m") d.setMonth(d.getMonth() + v);
-      else if (unit === "y") d.setFullYear(d.getFullYear() + v);
-      else if (unit === "h") d.setHours(d.getHours() + v);
-      else d.setMinutes(d.getMinutes() + v);
-    }
-    return strftime(d, fmt || (kind === "NOW" ? "%Y-%m-%d %H:%M" : "%Y-%m-%d"));
-  });
-}
+export { previewRule };
 
 function ruleBuilder(current, onApply) {
-  const m = modal("Date / time rule", `
-    <p class="muted">Values come from the Windows system clock of the PC that runs the test, at the moment it runs.</p>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
-      <label>Value <select name="base">
-        <option value="TODAY">Current System Date</option><option value="NOW">Current System Time</option></select></label>
-      <label>Change <select name="sign"><option value="">none</option><option value="+">plus</option><option value="-">minus</option></select></label>
-      <label>Amount <input name="amount" type="number" min="0" value="1"></label>
-      <label>Unit <select name="unit"><option value="d">days</option><option value="w">weeks</option><option value="m">months</option>
-        <option value="y">years</option><option value="h">hours</option><option value="min">minutes</option></select></label>
-      <label>Format <select name="fmt">${FORMATS.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}
-        <option value="custom">Custom…</option></select></label>
-      <label>Custom format <input name="custom" placeholder="%d.%m.%Y"></label>
-    </div>
-    <p>Rule <code id="rule"></code> → today this gives <strong id="preview"></strong></p>
-    <div class="row"><span class="spacer"></span><button class="btn" data-close>Cancel</button><button class="btn primary" id="apply">Use this rule</button></div>`);
-  const f = (n) => m.el.querySelector(`[name=${n}]`);
-  const rule = () => {
-    const sign = f("sign").value, fmt = f("fmt").value === "custom" ? f("custom").value : f("fmt").value;
-    return `{{${f("base").value}${sign ? `${sign}${Number(f("amount").value) || 0}${f("unit").value}` : ""}${fmt ? `:${fmt}` : ""}}}`;
-  };
-  const show = () => { m.el.querySelector("#rule").textContent = rule(); m.el.querySelector("#preview").textContent = previewRule(rule()); };
-  const parsed = /\{\{(TODAY|NOW)(?:([+-])(\d+)(min|[dwmyh]))?(?::([^}]*))?\}\}/.exec(current || "");
-  if (parsed) {
-    f("base").value = parsed[1]; f("sign").value = parsed[2] || ""; f("amount").value = parsed[3] || 1; f("unit").value = parsed[4] || "d";
-    if (FORMATS.some(([v]) => v === parsed[5])) f("fmt").value = parsed[5]; else if (parsed[5]) { f("fmt").value = "custom"; f("custom").value = parsed[5]; }
-  } else if (/time/i.test(current || "")) f("base").value = "NOW";
-  f("base").addEventListener("change", () => { if (f("base").value === "NOW") { f("fmt").value = "%H:%M"; f("unit").value = "h"; } show(); });
-  m.el.querySelectorAll("select,input").forEach((el) => el.addEventListener("input", show));
-  show();
-  m.el.querySelector("#apply").addEventListener("click", () => { onApply(rule()); m.close(); });
+  openRuleBuilder(current, onApply);
 }
 
 // ---- dialogs ------------------------------------------------------------------------------
@@ -238,8 +186,26 @@ async function home(view, tab) {
 
 // ---- script inventory -------------------------------------------------------------------------
 
+function deleteBtn(s) {
+  return `<button class="link-btn danger" data-del="${esc(s.id)}" title="Delete this script">Delete</button>`;
+}
+
+// 23.3.16: delete one inventory row (framework script or recorded script) after the confirmation.
+async function deleteScript(s) {
+  const ok = await confirmDelete({
+    name: s.script || s.id,
+    detail: [s.test_case_id ? `TC${s.test_case_id}` : "", s.test_case_title || ""].filter(Boolean).join(" - "),
+    note: s.framework ? "The test file and its test data are kept in the workspace .deleted folder; its versions and evidence are kept."
+      : "Its versions and evidence are kept in the archive folder.",
+  });
+  if (!ok) return false;
+  await api(s.framework ? `${BASE}/scripts/${sid(s.id)}` : `/api/automation/scripts/${sid(s.id)}`, { method: "DELETE" });
+  toast(`Deleted ${s.script || s.id}.`, "success");
+  return true;
+}
+
 function actionsHtml(s) {
-  if (!s.framework) return `<a href="#/ai-automation-classic?script=${sid(s.id)}">Open</a>`;
+  if (!s.framework) return `<span class="actions"><a href="#/ai-automation-classic?script=${sid(s.id)}">Open</a>${deleteBtn(s)}</span>`;
   const q = (tab) => link(`script=${sid(s.id)}&tab=${tab}`);
   return `<span class="actions">
     <a href="${q("view")}">View Script</a><a href="${q("edit")}">Edit Script</a><a href="${q("flow")}">Flow Logic</a>
@@ -247,7 +213,7 @@ function actionsHtml(s) {
     ${s.last_run_id ? `<a href="${link(`script=${sid(s.id)}&tab=results&run=${sid(s.last_run_id)}`)}">Result</a>
       <a href="${link(`script=${sid(s.id)}&tab=logs&run=${sid(s.last_run_id)}`)}">Logs</a>
       <a href="${link(`script=${sid(s.id)}&tab=evidence&run=${sid(s.last_run_id)}`)}">Evidence</a>` : ""}
-    <button class="link-btn" data-regen="${esc(s.id)}">Regenerate / Update</button></span>`;
+    <button class="link-btn" data-regen="${esc(s.id)}">Regenerate / Update</button>${s.last_result === "RUNNING" ? "" : deleteBtn(s)}</span>`;
 }
 
 async function inventoryPane(pane) {
@@ -305,9 +271,15 @@ async function inventoryPane(pane) {
     if (e.target.id === "all") { visible().filter((s) => s.framework && s.file_verified).forEach((s) => (e.target.checked ? selected.add(s.id) : selected.delete(s.id))); render(); }
   });
   pane.addEventListener("click", async (e) => {
-    const playBtn = e.target.closest("[data-play]"), regen = e.target.closest("[data-regen]");
+    const playBtn = e.target.closest("[data-play]"), regen = e.target.closest("[data-regen]"), del = e.target.closest("[data-del]");
     try {
-      if (playBtn) {
+      if (del) {
+        const s = items.find((x) => x.id === del.dataset.del);
+        if (!s || !(await deleteScript(s))) return;
+        selected.delete(s.id);
+        items = (await api(`${BASE}/inventory`)).items;
+        render();
+      } else if (playBtn) {
         const id = playBtn.dataset.play;
         const detail = await api(`${BASE}/scripts/${sid(id)}`);
         const r = await play(id, (detail.data?.combinations || []).map((c) => c.name));
@@ -585,7 +557,7 @@ async function scriptView(view, scriptId, tab, runId) {
         <span class="muted">Last result</span><span id="lastResult">${pill(s.last_result)}</span><span class="spacer"></span>
         <button class="btn primary" id="play" ${s.file_verified ? "" : "disabled"}>${s.last_run_id ? "Play Again" : "Play"}</button>
         <button class="btn" id="stop" hidden>Stop</button>
-        <button class="btn" id="regen">Regenerate / Update</button><button class="link-btn" id="archive">Archive</button></div>
+        <button class="btn" id="regen">Regenerate / Update</button><button class="btn danger" id="archive">Delete</button></div>
       <dl class="meta">
         <dt>Script</dt><dd><code>${esc(s.file)}</code> ${s.file_verified ? '<span class="muted">(file verified)</span>' : '<span class="pill FAIL">FILE MISSING</span>'}</dd>
         <dt>User Story</dt><dd>${s.user_story_id ? `US${esc(s.user_story_id)} ${esc(s.user_story_title || "")}` : "-"}</dd>
@@ -670,8 +642,10 @@ async function scriptView(view, scriptId, tab, runId) {
     catch (err) { toast(err.message, "error"); }
   });
   view.querySelector("#archive").addEventListener("click", async () => {
-    if (!confirm("Archive this script? It leaves the inventory; its files, versions and evidence are kept.")) return;
-    try { await api(`${BASE}/scripts/${sid(scriptId)}`, { method: "DELETE" }); go("tab=scripts"); } catch (err) { toast(err.message, "error"); }
+    try {
+      if (await deleteScript({ id: scriptId, framework: true, script: s.file_name || baseName(s.file),
+        test_case_id: s.test_case_id, test_case_title: s.test_case_title })) go("tab=scripts");
+    } catch (err) { toast(errorText(err), "error"); }
   });
   await renderTab();
 }
@@ -970,7 +944,15 @@ async function resultsTab(pane, scriptId, data, reload, runId) {
       ${r.healing.map((h) => `<tr><td>${h.step_index + 1}</td><td><code>${esc(h.original_selector)}</code></td><td>${h.healed_selector ? `<code>${esc(h.healed_selector)}</code>` : '<span class="muted">none</span>'}</td>
         <td>${Math.round(h.confidence * 100)}%</td><td>${esc(h.page_url || "")}</td><td>${pill(h.result === "failed" ? "FAILED" : h.result === "validated" ? "PASSED" : "WARN")} ${esc(h.result)}</td>
         <td>${h.applied ? '<span class="muted">Applied</span>' : h.result === "validated" ? `<button class="btn" data-apply="${h.id}" title="Update the Page Object locator (the old one is kept as an alternate)">Update Page Object</button>` : ""}</td></tr>`).join("")}</tbody></table>
+      ${r.healing.filter((h) => h.result === "validated" && !h.applied).length > 1 ? `<p><button class="btn primary" data-apply-all>Apply all healed steps</button></p>` : ""}
       <p class="muted">A healed locator never changes the source by itself. It can update the Page Object only after a run using it passed, and only when you choose to.</p>` : ""}`;
+  pane.querySelector("[data-apply-all]")?.addEventListener("click", async () => {  // 23.3.21
+    try {
+      const res = await api("/api/automation/healing/apply-all", { method: "POST", body: { script_id: scriptId, run_id: r.run_id } });
+      toast(`${res.applied.length} Page Object locator(s) updated` + (res.skipped.length ? `; ${res.skipped.length} skipped: ${res.skipped.map((x) => x.reason).join("; ")}` : ""), res.applied.length ? "success" : "error", 9000);
+      await reload();
+    } catch (err) { toast(err.message, "error"); }
+  });
   pane.querySelectorAll("[data-apply]").forEach((b) => b.addEventListener("click", async () => {
     try { const res = await api(`/api/automation/healing/${b.dataset.apply}/apply`, { method: "POST", body: {} }); toast(`Page Object updated: ${res.framework?.component || ""}`, "success"); await reload(); }
     catch (err) { toast(err.message, "error"); }

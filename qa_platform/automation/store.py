@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,72 @@ class ScriptStore:
             raise QAError("SCRIPT_VERSION_NOT_FOUND", f"Version {version} of {script_id} does not exist.", status=404)
         old = Script.model_validate_json(path.read_text(encoding="utf-8"))
         return self.save(old, reason=f"restore v{version}")
+
+    # ---- 23.3.17: files attached to a script (upload steps) and data-driven run batches ----------
+
+    MAX_FILE_BYTES = 50 * 1024 * 1024
+
+    def files_dir(self, script_id: str) -> Path:
+        return self._dir(script_id) / "files"
+
+    def list_files(self, script_id: str) -> list[dict[str, Any]]:
+        folder = self.files_dir(script_id)
+        if not folder.is_dir():
+            return []
+        return [{"name": p.name, "size": p.stat().st_size,
+                 "updated_at": datetime.fromtimestamp(p.stat().st_mtime, timezone.utc).isoformat()}
+                for p in sorted(folder.iterdir(), key=lambda x: x.name.lower()) if p.is_file()]
+
+    def save_file(self, script_id: str, name: str, content: bytes) -> dict[str, Any]:
+        from .files import safe_name
+
+        self.get(script_id)
+        if len(content) > self.MAX_FILE_BYTES:
+            raise QAError("FILE_TOO_LARGE", f"{name} is larger than 50 MB.", status=413)
+        folder = self.files_dir(script_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / safe_name(name)
+        tmp = target.with_name(target.name + ".part")
+        tmp.write_bytes(content)
+        tmp.replace(target)
+        return {"name": target.name, "size": len(content)}
+
+    def delete_file(self, script_id: str, name: str) -> None:
+        from .files import safe_name
+
+        target = self.files_dir(script_id) / safe_name(name)
+        if not target.is_file():
+            raise QAError("FILE_NOT_FOUND", f"{name} is not attached to {script_id}.", status=404)
+        target.unlink()
+
+    def adopt_files(self, script_id: str, source: Path) -> list[str]:
+        """Move files captured while recording (uploads) into the script's folder."""
+        if not source.is_dir():
+            return []
+        folder = self.files_dir(script_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        moved = []
+        for p in source.iterdir():
+            if p.is_file():
+                p.replace(folder / p.name)
+                moved.append(p.name)
+        try:
+            source.rmdir()
+        except OSError:
+            pass
+        return moved
+
+    def data_runs(self, script_id: str) -> list[dict[str, Any]]:
+        path = self._dir(script_id) / "data_runs.json"
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+
+    def add_data_run(self, script_id: str, batch: dict[str, Any]) -> None:
+        path = self._dir(script_id) / "data_runs.json"
+        items = [batch, *self.data_runs(script_id)][:20]
+        path.write_text(json.dumps(items, indent=2), encoding="utf-8")
 
     def delete(self, script_id: str) -> None:
         folder = self._dir(script_id)

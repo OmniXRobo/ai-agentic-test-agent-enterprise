@@ -19,7 +19,8 @@ from ..storage.db import Database, dumps, loads
 from . import healing
 from . import visual as visual_fx
 from .browser import default_headless, js, launch, start_playwright
-from .dsl import describe, NEEDS_TARGET, Script, Step, ValueResolver
+from . import files as filekit
+from .dsl import describe, FILE_CHECKS, NEEDS_TARGET, Script, Step, ValueResolver
 from .store import CredentialProfiles, ScriptStore
 
 
@@ -77,8 +78,10 @@ class Runner:
     # ---- main entry ----------------------------------------------------------------
 
     def run(self, script_id: str, run_id: str, *, dataset: dict[str, Any] | None = None,
-            headless: bool | None = None) -> dict[str, Any]:
+            headless: bool | None = None, data_label: str | None = None, browser: str | None = None) -> dict[str, Any]:
         script = self.scripts.get(script_id)
+        if browser:  # 23.3.21: the same script in another browser
+            script = script.model_copy(update={"browser": browser})
         playback = self.settings.section("playback")
         visual = bool(playback.get("visual_cursor", True) or playback.get("highlight", True))
         headless = default_headless(playback.get("headless")) if headless is None else headless
@@ -88,7 +91,7 @@ class Runner:
         stop = threading.Event()
         self.stop_events[run_id] = stop
         tc, us = script.test_case_id, script.user_story_id
-        title = f"{script.name}" + (f" (Test Case #{tc})" if tc else "")
+        title = f"{script.name}" + (f" (Test Case #{tc})" if tc else "") + (f" - {data_label}" if data_label else "")
         self.runs.start(run_id, "functional", title, test_case_id=tc, user_story_id=us)
         resolver = ValueResolver(
             data=dataset, credentials=lambda role, field: self.creds.lookup(script.application, role, field),
@@ -96,14 +99,14 @@ class Runner:
         record: dict[str, Any] = {
             "run_id": run_id, "script_id": script.id, "test_case_id": tc, "user_story_id": us,
             "status": "RUNNING", "started_at": now_iso(), "browser": script.browser, "base_url": script.base_url,
-            "steps": [], "evidence": {"folder": str(evidence_dir), "screenshots": [], "video": None},
-            "failed_step": None, "error": None, "healed": [],
+            "steps": [], "evidence": {"folder": str(evidence_dir), "screenshots": [], "video": None, "downloads": []},
+            "failed_step": None, "error": None, "healed": [], "data_row": data_label,
         }
         row_id = self.db.execute(
             "INSERT INTO execution_results (run_id, script_id, test_case_id, user_story_id, status, started_at, browser,"
             " base_url) VALUES (?,?,?,?,?,?,?,?)",
             (run_id, script.id, tc, us, "RUNNING", record["started_at"], script.browser, script.base_url)).lastrowid
-        label = f"Test Case #{tc}" if tc else script.name
+        label = (f"Test Case #{tc}" if tc else script.name) + (f" ({data_label})" if data_label else "")
         try:
             with agent.activity(f"Running {label}", run_id=run_id, test_case_id=tc, user_story_id=us,
                                 script_id=script.id) as act:
@@ -157,7 +160,8 @@ class Runner:
         browser = context = page = None
         try:
             browser = launch(pw, script.browser, headless=headless)
-            ctx_opts: dict[str, Any] = {"viewport": {"width": 1366, "height": 768}, "ignore_https_errors": True}
+            ctx_opts: dict[str, Any] = {"viewport": {"width": 1366, "height": 768}, "ignore_https_errors": True,
+                                        "accept_downloads": True}
             if video:
                 ctx_opts["record_video_dir"] = str(evidence_dir)
             context = browser.new_context(**ctx_opts)
@@ -168,6 +172,9 @@ class Runner:
                 context.add_init_script(js("overlay"))
             page = context.new_page()
             page.set_default_timeout(15000)
+            # 23.3.21: tabs a click opens, in the order they open; a step's ``tab`` picks one (0 = the first tab)
+            pages = [page]
+            context.on("page", lambda p: pages.append(p))
             total = len(script.steps)
             for index, step in enumerate(script.steps):
                 if stop.is_set():
@@ -179,6 +186,7 @@ class Runner:
                 entry: dict[str, Any] = {"index": index, "action": step.action, "description": desc, "status": "RUNNING"}
                 record["steps"].append(entry)
                 try:
+                    page = self._tab(pages, step, page)
                     self._step(page, script, step, index, act, resolver, record, evidence_dir, visual, delay)
                     entry["status"] = "PASSED"
                 except StepFailed:
@@ -220,6 +228,25 @@ class Runner:
             finally:
                 pw.stop()
 
+    @staticmethod
+    def _tab(pages: list[Any], step: Step, current: Any) -> Any:
+        """23.3.21: the tab the step was recorded in. A tab a click opened may take a moment to appear."""
+        if step.tab is None:
+            return pages[0] if pages and not pages[0].is_closed() else current
+        deadline = time.monotonic() + step.timeout_ms / 1000
+        while len(pages) <= step.tab and time.monotonic() < deadline:
+            current.wait_for_timeout(200)
+        if len(pages) <= step.tab:
+            raise RuntimeError(f"Tab {step.tab + 1} did not open (only {len(pages)} tab(s)).")
+        page = pages[step.tab]
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=step.timeout_ms)
+            page.bring_to_front()
+        except Exception:
+            pass
+        page.set_default_timeout(15000)
+        return page
+
     def _shot(self, page: Any, folder: Path, name: str) -> str | None:
         try:
             page.evaluate("window.__qaOverlay && window.__qaOverlay.clear()")
@@ -247,6 +274,16 @@ class Runner:
         if step.action == "wait":
             page.wait_for_timeout(int(value or 1000))
             return
+        if step.action == "dialog":  # 23.3.21: the next pop-up (alert / confirm / prompt) gets OK or Cancel
+            how, _, text = (value or "accept").partition(":")
+
+            def answer(d: Any, how: str = how, text: str = text) -> None:
+                act.event(names.EXECUTION_STEP, f"Pop-up \"{d.message[:120]}\": {'Cancel' if how == 'dismiss' else 'OK'}",
+                          step=index)
+                d.dismiss() if how == "dismiss" else (d.accept(text) if text else d.accept())
+
+            page.once("dialog", answer)
+            return
         if step.action == "expect_url":
             from playwright.sync_api import expect
 
@@ -256,6 +293,9 @@ class Runner:
             shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}-{re.sub(r'[^A-Za-z0-9_-]', '_', value or 'shot')}")
             if shot:
                 record["evidence"]["screenshots"].append(shot)
+            return
+        if step.action in FILE_CHECKS:
+            self._file_check(step, index, value or "", record, act)
             return
         if step.action == "press" and step.target is None:
             page.keyboard.press(value or "Enter")
@@ -285,6 +325,13 @@ class Runner:
             if box:
                 visual_fx.click(page, box)
             locator.click(timeout=timeout)
+        elif a == "right_click":  # 23.3.21
+            if box:
+                visual_fx.click(page, box)
+            locator.click(button="right", timeout=timeout)
+        elif a == "drag_to":  # 23.3.21: value = where it is dropped (a selector in the same frame)
+            dest = self._scope(page, step.target).locator(value or "").first
+            locator.drag_to(dest, timeout=timeout)
         elif a == "pick_date":
             how = visual_fx.pick_date(page, locator, value or "", timeout, bool(box), delay)
             act.event(names.EXECUTION_STEP, f"Date {value} chosen ({how})", step=index)
@@ -319,6 +366,15 @@ class Runner:
             expect(locator).to_contain_text(value or "", timeout=timeout)
         elif a == "expect_value":
             expect(locator).to_have_value(value or "", timeout=timeout)
+        elif a == "upload_file":
+            paths = self._upload_paths(script, step, value, index)
+            how = self._upload(page, locator, paths, timeout, box)
+            act.event(names.EXECUTION_STEP, f"Uploaded {', '.join(p.name for p in paths)} ({how})", step=index)
+        elif a == "download_file":
+            saved = self._download(page, locator, value, timeout, evidence_dir, box)
+            record["evidence"]["downloads"].append(str(saved))
+            record["steps"][-1]["download"] = str(saved)
+            act.event(names.EXECUTION_STEP, f"Downloaded {saved.name} ({saved.stat().st_size:,} bytes)", step=index)
         if visual:
             try:
                 page.wait_for_timeout(min(delay, 250))
@@ -326,7 +382,97 @@ class Runner:
             except Exception:
                 pass  # the page may have navigated
 
+    # ---- 23.3.17: upload and download -----------------------------------------------------
+
+    def _upload_paths(self, script: Script, step: Step, value: str | None, index: int) -> list[Path]:
+        names_ = [n.strip() for n in re.split(r"[;\n]", value or "") if n.strip()]
+        if not names_:
+            raise StepFailed(index, "Upload step: no file. Attach the file in Edit Script > Files and put its name "
+                                    "in Value.")
+        folder = self.scripts.files_dir(script.id)
+        out = []
+        for name in names_:
+            candidate = Path(name)
+            if not candidate.is_absolute():
+                candidate = folder / filekit.safe_name(name)
+            if not candidate.is_file():
+                raise StepFailed(index, f"Upload step: the file {name} is not attached to this script "
+                                        f"(Edit Script > Files) and is not a full path on this PC.")
+            out.append(candidate)
+        return out
+
+    @staticmethod
+    def _upload(page: Any, locator: Any, paths: list[Path], timeout: int, box: Any) -> str:
+        files = [str(p) for p in paths]
+        is_input = locator.evaluate("el => el.tagName === 'INPUT' && el.type === 'file'")
+        if is_input:
+            locator.set_input_files(files, timeout=timeout)
+            return "file field"
+        # A button or drop zone that opens the file chooser: answer the chooser with the files.
+        with page.expect_file_chooser(timeout=timeout) as chooser:
+            if box:
+                visual_fx.click(page, box)
+            locator.click(timeout=timeout)
+        chooser.value.set_files(files)
+        return "file chooser"
+
+    @staticmethod
+    def _download(page: Any, locator: Any, value: str | None, timeout: int, evidence_dir: Path, box: Any) -> Path:
+        with page.expect_download(timeout=max(timeout, 30000)) as info:
+            if box:
+                visual_fx.click(page, box)
+            locator.click(timeout=timeout)
+        download = info.value
+        failure = download.failure()
+        if failure:
+            raise RuntimeError(f"The download failed: {failure}")
+        folder = evidence_dir / "downloads"
+        folder.mkdir(parents=True, exist_ok=True)
+        name = filekit.safe_name(value or download.suggested_filename or "download")
+        target = folder / name
+        n = 2
+        while target.exists():
+            target = folder / f"{Path(name).stem} ({n}){Path(name).suffix}"
+            n += 1
+        download.save_as(str(target))
+        return target
+
+    def _file_check(self, step: Step, index: int, value: str, record: dict[str, Any], act: Any) -> None:
+        downloads = record["evidence"].get("downloads") or []
+        if not downloads:
+            raise StepFailed(index, f"{describe(step)}: no file was downloaded before this step. Add a "
+                                    "'download_file' step first.")
+        path = Path(downloads[-1])
+        if step.action == "expect_file_name":
+            if filekit.normalize(value) not in filekit.normalize(path.name):
+                raise StepFailed(index, f"The downloaded file is {path.name}, its name does not contain '{value}'.")
+            return
+        if step.action == "expect_file_text":
+            text = filekit.file_text(path)
+            missing = [v for v in (x.strip() for x in value.split("||")) if v and filekit.normalize(v) not in
+                       filekit.normalize(text)]
+            if missing:
+                sample = " ".join(text.split())[:160]
+                raise StepFailed(index, f"{path.name} does not contain '{missing[0]}'."
+                                        + (f" It starts with: {sample}" if sample else " No text was found in it."))
+            act.event(names.EXECUTION_STEP, f"{path.name} contains '{value}'", step=index)
+            return
+        sheet, cell, expected = filekit.parse_cell_check(value)
+        actual = filekit.excel_cell(path.read_bytes(), cell, sheet)
+        if not filekit.same_value(actual, expected):
+            raise StepFailed(index, f"{path.name} {(sheet + '!') if sheet else ''}{cell} is '{actual}', "
+                                    f"expected '{expected}'.")
+        act.event(names.EXECUTION_STEP, f"{path.name} {cell} = '{actual}'", step=index)
+
     # ---- locating and healing --------------------------------------------------------
+
+    @staticmethod
+    def _scope(page: Any, target: Any) -> Any:
+        """23.3.21: the page, or the iframe(s) the element is in."""
+        root = page
+        for sel in (getattr(target, "frames", None) or []):
+            root = root.frame_locator(sel)
+        return root
 
     def _try(self, page: Any, selector: str, timeout: int, state: str) -> Any | None:
         try:
@@ -341,14 +487,18 @@ class Runner:
         target = step.target
         assert target is not None
         state = "hidden" if step.action == "expect_hidden" else ("attached" if step.action == "expect_text" else "visible")
-        loc = self._try(page, target.selector, step.timeout_ms, state)
+        scope = self._scope(page, target)
+        loc = self._try(scope, target.selector, step.timeout_ms, state)
         if loc is not None or step.action == "expect_hidden":
-            return loc if loc is not None else page.locator(target.selector).first
+            return loc if loc is not None else scope.locator(target.selector).first
         for alt in target.alternates:
-            loc = self._try(page, alt, 1500, state)
+            loc = self._try(scope, alt, 1500, state)
             if loc is not None:
                 act.log(f"Primary locator failed; recorded alternate worked: {_short(alt)}", step=index)
                 return loc
+        if target.frames:  # self-healing reads the page's own elements; inside an iframe only alternates are tried
+            raise StepFailed(index, f"Element not found in the frame: {target.description or target.selector} "
+                                    f"(selector {_short(target.selector)}).")
         healed = self._heal(page, step, index, script, act, record, evidence_dir, visual)
         if healed is None:
             raise StepFailed(index, f"Element not found: {target.description or target.selector} "

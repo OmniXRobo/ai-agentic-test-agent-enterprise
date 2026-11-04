@@ -5,8 +5,9 @@ voice acknowledgement -> execute a supported dashboard action -> monitor it ->
 voice completion or failure response.
 
 * Speech recognition runs on the bundled offline recognizer (offline_stt.py),
-  in the browser, or on a local Whisper server (whisper.cpp ``/inference`` or an
-  OpenAI-compatible ``/audio/transcriptions`` endpoint) configured by URL.
+  in the browser, on the Faster-Whisper server this application starts itself
+  (fw_service.py, 23.3.7), or on another local Whisper server (whisper.cpp
+  ``/inference`` or an OpenAI-compatible ``/audio/transcriptions`` endpoint) configured by URL.
   Nothing is downloaded and no other host is called.
 * Replies can be rendered with the PC's Windows voices (tts.py) so the
   dashboard can play them as radio transmissions.
@@ -53,13 +54,35 @@ from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from ..tfs.service import TfsService
 from . import intents, registry
+from .intents_guided import guided_action
+from .commands_automation import AutomationCommands
+from .commands_design import DesignCommands
+from .commands_guided import GuidedCommands
+from .commands_safety import SafetyCommands
+from . import privacy
 from .commands_more import MoreCommands
+from .commands_plans import PlanCommands, original_case
 from .model import Conversation, Outcome
 from .intents import Intent
 from .offline_stt import OfflineRecognizer
+from . import fw_service
+from .fw_service import FasterWhisperService
 from .tts import SystemVoice
 
 log = get_logger("voice")
+
+
+def _silence_wav(seconds: float = 0.5) -> bytes:
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * int(16000 * seconds))
+    return buf.getvalue()
 
 UNSUPPORTED = "That operation is not supported."
 
@@ -68,17 +91,37 @@ PHRASES = {
                  "clarify": "Please clarify the instruction.", "confirm": "Confirm this operation?"},
     "tactical": {"ack": "Command received.", "done": "Mission complete.", "fail": "Command unsuccessful.",
                  "clarify": "Say again. Please clarify the instruction.", "confirm": "Confirm this operation?"},
+    # {a} is the configured form of address ("Boss"); with none set, ", {a}" is left out.
+    "conversational": {"ack": "On it, {a}.", "understood": "Understood, {a}.", "done": "Done, {a}.",
+                       "fail": "Sorry, {a}.", "clarify": "One question, {a}.", "confirm": "Please confirm, {a}."},
 }
+NEXT_QUESTION = "What would you like to do next?"
 
 
-def compose(status: str, say: str, style: str = "standard", background: bool = False) -> str:
+def _address(phrase: str, address: str) -> str:
+    address = " ".join((address or "").split())
+    return phrase.replace("{a}", address) if address else phrase.replace(", {a}", "").replace("{a}", "")
+
+
+def compose(status: str, say: str, style: str = "standard", background: bool = False, address: str = "") -> str:
     """The full spoken line for a reply: the fixed opening of its kind, then what actually happened."""
     p = PHRASES.get(style) or PHRASES["standard"]
-    head = {"accepted": p["ack"], "completed": p["done"] if background else p["ack"], "failed": p["fail"],
-            "unsupported": p["fail"], "needs_input": p["clarify"], "unclear": p["clarify"],
+    head = {"accepted": p["ack"], "completed": p["done"] if background else p.get("understood", p["ack"]),
+            "failed": p["fail"], "unsupported": p["fail"], "needs_input": p["clarify"], "unclear": p["clarify"],
             "needs_confirmation": p["confirm"]}.get(status, "")
-    return f"{head} {say}".strip()
+    line = f"{_address(head, address)} {say}".strip()
+    if style == "conversational" and background and status == "completed":
+        line = f"{line} {NEXT_QUESTION}"
+    return line
+
+
 PENDING_SECONDS = 120
+DUPLICATE_SECONDS = 5  # the same sentence again within this time is not executed twice
+# Commands that only look or move around may be repeated on purpose ("go back", "go back").
+REPEATABLE = {"open_page", "go_back", "help", "status", "show_details", "list_suites", "find_test_plan", "open_current",
+              "select_item", "open_work_item", "search_work_items", "read_notifications", "show_failed", "show_result",
+              "show_report", "show_performance_report", "confirm", "cancel", "interrupt", "repeat", "continue_work",
+              "explain_activity", "where", "automation_settings", "show_failure", "validate_script", None}
 DESIGN_AGENTS = {"requirements", "test_planning", "test_case_design", "test_data", "test_suite_design"}
 FAILURE_PHRASES = {
     "locator": "a locator failure on {element}",
@@ -148,7 +191,7 @@ def _match_score(query: str, *candidates: str | None) -> float:
     return best
 
 
-class VoiceService(MoreCommands):
+class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCommands, MoreCommands, PlanCommands):
     def __init__(self, settings: Settings, bus: EventBus, db: Database, runs: RunStore, state: AgentStateManager,
                  tfs: TfsService, ai: AIGateway, design: DesignService, automation: AutomationService,
                  performance: PerformanceService, defects: DefectService,
@@ -167,6 +210,7 @@ class VoiceService(MoreCommands):
         self.transport = transport
         self.agent = VoiceCommandAgent(bus)
         self.offline = OfflineRecognizer(settings)
+        self.fw = FasterWhisperService(settings)
         self.system_voice = SystemVoice(settings.path.parent / "voice-cache")
         self._conversations: dict[str, Conversation] = {}
         self._lock = threading.Lock()
@@ -182,6 +226,10 @@ class VoiceService(MoreCommands):
 
     def style(self) -> str:
         return self.config().get("phrase_style") or "standard"
+
+    def address(self) -> str:
+        """How the agent addresses the user ("Boss"); a setting, never code."""
+        return str(self.config().get("address_as") or "")
 
     def agent_name(self) -> str:
         return self.config().get("agent_display_name") or "HAMI"
@@ -218,16 +266,14 @@ class VoiceService(MoreCommands):
             return text
         if cfg.get("stt_engine") != "local":
             raise QAError("VOICE_STT_NOT_LOCAL", "Speech recognition is not set to the local speech server.", status=409)
-        url = (cfg.get("stt_url") or "").rstrip("/")
+        if cfg.get("stt_api") == fw_service.API:
+            url = self.fw.ensure_ready(timeout=float(cfg.get("stt_timeout_seconds") or 90))
+        else:
+            url = (cfg.get("stt_url") or "").rstrip("/")
         if not url:
             raise QAError("VOICE_STT_NOT_CONFIGURED", "No local speech recognition server URL is set in Voice settings.",
                           status=409)
-        language = cfg.get("language") or "en"
-        if cfg.get("stt_api") == "openai":
-            path, data = "/audio/transcriptions", {"model": cfg.get("stt_model") or "whisper-1",
-                                                   "response_format": "json", "language": language}
-        else:
-            path, data = "/inference", {"response_format": "json", "language": language, "temperature": "0"}
+        path, data = self._stt_request(cfg)
         try:
             with httpx.Client(timeout=float(cfg.get("stt_timeout_seconds") or 60), trust_env=False,
                               transport=self.transport) as c:
@@ -248,6 +294,70 @@ class VoiceService(MoreCommands):
                           status=422)
         return text
 
+    def vocabulary_prompt(self, cfg: dict[str, Any]) -> str:
+        """A short hint so Whisper spells the wake name and the application's words the way the commands expect."""
+        names = [n for n in dict.fromkeys((cfg.get("agent_command_name") or "", cfg.get("agent_display_name") or ""))
+                 if n and re.fullmatch(r"[A-Za-z][A-Za-z' -]*", n)]
+        lead = f"{names[0]}, open Test Plans." if names else "Open Test Plans."
+        return (f"{lead} Test Suites, Test Cases, Test Data, user story, acceptance criteria, TFS, Playwright, "
+                "regression, smoke test, Sprint 25.")
+
+    def _stt_request(self, cfg: dict[str, Any]) -> tuple[str, dict[str, str]]:
+        language = (cfg.get("language") or "en").split("-")[0]
+        if cfg.get("stt_api") == "openai":
+            return "/audio/transcriptions", {"model": cfg.get("stt_model") or "whisper-1", "response_format": "json",
+                                             "language": language, "prompt": self.vocabulary_prompt(cfg)}
+        return "/inference", {"response_format": "json", "language": language, "temperature": "0",
+                              "prompt": self.vocabulary_prompt(cfg)}
+
+    def _try_recording(self, url: str, cfg: dict[str, Any], timeout: float) -> tuple[str, str]:
+        """Send half a second of silence to the real recognition endpoint: PASS only if it answers with text JSON.
+
+        Before 23.3.7 the check only fetched the server's address and counted any answer below HTTP 500 as working,
+        so "HTTP 404" (nothing that recognises speech at that address) was shown as PASS.
+        """
+        path, data = self._stt_request(cfg)
+        started = time.monotonic()
+        try:
+            with httpx.Client(timeout=timeout, trust_env=False, transport=self.transport) as c:
+                r = c.post(url + path, data=data, files={"file": ("check.wav", _silence_wav(), "audio/wav")})
+        except httpx.HTTPError as exc:
+            return "FAIL", f"{url} is not reachable ({type(exc).__name__}). Is the speech server running?"
+        ms = int((time.monotonic() - started) * 1000)
+        if r.status_code == 404:
+            return "FAIL", (f"{url}{path} answered HTTP 404: there is no speech recognition at this address. "
+                            "Choose the server type \"Faster-Whisper on this PC\" (installed by patch 23.3.7), "
+                            "or the URL and type of your own speech server.")
+        if r.status_code != 200:
+            return "FAIL", f"{url}{path} answered HTTP {r.status_code}: {r.text[:160]}"
+        try:
+            body = r.json()
+        except ValueError:
+            return "FAIL", f"{url}{path} answered, but not with JSON, so it is not a speech server."
+        if not isinstance(body, dict) or "text" not in body:
+            return "FAIL", f"{url}{path} answered JSON without a \"text\" field, so it is not a speech server."
+        return "PASS", f"{url}{path} recognised a test recording in {ms} ms."
+
+    def speech_probe(self) -> tuple[str, str, str]:
+        """(status, short label, detail) of the local speech server, for the header badges (cached by health)."""
+        cfg = self.config()
+        if cfg.get("stt_api") == fw_service.API:
+            st = self.fw.status()
+            if not st["installed"]:
+                return "FAIL", "Not installed", "Faster-Whisper is not installed. Run the 23.3.7 patch."
+            if not st["model"]:
+                return "FAIL", "No model", "No Faster-Whisper model installed. Run the 23.3.7 patch with -ModelZip."
+            if st["state"] == "RUNNING":
+                return "PASS", "Faster-Whisper", f"{st['model']} on {st['url']}"
+            if st["state"] in ("LOADING", "STARTING"):
+                return "WARN", "Loading", f"Faster-Whisper is loading {st['model']}."
+            return "FAIL", "Stopped", st["error"] or "The Faster-Whisper server is not running. Click Check Voice Setup."
+        url = (cfg.get("stt_url") or "").rstrip("/")
+        if not url:
+            return "NOT_CONFIGURED", "Not set up", "Set the speech server URL."
+        status, detail = self._try_recording(url, cfg, 5)
+        return status, "Local server" if status == "PASS" else "Check", detail
+
     def diagnostics(self) -> dict[str, Any]:
         cfg = self.config()
         checks: list[dict[str, str]] = []
@@ -255,20 +365,27 @@ class VoiceService(MoreCommands):
         if engine == "builtin":
             status, detail = self.offline.status()
             checks.append({"name": "Built-in offline speech recognition", "status": status, "detail": detail})
+        elif engine == "local" and cfg.get("stt_api") == fw_service.API:
+            name = "Faster-Whisper speech recognition"
+            try:
+                url = self.fw.ensure_ready(timeout=120)
+                st = self.fw.status()
+                status, detail = self._try_recording(url, cfg, 30)
+                h = st.get("health") or {}
+                if status == "PASS":
+                    detail = (f"Model {st['model']} ({h.get('compute_type', '')}, {h.get('device', 'cpu')}) on {url}, "
+                              f"started with the application: {detail}")
+                checks.append({"name": name, "status": status, "detail": detail})
+            except QAError as exc:
+                checks.append({"name": name, "status": "FAIL", "detail": exc.message})
         elif engine == "local":
             url = (cfg.get("stt_url") or "").rstrip("/")
             if not url:
                 checks.append({"name": "Local speech server", "status": "NOT_CONFIGURED",
                                "detail": "Set the URL of your whisper.cpp or OpenAI-compatible speech server."})
             else:
-                try:
-                    with httpx.Client(timeout=5, trust_env=False, transport=self.transport) as c:
-                        r = c.get(url + ("/models" if cfg.get("stt_api") == "openai" else "/"))
-                    checks.append({"name": "Local speech server", "status": "PASS" if r.status_code < 500 else "FAIL",
-                                   "detail": f"{url} answered HTTP {r.status_code}"})
-                except httpx.HTTPError as exc:
-                    checks.append({"name": "Local speech server", "status": "FAIL",
-                                   "detail": f"{url} is not reachable ({type(exc).__name__})"})
+                status, detail = self._try_recording(url, cfg, 30)
+                checks.append({"name": "Local speech server", "status": status, "detail": detail})
         elif engine == "browser":
             checks.append({"name": "Browser speech recognition", "status": "WARN",
                            "detail": "Recognition is done by the browser. Chrome and Edge send audio to their online "
@@ -316,7 +433,11 @@ class VoiceService(MoreCommands):
         if c.pending and time.monotonic() - c.pending["at"] < PENDING_SECONDS:
             pending = {"kind": c.pending["kind"], "command": c.pending["intent"].command}
         return {"user_story_id": c.user_story_id, "test_case_id": c.test_case_id, "run_id": c.run_id,
-                "perf_plan_id": c.perf_plan_id, "base_url": c.base_url, "pending": pending}
+                "perf_plan_id": c.perf_plan_id, "base_url": c.base_url, "pending": pending,
+                "test_plan_id": c.test_plan_id, "test_plan_name": c.test_plan_name, "sprint": c.sprint,
+                "suite_selection": dict(c.suite_selection), "focus": c.focus, "last_action": c.last_action,
+                "case_runs": list(c.case_runs), "saved_case_ids": list(c.saved_case_ids), "data_case_ids": list(c.data_case_ids),
+                "script_id": c.script_id, "script_ids": list(c.script_ids)}
 
     @staticmethod
     def _apply_page(conv: Conversation, page: dict[str, Any] | None) -> None:
@@ -326,9 +447,19 @@ class VoiceService(MoreCommands):
         route, params = page.get("route") or "", page.get("params") or {}
         try:
             if route == "user-stories" and params.get("id"):
-                conv.user_story_id = int(params["id"])
+                conv.user_story_id, conv.focus = int(params["id"]), "user_story"
             elif route == "test-cases" and params.get("id"):
-                conv.test_case_id = int(params["id"])
+                conv.test_case_id, conv.focus = int(params["id"]), "test_case"
+            elif route == "test-plans" and params.get("id"):
+                if conv.test_plan_id != int(params["id"]):
+                    conv.test_plan_name, conv.suite_selection = None, {}
+                conv.test_plan_id, conv.focus = int(params["id"]), "test_plan"
+            elif route in ("test-suites", "test-cases") and params.get("plan"):
+                if conv.test_plan_id != int(params["plan"]):
+                    conv.test_plan_name, conv.suite_selection = None, {}
+                conv.test_plan_id = int(params["plan"])
+                if route == "test-suites":
+                    conv.focus = "test_plan"
             elif route == "test-design" and params.get("story"):
                 conv.user_story_id = int(params["story"])
             elif route == "history" and params.get("run"):
@@ -358,21 +489,37 @@ class VoiceService(MoreCommands):
         if not text:
             raise QAError("VALIDATION_FAILED", "Say or type a command.", status=422)
         conv = self._conv(conversation_id)
+        norm = intents.normalize(text)
         with conv.lock:
+            last = conv.last_command
+            if last and last[0] == norm and time.monotonic() - last[1] < DUPLICATE_SECONDS and last[2].get("command") not in REPEATABLE \
+                    and last[2].get("status") in ("accepted", "completed"):
+                # A repeated recognition result or a double click: answer, but never execute twice.
+                prev = last[2]
+                return {**prev, "duplicate": True, "navigate": None, "verify": None, "status": "completed",
+                        "say": "I already have that instruction, so I'm not doing it twice.",
+                        "speak": compose("completed", "I already have that instruction, so I'm not doing it twice.",
+                                         self.style(), address=self.address())}
+            conv.raw_text = text
             self._apply_page(conv, page)
+            # 23.3.6: spoken secrets are masked before the transcript is stored, logged or sent to the event feed
+            stored = privacy.redact(text) if self.config().get("keep_transcripts", True) else "(transcript not kept)"
             command_id = self.db.execute(
                 "INSERT INTO voice_commands (conversation_id, text, source, status, created_at) VALUES (?,?,?,?,?)",
-                (conversation_id, text, source, "received", now_iso())).lastrowid
+                (conversation_id, stored, source, "received", now_iso())).lastrowid
+            self._purge_transcripts()
             base = {"conversation_id": conversation_id, "command_id": command_id}
-            self.agent.emit(names.VOICE_COMMAND_RECEIVED, f'Voice command received: "{text}"', details=base)
+            self.agent.emit(names.VOICE_COMMAND_RECEIVED, f'Voice command received: "{privacy.redact(text)}"', details=base)
             intent = self._understand(text, conv)
+            if intent and isinstance(intent.params.get("name"), str):
+                intent.params["name"] = original_case(text, intent.params["name"])  # "Checkout Regression", as said
             outcome = self._dispatch(conv, intent, text)
             self.db.execute("UPDATE voice_commands SET command = ?, params = ?, via = ?, status = ?, reply = ?,"
                             " finished_at = ? WHERE id = ?",
-                            (intent.command if intent else None, dumps(intent.params) if intent else None,
+                            (intent.command if intent else None, dumps(privacy.redact_params(intent.params)) if intent else None,
                              intent.via if intent else None, "running" if outcome.job else outcome.status,
                              outcome.say, None if outcome.job else now_iso(), command_id))
-        speak = compose(outcome.status, outcome.say, self.style())
+        speak = compose(outcome.status, outcome.say, self.style(), address=self.address())
         details = {**base, "command": intent.command if intent else None, "say": outcome.say, "speak_line": speak,
                    "navigate": outcome.navigate, "owner": outcome.owner}
         if outcome.status in ("failed", "unsupported"):
@@ -382,10 +529,14 @@ class VoiceService(MoreCommands):
             self._start_job(conv, command_id, text, outcome)
         else:
             self.agent.emit(names.VOICE_COMMAND_COMPLETED, outcome.say, details=details)
-        return {"command_id": command_id, "status": outcome.status, "say": outcome.say, "speak": speak,
-                "navigate": outcome.navigate, "owner": outcome.owner, "agent_name": self.agent_name(),
-                "command": intent.command if intent else None, "via": intent.via if intent else None,
-                "context": self.context(conversation_id)}
+        reply = {"command_id": command_id, "status": outcome.status, "say": outcome.say, "speak": speak,
+                 "navigate": outcome.navigate, "verify": outcome.verify, "owner": outcome.owner, "agent_name": self.agent_name(),
+                 "command": intent.command if intent else None, "via": intent.via if intent else None,
+                 "context": self.context(conversation_id)}
+        conv.last_command = (norm, time.monotonic(), reply)
+        if outcome.status in ("completed", "accepted") and intent:
+            conv.last_action = intent.command
+        return reply
 
     def _start_job(self, conv: Conversation, command_id: int, text: str, outcome: Outcome) -> None:
         assert outcome.job is not None
@@ -406,7 +557,7 @@ class VoiceService(MoreCommands):
             except Exception as exc:  # reported, never silent
                 log.exception("Voice command job failed")
                 status, say = "failed", f"{outcome.failure} because of an unexpected error: {type(exc).__name__}."
-            line = compose(status, say, self.style(), background=True)
+            line = compose(status, say, self.style(), background=True, address=self.address())
             self.db.execute("UPDATE voice_commands SET status = ?, final_reply = ?, finished_at = ? WHERE id = ?",
                             (status, say, now_iso(), command_id))
             self.agent.emit(names.VOICE_COMMAND_COMPLETED if status == "completed" else names.VOICE_COMMAND_FAILED,
@@ -414,6 +565,16 @@ class VoiceService(MoreCommands):
                                           "result": status})
 
         threading.Thread(target=work, name=f"voice-{command_id}", daemon=True).start()
+
+    def _purge_transcripts(self) -> None:
+        """Delete voice history older than the retention set in Voice Settings (0 = keep). At most once a minute."""
+        days = int(self.config().get("transcript_days") or 0)
+        if days <= 0 or time.monotonic() - getattr(self, "_purged_at", -1e9) < 60:
+            return
+        self._purged_at = time.monotonic()
+        from datetime import timedelta
+        cutoff = (now() - timedelta(days=days)).isoformat()
+        self.db.execute("DELETE FROM voice_commands WHERE created_at < ?", (cutoff,))
 
     # ---- intent analysis -----------------------------------------------------------------------
 
@@ -431,7 +592,15 @@ class VoiceService(MoreCommands):
             else:
                 follow.params[pending["param"]] = value
                 return follow
-        # While a browser recording runs, "click search", "select tomorrow" and the like act in that browser.
+        # While a browser recording runs, "click search", "select tomorrow" and the like act in that browser
+        # ("select security" is only a suite when the sentence says suite or testing).
+        if intent is not None and intent.command == "select_suites" and not re.search(r"\b(suites?|testing)\b", intents.normalize(text)) \
+                and self._active_recording(conv):
+            intent = None
+        if intent is None and self._active_recording(conv):  # 23.3.4: credentials, checks, links, values to ask for
+            spoken = guided_action(intents.normalize(text))
+            if spoken:
+                return spoken
         if (intent is None or intent.command == "open_page") and self._active_recording(conv):
             spoken = intents.browser_action(intents.normalize(text))
             if spoken:
@@ -484,12 +653,15 @@ class VoiceService(MoreCommands):
         elif intent.command == "cancel":
             conv.pending = None
             return Outcome("completed", "Cancelled." if pending else "There is nothing to cancel.")
-        else:
-            conv.pending = None
+        elif intent.command not in ("interrupt", "continue_work", "repeat", "explain_activity"):
+            conv.pending = None  # these four look at, or drop, the waiting question themselves
         spec = registry.BY_ID.get(intent.command)
         handler = getattr(self, f"_cmd_{intent.command}", None)
         if spec is None or handler is None:
             return Outcome("unsupported", UNSUPPORTED)
+        denied = self._permission_denied(intent)  # 23.3.6: voice permissions, also for a confirmed command
+        if denied:
+            return denied
         try:
             outcome = handler(conv, intent)
         except QAError as exc:
@@ -528,7 +700,16 @@ class VoiceService(MoreCommands):
 
     def _cmd_open_page(self, conv: Conversation, intent: Intent) -> Outcome:
         route = intent.params["route"]
-        return Outcome("completed", f"{intents.PAGE_LABELS[route]} opened.", navigate=f"#/{route}")
+        label = intents.PAGE_LABELS[route]
+        if route == "test-suites" and conv.test_plan_id:
+            # "Now go to Test Suites": open them for the test plan being worked on.
+            plan = self._current_plan(conv)
+            if plan:
+                return Outcome("completed", f"I'm opening Test Suites for {plan['name']}.", navigate=f"#/test-suites?plan={plan['id']}",
+                               verify={"route": "test-suites", "label": "Test Suites"})
+        # The dashboard opens the page and checks it really loaded before anything says it is done.
+        say = f"I'm opening {label} now." if self.style() == "conversational" else f"{label} opened."
+        return Outcome("completed", say, navigate=f"#/{route}", verify={"route": route, "label": label})
 
     def _cmd_open_work_item(self, conv: Conversation, intent: Intent) -> Outcome:
         item_id = int(intent.params["id"])
@@ -627,7 +808,7 @@ class VoiceService(MoreCommands):
         if self.studio is not None:  # agentic: requirement -> application discovery -> Page Object script
             return Outcome("accepted", f"Reading the requirement of test case {tc}, using the application at {base_url} "
                                        f"({why}) and creating its automation script.",
-                           job=self._studio_job([{"test_case_ids": [int(tc)]}], base_url, f"test case {tc}"),
+                           job=self._studio_job([{"test_case_ids": [int(tc)]}], base_url, f"test case {tc}", conv),
                            owner="requirements", job_title=f"Voice: generating automation for Test Case #{tc}",
                            failure="Automation generation failed")
         run_id = new_run_id("GEN")
@@ -657,7 +838,8 @@ class VoiceService(MoreCommands):
             return next((s for s in scripts if str(s.get("test_case_id") or "") == str(conv.test_case_id)), None)
         return None
 
-    def _cmd_run_test_case(self, conv: Conversation, intent: Intent) -> Outcome:
+    def _run_recorded_test_case(self, conv: Conversation, intent: Intent) -> Outcome:
+        """Recorded (classic) scripts; generated framework scripts run through AutomationCommands._cmd_run_test_case."""
         script = self._find_script(conv, intent)
         if script is None:
             tc = intent.params.get("test_case_id") or (None if intent.params.get("name") else conv.test_case_id)

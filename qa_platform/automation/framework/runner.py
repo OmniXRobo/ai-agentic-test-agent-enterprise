@@ -60,7 +60,7 @@ class FrameworkRunner:
 
     def run(self, record: dict[str, Any], run_id: str, *, workspace: Path, env_extra: dict[str, str],
             secrets: list[str], combination: str | None = None, headless: bool | None = None,
-            on_finish: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+            on_finish: Callable[[dict[str, Any]], None] | None = None, browser: str | None = None) -> dict[str, Any]:
         """Run one framework script. ``record`` is its inventory row; ``env_extra`` carries credentials."""
         playback = self.settings.section("playback")
         headless = default_headless(playback.get("headless")) if headless is None else headless
@@ -71,7 +71,10 @@ class FrameworkRunner:
         log_file = evidence_dir / "execution.log"
         sid, tc, us = record["id"], record.get("test_case_id"), record.get("user_story_id")
         label = f"Test Case #{tc}" if tc else record.get("test_case_title") or sid
-        browser = "chromium"
+        # 23.3.3: browser, element timeout and step screenshots come from the playback settings when set (voice or
+        # Settings); unset, the framework keeps its own defaults (chromium, 10 seconds, a screenshot per step).
+        chosen = browser  # 23.3.21: a scheduled / Run now batch can pick the browser
+        browser = str(chosen or playback.get("browser") or os.environ.get("BROWSER") or "chromium")
         title = f"TC{tc} {record.get('test_case_title') or ''}".strip() + f" (Test Case #{tc})" if tc else sid
         self.runs.start(run_id, "functional", title, test_case_id=tc, user_story_id=us)
         started = now_iso()
@@ -106,6 +109,12 @@ class FrameworkRunner:
             "QA_TRACE": "1" if playback.get("trace") else "0", "QA_VIDEO": "1" if playback.get("video") else "0",
             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8",
         })
+        if playback.get("browser") or chosen:
+            env["BROWSER"] = browser
+        if playback.get("timeout_seconds"):
+            env["QA_TIMEOUT_MS"] = str(int(float(playback["timeout_seconds"]) * 1000))
+        if "step_screenshots" in playback:
+            env["QA_STEP_SCREENSHOTS"] = "1" if playback["step_screenshots"] else "0"
         if record.get("base_url"):
             env["BASE_URL"] = record["base_url"]
         if combination:

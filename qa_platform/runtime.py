@@ -65,9 +65,14 @@ class Runtime:
     health: HealthService
     llm: ManagedLLM
     setup: FirstRunSetup
+    mailer: Any = None  # 23.3.21: Outlook email
+    scheduler: Any = None  # 23.3.21: Scheduled Runs
 
     def close(self) -> None:
+        if self.scheduler is not None:
+            self.scheduler.close()
         self.llm.close()  # only the llama-server this application started
+        self.voice.fw.close()  # only the Faster-Whisper server this application started
         self.db.close()
 
 
@@ -116,12 +121,27 @@ def build_runtime(
     knowledge.studio = studio  # requirement -> discovery -> script generation chain
     health = HealthService(tfs, ai, orchestration, voice)
     voice.attach(studio=studio, reports=reports, notifications=notifications, health=health)
+    # 23.3.7: Faster-Whisper speech recognition starts with the application when it is the chosen speech server.
+    voice.fw.logs = paths.logs
+    voice.fw.log_file = paths.logs / "faster-whisper.log"
+    if stt_transport is None and voice.fw.selected() and voice.fw.config()["auto_start"]:
+        voice.fw.start_in_background()
     llm = ManagedLLM(settings, paths)
     if llm.config().get("auto_start") and ai_transport is None:
         try:
             llm.start(wait=False)  # once, when the application starts; never on page navigation
         except Exception as exc:  # the application still starts; the AI page shows why
             log.warning(f"Managed LLM did not start: {exc}")
-    return Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
-                   automation, performance, defects, voice, analytics, reports, studio, hierarchy, knowledge, health, llm,
-                   FirstRunSetup(settings, paths, tfs, llm, voice, health))
+    rt = Runtime(paths, settings, db, bus, state, notifications, runs, orchestration, secrets, tfs, ai, design,
+                 automation, performance, defects, voice, analytics, reports, studio, hierarchy, knowledge, health, llm,
+                 FirstRunSetup(settings, paths, tfs, llm, voice, health))
+    # 23.3.21: Outlook email and Scheduled Runs (a background thread checks the schedules every 15 seconds)
+    from .automation.scheduler import Scheduler
+    from .mailer import Mailer
+
+    rt.mailer = Mailer(settings, secrets)
+    rt.scheduler = Scheduler(automation, paths.root / "schedules.json", tfs=tfs, mailer=rt.mailer,
+                             reports_dir=paths.reports / "scheduled")
+    rt.scheduler.studio = studio
+    rt.scheduler.start()
+    return rt
