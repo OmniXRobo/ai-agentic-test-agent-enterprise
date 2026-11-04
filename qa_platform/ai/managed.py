@@ -10,6 +10,7 @@ package puts them in ``runtime\\ai``). No Administrator rights are needed.
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -33,7 +34,13 @@ DEFAULTS: dict[str, Any] = {
     "alias": "qwen",  # model name the server reports (what the AI settings use)
     "host": "127.0.0.1",
     "port": 8080,
-    "context_size": 8192,
+    "context_size": 8192,  # per request (per slot); llama-server gets context_size x parallel
+    # 23.3.11: "auto" = 2 slots with a GPU, 1 on a CPU. With one slot llama-server keeps the previous request and
+    # reads only the changed end of the next prompt; on a slow CPU reading the prompt is most of the time.
+    "parallel": "auto",
+    "gpu_layers": "auto",  # 23.3.9: "auto" = all layers on a GPU when llama-server reports one, 0 = CPU only
+    "threads": 0,  # 0 = llama-server's own choice
+    "extra_args": [],  # more llama-server arguments, e.g. ["--mlock"]
     "startup_timeout_s": 180,
     "auto_start": False,
 }
@@ -55,6 +62,8 @@ class ManagedLLM:
         self._started_at: str | None = None
         self._last_error: str | None = None
         self._state = "STOPPED"  # STOPPED | STARTING | RUNNING | FAILED
+        self._basic = False
+        self._died = False
         self.pid_file = paths.root / "managed-llm.json"
         self.log_file = paths.logs / "llama-server.log"
 
@@ -93,6 +102,59 @@ class ManagedLLM:
             raise QAError("LLM_MODEL_MISSING", "No GGUF model file was found. Choose the Qwen .gguf file under Managed Local LLM.",
                           status=409)
         return server, model
+
+    # ---- server arguments (23.3.9) -------------------------------------------------------------
+
+    def _server_text(self, server: Path, *args: str) -> str:
+        key = (str(server), server.stat().st_mtime if server.exists() else 0, args)
+        if key not in _HELP_CACHE:
+            try:
+                out = subprocess.run([str(server), *args], capture_output=True, timeout=30, cwd=str(server.parent),
+                                     stdin=subprocess.DEVNULL, **_no_window())
+                _HELP_CACHE[key] = (out.stdout + out.stderr).decode("utf-8", "replace")
+            except (OSError, subprocess.SubprocessError):
+                _HELP_CACHE[key] = ""
+        return _HELP_CACHE[key]
+
+    def gpu_devices(self, server: Path) -> list[str]:
+        """GPU devices this llama-server build can use (CUDA, Vulkan, SYCL, ROCm, Metal); empty for a CPU build."""
+        if "--list-devices" not in self._server_text(server, "--help"):
+            return []
+        text = self._server_text(server, "--list-devices")
+        return [line.strip() for line in text.splitlines()
+                if re.search(r"\b(CUDA|Vulkan|SYCL|ROCm|HIP|Metal|OpenCL)\d*\s*:", line, re.I)]
+
+    def server_args(self, server: Path, model: Path, cfg: dict[str, Any]) -> list[str]:
+        """llama-server arguments: the context per request times the parallel slots, all layers on a GPU when one is
+        found, and the speed options this llama-server build supports (an older build never gets an option it does
+        not know, so it still starts)."""
+        helptext = self._server_text(server, "--help")
+        gpu = str(cfg.get("gpu_layers", "auto")).strip().lower()
+        gpu_args: list[str] = []
+        if gpu not in ("0", "", "none", "off", "cpu") and ("--n-gpu-layers" in helptext or "-ngl" in helptext):
+            if gpu != "auto":
+                gpu_args = ["-ngl", gpu]
+            elif self.gpu_devices(server):
+                gpu_args = ["-ngl", "99"]
+        try:
+            parallel = max(1, min(8, int(cfg.get("parallel"))))
+        except (TypeError, ValueError):
+            parallel = 2 if gpu_args else 1
+        ctx = int(cfg["context_size"])
+        args = [str(server), "-m", str(model), "--alias", str(cfg["alias"]), "--host", str(cfg["host"]),
+                "--port", str(int(cfg["port"])), "-c", str(ctx * parallel), "-np", str(parallel)] + gpu_args
+        if int(cfg.get("threads") or 0) > 0:
+            args += ["-t", str(int(cfg["threads"]))]
+        if "--jinja" in helptext and "--no-jinja" not in helptext:
+            args += ["--jinja"]  # older builds: needed to switch a Qwen3 model's thinking off per request
+        if "--reasoning-budget" in helptext:
+            args += ["--reasoning-budget", "0"]  # no hidden <think> text: every token written is part of the answer
+        if "--cache-reuse" in helptext:
+            args += ["--cache-reuse", "256"]  # the instructions are the same in every call: read them once
+        extra = cfg.get("extra_args") or []
+        if isinstance(extra, list):
+            args += [str(a) for a in extra]
+        return args
 
     # ---- state -------------------------------------------------------------------------------
 
@@ -144,7 +206,12 @@ class ManagedLLM:
 
     # ---- control -----------------------------------------------------------------------------
 
-    def start(self, wait: bool = True) -> dict[str, Any]:
+    def basic_args(self, server: Path, model: Path, cfg: dict[str, Any]) -> list[str]:
+        """The 23.3.8 arguments, used when llama-server does not start with the tuned ones."""
+        return [str(server), "-m", str(model), "--alias", str(cfg["alias"]), "--host", str(cfg["host"]),
+                "--port", str(int(cfg["port"])), "-c", str(int(cfg["context_size"])), "-np", "1"]
+
+    def start(self, wait: bool = True, basic: bool = False) -> dict[str, Any]:
         cfg = self.config()
         with self._lock:
             if self._owned_pid():
@@ -154,8 +221,8 @@ class ManagedLLM:
                                                  "It is not managed by this application, so it was left running. "
                                                  "Use it as is, or choose another port.", status=409)
             server, model = self._resolve(cfg)
-            args = [str(server), "-m", str(model), "--alias", str(cfg["alias"]), "--host", str(cfg["host"]),
-                    "--port", str(int(cfg["port"])), "-c", str(int(cfg["context_size"]))]
+            args = self.basic_args(server, model, cfg) if basic else self.server_args(server, model, cfg)
+            self._basic = basic
             self.paths.logs.mkdir(parents=True, exist_ok=True)
             out = open(self.log_file, "wb")  # noqa: SIM115 - handed to the child process
             try:
@@ -167,14 +234,18 @@ class ManagedLLM:
                 raise QAError("LLM_START_FAILED", self._last_error, status=502) from exc
             out.close()
             self._started_at = now_iso()
-            self._state, self._last_error = "STARTING", None
+            self._state, self._last_error, self._died = "STARTING", None, False
             self.pid_file.write_text(json.dumps({"pid": self._proc.pid, "executable": str(server), "model": str(model),
                                                  "started_at": self._started_at}), encoding="utf-8")
-            log.info(f"Managed LLM started: pid {self._proc.pid}, {model.name} on {cfg['host']}:{cfg['port']}")
+            log.info(f"Managed LLM started: pid {self._proc.pid}, {model.name} on {cfg['host']}:{cfg['port']}: "
+                     + " ".join(args[1:]))
             # The AI settings point at the managed server.
             self.settings.update({"ai": {"base_url": self._url(cfg), "model": cfg["alias"]}})
         if wait:
             self._wait_ready(cfg)
+            if self._state == "FAILED" and not basic and self._died:
+                log.warning("llama-server stopped with the tuned arguments; starting it with the 23.3.8 arguments")
+                return self.start(wait=True, basic=True)
         else:
             threading.Thread(target=self._wait_ready, args=(cfg,), name="llm-startup", daemon=True).start()
         return self.status()
@@ -188,6 +259,14 @@ class ManagedLLM:
                     self._state = "FAILED"
                     self._last_error = "llama-server stopped while loading the model. See the log below."
                     self.pid_file.unlink(missing_ok=True)
+                    self._died = True
+                if not getattr(self, "_basic", True) and threading.current_thread().name == "llm-startup":
+                    log.warning("llama-server stopped with the tuned arguments; starting it with the 23.3.8 arguments")
+                    try:
+                        self._state = "STOPPED"
+                        self.start(wait=False, basic=True)
+                    except Exception as exc:  # noqa: BLE001 - reported through the state
+                        self._state, self._last_error = "FAILED", str(exc)
                 return
             if self._answering(cfg, 2):
                 with self._lock:
@@ -229,6 +308,9 @@ class ManagedLLM:
         """Called when the application shuts down: stops only the server it started in this session."""
         if self._proc is not None and self._proc.poll() is None:
             self.stop()
+
+
+_HELP_CACHE: dict[tuple[Any, ...], str] = {}
 
 
 def _alive(pid: int, executable: str) -> bool:

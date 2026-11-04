@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+# Patch tests look for the application in APP_DIR (in a patch zip it is the app/ folder; in this repository it is the root).
+os.environ.setdefault("APP_DIR", str(Path(__file__).resolve().parents[1]))
 import pytest
 from fastapi.testclient import TestClient
 

@@ -18,6 +18,7 @@ function query(extra = {}) {
   if (filters.iteration) q.set("iteration", filters.iteration);
   if (filters.user_story_id) q.set("user_story_id", filters.user_story_id);
   if (filters.test_case_id) q.set("test_case_ids", filters.test_case_id);
+  else if (filters.test_case_ids) q.set("test_case_ids", filters.test_case_ids);
   for (const [k, v] of Object.entries(extra)) q.set(k, v);
   return q;
 }
@@ -192,6 +193,10 @@ async function loadCases(view) {
 
 export async function mount(view) {
   filters = {};
+  // Test cases opened by voice or a link: #/test-data?tc=105,106,107
+  const tcs = (new URLSearchParams(location.hash.split("?")[1] || "").get("tc") || "").split(",").filter((x) => /^\d+$/.test(x));
+  if (tcs.length === 1) filters.test_case_id = tcs[0];
+  else if (tcs.length) filters.test_case_ids = tcs.join(","); // list filter only; the page's single-case tools stay as they were
   let meta = { iterations: [] };
   try { meta = await api("/api/tfs/meta"); } catch { /* list still works offline from saved data */ }
   view.innerHTML = `
@@ -208,7 +213,7 @@ export async function mount(view) {
       <div class="row" style="flex-wrap:wrap;margin-top:8px">
         <button class="btn danger" id="del" type="button">Delete selected</button>
         <button class="btn" id="load" type="button" title="Read the test data already written in the TFS test cases (Test Data tab, Parameter values or Summary)">Load from TFS</button>
-        <button class="btn" id="tfs" type="button" title="Writes a Test Data Matrix to the test case's Test Data tab when it has one, otherwise to its Parameter values or Summary">Write to TFS</button>
+        <button class="btn" id="tfs" type="button" title="Writes a Test Data Matrix to the test case's Summary and, when it has one, its Test Data tab (otherwise its Parameter values)">Write to TFS</button>
         <button class="btn" id="cov" type="button">Coverage matrix</button>
         <button class="btn" id="bind" type="button">Check parameter binding</button>
         <span class="spacer"></span>
@@ -219,6 +224,7 @@ export async function mount(view) {
       <p class="muted" id="syncNote" style="margin:6px 0 0"></p>
       <p class="muted" style="margin:6px 0 0">Generation uses the test case's steps, its user story's acceptance criteria and its suite's testing type. Nothing is inserted into any database or sent to any API: rows are only saved here and written to TFS when you ask. Passwords and tokens are stored as secret references.</p>
     </div>
+    ${tcs.length ? `<p class="muted voice-note">Showing test case${tcs.length > 1 ? "s" : ""} ${tcs.map((x) => "#" + x).join(", ")}. <a href="#/test-data">Show all</a></p>` : ""}
     <div id="genOut" style="margin-bottom:12px"></div>
     <div class="card" id="list"><p class="muted">Loading…</p></div>`;
   const f = (n) => view.querySelector(`[name="${n}"]`);

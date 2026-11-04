@@ -1,0 +1,67 @@
+/* Global voice assistant (23.3): compact orb in the shared top bar, expandable panel. Uses the app's theme tokens. */
+.va { position: relative; display: flex; align-items: center; gap: 6px; }
+.va-orb {
+  position: relative; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); transition: color .2s, border-color .2s, box-shadow .2s;
+}
+.va-orb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.va-live { position: absolute; top: 1px; right: 1px; width: 9px; height: 9px; border-radius: 50%; background: var(--fail); border: 2px solid var(--surface); display: none; }
+.va.mic-live .va-live { display: block; }
+.va-label {
+  background: none; border: 0; padding: 0; cursor: pointer; font: inherit; font-size: 12px; color: var(--muted);
+  max-width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.va[data-state="standby"] .va-orb { color: var(--ok); border-color: var(--ok); }
+.va[data-state="active"] .va-orb { color: #fff; background: var(--fail); border-color: var(--fail); animation: va-pulse 1.2s ease-out infinite; }
+.va[data-state="active"] .va-label { color: var(--fail); font-weight: 600; }
+.va[data-state="processing"] .va-orb { color: var(--run); border-color: var(--run); }
+.va[data-state="processing"] .va-orb::after {
+  content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--run);
+  animation: va-spin .9s linear infinite;
+}
+.va[data-state="speaking"] .va-orb { color: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.va[data-state="muted"] .va-orb, .va[data-state="off"] .va-orb { opacity: .65; }
+.va[data-state="muted"] .va-orb::before { content: ""; position: absolute; width: 2px; height: 24px; background: currentColor; transform: rotate(45deg); }
+.va[data-state="blocked"] .va-orb { color: var(--fail); border-color: var(--fail); }
+.va[data-state="blocked"] .va-label { color: var(--fail); }
+.va[data-state="attention"] .va-orb { color: var(--warn); border-color: var(--warn); }
+.va[data-state="attention"] .va-label { color: var(--warn); }
+@keyframes va-pulse { 0% { box-shadow: 0 0 0 0 var(--fail-soft); } 100% { box-shadow: 0 0 0 10px transparent; } }
+@keyframes va-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .va-orb, .va-orb::after { animation: none !important; } }
+
+.va-bubble, .va-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 60; background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+}
+.va-bubble { width: 300px; padding: 8px 12px; font-size: 13px; cursor: pointer; }
+.va-bubble .vwho, .va-panel .vwho { font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.va-panel { width: 360px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.va-head { display: flex; align-items: center; gap: 10px; }
+.va-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.va[data-state="standby"] .va-dot { background: var(--ok); }
+.va[data-state="active"] .va-dot, .va[data-state="blocked"] .va-dot { background: var(--fail); }
+.va[data-state="processing"] .va-dot { background: var(--run); }
+.va[data-state="speaking"] .va-dot { background: var(--accent); }
+.va[data-state="attention"] .va-dot { background: var(--warn); }
+.va-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.va-title span { font-size: 12px; color: var(--muted); }
+.va-min { width: 30px; height: 30px; font-size: 18px; line-height: 1; }
+.va-hint { font-size: 12px; padding: 6px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--text); }
+.va-log { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+.va-log .vmsg { font-size: 13px; }
+.va-empty { margin: 0; font-size: 13px; }
+.va-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.va-typed { display: flex; gap: 6px; }
+.va-typed input { flex: 1; min-width: 0; }
+.va-controls { display: flex; flex-wrap: wrap; gap: 6px; }
+.va-controls .btn { font-size: 12px; padding: 5px 10px; }
+.va-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
+.va-foot a { color: var(--accent); text-decoration: none; }
+.va-foot a:hover { text-decoration: underline; }
+
+@media (max-width: 900px) { .va-label { display: none; } }
+@media (max-width: 720px) {
+  .va-bubble, .va-panel { position: fixed; left: 16px; right: 16px; top: 60px; width: auto; }
+  .va-log { max-height: 40vh; }
+}

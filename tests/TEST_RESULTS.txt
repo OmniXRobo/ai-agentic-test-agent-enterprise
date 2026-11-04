@@ -1,0 +1,207 @@
+23.3.16 (3 Nov 2026): 121 passed (115 on 23.3.15 + 6 new). The same 12 failed and 4 errors occur on 23.3.15 in
+  this Linux test environment (Faster-Whisper stand-ins, tests that start Chromium from Python, folder layout);
+  test_voice_ui.py not run here (browser-only).
+  new: test_delete_scripts_23316.py (6 tests: a generated script is deleted - gone from the inventory and the
+  framework zip, test and data file moved to .deleted, second delete 404, Play Selected refuses it; the same Test Case
+  can be generated again; a running script is refused with 409; a test data file another script uses is kept;
+  Guided and Hybrid recorded scripts are deleted from both lists and kept in _archived)
+  browser (Chromium, by hand with Playwright): Script Inventory, Guided Browser Automation and Hybrid Test Automation
+  show Delete on every row; "Delete script?" names the script; Cancel, Escape keep it; Delete removes the row and
+  updates the count, Run all N and the Hybrid script picker; clicking Delete does not open the script; Delete on the
+  script editor returns to the list. No browser errors from the pages.
+
+23.3.15 (3 Nov 2026): 110 passed (6 Faster-Whisper stand-in tests fail the same way on 23.3.14 in this Linux test
+  environment; browser tests not run here)
+  new: test_automation_focus_23315.py (5 tests: the focus keeps every page and the matching elements, small inventory
+  sent whole and Intelligent Discovery selectors first, filler words skipped; the real generation job with 290
+  selectors on 5 pages sends <= 60 elements, a 600 s timeout, answer limit 1500 and the enforced shape, and builds
+  the script; a timeout is asked again with 25 elements and succeeds)
+
+23.3.13 (2 Nov 2026): 116 passed, 3 deselected (browser-only voice tests)
+  new: test_tfs_test_data_tab_2313.py (8 tests: tab + Summary, no tab, plain-text field and numeric id, refused
+  fields, design write, new test cases get the tab, created once when refused, test data lines)
+
+23.3.12 (2 Nov 2026): 108 passed, 3 deselected in 36.93s
+  new: test_data_2312.py (7 tests: schema sent, batches, prose/fences/trailing commas, one bad row, cut-off answer,
+  server without schema support, nothing usable twice, later batch failure keeps rows, cloud gets no schema)
+
+Patch 23.3.7 test run on 2026-10-31, Linux, Python 3.13, Chromium (Playwright). The 23.3.7 files were copied over a clean 23.2.2
+app and all tests below ran against it: 94 passed, 0 failed.
+
+Faster-Whisper (tests/test_faster_whisper.py): the real server script, the real start and stop of the server process by the
+application, the settings, the voice check and the SPEECH badge are exercised with a stand-in faster_whisper package (the
+speech model is not part of the tests). Also checked by hand:
+* the real faster-whisper 1.2.1 / ctranslate2 4.8.4 packages install from wheels with pip and, without pip, by unpacking,
+  load, report "CPU int8: True", and the server reports a damaged model as an error instead of failing silently;
+* GET_FASTER_WHISPER_MODEL.ps1 (PowerShell 7, with Hugging Face simulated) downloads, verifies SHA-256 and zips a model;
+  patch_helper.py installs it, refuses a file that does not match its checksum, and switches the settings while keeping
+  the wake name, address, TFS and AI settings;
+* the Voice & Command Agent page and the Command Center show Faster-Whisper, and CHECK VOICE SETUP shows PASS for it;
+* stopping the application stops the Faster-Whisper server (no process left behind).
+Not tested here: the real small.en model and Windows itself. The patch tests both on the PC: APPLY_PATCH.ps1 has a Windows
+voice say "<wake name>, open Test Plans.", prints what Faster-Whisper heard, and runs the voice check after the start.
+
+tests/test_faster_whisper.py::test_wav_decoding_resamples_and_mixes_to_16k_mono PASSED [  1%]
+tests/test_faster_whisper.py::test_multipart_parsing_without_cgi PASSED  [  2%]
+tests/test_faster_whisper.py::test_starts_with_the_application_and_recognises_speech PASSED [  3%]
+tests/test_faster_whisper.py::test_vocabulary_prompt_carries_the_wake_name PASSED [  4%]
+tests/test_faster_whisper.py::test_changing_the_model_restarts_the_service PASSED [  5%]
+tests/test_faster_whisper.py::test_a_foreign_program_on_the_port_is_left_alone_and_another_port_is_used PASSED [  6%]
+tests/test_faster_whisper.py::test_not_installed_is_reported_clearly PASSED [  7%]
+tests/test_faster_whisper.py::test_other_speech_servers_are_checked_with_a_real_recording[answer0-FAIL-HTTP 404: there is no speech recognition at this address] PASSED [  8%]
+tests/test_faster_whisper.py::test_other_speech_servers_are_checked_with_a_real_recording[answer1-FAIL-not with JSON] PASSED [  9%]
+tests/test_faster_whisper.py::test_other_speech_servers_are_checked_with_a_real_recording[answer2-FAIL-without a "text" field] PASSED [ 10%]
+tests/test_faster_whisper.py::test_other_speech_servers_are_checked_with_a_real_recording[answer3-PASS-recognised a test recording] PASSED [ 11%]
+tests/test_faster_whisper.py::test_unreachable_server_fails PASSED       [ 12%]
+tests/test_faster_whisper.py::test_server_script_is_shipped_next_to_the_service PASSED [ 13%]
+tests/test_faster_whisper.py::test_stopping_right_after_starting_leaves_no_server_behind PASSED [ 14%]
+tests/test_regression_pages.py::test_every_page_loads_like_before PASSED [ 15%]
+tests/test_upgrade.py::test_upgrade_keeps_settings_and_turns_wake_on PASSED [ 17%]
+tests/test_voice_automation.py::test_ac14_plan_python_playwright_generate PASSED [ 18%]
+tests/test_voice_automation.py::test_generate_for_these_and_for_one_suite PASSED [ 19%]
+tests/test_voice_automation.py::test_one_generated_script_opens_its_code_and_failures_are_reported PASSED [ 20%]
+tests/test_voice_automation.py::test_settings_change_and_read_back PASSED [ 21%]
+tests/test_voice_automation.py::test_validate_run_failure_and_regenerate PASSED [ 22%]
+tests/test_voice_automation.py::test_run_environments_are_checked PASSED [ 23%]
+tests/test_voice_automation.py::test_runner_passes_settings_only_when_set PASSED [ 24%]
+tests/test_voice_backend.py::test_defaults_wake_on_and_name_from_settings PASSED [ 25%]
+tests/test_voice_backend.py::test_settings_validation_and_persistence PASSED [ 26%]
+tests/test_voice_backend.py::test_voice_settings_do_not_touch_tfs_or_ai PASSED [ 27%]
+tests/test_voice_backend.py::test_navigation_is_acknowledged_then_verified PASSED [ 28%]
+tests/test_voice_backend.py::test_navigation_phrases[open test suites-test-suites] PASSED [ 29%]
+tests/test_voice_backend.py::test_navigation_phrases[open test cases-test-cases] PASSED [ 30%]
+tests/test_voice_backend.py::test_navigation_phrases[navigate to test data-test-data] PASSED [ 31%]
+tests/test_voice_backend.py::test_navigation_phrases[open ai driven automation-ai-automation] PASSED [ 32%]
+tests/test_voice_backend.py::test_navigation_phrases[go to guided browser automation-guided-automation] PASSED [ 34%]
+tests/test_voice_backend.py::test_navigation_phrases[open acceptance criteria-acceptance-criteria] PASSED [ 35%]
+tests/test_voice_backend.py::test_navigation_phrases[go to settings-settings] PASSED [ 36%]
+tests/test_voice_backend.py::test_navigation_phrases[go back to the dashboard-dashboard] PASSED [ 37%]
+tests/test_voice_backend.py::test_older_styles_unchanged PASSED          [ 38%]
+tests/test_voice_backend.py::test_compose_conversational_wording PASSED  [ 39%]
+tests/test_voice_backend.py::test_unknown_command_asks_or_declines PASSED [ 40%]
+tests/test_voice_backend.py::test_bare_wake_name_alone_is_rejected_by_api PASSED [ 41%]
+tests/test_voice_backend.py::test_named_page_after_back[go back to the dashboard-dashboard] PASSED [ 42%]
+tests/test_voice_backend.py::test_named_page_after_back[return to test plans-test-plans] PASSED [ 43%]
+tests/test_voice_backend.py::test_named_page_after_back[take me to test suites-test-suites] PASSED [ 44%]
+tests/test_voice_backend.py::test_previous_page[go back] PASSED          [ 45%]
+tests/test_voice_backend.py::test_previous_page[return to the previous page] PASSED [ 46%]
+tests/test_voice_backend.py::test_previous_page[previous page] PASSED    [ 47%]
+tests/test_voice_backend.py::test_previous_page[back please] PASSED      [ 48%]
+tests/test_voice_design.py::test_ac12_generate_from_acceptance_criteria_for_the_selected_suites PASSED [ 50%]
+tests/test_voice_design.py::test_save_needs_confirmation_and_reports_real_counts PASSED [ 51%]
+tests/test_voice_design.py::test_generate_without_plan_or_suites_asks PASSED [ 52%]
+tests/test_voice_design.py::test_old_user_story_generation_still_used_when_a_story_is_the_context PASSED [ 53%]
+tests/test_voice_design.py::test_explain_and_open_test_case PASSED       [ 54%]
+tests/test_voice_design.py::test_ac13_test_data_for_named_cases_with_volume PASSED [ 55%]
+tests/test_voice_design.py::test_test_data_limits_are_said_not_hidden PASSED [ 56%]
+tests/test_voice_design.py::test_saved_cases_become_these_test_cases PASSED [ 57%]
+tests/test_voice_e2e_automation.py::test_e2e_run_settings_by_voice PASSED [ 58%]
+tests/test_voice_e2e_design.py::test_e2e_cases_then_data PASSED          [ 59%]
+tests/test_voice_e2e_plans.py::test_e2e_wake_plans_create_suites PASSED  [ 60%]
+tests/test_voice_e2e_plans.py::test_page_selection_is_the_voice_context PASSED [ 61%]
+tests/test_voice_guided.py::test_ac15_voice_operates_guided_browser_and_records PASSED [ 62%]
+tests/test_voice_guided.py::test_missing_values_and_spoken_passwords PASSED [ 63%]
+tests/test_voice_guided.py::test_ac16_third_party_app_registration_with_confirmations PASSED [ 64%]
+tests/test_voice_plans.py::test_ac09_find_by_sprint_and_open PASSED      [ 65%]
+tests/test_voice_plans.py::test_ac18_two_matches_ask_which_then_select PASSED [ 67%]
+tests/test_voice_plans.py::test_find_by_id_name_state_and_missing PASSED [ 68%]
+tests/test_voice_plans.py::test_ac10_ac17_create_then_open_it_then_suites_then_details PASSED [ 69%]
+tests/test_voice_plans.py::test_ac26_repeated_create_is_not_executed_twice PASSED [ 70%]
+tests/test_voice_plans.py::test_create_with_unknown_or_ambiguous_sprint_asks PASSED [ 71%]
+tests/test_voice_plans.py::test_ac11_batch_select_uncheck_existing_and_delete_with_confirmation PASSED [ 72%]
+tests/test_voice_plans.py::test_save_suites_and_no_plan_asks PASSED      [ 73%]
+tests/test_voice_plans.py::test_ac19_tfs_failure_is_reported PASSED      [ 74%]
+tests/test_voice_plans.py::test_update_plan_needs_confirmation_and_is_verified PASSED [ 75%]
+tests/test_voice_plans.py::test_context_follows_the_page PASSED          [ 76%]
+tests/test_voice_plans.py::test_old_commands_keep_their_meaning PASSED   [ 77%]
+tests/test_voice_security.py::test_ac25_viewer_and_tester_permissions PASSED [ 78%]
+tests/test_voice_security.py::test_spoken_secrets_are_never_stored_or_logged PASSED [ 79%]
+tests/test_voice_security.py::test_privacy_controls PASSED               [ 80%]
+tests/test_voice_security.py::test_stop_repeat_continue_and_explain PASSED [ 81%]
+tests/test_voice_security.py::test_session_isolation PASSED              [ 82%]
+tests/test_voice_security.py::test_generation_wait_has_a_time_limit PASSED [ 84%]
+tests/test_voice_security.py::test_a_spoken_password_is_never_typed PASSED [ 85%]
+tests/test_voice_ui.py::test_ac01_ac02_ac04_wake_listening_starts_by_itself PASSED [ 86%]
+tests/test_voice_ui.py::test_ac03_ac05_ac06_ac08_wake_then_navigate_from_any_page PASSED [ 87%]
+tests/test_voice_ui.py::test_unaddressed_speech_is_ignored PASSED        [ 88%]
+tests/test_voice_ui.py::test_ac26_ac29_duplicates_and_own_voice_are_not_commands PASSED [ 89%]
+tests/test_voice_ui.py::test_ac07_ac19_failed_navigation_is_reported_not_claimed PASSED [ 90%]
+tests/test_voice_ui.py::test_ac27_permission_denied_is_explained_and_not_retried PASSED [ 91%]
+tests/test_voice_ui.py::test_prompt_refused_reports_blocked PASSED       [ 92%]
+tests/test_voice_ui.py::test_audio_held_until_first_click PASSED         [ 93%]
+tests/test_voice_ui.py::test_mute_stop_and_persistence_across_refresh PASSED [ 94%]
+tests/test_voice_ui.py::test_one_tab_listens_at_a_time PASSED            [ 95%]
+tests/test_voice_ui.py::test_floating_assistant_on_every_page_and_typed_command PASSED [ 96%]
+tests/test_voice_ui.py::test_mobile_layout PASSED                        [ 97%]
+tests/test_voice_ui.py::test_ac21_command_center_push_to_talk_and_settings_still_work PASSED [ 98%]
+tests/test_voice_ui.py::test_microphone_dropout_recovers PASSED          [100%]
+======================== 94 passed in 259.57s (0:04:19) ========================
+
+
+=== 23.3.9 (faster test case generation), Linux, Python 3.13, on the 23.3.9 application tree ===
+====================== 96 passed, 3 deselected in 32.82s =======================
+Deselected (fail the same way on unchanged 23.3.7-r5 here: no browser in this test machine): test_voice_guided ac15, missing_values, ac16. Browser UI tests not re-run: no web files changed.
+Managed llama-server with a fake server that rejects --reasoning-budget: started again with the 23.3.8 arguments (wait and background start): RUNNING.
+
+
+=== 23.3.10 (HTTP 500 context fix), on the 23.3.10 application tree ===
+====================== 99 passed, 3 deselected in 40.31s =======================
+
+
+=== 23.3.11 (application-run llama-server, prompt reuse, BOM fix), on the 23.3.11 application tree ===
+      self.agent.emit(names.VOICE_COMMAND_COMPLETED if status == "completed" else names.VOICE_COMMAND_FAILED,
+================ 101 passed, 3 deselected, 1 warning in 37.36s =================
+patch_helper llm-manage: no model -> exit 3, nothing changed (own server kept); with a model in runtime\ai -> managed. manifest with a UTF-8 BOM: read and updated.
+APPLY_PATCH.ps1 not executed here (no Windows); reviewed by hand.
+
+23.3.14 (2026-11-02): tests/test_dashboard_2314.py 2 passed; test_data_2312, test_tfs_test_data_tab_2313, test_voice_backend, test_suite_cases_context 43 passed. Dashboard, Agent Workflow (dark and light) and AI Voice Command Center checked in Chromium with no script errors.
+
+23.3.17 (2026-11-03), Linux, Python 3.13, on 23.2.2 + this patch: 176 passed (whole suite; test_regression_pages
+needs the old base-app folder and is not run here). New tests/test_files_data_dates_23317.py: 26 passed with a real
+headless Chromium against a local web application (date field that refuses past dates, file upload, PDF and Excel
+downloads): upload, download, PDF text and Excel cell checks, 4-row Excel data run (3 PASSED, 1 FAILED as designed),
+recording of an upload, a download and today's date, date/time rules (+/- days, hours, minutes), AI-Driven test data.
+Edit Script checked in Chromium (light and dark): Rule dialog, Make it dynamic, Files and Test data cards, save; no
+script errors. APPLY_PATCH.ps1 not executed here (no Windows); changes are the version numbers only.
+
+23.3.18 (2026-11-03), Linux, Python 3.13: 188 passed (whole suite, test_regression_pages not run here). New
+tests/test_datepicker_23318.py: 12 passed in headless Chromium on tests/site/oxd_leave.html, a copy of the kind of
+pickers OrangeHRM 5 uses (yyyy-dd-mm, labels without "for", chevron icons, month / year drop-downs, time picker):
+recording From Date (icon), To Date (field) and Start Time gives pick_date {{TODAY-1d}}, pick_date {{TODAY+27d}},
+fill {{NOW+2h:%I:%M %p}} on label locators, and the script plays back PASSED; pick_date reaches +400 and -75 days with
+the drop-downs and types yyyy-dd-mm when no calendar can be read. The real OrangeHRM demo site could not be reached
+from the test machine. Edit Script checked in Chromium: Data button, live warning, Replace with one date step; no
+script errors.
+Also on 23.3.18: a plain 23.2.2 app with this patch's app/ folder copied over it ran test_datepicker_23318 and
+test_files_data_dates_23317: 38 passed. Two timing issues found that way were fixed before packaging (a time picker
+recorded as +1h+59min, a second calendar that closed as it opened); the whole suite then passed 188 again.
+
+23.3.19 (2026-11-04): Edit Script checked in headless Chromium at 1920 x 1000 with an imported Excel (id, employee):
+before the fix the Data menu was created with position: relative at y=2575 (below the page) and a click on Data
+right after typing a value opened nothing; after it the menu opens under the button (y=550, position fixed), opens
+after typing too, and picking "employee" sets {{DATA:employee}}. No script errors. Python suite unchanged: 188 passed.
+
+23.3.20 (2026-11-04): Record more steps opens the browser without recording; Record / Pause / Resume on the page and
+on the bar in the browser window; steps inserted at several positions and replacing steps in one session; steps
+1 to N-1 played first. tests/test_record_controls_23320.py: 4 passed (real headless Chromium). Hybrid page checked
+end to end in Chromium (Xvfb): script hr (5 steps), Insert at step 4 with "play steps 1 to 3" -> NOT RECORDING, a click
+before Record not recorded, Record -> Export, Pause, Set position "replace step 5", Resume from the browser bar ->
+Logout; saved as goto, Login, Leave, Export, Search, Logout. Full suite: 193 passed.
+
+23.3.21 (2026-11-04): Scheduled Runs page, Outlook Email settings, TFS test-run outcomes, parallel / multi-browser
+runs, new recorded actions, Apply all healed steps, Re-record from a step. Full suite: 199 passed (193 + 6 new).
+  new: test_schedules_23321.py (4 tests: next-run rules for once / daily / weekdays / chosen days / hourly / until;
+  a schedule run of 2 scripts x 2 data rows in parallel with the email report (SMTP stand-in) and Passed / Failed
+  written to TFS test runs (TFS stand-in); due and missed times run by the timer; the parallel-runs setting)
+  new: test_recorder_actions_23321.py (2 tests, real headless Chromium: double-click, right-click, hover menu, drag
+  and drop, a click inside an iframe, confirm pop-up Cancel then OK, click-to-check, a new tab; the recorded script
+  is played back and passes, iframe and new tab included; the Python export knows the new actions)
+  changed: test_regression_pages.py accepts the two new pages (they must load without errors).
+  Fixed while testing: a click inside an iframe froze the recording (iframe chain now worked out after the click);
+  hover detection no longer fires inside date pickers or when clicking into a field.
+  browser (Chromium, Xvfb): Outlook Email saved (password in the credential store) and test email sent; Scheduled
+  Runs filter by page; "Nightly HR regression" Monday to Friday 02:00 (continues), Chromium + Firefox, 2 at a time,
+  email to 2 people -> next run 05/11 02:00; Run now -> 1/2 passed, email sent with the HTML report and the failure
+  screenshot; Edit Script "Re-record this step" -> Hybrid with replay of steps 1-2, Click element: check text in the
+  browser bar, step 3 replaced by the check + Logout. No script errors on the pages.
+  Not tested here: the Outlook desktop app mode (Windows + Outlook COM), real SMTP and TFS servers.

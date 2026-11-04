@@ -234,6 +234,10 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
         raise QAError("SETTINGS_INVALID", "Cursor movement time must be between 0 and 2000 ms.")
     if "click_volume" in pb and not (isinstance(pb["click_volume"], (int, float)) and 0 <= pb["click_volume"] <= 1):
         raise QAError("SETTINGS_INVALID", "Click sound volume must be between 0 and 1.")
+    if "browser" in pb and pb["browser"] not in ("chromium", "chrome", "msedge", "firefox", "webkit"):
+        raise QAError("SETTINGS_INVALID", "Browser must be chromium, chrome, msedge, firefox or webkit.")
+    if "timeout_seconds" in pb and not (isinstance(pb["timeout_seconds"], (int, float)) and 1 <= pb["timeout_seconds"] <= 120):
+        raise QAError("SETTINGS_INVALID", "The element timeout must be between 1 and 120 seconds.")
     mode = patch.get("defects", {}).get("creation_mode")
     if mode is not None and mode not in ("review", "automatic", "disabled"):
         raise QAError("SETTINGS_INVALID", "Defect creation mode must be review, automatic or disabled.")

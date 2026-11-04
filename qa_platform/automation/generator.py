@@ -17,6 +17,7 @@ from ..ai.gateway import AIGateway
 from ..errors import QAError
 from ..events import names
 from ..tfs.service import TfsService
+from .date_rules import VALUE_ACTIONS, detect
 from .dsl import Script, Step, Target, new_script_id
 
 
@@ -98,7 +99,7 @@ class AutomationGenerator:
                 "You are a Playwright automation engineer. Convert the manual test steps into automation steps. "
                 "Start with a goto step to the start URL. For every click/fill/select/check/expect on an element, copy "
                 "exactly one selector from the ELEMENT INVENTORY; never invent selectors. Add an expect step for each "
-                "expected result you can verify. Use {{TODAY}}/{{TODAY+Nd:%d/%m/%Y}} for dates. " + cred,
+                "expected result you can verify. Never use a fixed date or time: use {{TODAY}}, {{TODAY+Nd:%d/%m/%Y}}, {{TODAY-Nd:%d/%m/%Y}} or {{NOW+Nh:%H:%M}}. " + cred,
                 f"Start URL: {base_url}\n\nManual test steps:\n{manual}\n\nELEMENT INVENTORY (selector | role | name):\n{inv_text}",
                 GeneratedScript, max_tokens=6000)
             out_steps, unverified = [], []
@@ -115,7 +116,12 @@ class AutomationGenerator:
                         target = Target(selector=g.selector, description=g.description)
                     else:
                         target = Target.model_validate({**fp, "selector": g.selector, "description": g.description})
-                out_steps.append(Step(action=action, target=target, value=g.value, description=g.description))
+                value, original = g.value, None
+                found = detect(value) if action in VALUE_ACTIONS else None
+                if found:  # 23.3.17: a fixed date or time from the Test Case becomes a rule
+                    value, original = found["rule"], g.value
+                out_steps.append(Step(action=action, target=target, value=value, description=g.description,
+                                      original_value=original))
             script = Script(
                 id=new_script_id(), name=f"TC{tc} {item['title']}"[:120], mode="ai", base_url=base_url,
                 test_case_id=tc, user_story_id=str(story["id"]) if story else None, steps=out_steps,

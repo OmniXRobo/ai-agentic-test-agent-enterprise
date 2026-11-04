@@ -108,8 +108,9 @@ class HealthService:
             status, detail = self.voice.offline.status()
             return _item("speech", "Speech", status, "Offline" if status == "PASS" else "Check", detail)
         if engine == "local":
-            return _item("speech", "Speech", "PASS" if cfg.get("stt_url") else "NOT_CONFIGURED",
-                         "Local server" if cfg.get("stt_url") else "Not set up", cfg.get("stt_url") or "Set the speech server URL.")
+            # 23.3.7: a real test recording (or the Faster-Whisper service's own state), not just "a URL is set".
+            status, label, detail = self.voice.speech_probe()
+            return _item("speech", "Speech", status, label, detail)
         return _item("speech", "Speech", "WARN", "Browser", "Browser recognition needs Internet in Chrome and Edge.")
 
     def summary(self, force: bool = False) -> dict[str, Any]:

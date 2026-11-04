@@ -76,7 +76,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "stt_engine": "builtin",
         "stt_model_dir": "",
         "stt_url": "",
-        "stt_api": "whisper_cpp",  # whisper_cpp (/inference) | openai (/audio/transcriptions)
+        # whisper_cpp (/inference) | openai (/audio/transcriptions) |
+        # faster_whisper (23.3.7: the Faster-Whisper server this application starts itself, see voice/fw_service.py)
+        "stt_api": "whisper_cpp",
+        "fw_model": "small.en",  # a folder in runtime/faster-whisper/models
+        "fw_port": 8766,  # 127.0.0.1 only; the next free port is used if another program has it
+        "fw_compute_type": "int8",
+        "fw_threads": 0,  # 0 = CTranslate2 decides
+        "fw_beam_size": 5,
+        "fw_auto_start": True,
         "stt_model": "",
         "language": "en",
         "speak_replies": True,
@@ -91,7 +99,21 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "agent_command_name": "Hami",
         "voice_enabled": True,  # microphone input on/off (typed commands always work)
         "listen_mode": "push_to_talk",  # push_to_talk | wake_name (hands-free: say the command name first)
-        "phrase_style": "standard",  # standard ("OK, I will do your task now.") | tactical ("Command received.")
+        # Global voice agent (23.3): listen for the command name on every page, started automatically when the
+        # dashboard opens (the browser still asks for the microphone). Off = press the mic to talk.
+        "wake_listening": True,
+        "follow_up_seconds": 8,  # after "<name>." alone (or a question from the agent) the next sentence needs no name
+        "address_as": "Boss",
+        # 23.3.4: test applications where the agent may submit forms, pay, delete... without asking first (names as in
+        # Application Credentials). Empty = always ask before a consequential action.
+        "approved_test_apps": [],
+        # 23.3.6: what the voice agent may do (viewer | tester | full) and how long transcripts are kept (0 = keep)
+        "voice_role": "full",
+        "keep_transcripts": True,
+        "transcript_days": 0,  # how the agent addresses you ("Yes, Boss. I'm listening."); empty = no form of address
+        # standard ("OK, I will do your task now.") | tactical ("Command received.") |
+        # conversational ("Understood, Boss. I'm opening Test Plans now.")
+        "phrase_style": "conversational",
         "radio_intensity": 0.5,  # 0 = clean voice .. 1 = strong radio processing
         "wireless_tone": True,  # radio-open and radio-close beeps
         "static_volume": 0.25,  # wireless/static texture under the voice

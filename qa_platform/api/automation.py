@@ -9,8 +9,12 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
-from ..automation import pytest_export
-from ..automation.dsl import Script, Step, new_script_id, to_playwright_python
+import base64
+import binascii
+
+from ..automation import date_rules, pytest_export
+from ..automation import files as filekit
+from ..automation.dsl import DataTable, Script, Step, new_script_id, to_playwright_python
 from ..clock import now_iso
 from ..errors import QAError
 from ..runtime import Runtime
@@ -61,11 +65,24 @@ def _datasets_for(rt: Runtime, script: Script) -> list[dict[str, Any]]:
     return [{"name": r["name"], "values": r["dataset"]} for r in reversed(rows) if isinstance(r["dataset"], dict)]
 
 
+def _all_datasets(rt: Runtime, script: Script) -> list[dict[str, Any]]:
+    """TFS test data of the Test Case, then the rows imported from Excel / CSV (23.3.17: one test per row)."""
+    out = _datasets_for(rt, script)
+    if script.data_table and script.data_table.rows:
+        n = len(script.data_table.rows)
+        out += [{"name": f"row {i + 1} of {n}", "values": row} for i, row in enumerate(script.data_table.rows)]
+    return out
+
+
 @router.get("/scripts/{script_id}")
 def get_script(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     script = rt.automation.scripts.get(script_id)
-    return {"ok": True, "script": script.model_dump(), "python": pytest_export.to_pytest(script, _datasets_for(rt, script)),
-            "python_file": pytest_export.file_name(script), "versions": rt.automation.scripts.versions(script_id)}
+    return {"ok": True, "script": script.model_dump(), "python": pytest_export.to_pytest(script, _all_datasets(rt, script)),
+            "python_file": pytest_export.file_name(script), "versions": rt.automation.scripts.versions(script_id),
+            "files": rt.automation.scripts.list_files(script_id),
+            "date_suggestions": {str(k): v for k, v in date_rules.suggestions(script.steps).items()},
+            "calendar_pairs": date_rules.calendar_pairs(script.steps),
+            "converted": rt.automation.last_conversions.pop(script_id, [])}
 
 
 @router.put("/scripts/{script_id}")
@@ -73,13 +90,138 @@ def update_script(script_id: str, body: ScriptIn, rt: Runtime = Depends(runtime)
     current = rt.automation.scripts.get(script_id)
     script = Script.model_validate({**body.model_dump(), "id": script_id, "version": current.version,
                                     "created_at": current.created_at})
+    script.data_table = current.data_table  # imported test data is changed with its own endpoints (23.3.17)
     return {"ok": True, "script": rt.automation.scripts.save(script, reason="edited").model_dump()}
+
+
+# ---- 23.3.17: files for upload steps -------------------------------------------------------------
+
+
+class FileIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    content_base64: str = Field(max_length=70_000_000)
+
+
+def _decode(content: str) -> bytes:
+    try:
+        return base64.b64decode(content.split(",", 1)[1] if content.startswith("data:") else content, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise QAError("FILE_UNREADABLE", "The file could not be read.", status=422) from exc
+
+
+@router.get("/scripts/{script_id}/files")
+def list_files(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.automation.scripts.get(script_id)
+    return {"ok": True, "items": rt.automation.scripts.list_files(script_id)}
+
+
+@router.post("/scripts/{script_id}/files", status_code=201)
+def add_file(script_id: str, body: FileIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    saved = rt.automation.scripts.save_file(script_id, body.name, _decode(body.content_base64))
+    return {"ok": True, "file": saved, "items": rt.automation.scripts.list_files(script_id)}
+
+
+@router.delete("/scripts/{script_id}/files/{name}")
+def delete_file(script_id: str, name: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.automation.scripts.delete_file(script_id, name)
+    return {"ok": True, "items": rt.automation.scripts.list_files(script_id)}
+
+
+# ---- 23.3.17: data-driven runs from Excel / CSV -----------------------------------------------------
+
+
+class DataImportIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    content_base64: str = Field(max_length=70_000_000)
+    sheet: str | None = None
+    dynamic_dates: bool = True
+    preview: bool = False
+
+
+def _data_fields(script: Script) -> list[str]:
+    import re
+
+    found: list[str] = []
+    for step in script.steps:
+        for f in re.findall(r"\{\{\s*DATA:([^}]+?)\s*\}\}", step.value or ""):
+            if f not in found:
+                found.append(f)
+    return found
+
+
+@router.post("/scripts/{script_id}/data-table")
+def import_data_table(script_id: str, body: DataImportIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    script = rt.automation.scripts.get(script_id)
+    table = filekit.read_table(body.name, _decode(body.content_base64), body.sheet)
+    converted = 0
+    if body.dynamic_dates:
+        for row in table["rows"]:
+            converted += len(date_rules.convert_values(row))
+    used = _data_fields(script)
+    missing = [f for f in used if f not in table["columns"]]
+    result = {"ok": True, "columns": table["columns"], "rows": table["rows"][:50], "row_count": len(table["rows"]),
+              "sheet": table["sheet"], "sheets": table["sheets"], "dates_converted": converted,
+              "fields_used": used, "fields_missing": missing}
+    if body.preview:
+        return result
+    script.data_table = DataTable(source=filekit.safe_name(body.name), sheet=table["sheet"], imported_at=now_iso(),
+                                  columns=table["columns"], rows=table["rows"])
+    saved = rt.automation.scripts.save(script, reason=f"test data imported from {script.data_table.source} "
+                                                      f"({len(table['rows'])} rows)")
+    return {**result, "script": saved.model_dump()}
+
+
+@router.delete("/scripts/{script_id}/data-table")
+def remove_data_table(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    script = rt.automation.scripts.get(script_id)
+    script.data_table = None
+    return {"ok": True, "script": rt.automation.scripts.save(script, reason="imported test data removed").model_dump()}
+
+
+class DataRunIn(BaseModel):
+    rows: list[int] | None = Field(default=None, max_length=1000)  # 0-based; empty = every row
+    headless: bool | None = None
+
+
+@router.post("/scripts/{script_id}/data-runs", status_code=202)
+def run_data_rows(script_id: str, body: DataRunIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    body = body or DataRunIn()
+    return {"ok": True, **rt.automation.run_data_rows(script_id, body.rows, headless=body.headless)}
+
+
+@router.get("/scripts/{script_id}/data-runs")
+def data_runs(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.automation.scripts.get(script_id)
+    return {"ok": True, "items": rt.automation.data_run_status(script_id)}
+
+
+@router.post("/data-runs/{batch_id}/stop")
+def stop_data_rows(batch_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    if not rt.automation.stop_data_rows(batch_id):
+        raise QAError("RUN_NOT_ACTIVE", f"{batch_id} is not running.", status=409)
+    return {"ok": True}
+
+
+class RulePreviewIn(BaseModel):
+    values: list[str] = Field(max_length=200)
+
+
+@router.post("/date-rules/preview")
+def preview_rules(body: RulePreviewIn) -> dict[str, Any]:
+    """What each rule gives now on this PC's clock (the browser's own clock may differ)."""
+    out = []
+    for v in body.values:
+        try:
+            out.append({"value": v, "now": date_rules.preview(v), "label": date_rules.label(v)})
+        except Exception as exc:  # e.g. a DATA field: shown as is
+            out.append({"value": v, "now": v, "label": None, "error": str(exc)[:200]})
+    return {"ok": True, "items": out}
 
 
 @router.delete("/scripts/{script_id}")
 def delete_script(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     rt.automation.scripts.delete(script_id)
-    return {"ok": True, "archived": True}
+    return {"ok": True, "archived": True, "deleted": True, "id": script_id}
 
 
 @router.post("/scripts/{script_id}/restore/{version}")
@@ -95,7 +237,7 @@ def export_script(script_id: str, format: str = Query("pytest", pattern="^(pytes
     if format == "playwright":
         return PlainTextResponse(to_playwright_python(script), headers={
             "Content-Disposition": f'attachment; filename="{script_id}.py"'})
-    return PlainTextResponse(pytest_export.to_pytest(script, _datasets_for(rt, script)), headers={
+    return PlainTextResponse(pytest_export.to_pytest(script, _all_datasets(rt, script)), headers={
         "Content-Disposition": f'attachment; filename="{pytest_export.file_name(script)}"'})
 
 
@@ -119,7 +261,8 @@ def export_bundle(body: BundleIn, rt: Runtime = Depends(runtime)) -> Response:
                 scripts.append(rt.automation.scripts.get(item["id"]))
     if not scripts:
         raise QAError("NO_SCRIPTS", "No automation scripts match. Create the automation first.", status=404)
-    data = pytest_export.bundle([(s, _datasets_for(rt, s)) for s in scripts], now_iso())
+    data = pytest_export.bundle([(s, _all_datasets(rt, s)) for s in scripts], now_iso(),
+                                files={s.id: rt.automation.scripts.files_dir(s.id) for s in scripts})
     name = f"automated-tests-US{body.user_story_id}.zip" if body.user_story_id else "automated-tests.zip"
     return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
@@ -150,7 +293,12 @@ def _dataset(rt: Runtime, data_id: int | None) -> dict[str, Any] | None:
 @router.post("/scripts/{script_id}/run", status_code=202)
 def run_script(script_id: str, body: RunIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     body = body or RunIn()
-    run_id = rt.automation.run_script(script_id, dataset=_dataset(rt, body.test_data_id), headless=body.headless)
+    dataset = _dataset(rt, body.test_data_id)
+    if dataset is None:  # 23.3.17: Run without a TFS data set uses the first imported Excel / CSV row
+        table = rt.automation.scripts.get(script_id).data_table
+        if table and table.rows:
+            dataset = dict(table.rows[0])
+    run_id = rt.automation.run_script(script_id, dataset=dataset, headless=body.headless)
     return {"ok": True, "run_id": run_id}
 
 
@@ -192,6 +340,42 @@ def healing(script_id: str | None = None, rt: Runtime = Depends(runtime)) -> dic
     return {"ok": True, "items": rt.automation.runner.healing_events(script_id)}
 
 
+class ApplyAllIn(BaseModel):
+    script_id: str | None = None
+    run_id: str | None = None
+
+
+@router.post("/healing/apply-all")
+def apply_all_healing(body: ApplyAllIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.3.21: apply every healed locator whose run then passed (one script, one run, or all), newest first; one
+    per step, so an older healing of the same step is left alone. Each one that cannot be applied says why."""
+    where, params = ["result = 'validated'", "(applied IS NULL OR applied = 0)"], []
+    if body.script_id:
+        where.append("script_id = ?")
+        params.append(body.script_id)
+    if body.run_id:
+        where.append("run_id = ?")
+        params.append(body.run_id)
+    rows = rt.db.query(f"SELECT id, script_id, step_index, original_selector FROM healing_events WHERE {' AND '.join(where)}"
+                       " ORDER BY id DESC", params)
+    applied, skipped, seen = [], [], set()
+    for row in rows:
+        key = (row["script_id"], row["step_index"], row["original_selector"])
+        if key in seen:
+            skipped.append({"id": row["id"], "step": row["step_index"] + 1, "reason": "a newer healing of this step was applied"})
+            continue
+        seen.add(key)
+        try:
+            if str(row["script_id"] or "").startswith("FWS-"):
+                rt.studio.apply_healing(row["id"])
+            else:
+                rt.automation.runner.apply_healing(row["id"])
+            applied.append({"id": row["id"], "script_id": row["script_id"], "step": row["step_index"] + 1})
+        except QAError as exc:
+            skipped.append({"id": row["id"], "step": row["step_index"] + 1, "reason": exc.message})
+    return {"ok": True, "applied": applied, "skipped": skipped}
+
+
 @router.post("/healing/{healing_id}/apply")
 def apply_healing(healing_id: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     row = rt.db.query_one("SELECT script_id FROM healing_events WHERE id = ?", (healing_id,))
@@ -213,6 +397,15 @@ class RecordIn(BaseModel):
     credential_role: str | None = None
     test_case_id: str | None = None
     application: str | None = None
+    start_paused: bool | None = None  # 23.3.20: None = paused for Record more steps, recording for a new script
+    replace: int = Field(default=0, ge=0, le=500)
+    replay: bool = False
+
+
+class ControlIn(BaseModel):
+    action: str = Field(pattern="^(record|pause|position|pick_text|pick_visible|pick_off|dialog_ok|dialog_cancel)$")
+    insert_at: int | None = Field(default=None, ge=0)
+    replace: int | None = Field(default=None, ge=0, le=500)
 
 
 class AssertIn(BaseModel):
@@ -225,8 +418,16 @@ def start_recording(body: RecordIn, rt: Runtime = Depends(runtime)) -> dict[str,
     run_id = rt.automation.start_recording(
         _url(body.start_url, "start URL"), name=body.name, append_to=body.append_to, insert_at=body.insert_at,
         browser=body.browser, headless=body.headless, credential_role=body.credential_role,
-        test_case_id=body.test_case_id, application=body.application)
+        test_case_id=body.test_case_id, application=body.application, start_paused=body.start_paused,
+        replace=body.replace, replay=body.replay)
     return {"ok": True, "run_id": run_id}
+
+
+@router.post("/recordings/{run_id}/control")
+def recording_control(run_id: str, body: ControlIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.3.20: Record / Pause / change where the next recorded steps go."""
+    rt.automation.recording_control(run_id, body.action, insert_at=body.insert_at, replace=body.replace)
+    return {"ok": True, **rt.automation.recording_status(run_id)}
 
 
 @router.get("/recordings/{run_id}")
@@ -242,7 +443,10 @@ def recording_assert(run_id: str, body: AssertIn, rt: Runtime = Depends(runtime)
 
 @router.post("/recordings/{run_id}/stop")
 def stop_recording(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    return {"ok": True, "script": rt.automation.stop_recording(run_id).model_dump()}
+    script = rt.automation.stop_recording(run_id)
+    return {"ok": True, "script": script.model_dump(), "converted": rt.automation.last_conversions.get(script.id, []),
+            "summary": rt.automation.last_summary.pop(script.id, None),
+            "files": rt.automation.scripts.list_files(script.id)}
 
 
 # ---- discovery and AI generation ---------------------------------------------------------

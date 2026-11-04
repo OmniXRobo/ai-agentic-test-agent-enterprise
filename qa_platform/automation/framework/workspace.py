@@ -64,7 +64,8 @@ SEED_FILES = {
     "test_data/README.txt": TEMPLATE / "test_data" / "README.txt",
 }
 STATE_FILE = ".framework.json"
-SKIP_COPY = {".versions", ".staging", "execution-results", "__pycache__", ".pytest_cache"}
+DELETED_FOLDER = ".deleted"   # 23.3.16: files of deleted scripts, kept out of tests/, the zip and the test run
+SKIP_COPY = {".versions", ".staging", DELETED_FOLDER, "execution-results", "__pycache__", ".pytest_cache"}
 _SAFE_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -130,7 +131,7 @@ class FrameworkWorkspace:
         if not rel or rel.startswith("/") or ":" in rel or not parts or any(
                 p in ("..", ".") or not _SAFE_PART.match(p) for p in parts):
             raise QAError("PROJECT_PATH_INVALID", f"Invalid workspace path '{rel}'.", status=400)
-        if parts[0] in (".versions", ".staging"):
+        if parts[0] in (".versions", ".staging", DELETED_FOLDER):
             raise QAError("PROJECT_PATH_INVALID", f"'{rel}' is not a framework file.", status=400)
         return "/".join(parts)
 

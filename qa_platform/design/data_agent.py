@@ -31,8 +31,9 @@ from ..storage.db import dumps, loads
 from . import models, testing_types
 from .service import DesignService, html_to_text
 from .suite_cases import SuiteCaseService
+from .tfs_test_data import _label, matrix_html, tab_fields, tab_values, write_with_fallback  # noqa: F401
 
-AGENT_VERSION = "suite-aware-test-data/1.0"
+AGENT_VERSION = "suite-aware-test-data/1.1"
 RULE_VERSION = "data-rules/1.0"
 
 DATA_PROMPT = (
@@ -49,7 +50,179 @@ DATA_PROMPT = (
     "values must be unique per run. List data scenarios that do not apply to this testing type in not_applicable "
     "with the reason. At most {max_rows} rows.")
 
-PROMPT_VERSION = hashlib.sha256((AGENT_VERSION + RULE_VERSION + DATA_PROMPT).encode()).hexdigest()[:12]
+# 23.3.12: the answer format. Short keys (a small local model on a CPU writes every key of every row, so they cost
+# time), every row complete on its own, and a JSON schema that llama-server enforces while the model writes.
+ANSWER_FORMAT = (
+    "Reply with one JSON object only, no other text:\n"
+    '{{{fields}"rows":[{{"name":"short row name","scenario":"valid|invalid|boundary|outside_boundary|missing|empty|'
+    'null|whitespace|duplicate|date_time|role|relationship|unicode|special_characters|pairwise|volume|security|other",'
+    '"valid":true,"breaks":"for an invalid row: the rule it breaks","expected":"observable result",'
+    '"ac":["AC01"],"values":{{"field name":"value"}}}}]{extra}}}\n'
+    "Write at most {batch} rows. Keep each text short (one sentence). values holds one plain value per field.")
+FIELDS_FORMAT = ('"fields":[{"name":"field name","type":"string|integer|decimal|boolean|date|datetime|time|email|'
+                 'phone|secret|enum|other","required":true,"rule":"format, length or range","source":"specified|assumed"}],')
+EXTRA_FORMAT = ',"gaps":["missing rule"],"not_applicable":["scenario: reason"]'
+_SCENARIOS = list(models.DataRow.model_fields["scenario"].annotation.__args__)
+_FIELD_TYPES = list(models.DataField.model_fields["type"].annotation.__args__)
+
+PROMPT_VERSION = hashlib.sha256((AGENT_VERSION + RULE_VERSION + DATA_PROMPT + ANSWER_FORMAT).encode()).hexdigest()[:12]
+
+
+def answer_schema(batch: int, first: bool) -> dict[str, Any]:
+    """The JSON schema of one answer, for llama-server's grammar: at most ``batch`` rows, short strings, and the
+    field list, gaps and not-applicable scenarios only in the first answer."""
+    text = lambda n: {"type": "string", "maxLength": n}  # noqa: E731
+    scalar = {"anyOf": [{"type": "string", "maxLength": 200}, {"type": "number"}, {"type": "boolean"}, {"type": "null"}]}
+    row = {"type": "object", "properties": {
+        "name": text(80), "scenario": {"enum": _SCENARIOS}, "valid": {"type": "boolean"}, "breaks": text(160),
+        "expected": text(200), "ac": {"type": "array", "maxItems": 4, "items": text(12)},
+        "values": {"type": "object", "additionalProperties": scalar}},
+        "required": ["name", "scenario", "valid", "expected", "values"]}
+    props: dict[str, Any] = {"rows": {"type": "array", "minItems": 1, "maxItems": max(1, batch), "items": row}}
+    required = ["rows"]
+    if first:
+        props = {"fields": {"type": "array", "maxItems": 12, "items": {"type": "object", "properties": {
+            "name": text(60), "type": {"enum": _FIELD_TYPES}, "required": {"type": "boolean"}, "rule": text(160),
+            "source": {"enum": ["specified", "assumed"]}}, "required": ["name", "type"]}}, **props,
+            "gaps": {"type": "array", "maxItems": 4, "items": text(200)},
+            "not_applicable": {"type": "array", "maxItems": 4, "items": text(160)}}
+        required = ["fields", "rows"]
+    return {"type": "object", "properties": props, "required": required}
+
+
+def _close_json(text: str) -> str | None:
+    """Cut a JSON text that stopped part way (answer limit reached) after the last complete value and close the
+    open brackets, so the rows written before the cut are kept."""
+    stack: list[str] = []
+    in_str = esc = False
+    best: tuple[int, list[str]] | None = None
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if not stack:
+                break
+            stack.pop()
+            best = (i + 1, list(stack))
+            if not stack:
+                return text[: i + 1]
+    if not best:
+        return None
+    end, rest = best
+    return re.sub(r",\s*$", "", text[:end]) + "".join(reversed(rest))
+
+
+def parse_answer(text: str) -> Any:
+    """JSON from a small model's reply: fences, <think> blocks, prose around it, trailing commas, Python literals
+    and an answer cut off part way are all accepted. Raises ValueError when no JSON object is found."""
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
+    m = re.search(r"```(?:json)?\s*(.*?)(?:```|$)", text, re.S)
+    if m and "{" in m.group(1):
+        text = m.group(1).strip()
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    if not starts:
+        raise ValueError("No JSON found in the AI answer.")
+    text = text[min(starts):]
+    candidates = [text]
+    closed = _close_json(text)
+    if closed and closed != text:
+        candidates.append(closed)
+    for cand in candidates:
+        for fix in (lambda t: t,
+                    lambda t: re.sub(r",\s*([}\]])", r"\1", t),
+                    lambda t: re.sub(r"\bNone\b", "null", re.sub(r"\bFalse\b", "false",
+                                     re.sub(r"\bTrue\b", "true", re.sub(r",\s*([}\]])", r"\1", t))))):
+            try:
+                return json.JSONDecoder().raw_decode(fix(cand))[0]
+            except json.JSONDecodeError:
+                continue
+    raise ValueError("The AI answer is not valid JSON.")
+
+
+def _plain(value: Any) -> str | int | float | bool | None:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _truthy(value: Any, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "yes", "y", "valid", "1", "positive"):
+            return True
+        if v in ("false", "no", "n", "invalid", "0", "negative"):
+            return False
+    return default
+
+
+def rows_from_answer(data: Any, batch: int) -> tuple[list[models.DataRow], list[models.DataField], dict[str, list[str]]]:
+    """Rows, fields and notes from one parsed answer. Each row is checked on its own: a row the model got wrong is
+    left out and the others are kept, instead of failing the whole answer."""
+    if isinstance(data, list):
+        data = {"rows": data}
+    if not isinstance(data, dict):
+        return [], [], {}
+    raw_rows = data.get("rows") or data.get("data_rows") or data.get("test_data") or []
+    if isinstance(raw_rows, dict):
+        raw_rows = [raw_rows]
+    rows: list[models.DataRow] = []
+    for n, r in enumerate(raw_rows if isinstance(raw_rows, list) else []):
+        if not isinstance(r, dict):
+            continue
+        values = r.get("values", r.get("data", r.get("dataset")))
+        if isinstance(values, list):  # [{"field": "x", "value": 1}, ...]
+            values = {str(v.get("field") or v.get("name")): v.get("value") for v in values
+                      if isinstance(v, dict) and (v.get("field") or v.get("name"))}
+        if not isinstance(values, dict) or not values:
+            continue
+        valid = _truthy(r.get("valid", r.get("intended_valid")), default=r.get("scenario") not in (
+            "invalid", "outside_boundary", "missing", "empty", "null", "whitespace", "duplicate", "security"))
+        ac = r.get("ac", r.get("ac_ids")) or []
+        ac = [ac] if isinstance(ac, str) else [str(a) for a in ac if a] if isinstance(ac, list) else []
+        try:
+            rows.append(models.DataRow.model_validate({
+                "name": str(r.get("name") or r.get("scenario") or f"Row {n + 1}")[:120],
+                "scenario": r.get("scenario") or ("valid" if valid else "invalid"),
+                "intended_valid": valid,
+                "violated_rule": (str(r.get("breaks") or r.get("violated_rule") or "") or None) if not valid else None,
+                "expected_outcome": str(r.get("expected") or r.get("expected_outcome") or r.get("expected_result") or ""),
+                "ac_ids": ac, "values": {str(k): _plain(v) for k, v in values.items()}}))
+        except ValueError:
+            continue
+        if len(rows) >= batch:
+            break
+    fields: list[models.DataField] = []
+    for f in data.get("fields") or []:
+        if isinstance(f, str):
+            f = {"name": f}
+        if not isinstance(f, dict) or not f.get("name"):
+            continue
+        try:
+            fields.append(models.DataField.model_validate({
+                "name": str(f["name"]), "type": models._choice(f.get("type") or "string", tuple(_FIELD_TYPES), "other"),
+                "required": _truthy(f["required"]) if "required" in f and f["required"] is not None else None,
+                "rule": str(f["rule"]) if f.get("rule") else None,
+                "source": "specified" if str(f.get("source", "")).lower().startswith("spec") else "assumed"}))
+        except ValueError:
+            continue
+    notes = {}
+    for key in ("gaps", "not_applicable", "preconditions", "cleanup"):
+        items = data.get(key) or []
+        items = [items] if isinstance(items, str) else items if isinstance(items, list) else []
+        notes[key] = [i if isinstance(i, str) else json.dumps(i, ensure_ascii=False) for i in items if i]
+    return rows, fields, notes
 
 SECRET_FIELD = re.compile(r"pass(word|wd|code)?$|^pwd$|secret|token|api[_ -]?key|^pin$|otp|cvv|cvc|private[_ ]?key", re.I)
 SECRET_REF = re.compile(r"^\s*\{\{\s*(SECRET|CRED):[^}]+\}\}\s*$")
@@ -153,30 +326,6 @@ _EXPECTED_KEYS = ("expected result", "expected outcome", "expected", "expected r
 _RULE_KEYS = ("violated rule", "rule broken", "broken rule", "rule violated")
 _INVALID_WORDS = re.compile(r"\b(invalid|negative|wrong|incorrect|empty|missing|blank|error|fail(ed|s|ure)?|locked|"
                             r"expired|null|rejected?|not allowed|unauthori[sz]ed)\b", re.I)
-_DATA_FIELD_NAME = re.compile(r"test\s*_?data", re.I)
-
-
-def _label(key: str) -> str:
-    text = re.sub(r"[_]+", " ", str(key)).strip()
-    return text[:1].upper() + text[1:] if text else str(key)
-
-
-def matrix_html(rows: list[dict[str, Any]], marker: str | None = None) -> str:
-    """Rows -> the 'Test Data Matrix' layout used in the project's test cases (one Combination per row)."""
-    e = html.escape
-    parts = ["<h3>Test Data Matrix</h3>"]
-    for n, r in enumerate(rows, start=1):
-        vals = r["dataset"] if isinstance(r.get("dataset"), dict) else (r.get("values") or {})
-        lines = [f"<strong>Combination {n}: {e(str(r.get('name') or r.get('scenario') or 'Data set'))}</strong>"]
-        lines += [f"<strong>{e(_label(k))}:</strong> {e('' if v is None else str(v))}" for k, v in vals.items()]
-        if r.get("intended_valid") is False and r.get("violated_rule"):
-            lines.append(f"<strong>Violated rule:</strong> {e(r['violated_rule'])}")
-        if r.get("expected_outcome"):
-            lines.append(f"<strong>Expected Result:</strong> {e(r['expected_outcome'])}")
-        parts.append("<p>" + "<br>".join(lines) + "</p>")
-    if marker:
-        parts.append(f"<p><em>{e(marker)}</em></p>")
-    return "".join(parts)
 
 
 def parse_matrix(value: str | None) -> list[dict[str, Any]]:
@@ -282,25 +431,10 @@ class TestDataService:
         names_ = [*(item.get("tags") or "").split(";"), item.get("title")]
         return next((t for t in (testing_types.from_suite_name(n) for n in names_) if t), None)
 
-    def _data_fields(self, type_name: str) -> list[dict[str, Any]]:
-        """Fields of the test case type that hold test data: a custom 'Test Data' field (the 'Test Data' tab), its
-        'Test Data ID', and so on. Cached per type."""
-        def load() -> list[dict[str, Any]]:
-            fields = self.tfs._with_client(lambda c: c.work_item_type_fields(type_name))
-            return [f for f in fields if not f["referenceName"].startswith(("System.", "Microsoft.VSTS."))
-                    and _DATA_FIELD_NAME.search(f"{f.get('name') or ''} {f['referenceName']}")]
-
-        key = ("test-data-fields", self.tfs.active_mode(), self.tfs.profile()["project"], type_name)
-        return self.tfs.meta_cache.get_or_set(key, load)
-
     def _data_field(self, type_name: str) -> tuple[str | None, str | None]:
         """(test data field, test data id field) reference names."""
-        fields = self._data_fields(type_name)
-        is_id = lambda f: re.search(r"\bid\b|_?id$", (f.get("name") or f["referenceName"]).strip(), re.I)  # noqa: E731
-        exact = [f for f in fields if re.sub(r"\W", "", (f.get("name") or "").lower()) == "testdata"]
-        data = next(iter(exact), None) or next((f for f in fields if not is_id(f)), None)
-        ident = next((f for f in fields if is_id(f)), None)
-        return (data or {}).get("referenceName"), (ident or {}).get("referenceName")
+        tab = tab_fields(self.tfs, type_name)
+        return tab["data"], tab["id"]
 
     # ---- existing test data in TFS ---------------------------------------------------------------------
 
@@ -425,52 +559,77 @@ class TestDataService:
 
     def _design_rows(self, tc_id: int, t: dict[str, Any], context: str, max_rows: int, act: Any) -> models.TestDataDesign:
         """Ask for the rows a few at a time: a local model on a CPU writes a dozen rows in one answer slower than any
-        sensible timeout. Each call has the generation timeout; a later call that fails keeps the rows already made."""
+        sensible timeout. Each call has the generation timeout; a later call that fails keeps the rows already made.
+
+        23.3.12: short answer keys and a JSON schema the AI server enforces (llama-server grammar), each row checked
+        on its own, an answer that was cut off keeps its complete rows, and no second "repair" call (it took as long
+        as the first one and a small model rarely fixed its answer)."""
         cfg = self.ai.config()
         timeout = max(cfg["timeout_seconds"], cfg.get("generation_timeout_seconds") or 600)
-        per_call = max(1, int((self.ai.settings.section("design") or {}).get("data_rows_per_call") or 4))
+        per_call = max(1, int((self.ai.settings.section("design") or {}).get("data_rows_per_call") or 3))
         design = models.TestDataDesign()
         seen: set[str] = set()
+        failures = 0
         while len(design.rows) < max_rows:
             batch = min(per_call, max_rows - len(design.rows))
-            system = DATA_PROMPT.format(type=t["name"], focus=t["data"], max_rows=batch)
+            first = not design.rows
+            system = (DATA_PROMPT.format(type=t["name"], focus=t["data"], max_rows=batch) + "\n\n"
+                      + ANSWER_FORMAT.format(fields=FIELDS_FORMAT if first else "", extra=EXTRA_FORMAT if first else "",
+                                             batch=batch))
             user = context
-            if design.rows:
+            if not first:
+                user += ("\n\nUse these fields in values: " + ", ".join(f.name for f in design.fields) if design.fields
+                         else "")
                 user += ("\n\nRows already written (do not repeat them; add rows for scenarios not covered yet, or "
-                         "return no rows when the scenarios that apply are covered):\n"
+                         "return an empty rows list when the scenarios that apply are covered):\n"
                          + "\n".join(f"- {r.name} ({r.scenario})" for r in design.rows))
             act.progress(None, f"Test case #{tc_id}: writing {t['name']} data rows {len(design.rows) + 1} to "
                          f"{len(design.rows) + batch} of up to {max_rows}")
+            error: QAError | None = None
+            rows: list[models.DataRow] = []
             try:
-                part = self.ai.complete_json(system, user, models.TestDataDesign,
-                                             max_tokens=min(6000, 1200 + 600 * batch), timeout=timeout)
+                reply, finish = self.ai.chat_result(
+                    [{"role": "system", "content": system}, {"role": "user", "content": user}], json_mode=True,
+                    max_tokens=(450 if first else 120) + 220 * batch, timeout=timeout,
+                    schema=answer_schema(batch, first))
+                rows, fields, notes = rows_from_answer(parse_answer(reply), batch)
+                if not rows and first:
+                    error = QAError("AI_OUTPUT_TRUNCATED" if finish == "length" else "AI_OUTPUT_INVALID",
+                                    f"The {self.ai.label()} did not return valid structured output"
+                                    + (" (the answer was cut off)." if finish == "length" else "."), status=502,
+                                    details=reply[:500])
+            except ValueError as exc:
+                error = QAError("AI_OUTPUT_INVALID", f"The {self.ai.label()} did not return valid structured output.",
+                                status=502, details=str(exc)[:300])
             except QAError as exc:
-                if exc.error_code not in ("AI_TIMEOUT", "AI_OUTPUT_INVALID"):
+                if exc.error_code not in ("AI_TIMEOUT", "AI_OUTPUT_INVALID", "AI_OUTPUT_TRUNCATED", "AI_CONTEXT_EXCEEDED"):
                     raise
+                error = exc
+            if error:
                 if design.rows:
-                    design.gaps.append(f"Generation stopped after {len(design.rows)} rows ({exc.message}); generate "
+                    design.gaps.append(f"Generation stopped after {len(design.rows)} rows ({error.message}); generate "
                                        "again for more rows, or raise the generation timeout under AI settings.")
                     break
-                if per_call > 1:  # nothing yet: try once more with the smallest answer
-                    per_call = 1
+                failures += 1
+                if failures == 1 and (per_call > 1 or error.error_code != "AI_TIMEOUT"):
+                    per_call = 1  # nothing yet: try once more with the smallest answer
                     continue
-                raise QAError(exc.error_code, f"{exc.message} Even one data row took longer than the generation timeout "
-                              f"({int(timeout)} s); raise it under AI settings.", status=exc.status) from exc
+                if error.error_code != "AI_TIMEOUT":
+                    raise error
+                raise QAError(error.error_code, f"{error.message} Even one data row took longer than the generation "
+                              f"timeout ({int(timeout)} s); raise it under AI settings.", status=error.status) from error
             new = []
-            for r in part.rows[:batch]:
+            for r in rows:
                 key = f"{r.name.lower()}|{dumps(r.values)}"
                 if key not in seen:
                     seen.add(key)
                     new.append(r)
-            if not design.rows:
-                design = part.model_copy(update={"rows": []})
-            else:
-                names = {f.name for f in design.fields}
-                design.fields += [f for f in part.fields if f.name not in names]
-                for attr in ("not_applicable", "gaps", "preconditions", "cleanup"):
-                    getattr(design, attr).extend(x for x in getattr(part, attr) if x not in getattr(design, attr))
+            names_ = {f.name for f in design.fields}
+            design.fields += [f for f in fields if f.name not in names_]
+            for attr, items in notes.items():
+                getattr(design, attr).extend(x for x in items if x not in getattr(design, attr))
             design.rows += new
-            if not new or len(part.rows) < batch:
+            if not new or len(rows) < batch:
                 break
         return design
 
@@ -644,8 +803,9 @@ class TestDataService:
     # ---- write to TFS ------------------------------------------------------------------------------------
 
     def write_to_tfs(self, tc_id: int) -> dict[str, Any]:
-        """Write the rows into the test case's Test Data tab (a custom 'Test Data' field) in the 'Test Data Matrix'
-        layout; without such a field into the Parameter values grid, otherwise into the Summary."""
+        """Write the rows in the 'Test Data Matrix' layout into the Summary and, when the test case type has one, the
+        Test Data tab (a custom 'Test Data' field, and its 'Test Data ID'); without such a field also into the
+        Parameter values grid."""
         rows = [r for r in self.list(test_case_ids=[tc_id]) if (r.get("meta") or {}).get("source") != "tfs"] \
             or self.list(test_case_ids=[tc_id])
         if not rows:
@@ -659,26 +819,26 @@ class TestDataService:
                      "values": r["dataset"] if isinstance(r["dataset"], dict) else {}} for r in rows]
         item = self.tfs.detail(tc_id)
         refs = self.tfs.type_field_refs(item["type"])
-        data_ref, id_ref = self._data_field(item["type"])
         from .service import _TEST_DATA_HEADING, parameters_xml
-        if data_ref:
-            values = {data_ref: matrix_html(rows, marker)}
-            if id_ref:
-                values[id_ref] = ", ".join(keys)
-            target = f"Test Data tab ({data_ref})"
-        elif {"Microsoft.VSTS.TCM.Parameters", "Microsoft.VSTS.TCM.LocalDataSource"} <= refs and parameters_xml(datasets):
+        # 23.3.13: the Test Data tab (when the type has it) and the Summary, both.
+        tab = tab_values(self.tfs, item["type"], rows, ", ".join(keys), marker)
+        current = _TEST_DATA_HEADING.sub("", item.get("description") or "")
+        current = re.sub(r"<h3>\s*Test Data Matrix\s*</h3>.*", "", current, flags=re.S | re.I)
+        values = {**tab, "description": current + matrix_html(rows, marker)}
+        targets = ([f"Test Data tab ({next(iter(tab))})"] if tab else []) + ["Summary"]
+        if not tab and {"Microsoft.VSTS.TCM.Parameters", "Microsoft.VSTS.TCM.LocalDataSource"} <= refs \
+                and parameters_xml(datasets):
             params = parameters_xml(datasets)
-            values = {"Microsoft.VSTS.TCM.Parameters": params[0], "Microsoft.VSTS.TCM.LocalDataSource": params[1]}
-            target = "Parameter values (test data tab)"
-        else:
-            current = _TEST_DATA_HEADING.sub("", item.get("description") or "")
-            current = re.sub(r"<h3>\s*Test Data Matrix\s*</h3>.*", "", current, flags=re.S | re.I)
-            values = {"description": current + matrix_html(rows, marker)}
-            target = "Summary"
+            values.update({"Microsoft.VSTS.TCM.Parameters": params[0], "Microsoft.VSTS.TCM.LocalDataSource": params[1]})
+            targets.insert(0, "Parameter values (test data tab)")
+        target = " and ".join(targets)
         with self.design.data.activity(f"Writing test data to Test Case #{tc_id} in TFS", test_case_id=str(tc_id)) as act:
-            updated = self.tfs.update(tc_id, values)
+            updated, left_out = write_with_fallback(lambda v: self.tfs.update(tc_id, v), values, list(tab))
+            if left_out:
+                target = "Summary (TFS refused the Test Data tab fields)"
             act.complete(f"Test data written to Test Case #{tc_id} ({target}): {len(rows)} rows")
-        return {"test_case_id": tc_id, "rows": len(rows), "target": target, "skipped_fields": updated["skipped_fields"]}
+        return {"test_case_id": tc_id, "rows": len(rows), "target": target,
+                "skipped_fields": updated["skipped_fields"] + left_out}
 
     # ---- import / export -----------------------------------------------------------------------------------
 

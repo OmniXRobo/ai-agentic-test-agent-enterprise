@@ -20,6 +20,8 @@ import difflib
 import hashlib
 import html
 import re
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Any
 
 from ..agents.base import new_run_id
@@ -29,12 +31,13 @@ from ..events import names
 from ..logging_setup import get_logger
 from ..storage.db import dumps, loads
 from . import models, testing_types
+from .tfs_test_data import rows_from_lines, tab_values, write_with_fallback
 from ..automation.generator import parse_tfs_steps
 from .service import DesignService, html_to_text, steps_xml
 
 log = get_logger("design.suite_cases")
 
-AGENT_VERSION = "suite-aware-test-case-design/1.1"
+AGENT_VERSION = "suite-aware-test-case-design/1.3"
 
 _EXPLICIT_ID = re.compile(r"^\s*\(?((?:AC|A\.C\.|Criteri(?:on|a))[\s#_-]*\d+(?:\.\d+)?[a-z]?)\)?\s*[:.)\-–]\s*(.+)$", re.I)
 _GHERKIN_CONT = re.compile(r"^\s*(and|but|when|then)\b", re.I)
@@ -60,7 +63,10 @@ CASES_PROMPT = (
     "- each expected result states what the tester can see on the screen (page, message text, field value, list "
     "content), never 'works correctly', 'as expected', 'successfully completes' or 'the workflow is completed';\n"
     "- never write a single summary step such as 'Complete the purchase workflow': break it into its screens;\n"
-    "- usually 3 to 8 steps; start from the precondition state.\n"
+    "- usually 3 to 6 steps; start from the precondition state.\n"
+    "Keep every case compact, because each word costs time on a local model: objective in one sentence, "
+    "risk_rationale and automation_reason under 15 words, test_data only for values the steps use, and leave optional "
+    "fields empty instead of repeating the steps.\n"
     "Example of the required format (an example only; use the story's own pages and rules):\n"
     "Title: Login with valid credentials shows the product inventory\n"
     "Precondition: The login page is open and the account 'standard_user' exists.\n"
@@ -82,6 +88,22 @@ REVIEW_PROMPT = (
     "changed, and add cases for uncovered conditions when this testing type applies (otherwise list the criterion "
     "in not_applicable with the reason). Keep refs and everything that is already correct. Never invent business "
     "rules or thresholds. Return the complete corrected set.")
+
+# Context-window budgeting (tokens): one generated case with 3 to 8 steps, and the compact JSON schema.
+_CASE_TOKENS = 550
+_SCHEMA_TOKENS = 720
+# description characters, other criteria, existing case titles, characters per listed line
+_CONTEXT_LEVELS = [(4000, 30, 60, 300), (1500, 8, 20, 160), (600, 0, 0, 0)]
+_SPLIT_ERRORS = {"AI_TIMEOUT", "AI_OUTPUT_INVALID", "AI_OUTPUT_TRUNCATED", "AI_CONTEXT_EXCEEDED"}
+_SHRINK_ERRORS = {"AI_OUTPUT_TRUNCATED", "AI_CONTEXT_EXCEEDED"}
+
+
+def _cut(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if limit <= 0:
+        return ""
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + " ... (shortened)"
+
 
 PROMPT_VERSION = hashlib.sha256((AGENT_VERSION + CASES_PROMPT + REVIEW_PROMPT).encode()).hexdigest()[:12]
 
@@ -605,26 +627,66 @@ class SuiteCaseService:
         cfg = self.ai.config()
         return max(cfg["timeout_seconds"], cfg.get("generation_timeout_seconds") or 600)
 
-    def _per_call(self) -> int:
-        return int((self.ai.settings.section("design") or {}).get("criteria_per_call") or 2)
+    def _context_window(self) -> int:
+        try:
+            return int(self.ai.context_window() or 0)
+        except Exception:  # noqa: BLE001 - a missing value only means "unknown"
+            return 0
 
-    def _design_chunk(self, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
-                      ttype: dict[str, Any], budget: int) -> tuple[models.SuiteCaseSet, str]:
-        """One AI call for a few criteria: a small prompt and a short answer, so a local model answers in time."""
+    def _per_call(self) -> int:
+        configured = (self.ai.settings.section("design") or {}).get("criteria_per_call")
+        if configured:
+            return int(configured)
+        n_ctx = self._context_window()
+        # A small context (llama-server's default -c 4096, or -c split between -np slots) holds one criterion's cases.
+        return 1 if n_ctx and n_ctx < 8192 else 2
+
+    def _story_context(self, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
+                       ttype: dict[str, Any], level: int) -> str:
+        """The user prompt for a few criteria. Level 0 is the full context with long parts capped, 1 is compact and
+        2 is minimal (the criteria and their conditions only), for a model with a small context window."""
+        desc_max, others_max, existing_max, line_max = _CONTEXT_LEVELS[level]
         s = data["story"]
         ids = {c["id"] for c in crit}
         conds = "\n".join(f"{x.id} ({a.ac_id}): {x.text}" for a in analysis.criteria if a.ac_id in ids for x in a.conditions)
-        existing = "\n".join(f"#{e['id']} {e['title']}" for e in data["existing"]) or "(none)"
-        others = [c for c in data["criteria"] if c["id"] not in ids]
-        ctx = (f"User story US{s['id']}: {s['title']}\nState: {s['state']}; Iteration: {s['iteration']}\n\n"
-               f"Description:\n{s['description'] or '(none)'}\n\n"
-               "Acceptance criteria:\n" + "\n".join(f"{c['id']}: {c['text']}" for c in crit) + "\n\n"
-               + ("Other criteria of the story (context only, covered separately):\n"
-                  + "\n".join(f"- {c['text']}" for c in others) + "\n\n" if others else "")
-               + f"Selected suite testing type: {ttype['name']}\n\nConditions:\n{conds}\n\n"
-               f"Existing test cases linked to this story:\n{existing}")
-        return self.ai.complete_json(CASES_PROMPT.format(type=ttype["name"], focus=ttype["focus"], max_cases=budget),
-                                     ctx, models.SuiteCaseSet, max_tokens=min(1400 * len(crit), 4096),
+        existing = data["existing"][:existing_max]
+        existing_txt = "\n".join(f"#{e['id']} {_cut(e['title'], line_max)}" for e in existing) or "(none)"
+        if len(data["existing"]) > len(existing):
+            existing_txt += f"\n(and {len(data['existing']) - len(existing)} more)"
+        every = data["criteria"][:others_max]
+        # 23.3.11: everything that is the same for every call of this story comes first, the criteria of this call
+        # last. llama-server keeps what it has read of the previous request, so on a slow CPU it reads only the
+        # changed end of the prompt (seconds) instead of the whole prompt again (minutes).
+        return (f"User story US{s['id']}: {s['title']}\nState: {s['state']}; Iteration: {s['iteration']}\n\n"
+                f"Description:\n{_cut(s['description'] or '(none)', desc_max)}\n\n"
+                + ("All acceptance criteria of the story (context):\n"
+                   + "\n".join(f"- {c['id']}: {_cut(c['text'], line_max)}" for c in every) + "\n\n" if every else "")
+                + f"Selected suite testing type: {ttype['name']}\n\n"
+                + (f"Existing test cases linked to this story:\n{existing_txt}" if existing_max else
+                   f"Existing test cases linked to this story: {len(data['existing'])} (titles left out to fit the "
+                   "model's context)")
+                + "\n\nWrite test cases now only for these acceptance criteria:\n"
+                + "\n".join(f"{c['id']}: {c['text']}" for c in crit) + f"\n\nConditions:\n{conds}")
+
+    def _design_chunk(self, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
+                      ttype: dict[str, Any], budget: int, level: int = 0) -> tuple[models.SuiteCaseSet, str]:
+        """One AI call for a few criteria: a small prompt and a short answer, so a local model answers in time and
+        prompt + answer fit the model's context window (otherwise the server answers HTTP 400)."""
+        n_ctx = self._context_window()
+        system_tokens = self.ai.estimate_tokens(CASES_PROMPT) + _SCHEMA_TOKENS
+        while True:
+            ctx = self._story_context(data, crit, analysis, ttype, level)
+            room = n_ctx - system_tokens - self.ai.estimate_tokens(ctx) - 64 if n_ctx else 0
+            if not n_ctx or room >= _CASE_TOKENS * budget or level >= 2:
+                break
+            level += 1
+        if n_ctx:
+            budget = max(1, min(budget, room // _CASE_TOKENS))
+        # The number of cases goes at the end of the request, so the instructions stay the same in every call.
+        ctx += f"\n\nGenerate at most {budget} test cases."
+        return self.ai.complete_json(CASES_PROMPT.format(type=ttype["name"], focus=ttype["focus"],
+                                                         max_cases="the number given at the end of the request"),
+                                     ctx, models.SuiteCaseSet, max_tokens=min(1400 * len(crit), 600 + _CASE_TOKENS * budget, 4096),
                                      timeout=self._call_timeout()), ctx
 
     def _review_chunk(self, ctx: str, case_set: models.SuiteCaseSet, issues: list[str],
@@ -637,12 +699,12 @@ class SuiteCaseService:
 
     def _chunk(self, story_id: Any, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
                ttype: dict[str, Any], per_ac: int, act: Any, label: str,
-               thorough: bool = False) -> tuple[models.SuiteCaseSet, bool]:
+               thorough: bool = False, level: int = 0) -> tuple[models.SuiteCaseSet, bool]:
         """Generate, validate and refine the cases of a few criteria. The review call (as slow as the first one on a
         local model) runs for errors and uncovered criteria; warnings alone only trigger it in a thorough review."""
         budget = per_ac * len(crit)
         act.progress(None, f"US{story_id}: writing {ttype['name']} test cases for {label}")
-        case_set, ctx = self._design_chunk(data, crit, analysis, ttype, budget)
+        case_set, ctx = self._design_chunk(data, crit, analysis, ttype, budget, level)
         case_set.test_cases = case_set.test_cases[:budget]
         sub = analysis.model_copy(update={"criteria": [a for a in analysis.criteria if a.ac_id in {c["id"] for c in crit}]})
         check = validate(case_set, crit, sub, ttype, data["existing"])
@@ -686,33 +748,93 @@ class SuiteCaseService:
         refined_any = False
         failed: list[dict[str, Any]] = []
         groups = chunks(data["criteria"], self._per_call())
-        act.progress(None, f"US{story_id}: {len(data['criteria'])} acceptance criteria, {len(groups)} AI calls")
-        queue = [(g, f"{g[0]['id']}" + (f" to {g[-1]['id']}" if len(g) > 1 else "")) for g in groups]
-        while queue:
-            crit, label = queue.pop(0)
-            try:
-                part, refined = self._chunk(story_id, data, crit, analysis, ttype, cases_per_criterion, act, label,
-                                            thorough_review)
-            except QAError as exc:
-                if len(crit) > 1 and exc.error_code in ("AI_TIMEOUT", "AI_OUTPUT_INVALID"):
-                    # Too much for one answer: retry these criteria one by one.
-                    queue[:0] = [([c], c["id"]) for c in crit]
-                    continue
-                if exc.error_code in ("AI_UNREACHABLE", "AI_NOT_CONFIGURED", "AI_REQUEST_FAILED") and not merged.test_cases:
-                    raise
-                failed += crit
-                notes.append(f"{label}: no test cases were written ({exc.message}). Generate again for this story, or "
-                             "raise the generation timeout under AI settings.")
-                continue
-            refined_any = refined_any or refined
+
+        # 23.3.9: as many AI calls at a time as the AI server has slots (a CPU writes two answers almost as fast as
+        # one). Results are put together in criterion order, whatever order the calls finish in.
+        workers = max(1, int(self.ai.parallel_requests() if hasattr(self.ai, "parallel_requests") else 1))
+        n_ctx = self._context_window()
+        act.progress(None, f"US{story_id}: {len(data['criteria'])} acceptance criteria, {len(groups)} AI calls"
+                     + (f", {workers} at a time" if workers > 1 else "")
+                     + (f" (AI context {n_ctx} tokens per call)" if n_ctx else ""))
+        shared_retry: set[tuple[int, ...]] = set()
+        pending: deque[tuple[tuple[int, ...], list[dict[str, Any]], str, int, int]] = deque(
+            ((n,), g, f"{g[0]['id']}" + (f" to {g[-1]['id']}" if len(g) > 1 else ""), cases_per_criterion, 0)
+            for n, g in enumerate(groups))
+        parts: dict[tuple[int, ...], models.SuiteCaseSet] = {}
+        last_error: QAError | None = None
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="tcgen")
+        running: dict[Future[Any], tuple[tuple[int, ...], list[dict[str, Any]], str, int, int]] = {}
+        try:
+            while pending or running:
+                workers = max(1, int(self.ai.parallel_requests() if hasattr(self.ai, "parallel_requests") else 1))
+                while pending and len(running) < workers:
+                    item = pending.popleft()
+                    key, crit, label, per_ac, level = item
+                    running[pool.submit(self._chunk, story_id, data, crit, analysis, ttype, per_ac, act, label,
+                                        thorough_review, level)] = item
+                done, _ = wait(list(running), return_when=FIRST_COMPLETED)
+                for fut in sorted(done, key=lambda f: running[f][0]):
+                    key, crit, label, per_ac, level = running.pop(fut)
+                    try:
+                        part, refined = fut.result()
+                    except QAError as exc:
+                        last_error = exc
+                        log.info(f"US{story_id} {label}: {exc.error_code} {exc.message} {exc.details or ''}",
+                                 extra={"operation": "design.suite_cases"})
+                        if len(crit) > 1 and exc.error_code in _SPLIT_ERRORS:
+                            # Too much for one answer or for the context window: retry these criteria one by one.
+                            act.progress(None, f"US{story_id}: {label} was too large for one AI call ({exc.message}); "
+                                         "retrying one criterion at a time")
+                            pending.extendleft(reversed([(key + (j,), [c], c["id"], per_ac, level)
+                                                         for j, c in enumerate(crit)]))
+                            continue
+                        if (exc.error_code == "AI_OUTPUT_TRUNCATED" and key not in shared_retry
+                                and getattr(self.ai, "_shared_ctx_overflow", False)):
+                            # Parallel slots shared one context and ran out: the same request, now one at a time.
+                            shared_retry.add(key)
+                            act.progress(None, f"US{story_id}: the AI server ran out of context with 2 calls at a "
+                                         f"time; writing {label} again, one call at a time")
+                            pending.appendleft((key, crit, label, per_ac, level))
+                            continue
+                        if exc.error_code in _SHRINK_ERRORS and level >= 2 and not parts:
+                            # Even the shortest prompt for one criterion and one case does not fit: every other call
+                            # would fail the same way, so stop now with what to change.
+                            n_ctx = self._context_window()
+                            raise QAError("AI_CONTEXT_EXCEEDED", f"US{story_id}: even one test case for {label} does not "
+                                          f"fit the {self.ai.label()} model's context window"
+                                          + (f" ({n_ctx} tokens)" if n_ctx else "") + ". Start the AI server with a "
+                                          "larger context, e.g. llama-server -c 16384 (with -np N the context is shared "
+                                          "between N slots), then generate again.", status=502,
+                                          details=exc.message) from exc
+                        if exc.error_code in _SHRINK_ERRORS and level < 2:
+                            # One criterion still does not fit: retry it with a shorter prompt and fewer cases.
+                            act.progress(None, f"US{story_id}: retrying {label} with a shorter prompt ({exc.message})")
+                            pending.appendleft((key, crit, label, 1, level + 1))
+                            continue
+                        if exc.error_code in ("AI_UNREACHABLE", "AI_NOT_CONFIGURED", "AI_REQUEST_FAILED") and not parts:
+                            raise
+                        failed += crit
+                        notes.append(f"{label}: no test cases were written ({exc.message}). Generate again for this "
+                                     "story" + (", or raise the generation timeout under AI settings."
+                                                if exc.error_code == "AI_TIMEOUT" else "."))
+                        continue
+                    refined_any = refined_any or refined
+                    parts[key] = part
+                    act.progress(None, f"US{story_id}: {label} done, {len(part.test_cases)} test cases")
+        finally:
+            # On an error the calls still running finish in the background; their answers are not used.
+            pool.shutdown(wait=False, cancel_futures=True)
+        for key in sorted(parts):
+            part = parts[key]
             merged.not_applicable += part.not_applicable
             merged.clarifications += part.clarifications
             for case in part.test_cases:
                 case.ref = f"TC{len(merged.test_cases) + 1}"
                 merged.test_cases.append(case)
-            act.progress(None, f"US{story_id}: {label} done, {len(part.test_cases)} test cases")
         if failed and len(failed) == len(data["criteria"]):
-            raise QAError("AI_TIMEOUT", f"No test cases could be generated for US{story_id}: " + " ".join(notes), status=504)
+            code = last_error.error_code if last_error else "AI_TIMEOUT"
+            raise QAError(code, f"No test cases could be generated for US{story_id}: " + " ".join(notes[-1:]),
+                          status=504 if code == "AI_TIMEOUT" else 502, details=" ".join(notes)[:2000])
         if max_cases:
             merged.test_cases = merged.test_cases[:max_cases]
         check = validate(merged, data["criteria"], analysis, ttype, data["existing"])
@@ -885,10 +1007,17 @@ class SuiteCaseService:
                             "Microsoft.VSTS.TCM.Steps": steps_xml([models.TestStep(**s) for s in case["steps"]]),
                             "description": case_summary_html(case, story["story"], story["criteria"], suite, meta),
                         }
-                        patch, _skipped = self.tfs.build_patch(tc_type, values)
-                        patch.append({"op": "add", "path": "/relations/-",
-                                      "value": {"rel": "Microsoft.VSTS.Common.TestedBy-Reverse", "url": story_url}})
-                        tc_id, action = int(self.tfs.create_raw(tc_type, patch)["id"]), "created"
+                        # 23.3.13: the test data also on the Test Data tab when the test case type has one.
+                        tab = tab_values(self.tfs, tc_type, rows_from_lines(case.get("test_data") or [], case["title"]),
+                                         f"US{sid}-{case['ref']}")
+
+                        def create(v: dict[str, Any]) -> dict[str, Any]:
+                            patch, _skipped = self.tfs.build_patch(tc_type, v)
+                            patch.append({"op": "add", "path": "/relations/-",
+                                          "value": {"rel": "Microsoft.VSTS.Common.TestedBy-Reverse", "url": story_url}})
+                            return self.tfs.create_raw(tc_type, patch)
+                        made, _left_out = write_with_fallback(create, {**values, **tab}, list(tab))
+                        tc_id, action = int(made["id"]), "created"
                     case["published_id"] = tc_id
                     self._trace_case(sid, story["criteria"], case, suite, plan_id, tc_id, run_id)
                     created.append({"story_id": sid, "ref": case["ref"], "id": tc_id, "title": case["title"],

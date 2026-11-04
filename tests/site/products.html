@@ -1,12 +1,20 @@
-<!doctype html>
-<html><head><meta charset="utf-8"><title>Products</title></head>
-<body>
-<a href="index.html">Home</a>
-<input type="search" aria-label="Search products" placeholder="Search">
-<ul id="list"></ul>
+<!doctype html><html><head><meta charset="utf-8"><title>Products</title></head><body>
+<div id="app">Loading…</div>
 <script>
-  Promise.all([fetch("api/items/7"), fetch("api/items/8")]).then(rs => Promise.all(rs.map(r => r.json()))).then(items => {
-    document.getElementById("list").innerHTML = items.map(i => `<li>${i.name}</li>`).join("");
-  });
-</script>
-</body></html>
+setTimeout(() => {
+  document.getElementById("app").innerHTML = `
+    <label for="cat">Category</label><select id="cat"><option>Select a category</option><option>Books</option><option>Electronics</option></select>
+    <label for="pn">Product name</label><input id="pn">
+    <label for="co">Country</label><select id="co"><option>Choose...</option><option>Canada</option><option>United States</option></select>
+    <label for="zip">ZIP code</label><input id="zip">
+    <label><input type="checkbox" id="gift"> Gift wrap</label>
+    <label><input type="radio" name="ship" value="std"> Standard shipping</label>
+    <label><input type="radio" name="ship" value="exp"> Express shipping</label>
+    <button id="save" type="button">Save</button><div id="msg"></div>`;
+  document.getElementById("save").onclick = () => setTimeout(() => {
+    const m = document.getElementById("msg");
+    m.className = "confirmation"; m.setAttribute("role", "status");
+    m.textContent = "Product " + document.getElementById("pn").value + " saved.";
+  }, 500);
+}, 600);
+</script></body></html>

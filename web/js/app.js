@@ -16,6 +16,7 @@ import * as testSuites from "./pages/test-suites.js";
 import * as testCases from "./pages/test-cases.js";
 import * as scriptStudio from "./pages/script-studio.js";
 import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
+import { scheduledRuns, emailSettings } from "./pages/schedules.js";
 import * as appCredentials from "./pages/app-credentials.js";
 import { perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
 import { defectReview, perfDefects } from "./pages/defect-review.js";
@@ -24,7 +25,8 @@ import * as reports from "./pages/reports.js";
 import * as analytics from "./pages/analytics.js";
 import * as commandCenter from "./pages/command-center.js";
 import * as setupPage from "./pages/setup.js";
-import { voice, onVoice, listen, loadSettings, agentName } from "./voice.js";
+import { voice, onVoice, loadSettings, agentName } from "./voice.js";
+import { initVoiceAgent } from "./voice-agent.js";
 
 // route -> { title, page }
 const NAV = [
@@ -50,6 +52,7 @@ const NAV = [
     ["guided-automation", "Guided Browser Automation", guidedAutomation],
     ["discovery", "Application Discovery & Update", discovery],
     ["hybrid-automation", "Hybrid Test Automation", hybridAutomation],
+    ["scheduled-runs", "Scheduled Runs", scheduledRuns],
   ]],
   ["Performance Testing", [
     ["perf-plans", "Performance Test Plans", perfPlans],
@@ -72,6 +75,7 @@ const NAV = [
     ["tfs-settings", "TFS Connection", tfsSettings],
     ["ai-settings", "AI Runtime", aiSettings],
     ["app-credentials", "Application Credentials", appCredentials],
+    ["email-settings", "Outlook Email", emailSettings],
     ["voice", "Voice & Command Agent", voicePage],
   ]],
 ];
@@ -96,6 +100,7 @@ let current = null;
 
 async function navigate() {
   const route = (location.hash.replace(/^#\/?/, "").split("?")[0]) || "dashboard";
+  const requested = route;
   const entry = ROUTES.get(route) || ROUTES.get("dashboard");
   if (current?.page.unmount) current.page.unmount();
   current = entry;
@@ -105,12 +110,19 @@ async function navigate() {
   document.getElementById("sidebar").classList.remove("open");
   const view = document.getElementById("view");
   view.innerHTML = "";
+  let ok = true, error = null;
   try {
     await entry.page.mount(view, entry);
   } catch (err) {
+    ok = false; error = err.message;
     view.innerHTML = `<div class="card"><h2>Could not load this page</h2><p class="muted">${esc(err.message)}</p></div>`;
   }
+  // The voice agent only reports a page as open once it has really loaded (or says why it did not).
+  window.dispatchEvent(new CustomEvent("qa:route", { detail: { route: requested, shown: entry.route, title: entry.title, ok: ok && ROUTES.has(requested), error: ROUTES.has(requested) ? error : "That page does not exist." } }));
 }
+
+/** The modules the voice agent can open, from this router's own table (never a hand-written list). */
+export function routeTable() { return [...ROUTES.values()].map(({ route, title }) => ({ route, title })); }
 
 // ---- theme ----
 function setTheme(theme, persist = true) {
@@ -188,42 +200,13 @@ function initConnection() {
   });
 }
 
-// ---- header microphone: speak a command from any page ----
-function initVoice() {
-  const btn = document.getElementById("voiceBtn");
-  const pop = document.getElementById("voicePop");
-  let hideTimer = null;
-  const show = () => {
-    const last = voice.log.slice(-3);
-    const status = { listening: "Listening… speak now", transcribing: "Transcribing…", thinking: "Understanding…", executing: "Executing…" }[voice.status] || voice.error || "";
-    pop.innerHTML = `${status ? `<div class="vstatus">${esc(status)}</div>` : ""}${last.map((m) => `<div class="vmsg ${m.who}"><span class="vwho">${m.who === "you" ? "You" : esc(agentName())}</span><span class="vtext">${esc(m.text)}</span></div>`).join("")}
-      <a class="popover-foot" href="#/command-center">Open Command Center</a>`;
-    btn.classList.toggle("listening", voice.status === "listening");
-    if (location.hash.startsWith("#/command-center")) { pop.hidden = true; return; } // the page shows the conversation
-    pop.hidden = !status && !last.length;
-    clearTimeout(hideTimer);
-    if (!["listening", "transcribing", "thinking"].includes(voice.status)) hideTimer = setTimeout(() => { pop.hidden = true; }, 9000);
-  };
-  onVoice(show);
-  btn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    try {
-      const s = await loadSettings();
-      if (s.stt_engine === "off" || (s.stt_engine === "local" && !s.stt_url)) { location.hash = "#/voice"; toast("Set up speech recognition first, or type a command here.", "info"); return; }
-      await listen();
-    } catch (err) { show(); toast(err.message, "error"); }
-  });
-  document.addEventListener("click", (e) => { if (!pop.hidden && !pop.contains(e.target)) pop.hidden = true; });
-  window.addEventListener("hashchange", () => { if (location.hash.startsWith("#/command-center")) pop.hidden = true; });
-}
-
 // ---- command-center status strip, Windows clock and agent name ----
 const STRIP_ORDER = ["tfs", "ai", "playwright", "speech"];
 function renderStrip() {
   const el = document.getElementById("sysStrip");
   const items = state.health?.items || [];
   const byKey = Object.fromEntries(items.map((i) => [i.key, i]));
-  const mic = voice.status === "listening" ? { status: "RUNNING", value: "Live" }
+  const mic = voice.status === "listening" || voice.wakeState === "on" ? { status: "RUNNING", value: voice.wakeState === "on" && voice.status !== "listening" ? "Wake" : "Live" }
     : voice.micError ? { status: "FAIL", value: "Blocked" } : { status: voice.settings?.voice_enabled === false ? "NOT_CONFIGURED" : "PASS", value: voice.settings?.voice_enabled === false ? "Off" : "Standby" };
   el.innerHTML = STRIP_ORDER.map((k) => byKey[k]).filter(Boolean).map((i) =>
     `<span class="sys-chip" title="${esc(i.label + ": " + i.detail)}"><span class="lamp ${esc(i.status)}"></span>${esc(i.label)} <b>${esc(i.value)}</b></span>`).join("")
@@ -267,7 +250,7 @@ renderNav();
 initTheme();
 initBell();
 initConnection();
-initVoice();
+initVoiceAgent(document.getElementById("voiceAgent"));
 initStrip();
 window.addEventListener("hashchange", navigate);
 

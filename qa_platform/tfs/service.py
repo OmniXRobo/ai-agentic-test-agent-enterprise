@@ -696,6 +696,80 @@ class TfsService:
         return self.cache.get_or_set(("suitecases", self.active_mode(), int(plan_id), int(suite_id)),
                                      lambda: self._with_client(run))
 
+    # ---- 23.3.21: automation results as TFS test run outcomes -------------------------------
+
+    def publish_results(self, title: str, results: list[dict[str, Any]]) -> dict[str, Any]:
+        """Write Passed / Failed for each automated run of a test case into TFS test runs.
+
+        ``results``: dicts with test_case_id, status (PASSED / FAILED / ...), name, duration_ms, error, run_id,
+        started_at, finished_at. Runs whose test case is in a test plan become one test run per plan on that plan's
+        test points (the plan's outcome changes); test cases in no plan go into one automated run without a plan."""
+        outcome_of = {"PASSED": "Passed", "FAILED": "Failed", "ERROR": "Failed", "STOPPED": "Aborted",
+                      "SKIPPED": "NotExecuted"}
+        rows = [r for r in results if str(r.get("test_case_id") or "").isdigit()]
+        report: dict[str, Any] = {"runs": [], "skipped": len(results) - len(rows), "errors": []}
+        if not rows:
+            return report
+
+        def work(c: AzureDevOpsClient) -> dict[str, Any]:
+            by_plan: dict[int, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+            no_plan: list[dict[str, Any]] = []
+            for r in rows:
+                try:
+                    points = c.test_points_for_case(int(r["test_case_id"]))
+                except QAError as exc:
+                    report["errors"].append(f"Test case {r['test_case_id']}: {exc.message}")
+                    points = []
+                if not points:
+                    no_plan.append(r)
+                for pt in points:
+                    plan = int((pt.get("testPlan") or {}).get("id") or 0)
+                    if plan:
+                        by_plan.setdefault(plan, []).append((r, pt))
+
+            def result_body(r: dict[str, Any]) -> dict[str, Any]:
+                body = {"outcome": outcome_of.get(str(r.get("status") or "").upper(), "Failed"), "state": "Completed",
+                        "comment": f"QA Enterprise AI run {r.get('run_id') or ''} ({r.get('browser') or 'browser'})"}
+                if r.get("duration_ms") is not None:
+                    body["durationInMs"] = int(r["duration_ms"])
+                if r.get("error"):
+                    body["errorMessage"] = str(r["error"])[:4000]
+                if r.get("started_at"):
+                    body["startedDate"] = r["started_at"]
+                if r.get("finished_at"):
+                    body["completedDate"] = r["finished_at"]
+                return body
+
+            for plan, pairs in by_plan.items():
+                run = c.create_test_run({"name": title[:250], "plan": {"id": plan}, "automated": True,
+                                         "pointIds": sorted({int(pt["id"]) for _, pt in pairs}), "state": "InProgress"})
+                rid = int(run["id"])
+                existing = c.test_run_results(rid)
+                updates = []
+                for res in existing:
+                    point = int((res.get("testPoint") or {}).get("id") or 0)
+                    match = next((r for r, pt in pairs if int(pt["id"]) == point), None)
+                    if match:
+                        updates.append({"id": res["id"], **result_body(match)})
+                if updates:
+                    c.update_test_results(rid, updates)
+                c.update_test_run(rid, {"state": "Completed"})
+                report["runs"].append({"id": rid, "plan_id": plan, "results": len(updates),
+                                       "url": f"{c.base_url}/{c.project}/_testManagement/runs?runId={rid}"})
+            if no_plan:
+                run = c.create_test_run({"name": title[:250], "automated": True, "state": "InProgress"})
+                rid = int(run["id"])
+                c.add_test_results(rid, [{"testCase": {"id": str(r["test_case_id"])},
+                                          "testCaseTitle": r.get("name") or f"Test Case {r['test_case_id']}",
+                                          "automatedTestName": r.get("name") or str(r["test_case_id"]),
+                                          **result_body(r)} for r in no_plan])
+                c.update_test_run(rid, {"state": "Completed"})
+                report["runs"].append({"id": rid, "plan_id": None, "results": len(no_plan),
+                                       "url": f"{c.base_url}/{c.project}/_testManagement/runs?runId={rid}"})
+            return report
+
+        return self._with_client(work)
+
     # ---- dashboard -------------------------------------------------------------------
 
     def kpis(self) -> dict[str, Any]:

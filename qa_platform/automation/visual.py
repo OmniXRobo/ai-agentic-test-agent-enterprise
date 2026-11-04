@@ -63,13 +63,14 @@ def parse_date(value: str) -> date:
 
 
 def typed_format(placeholder: str) -> str:
-    """strftime format for typing a date into a field, guessed from its placeholder (ISO if unknown)."""
-    p = (placeholder or "").lower()
-    if re.search(r"mm[/.-]dd[/.-]y{2,4}", p):
-        return "%m/%d/%Y" if "/" in p else "%m-%d-%Y"
-    if re.search(r"dd[/.-]mm[/.-]y{2,4}", p):
-        sep = re.search(r"dd([/.-])mm", p).group(1)
-        return f"%d{sep}%m{sep}%Y"
+    """strftime format for typing a date into a field, from its placeholder (ISO if unknown).
+
+    23.3.18: any order (yyyy-dd-mm in OrangeHRM, dd/mm/yyyy, mm-dd-yyyy, dd.mm.yyyy ...)."""
+    from .date_rules import format_from_placeholder
+
+    own = format_from_placeholder(placeholder)
+    if own and any(k in own for k in ("%d", "%Y")):
+        return own
     return "%Y-%m-%d"
 
 
@@ -81,20 +82,36 @@ def pick_date(page: Any, locator: Any, value: str, timeout: int, visual: bool, d
     """
     target = parse_date(value)
     iso = target.isoformat()
+    opener = locator
+    if locator.evaluate("el => !['INPUT', 'TEXTAREA'].includes(el.tagName)"):
+        # 23.3.18: the step points at the calendar icon (older recordings): the field is the input next to it
+        near = locator.locator("xpath=ancestor-or-self::*[.//input[not(@type='hidden')]][1]//input[not(@type='hidden')]").first
+        if near.count():
+            locator = near
     kind = (locator.get_attribute("type", timeout=timeout) or "").lower()
     if kind == "date":
         locator.fill(iso, timeout=timeout)
         return "native"
-    box = locator.bounding_box(timeout=timeout)
+    box = opener.bounding_box(timeout=timeout)
     if visual and box:
         click(page, box)
-    locator.click(timeout=timeout)
+    opener.click(timeout=timeout)
     page.wait_for_timeout(300)
-    for _ in range(MAX_MONTH_STEPS + 1):
-        try:
-            step = page.evaluate("iso => window.__qaCal ? window.__qaCal.step(iso) : ''", iso)
-        except Exception:
-            step = ""
+    for turn in range(MAX_MONTH_STEPS + 1):
+        step = ""
+        for wait in range(12):  # a slow page can take a moment to open or redraw the calendar
+            try:
+                step = page.evaluate("iso => window.__qaCal ? window.__qaCal.step(iso) : ''", iso)
+            except Exception:
+                step = ""
+            if step:
+                break
+            if turn == 0 and wait == 4:  # the calendar closed again (a previous picker was still closing): reopen
+                try:
+                    opener.click(timeout=timeout)
+                except Exception:
+                    pass
+            page.wait_for_timeout(200)
         if not step:
             break
         mark = page.locator('[data-qa-cal="target"]').first
@@ -107,10 +124,17 @@ def pick_date(page: Any, locator: Any, value: str, timeout: int, visual: bool, d
         mark.click(timeout=timeout)
         if step == "day":
             page.evaluate("() => window.__qaCal && window.__qaCal.clear()")
+            page.wait_for_timeout(300)  # let the calendar finish closing before the next step
             return "calendar"
         page.wait_for_timeout(200)
-    # No readable calendar: type the date in the field's own format.
+    # No readable calendar: type the date in the field's own format (from its placeholder).
     placeholder = locator.get_attribute("placeholder", timeout=timeout) or ""
     page.keyboard.press("Escape")
-    locator.fill(target.strftime(typed_format(placeholder)), timeout=timeout)
+    text = target.strftime(typed_format(placeholder))
+    locator.fill(text, timeout=timeout)
+    try:  # the application reads the typed date when the field loses focus
+        locator.dispatch_event("change")
+        locator.press("Tab", timeout=2000)
+    except Exception:
+        pass
     return "typed"
