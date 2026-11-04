@@ -374,7 +374,7 @@ def test_write_test_data_to_tfs_uses_test_data_tab_else_summary(env):
     tc = _published_case(c)
     _gen_data(c, test_case_ids=[tc])
     r = c.post(f"/api/test-data/tfs/{tc}", json={"target": "auto"}).json()
-    assert r["target"] == "Parameter values (test data tab)" and r["rows"] == 4
+    assert r["target"] == "Parameter values (test data tab) and Summary" and r["rows"] == 4  # 23.3.13: and the Summary
     assert "<parameters>" in ado.items[tc]["Microsoft.VSTS.TCM.Parameters"]
     assert "{{SECRET:password}}" in ado.items[tc]["Microsoft.VSTS.TCM.LocalDataSource"]
     assert "ValidPass123!" not in json.dumps(ado.items[tc])

@@ -1,1 +1,3 @@
 -r requirements.txt
+# The Faster-Whisper server script needs numpy (shipped with its wheels at runtime); the tests use a stand-in model
+numpy>=2.0,<3

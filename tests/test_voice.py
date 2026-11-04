@@ -29,7 +29,8 @@ CONV = "conv-test-0001"
     ("Open user story 118", "open_work_item", {"kind": "user story", "id": 118}),
     ("Generate test cases for user story 118", "generate_test_cases", {"user_story_id": 118}),
     ("Generate automation for test case 1280", "generate_automation", {"test_case_id": 1280}),
-    ("Generate automation for the smoke test", "generate_automation", {"name": "smoke"}),
+    # 23.3.x: generating automation without a test case number works on the current selection or suite
+    ("Generate automation for the smoke test", "automate_selection", {"which": "suite", "suite": "smoke"}),
     ("Play test case 1280", "run_test_case", {"test_case_id": 1280, "play": True}),
     ("Run test case 1280.", "run_test_case", {"test_case_id": 1280, "play": False}),
     ("Run all automated tests", "run_all_tests", {}),
@@ -49,9 +50,9 @@ CONV = "conv-test-0001"
     ("run it again", "run_test_case", {"play": False}),
     ("yes", "confirm", {}),
     ("never mind", "cancel", {}),
-    ("Create the test case", "generate_test_cases", {}),
-    ("Create the automation test case", "generate_automation", {}),
-    ("Create the automated test case", "generate_automation", {}),
+    ("Create the test case", "generate_suite_cases", {}),  # 23.3.x: test cases of the selected suite
+    ("Create the automation test case", "automate_selection", {}),
+    ("Create the automated test case", "automate_selection", {}),
     ("Do JMeter", "run_performance", {}),
     ("do j meter test", "run_performance", {}),
     ("Do the performance testing", "run_performance", {}),
@@ -138,7 +139,7 @@ def test_follow_up_uses_the_story_in_context_and_reports_completion(env):
     assert r["say"] == "User Story 118 opened: Checkout with saved card."
     r = say(c, "Generate the test cases")  # no number: the story just opened
     assert r["status"] == "accepted" and r["say"] == "User story 118 located. Generating test cases now."
-    assert r["speak"] == "OK, I will do your task now. User story 118 located. Generating test cases now."
+    assert r["speak"] == "On it, Boss. User story 118 located. Generating test cases now."  # 23.3.x voice persona
     done = final(rt, r["command_id"])
     assert done["status"] == "completed"
     assert done["final_reply"].startswith("Test case generation completed successfully. 2 test cases were generated")
@@ -148,10 +149,13 @@ def test_follow_up_uses_the_story_in_context_and_reports_completion(env):
 
 def test_missing_parameter_is_asked_for_and_page_is_context(env):
     c, ado, rt, _ = env
-    r = say(c, "generate automation")
-    assert r["status"] == "needs_input" and r["say"] == "Which test case? Say its number."
+    # 23.3.x: "generate automation" with no number automates the current selection, so the number is asked by "run"
+    r = say(c, "run the test case")
+    assert r["status"] == "needs_input" and r["say"] == "Which test case should I run? Say its number."
     r = say(c, "1280")  # the answer completes the earlier command
-    assert r["via"] == "follow_up" and r["command"] == "generate_automation"
+    assert r["via"] == "follow_up" and r["command"] == "run_test_case"
+    r = say(c, "generate automation for test case 1280")
+    assert r["command"] == "generate_automation"
     assert "Test case 1280 is selected on AI-Driven Automation" in r["say"]  # no known application address
     r = c.post("/api/voice/commands", json={"text": "run this test case", "conversation_id": "conv-other-01",
                                             "page": {"route": "test-cases", "params": {"id": "1280"}}}).json()
@@ -168,7 +172,7 @@ def test_unsupported_without_ai_and_ai_fallback_never_invents_ids(env):
     r = say(c, "order a pizza")
     assert r["status"] == "unsupported"
     assert r["say"] == "That operation is not supported."
-    assert r["speak"] == "Unable to complete the command. That operation is not supported."
+    assert r["speak"] == "Sorry, Boss. That operation is not supported."  # 23.3.x voice persona
 
 
 def test_status_pages_and_stop(env):

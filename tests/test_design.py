@@ -14,7 +14,9 @@ from tests.fake_llm import FakeLLM
 
 
 @pytest.fixture()
-def env(paths):
+def env(paths, monkeypatch):
+    from qa_platform.ai import gateway
+    monkeypatch.setattr(gateway, "_sleep", lambda s: None)  # 23.3.x retries a failed AI request after 3 s and 8 s
     ado, llm = FakeAzureDevOps(), FakeLLM()
     app = create_app(paths, secret_backend=MemoryBackend(), tfs_transport=ado.transport(), ai_transport=llm.transport())
     with TestClient(app) as c:
@@ -45,7 +47,7 @@ def test_ai_diagnostics_pass(env):
     r = c.post("/api/ai/diagnostics").json()
     assert r["ok"] is True, r
     assert [x["name"] for x in r["checks"]] == ["Configuration", "Server Reachability", "Model Loaded", "Completion",
-                                                "Structured JSON Output"]
+                                                "Generation Speed", "Structured JSON Output"]  # 23.3.9: speed check
 
 
 def test_ai_diagnostics_model_not_loaded(env):
