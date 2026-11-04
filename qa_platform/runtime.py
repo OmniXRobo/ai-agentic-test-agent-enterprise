@@ -71,6 +71,7 @@ class Runtime:
     def close(self) -> None:
         if self.scheduler is not None:
             self.scheduler.close()
+        self.performance.close()  # 23.3.22: a running load test is stopped and recorded as INTERRUPTED
         self.llm.close()  # only the llama-server this application started
         self.voice.fw.close()  # only the Faster-Whisper server this application started
         self.db.close()
@@ -144,4 +145,6 @@ def build_runtime(
                              reports_dir=paths.reports / "scheduled")
     rt.scheduler.studio = studio
     rt.scheduler.start()
+    # 23.3.22: performance runs left active by an earlier shutdown become INTERRUPTED; the run queue starts
+    performance.start()
     return rt

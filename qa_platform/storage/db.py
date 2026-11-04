@@ -409,6 +409,42 @@ MIGRATIONS: list[str] = [
         at TEXT NOT NULL
     );
     """,
+    # 12 (23.3.22): performance scenarios and environments; execution state kept apart from the verdict; run queue
+    """
+    CREATE TABLE IF NOT EXISTS perf_environments (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS perf_scenarios (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        plan_id TEXT,
+        environment_id TEXT,
+        archived INTEGER NOT NULL DEFAULT 0,
+        data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_perf_scenarios_plan ON perf_scenarios(plan_id);
+    ALTER TABLE perf_runs ADD COLUMN state TEXT;
+    ALTER TABLE perf_runs ADD COLUMN verdict TEXT;
+    ALTER TABLE perf_runs ADD COLUMN partial INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE perf_runs ADD COLUMN scenario_id TEXT;
+    ALTER TABLE perf_runs ADD COLUMN environment_id TEXT;
+    ALTER TABLE perf_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'manual';
+    ALTER TABLE perf_runs ADD COLUMN queued_at TEXT;
+    ALTER TABLE perf_runs ADD COLUMN overrides TEXT;
+    ALTER TABLE perf_runs ADD COLUMN config TEXT;
+    ALTER TABLE perf_runs ADD COLUMN checks TEXT;
+    ALTER TABLE perf_runs ADD COLUMN generator TEXT;
+    ALTER TABLE perf_runs ADD COLUMN pid INTEGER;
+    ALTER TABLE perf_runs ADD COLUMN state_reason TEXT;
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_state ON perf_runs(state);
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_scenario ON perf_runs(scenario_id);
+    """,
 ]
 
 

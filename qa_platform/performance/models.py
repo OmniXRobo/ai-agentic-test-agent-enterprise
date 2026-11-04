@@ -109,3 +109,76 @@ class PerfPlan(BaseModel):
 
 def new_plan_id() -> str:
     return "PERF-" + uuid.uuid4().hex[:10].upper()
+
+
+# ---- 23.3.22: scenarios, environments, run states -----------------------------------------------------------------
+
+# Execution state (what happened to the process) is kept apart from the performance verdict (what the numbers say).
+RUN_STATES = ("QUEUED", "VALIDATING", "RUNNING", "STOPPING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED",
+              "SKIPPED")
+ACTIVE_STATES = ("VALIDATING", "RUNNING", "STOPPING")
+# PASS / FAIL against the targets; NOT_SPECIFIED when the plan has no targets (measurements are still reported);
+# INCONCLUSIVE when the run did not complete, so its partial numbers cannot pass or fail it.
+VERDICTS = ("PASS", "FAIL", "NOT_SPECIFIED", "INCONCLUSIVE")
+TEST_TYPES = ("load", "stress", "spike", "soak")
+
+
+class PerfEnvironment(BaseModel):
+    """A target environment and the load this application may put on it."""
+    id: str = ""
+    name: str = Field(min_length=1, max_length=120)
+    base_url: str = ""
+    allowed_hosts: list[str] = Field(default=[], description="Host names requests may go to; empty means any host")
+    max_users: int = Field(default=50, ge=1, le=100000)
+    max_duration_s: int | None = Field(default=None, ge=10, le=7 * 86400)
+    third_party: bool = Field(default=False, description="A public site this team does not own: keep load minimal")
+    notes: str = ""
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def _hosts(cls, v: list[str]) -> list[str]:
+        out = []
+        for h in v:
+            h = h.strip().lower()
+            if "://" in h:
+                h = h.split("://", 1)[1]
+            h = h.split("/", 1)[0].split(":", 1)[0]
+            if h and h not in out:
+                out.append(h)
+        return out
+
+    @field_validator("base_url")
+    @classmethod
+    def _base(cls, v: str) -> str:
+        v = v.strip()
+        if v and not v.lower().startswith(("http://", "https://")):
+            raise ValueError("The base URL must start with http:// or https://")
+        return v
+
+
+class PerfScenario(BaseModel):
+    """A performance scenario: what is tested, where, against which story, with which script (plan)."""
+    id: str = ""
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    project: str = ""
+    environment_id: str | None = None
+    plan_id: str | None = None  # the script; versions arrive in 23.3.23
+    user_story_id: str = ""
+    acceptance_criteria: str = ""
+    test_suite_id: str = ""
+    functional_script_id: str = ""  # the related functional (browser) script, kept separate from the load script
+    tags: list[str] = []
+    archived: bool = False
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+def new_scenario_id() -> str:
+    return "SCN-" + uuid.uuid4().hex[:10].upper()
+
+
+def new_environment_id() -> str:
+    return "ENV-" + uuid.uuid4().hex[:8].upper()

@@ -36,6 +36,9 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
 ## Performance
 
 * JMeter load, stress, spike and soak tests, results and performance defects are kept.
+* 23.3.22: performance scenarios, target environments with load limits, pre-run checks, a run queue, Stop and
+  Emergency stop, execution state apart from the verdict, run snapshots (config.json), load-generator monitoring
+  and recovery of interrupted runs. See PATCH_23.3.22.md.
 
 ## Quality
 

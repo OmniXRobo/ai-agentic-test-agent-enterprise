@@ -36,6 +36,7 @@ PAGES: list[tuple[str, str, tuple[str, ...]]] = [
                                                         "browser automation", "recorder", "browser recording")),
     ("discovery", "Application Discovery & Update", ("application discovery", "discovery")),
     ("hybrid-automation", "Hybrid Test Automation", ("hybrid test automation", "hybrid automation")),
+    ("perf-scenarios", "Performance Scenarios", ("performance scenarios", "load test scenarios")),
     ("perf-plans", "Performance Test Plans", ("performance test plans", "performance plans", "load test plans")),
     ("perf-load", "Load Tests", ("load tests",)),
     ("perf-stress", "Stress Tests", ("stress tests",)),

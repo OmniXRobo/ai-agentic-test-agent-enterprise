@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from ..agents.base import new_run_id
 from ..errors import QAError
 from ..logging_setup import get_logger
 from ..performance.jmx import build_jmx
-from ..performance.models import PerfPlan
+from ..performance.models import PerfEnvironment, PerfPlan, PerfScenario
 from ..runtime import Runtime
 from .deps import runtime
 
@@ -52,10 +50,11 @@ def plans(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 
 
 @router.post("/plans", status_code=201)
-def create_plan(body: PerfPlan, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+def create_plan(body: PerfPlan, scenario_id: str | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """A new plan joins `scenario_id` when given, otherwise it gets its own scenario."""
     body.id = ""
     body.source = body.source or "manual"
-    return {"ok": True, "plan": rt.performance.save_plan(body).model_dump()}
+    return {"ok": True, "plan": rt.performance.save_plan(body, scenario_id=scenario_id).model_dump()}
 
 
 @router.post("/plans/from-discovery", status_code=201)
@@ -93,39 +92,146 @@ def plan_jmx(plan_id: str, rt: Runtime = Depends(runtime)) -> PlainTextResponse:
                              headers={"Content-Disposition": f'attachment; filename="{plan_id}.jmx"'})
 
 
-@router.post("/plans/{plan_id}/run", status_code=202)
-async def run_plan(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    rt.performance.get_plan(plan_id)
-    if rt.performance.running():
-        raise QAError("PERF_ALREADY_RUNNING", "A performance test is already running.", status=409)
+def _require_tools(rt: Runtime) -> None:
     env = rt.performance.environment()
     if not env["ready"]:
         missing = "Java" if not env["java"] else "JMeter"
         raise QAError(f"{missing.upper()}_NOT_FOUND", f"{missing} was not found. Set it under Performance tool settings.",
                       status=409)
-    run_id = new_run_id("PERF")
 
-    def work() -> None:
-        try:
-            rt.performance.run(plan_id, run_id)
-        except Exception:
-            log.info("Performance run ended with an error", extra={"run_id": run_id})
 
-    asyncio.get_running_loop().run_in_executor(None, work)
-    return {"ok": True, "run_id": run_id}
+@router.post("/plans/{plan_id}/run", status_code=202)
+def run_plan(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Queue the plan. Runs start one at a time on this PC; the run page shows the queue position."""
+    rt.performance.get_plan(plan_id)
+    _require_tools(rt)
+    run_id = rt.performance.enqueue(plan_id, trigger="manual")
+    return {"ok": True, "run_id": run_id, "state": "QUEUED"}
+
+
+class StopIn(BaseModel):
+    mode: str = Field(default="graceful", pattern="^(graceful|emergency)$")
 
 
 @router.post("/runs/{run_id}/stop")
-def stop_run(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    if not rt.performance.stop(run_id):
-        raise QAError("RUN_NOT_ACTIVE", f"Run {run_id} is not executing.", status=409, run_id=run_id)
+def stop_run(run_id: str, body: StopIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    mode = (body or StopIn()).mode
+    if rt.performance.stop(run_id, mode=mode):
+        return {"ok": True, "mode": mode}
+    if rt.performance.cancel(run_id):
+        return {"ok": True, "mode": "cancelled"}
+    raise QAError("RUN_NOT_ACTIVE", f"Run {run_id} is not queued or executing.", status=409, run_id=run_id)
+
+
+@router.post("/runs/{run_id}/cancel")
+def cancel_run(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    if not rt.performance.cancel(run_id):
+        raise QAError("RUN_NOT_QUEUED", f"Run {run_id} is not waiting in the queue.", status=409, run_id=run_id)
     return {"ok": True}
 
 
+@router.get("/queue")
+def run_queue(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": rt.performance.queue()}
+
+
 @router.get("/runs")
-def runs(plan_id: str | None = None, kind: str | None = None, limit: int = Query(100, ge=1, le=1000),
+def runs(plan_id: str | None = None, kind: str | None = None, scenario_id: str | None = None,
+         environment_id: str | None = None, state: str | None = None, verdict: str | None = None,
+         trigger: str | None = None, q: str = "", limit: int = Query(100, ge=1, le=1000),
          rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    return {"ok": True, "items": rt.performance.list_runs(plan_id, kind, limit), "running": rt.performance.running()}
+    items = rt.performance.list_runs(plan_id, kind, limit, scenario_id=scenario_id, environment_id=environment_id,
+                                     state=state, verdict=verdict, trigger=trigger, q=q)
+    return {"ok": True, "items": items, "running": rt.performance.running()}
+
+
+# ---- 23.3.22: target environments ------------------------------------------------------------------------
+
+@router.get("/environments")
+def environments(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": [e.model_dump() for e in rt.performance.list_environments()]}
+
+
+@router.post("/environments", status_code=201)
+def create_environment(body: PerfEnvironment, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    body.id = ""
+    return {"ok": True, "environment": rt.performance.save_environment(body).model_dump()}
+
+
+@router.put("/environments/{env_id}")
+def update_environment(env_id: str, body: PerfEnvironment, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    body.id = env_id
+    return {"ok": True, "environment": rt.performance.save_environment(body).model_dump()}
+
+
+@router.delete("/environments/{env_id}")
+def delete_environment(env_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.performance.delete_environment(env_id)
+    return {"ok": True}
+
+
+# ---- 23.3.22: scenarios ----------------------------------------------------------------------------------
+
+class CloneIn(BaseModel):
+    name: str | None = None
+
+
+class ArchiveIn(BaseModel):
+    archived: bool = True
+
+
+@router.get("/scenarios")
+def scenarios(q: str = "", kind: str | None = None, environment_id: str | None = None, archived: bool = False,
+              rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": rt.performance.list_scenarios(q=q, kind=kind, environment_id=environment_id,
+                                                               archived=archived)}
+
+
+@router.post("/scenarios", status_code=201)
+def create_scenario(body: PerfScenario, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    body.id, body.archived = "", False
+    sc = rt.performance.save_scenario(body)
+    return {"ok": True, "scenario": rt.performance.scenario_detail(sc.id)}
+
+
+@router.get("/scenarios/{scenario_id}")
+def get_scenario(scenario_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "scenario": rt.performance.scenario_detail(scenario_id),
+            "runs": rt.performance.list_runs(scenario_id=scenario_id, limit=50)}
+
+
+@router.put("/scenarios/{scenario_id}")
+def update_scenario(scenario_id: str, body: PerfScenario, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    current = rt.performance.get_scenario(scenario_id)
+    body.id, body.archived = scenario_id, current.archived
+    rt.performance.save_scenario(body)
+    return {"ok": True, "scenario": rt.performance.scenario_detail(scenario_id)}
+
+
+@router.post("/scenarios/{scenario_id}/clone", status_code=201)
+def clone_scenario(scenario_id: str, body: CloneIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    sc = rt.performance.clone_scenario(scenario_id, (body or CloneIn()).name)
+    return {"ok": True, "scenario": rt.performance.scenario_detail(sc.id)}
+
+
+@router.post("/scenarios/{scenario_id}/archive")
+def archive_scenario(scenario_id: str, body: ArchiveIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.performance.archive_scenario(scenario_id, (body or ArchiveIn()).archived)
+    return {"ok": True, "scenario": rt.performance.scenario_detail(scenario_id)}
+
+
+@router.post("/scenarios/{scenario_id}/check")
+def check_scenario(scenario_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Pre-run checks without running anything: tools, JMX, disk space, hosts and load limits."""
+    return {"ok": True, **rt.performance.check_scenario(scenario_id)}
+
+
+@router.post("/scenarios/{scenario_id}/run", status_code=202)
+def run_scenario(scenario_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.performance.get_scenario(scenario_id)
+    _require_tools(rt)
+    run_id = rt.performance.run_scenario(scenario_id, trigger="manual")
+    return {"ok": True, "run_id": run_id, "state": "QUEUED"}
 
 
 @router.get("/runs/{run_id}")

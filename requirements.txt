@@ -13,3 +13,5 @@ vosk==0.3.45
 pytest==9.1.1
 # CA bundle used by httpx/requests; pinned to a release without known advisories
 certifi==2026.10.19
+# Load-generator CPU, memory and disk during performance runs (23.3.22)
+psutil==7.2.2
