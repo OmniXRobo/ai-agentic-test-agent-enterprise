@@ -211,7 +211,13 @@ def test_stress_shape_and_request_rate_target_in_real_runs(client, site):
     _jmeter(rt)
     port = site.rsplit(":", 1)[1]
     plan, sc = _plan(client, port)
-    # Stress: 1 user, then 2, then 3 (steps of 4 s)
+    # Think time, so the users do not open thousands of connections (the test server closes each one, and on
+    # Windows the closed ports stay reserved for minutes, which later tests would run out of)
+    view = client.get(f"/api/performance/plans/{plan['id']}/script").json()
+    work = client.post("/api/performance/script/apply", json={"script": view["script"], "ops": [
+        {"op": "add", "parent": "0/0", "type": "constant_timer", "values": {"delay_ms": 300}}]}).json()
+    client.put(f"/api/performance/plans/{plan['id']}/script", json={"script": work["script"], "base_version": 1})
+    # Stress: 1 user, then 2, then 3 (steps of 10 s)
     client.put(f"/api/performance/plans/{plan['id']}/workload",
                json={"shape": "stress", "users": 1, "steps": 3, "step_s": 10, "ramp_up_s": 0})
     run = _wait(client, client.post(f"/api/performance/plans/{plan['id']}/run").json()["run_id"])
