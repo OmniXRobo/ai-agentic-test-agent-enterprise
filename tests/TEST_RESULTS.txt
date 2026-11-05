@@ -1,5 +1,5 @@
-23.3.28 (5 Nov 2026): full suite 507 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
-  new: test_perf_reports_23328.py (6 tests): planned phase windows and shape text; per-phase figures from a results
+23.3.28 (5 Nov 2026): full suite 508 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_reports_23328.py (7 tests): planned phase windows and shape text; per-phase figures from a results
   file; comparability between runs (blocking differences, cautions, build as information); defect draft content
   (environment, build, workload, affected transactions, expected against actual, run times, files) and suggested
   severity with its reason; real JMeter runs: the run report made when a run ends holds every required section,

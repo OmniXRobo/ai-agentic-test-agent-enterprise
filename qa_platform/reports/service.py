@@ -13,6 +13,7 @@ import html
 import json
 import shutil
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,11 @@ class ReportService:
         self.agent = ReportingAgent(bus)
         if performance is not None and hasattr(performance, "finished_hooks"):
             performance.finished_hooks.append(self.on_perf_finished)  # 23.3.28: a report after every run
+        # 23.3.28: background run reports are made one at a time (each prints with Chromium) and are waited for when
+        # the application closes, so none is left writing to a closed database
+        self._report_lock = threading.Lock()
+        self._closing = threading.Event()
+        self._report_threads: set[threading.Thread] = set()
         # a report cannot still be running when the application starts
         db.execute("UPDATE reports SET status = 'failed', finished_at = ?, error = ? WHERE status = 'running'",
                    (now_iso(), "Interrupted because the application stopped while the report was being generated."))
@@ -232,15 +238,32 @@ class ReportService:
         if not self.performance.settings.section("performance").get("auto_report", True):
             return
 
+        if self._closing.is_set():
+            return
+
         def work() -> None:
             try:
-                if verdict == "FAIL" and self.defects is not None:
+                if verdict == "FAIL" and self.defects is not None and not self._closing.is_set():
                     self.defects.wait_for_automatic(run_id, 30)
-                self.perf_run_report(run_id)
+                with self._report_lock:
+                    if not self._closing.is_set():
+                        self.perf_run_report(run_id)
             except Exception as exc:  # never disturbs the run; the report can be made again from the run page
                 log.info(f"Run report not created: {exc}", extra={"run_id": run_id})
+            finally:
+                self._report_threads.discard(threading.current_thread())
 
-        threading.Thread(target=work, name=f"report-{run_id}", daemon=True).start()
+        t = threading.Thread(target=work, name=f"report-{run_id}", daemon=True)
+        self._report_threads.add(t)
+        t.start()
+
+    def close(self, timeout: float = 60) -> None:
+        """No new background reports; a report being made is finished (up to the timeout) and the waiting ones are
+        skipped. A skipped report can be made from the run page."""
+        self._closing.set()
+        deadline = time.monotonic() + timeout
+        for t in list(self._report_threads):
+            t.join(max(0.0, deadline - time.monotonic()))
 
     def perf_report(self, kind: str, run_ids: list[str], title: str | None = None) -> dict[str, Any]:
         """A comparison (the first run is the baseline) or a consolidated report across test types, as a PDF in

@@ -23,6 +23,8 @@ def paths(tmp_path):
 def client(paths):
     app = create_app(paths, secret_backend=MemoryBackend())
     with TestClient(app) as c:
+        # 23.3.28: no PDF report after every load test run (each prints with Chromium); the report tests turn it on
+        c.app.state.runtime.settings.update({"performance": {"auto_report": False}})
         yield c
 
 

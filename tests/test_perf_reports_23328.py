@@ -125,6 +125,7 @@ def _wait_file(path: Path, timeout: float = 90) -> bool:
 
 def test_reports_history_and_defects_from_real_runs(client, site):
     rt = client.app.state.runtime
+    rt.settings.update({"performance": {"auto_report": True}})  # the default; the test fixture turns it off
     _jmeter(rt)
     port = site.rsplit(":", 1)[1]
     plan, sc = _plan(client, port)
@@ -219,3 +220,23 @@ def test_text_read_from_a_pdf_with_ligatures_still_matches():
     assert pr.plain("Result ﬁles · Session ﬂow") == "resultfilessessionflow"
     assert pr.secret_scan("token: abﬁcd123", ["abficd123"]) == ["abficd123"]
     assert "font-variant-ligatures: none" in pr.EXTRA_CSS
+
+
+def test_background_reports_end_before_the_database_closes(client):
+    """Reports are made one at a time, and closing the application waits for the one being made."""
+    reports = client.app.state.runtime.reports
+    reports.performance.settings.update({"performance": {"auto_report": True}})
+    made = []
+
+    def slow(run_id, pdf=True):
+        time.sleep(0.3)
+        made.append(run_id)
+    reports.perf_run_report = slow
+    reports.on_perf_finished("PERF-a", "PASS")
+    reports.on_perf_finished("PERF-b", "PASS")
+    time.sleep(0.05)
+    reports.close()
+    assert len(made) == 1  # the one being made finished; the waiting one was skipped (it can be made again)
+    assert not reports._report_threads
+    reports.on_perf_finished("PERF-c", "PASS")  # after closing: nothing starts
+    assert "PERF-c" not in made and not reports._report_threads
