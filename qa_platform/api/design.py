@@ -217,11 +217,12 @@ class SuiteRunIn(BaseModel):
 @router.post("/design/suite-runs", status_code=202)
 async def start_suite_run(body: SuiteRunIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     """One run per selected suite; the runs are generated one after the other (one local model)."""
-    if _busy(rt):
-        raise QAError("ALREADY_RUNNING", "A test design run is already in progress.", status=409)
+    # the request is checked before the busy check: a run's status can read PASSED a moment before it stops being busy
     suite_ids = list(dict.fromkeys([*(body.suite_ids or []), *([body.suite_id] if body.suite_id else [])]))
     if not suite_ids:
         raise QAError("SUITE_REQUIRED", "Choose at least one test suite.")
+    if _busy(rt):
+        raise QAError("ALREADY_RUNNING", "A test design run is already in progress.", status=409)
     # fail fast, before any run starts; the type override only applies to suites without a testing type
     suites = [rt.design.cases.suite_info(body.plan_id, sid, body.testing_type) if len(suite_ids) == 1
               else _suite_or_override(rt, body.plan_id, sid, body.testing_type) for sid in suite_ids]
