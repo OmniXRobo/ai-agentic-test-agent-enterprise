@@ -457,6 +457,21 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (plan_id, version)
     );
     """,
+    # 14 (23.3.25): test data sets for performance scripts (secret cells are kept in the Credential Manager)
+    """
+    CREATE TABLE IF NOT EXISTS perf_datasets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        columns TEXT NOT NULL,
+        rows TEXT NOT NULL,
+        secret_chunks INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 1,
+        source TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """,
 ]
 
 

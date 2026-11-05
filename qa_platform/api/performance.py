@@ -298,6 +298,134 @@ def save_plan_secret(plan_id: str, name: str, body: SecretIn, rt: Runtime = Depe
     return {"ok": True, "items": rt.performance.save_script_secret(plan_id, name, body.value)}
 
 
+# ---- 23.3.25: test data sets and bindings ---------------------------------------------------------------------------
+
+class ColumnIn(BaseModel):
+    name: str
+    type: str = "text"
+    from_: str | None = Field(default=None, alias="from")
+
+
+class DatasetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    columns: list[ColumnIn] = Field(min_length=1)
+    rows: list[list[str | None]] = []
+
+
+class DatasetRowIn(BaseModel):
+    id: int | None = None
+    values: list[str | None] = []
+
+
+class DatasetUpdateIn(BaseModel):
+    name: str = ""
+    description: str = ""
+    columns: list[ColumnIn] = Field(min_length=1)
+    rows: list[DatasetRowIn] = []
+    base_version: int | None = None
+
+
+class CsvIn(BaseModel):
+    csv: str = Field(min_length=1)  # the file's text; base64:... for bytes (other encodings than UTF-8)
+    filename: str = ""
+    name: str = ""
+    mode: str = Field(default="create", pattern="^(create|replace|append)$")
+
+
+class GenerateIn(BaseModel):
+    rules: dict[str, dict[str, Any]] = {}
+    count: int = Field(default=10, ge=1, le=10000)
+    replace: bool = False
+    seed: int | None = None
+
+
+class AiRowsIn(BaseModel):
+    description: str = ""
+    count: int = Field(default=10, ge=1, le=50)
+
+
+def _csv_bytes(text: str) -> bytes | str:
+    if text.startswith("base64:"):
+        import base64
+        try:
+            return base64.b64decode(text[7:], validate=True)
+        except ValueError as exc:
+            raise QAError("VALIDATION_FAILED", "The file could not be read.", status=422) from exc
+    return text
+
+
+@router.get("/datasets")
+def list_datasets(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": rt.performance.datasets.list()}
+
+
+@router.post("/datasets", status_code=201)
+def create_dataset(body: DatasetIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    cols = [c.model_dump(exclude={"from_"}) for c in body.columns]
+    return {"ok": True, "dataset": rt.performance.datasets.create(body.name, cols, body.rows,
+                                                                  description=body.description)}
+
+
+@router.post("/datasets/import", status_code=201)
+def import_dataset(body: CsvIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "dataset": rt.performance.datasets.import_csv(_csv_bytes(body.csv), name=body.name,
+                                                                      filename=body.filename)}
+
+
+@router.get("/datasets/{ds_id}")
+def get_dataset(ds_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """The data set; secret cells are never returned (secret_set says which rows have a value)."""
+    return {"ok": True, "dataset": rt.performance.datasets.view(ds_id)}
+
+
+@router.put("/datasets/{ds_id}")
+def update_dataset(ds_id: str, body: DatasetUpdateIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    cols = [{"name": c.name, "type": c.type, "from": c.from_} for c in body.columns]
+    return {"ok": True, "dataset": rt.performance.datasets.update(
+        ds_id, name=body.name, description=body.description, columns=cols,
+        rows=[r.model_dump() for r in body.rows], base_version=body.base_version)}
+
+
+@router.delete("/datasets/{ds_id}")
+def delete_dataset(ds_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.performance.datasets.delete(ds_id)
+    return {"ok": True}
+
+
+@router.post("/datasets/{ds_id}/import")
+def import_into_dataset(ds_id: str, body: CsvIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    mode = body.mode if body.mode != "create" else "replace"
+    return {"ok": True, "dataset": rt.performance.datasets.import_csv(_csv_bytes(body.csv), ds_id=ds_id, mode=mode,
+                                                                      filename=body.filename)}
+
+
+@router.get("/datasets/{ds_id}/csv", response_class=PlainTextResponse)
+def export_dataset(ds_id: str, rt: Runtime = Depends(runtime)) -> PlainTextResponse:
+    """The data set as UTF-8 CSV. Secret columns are exported empty."""
+    text, filename = rt.performance.datasets.export_csv(ds_id)
+    return PlainTextResponse("\ufeff" + text, media_type="text/csv; charset=utf-8",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.post("/datasets/{ds_id}/generate")
+def generate_rows(ds_id: str, body: GenerateIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "dataset": rt.performance.datasets.generate(ds_id, body.rules, body.count,
+                                                                    replace=body.replace, seed=body.seed)}
+
+
+@router.post("/datasets/{ds_id}/generate-ai")
+def generate_ai_rows(ds_id: str, body: AiRowsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "dataset": rt.performance.datasets.generate_ai(ds_id, body.description, body.count)}
+
+
+@router.post("/script/fields")
+def script_fields(body: ScriptIn) -> dict[str, Any]:
+    """Request values of a working copy that can be bound to data columns, and the data sets it reads."""
+    return {"ok": True, "fields": jscript.fields(body.script),
+            "data_sets": jscript.data_sets(jscript.parse(body.script))}
+
+
 def _require_tools(rt: Runtime) -> None:
     env = rt.performance.environment()
     if not env["ready"]:

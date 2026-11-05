@@ -529,3 +529,7 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
 .pairs th:last-child, .pairs td:last-child { width: 76px; }
 .problems ul { margin: 4px 0 0; padding-left: 18px; }
 pre.code.diff.jdiff span { display: block; }
+/* 23.3.25: data set table */
+.dsgrid th, .dsgrid td { vertical-align: top; }
+.dsgrid input:not([type=checkbox]) { min-width: 120px; width: 100%; box-sizing: border-box; }
+.dsgrid select { width: 100%; margin-top: 4px; }

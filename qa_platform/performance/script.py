@@ -742,6 +742,28 @@ def _tpl_assert(v: dict[str, Any]) -> str:
             f'</ResponseAssertion>')
 
 
+DATASET_FILE = re.compile(r"^datasets/(DS-[A-Z0-9]{4,20})\.csv$")
+SHARE_MODES = {"all": "shareMode.all", "group": "shareMode.group", "thread": "shareMode.thread"}
+
+
+def _tpl_csv(v: dict[str, Any]) -> str:
+    """A CSV Data Set Config that reads a data set of this application. The file is written into the run folder for
+    each run (datasets/<id>.csv next to plan.jmx), so the script carries no path of this PC."""
+    ds = str(v.get("dataset_id") or "")
+    if not re.fullmatch(r"DS-[A-Z0-9]{4,20}", ds):
+        raise _err("Choose a data set.")
+    names = [str(n) for n in (v.get("variables") or [])]
+    if not names:
+        raise _err("The data set has no columns.")
+    share = SHARE_MODES.get(str(v.get("share") or "all"), "shareMode.all")
+    return (f'<CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" '
+            f'testname="{_a(v.get("name") or "Test data")}">{_s("filename", f"datasets/{ds}.csv")}'
+            f'{_s("fileEncoding", "UTF-8")}{_s("variableNames", ",".join(names))}'
+            f'{_b("ignoreFirstLine", True)}{_s("delimiter", ",")}{_b("quotedData", True)}'
+            f'{_b("recycle", bool(v.get("recycle", True)))}{_b("stopThread", bool(v.get("stop_thread", False)))}'
+            f'{_s("shareMode", share)}</CSVDataSet>')
+
+
 TEMPLATES: dict[str, tuple[str, str, Any]] = {
     "thread_group": ("thread_group", "Thread group", lambda v: (
         f'<ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="{_a(v.get("name") or "Users")}">'
@@ -815,6 +837,7 @@ TEMPLATES: dict[str, tuple[str, str, Any]] = {
         f'<CookieManager guiclass="CookiePanel" testclass="CookieManager" testname="{_a(v.get("name") or "Cookies")}">'
         f'<collectionProp name="CookieManager.cookies"/>{_b("CookieManager.clearEachIteration", True)}'
         f'</CookieManager>')),
+    "csv_dataset": ("config", "Test data (CSV data set)", lambda v: _tpl_csv(v)),
     "user_variables": ("config", "User defined variables", lambda v: (
         f'<Arguments guiclass="ArgumentsPanel" testclass="Arguments" testname="{_a(v.get("name") or "Variables")}">'
         f'<collectionProp name="Arguments.arguments"/></Arguments>')),
@@ -934,6 +957,9 @@ def apply(text: str, ops: list[dict[str, Any]]) -> dict[str, Any]:
             selected = _move(root, op["node"], op.get("direction") or "up")
         elif kind == "duplicate":
             selected = _duplicate(root, op["node"])
+        elif kind == "bind":
+            bind_field(root, op)
+            selected = op["node"]
         else:
             raise _err(f"Unknown edit {kind}.")
     out = dump(root)
@@ -950,3 +976,299 @@ def node_details(text: str, node_id: str) -> dict[str, Any]:
 def diff(a: str, b: str, a_label: str, b_label: str) -> str:
     return "".join(difflib.unified_diff(a.splitlines(keepends=True), b.splitlines(keepends=True),
                                         fromfile=a_label, tofile=b_label, n=3))
+
+
+# ---- 23.3.25: test data bound to request fields ------------------------------------------------------------------
+
+SAMPLER_TAGS = ("HTTPSamplerProxy", "HTTPSampler", "HTTPSampler2")
+
+
+def data_sets(root: ET.Element) -> list[dict[str, Any]]:
+    """The CSV Data Set Config elements of the script, with the data set of this application each one reads."""
+    out = []
+
+    def walk(container: ET.Element, prefix: str, parent_on: bool, scope: str) -> None:
+        for i, (el, ht) in enumerate(_pairs(container)):
+            nid = f"{prefix}{i}"
+            on = enabled(el) and parent_on
+            here = el.get("testname") or el.tag if el.tag in THREAD_GROUPS else scope
+            if el.tag == "CSVDataSet":
+                p = simple_props(el)
+                m = DATASET_FILE.match(p.get("filename", "").replace("\\", "/"))
+                out.append({"node": nid, "name": el.get("testname") or "", "enabled": on, "scope": scope,
+                            "dataset_id": m.group(1) if m else None, "filename": p.get("filename", ""),
+                            "variables": [x.strip() for x in p.get("variableNames", "").split(",") if x.strip()],
+                            "share": next((k for k, v in SHARE_MODES.items() if v == p.get("shareMode")), "all"),
+                            "recycle": p.get("recycle", "true").lower() == "true",
+                            "stop_thread": p.get("stopThread", "false").lower() == "true"})
+            if ht is not None:
+                walk(ht, nid + "/", on, here)
+    walk(_top(root), "", True, "whole test plan")
+    return out
+
+
+def _raw_body(el: ET.Element) -> tuple[ET.Element | None, str | None]:
+    if simple_props(el).get("HTTPSampler.postBodyRaw", "false").lower() != "true":
+        return None, None
+    coll = _args_collection(el, "HTTPsampler.Arguments")
+    for ep in (coll if coll is not None else []):
+        if _is_element(ep):
+            for q in ep:
+                if _is_element(q) and q.get("name") == "Argument.value":
+                    return q, q.text or ""
+    return None, None
+
+
+def _form_pairs(body: str) -> list[tuple[str, str]] | None:
+    """key=value&... pairs of a form body, or None when the body is not a form. ${...} is kept whole."""
+    if not body or body.lstrip()[:1] in "{[<" or "=" not in body:
+        return None
+    parts, depth, cur = [], 0, ""
+    for ch in body:
+        depth += ch == "{" and cur.endswith("$")
+        if ch == "}" and depth:
+            depth -= 1
+        if ch == "&" and not depth:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    out = []
+    for p in parts:
+        if "=" not in p:
+            return None
+        k, v = p.split("=", 1)
+        if not re.fullmatch(r"[A-Za-z0-9_.\-\[\]%]+", k):
+            return None
+        out.append((k, v))
+    return out
+
+
+def _json_leaves(data: Any, path: str = "$") -> list[tuple[str, Any]]:
+    out: list[tuple[str, Any]] = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            out += _json_leaves(v, f"{path}.{k}" if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(k))
+                                else f"{path}[{json_quote(str(k))}]")
+    elif isinstance(data, list):
+        for i, v in enumerate(data):
+            out += _json_leaves(v, f"{path}[{i}]")
+    else:
+        out.append((path, data))
+    return out
+
+
+_EXPR = "__QA_EXPR_{}__"
+_GROOVY_JSON = r"\$\{__groovy\(groovy\.json\.JsonOutput\.toJson\(vars\.get\('([^']+)'\)\)\)\}"
+
+
+def _json_template_load(body: str) -> tuple[Any, list[str]]:
+    """Parse a JSON body in which JMeter expressions such as ${__groovy(...)} or ${count} stand in value positions
+    (outside quotes). Each one becomes a placeholder string; _json_template_dump puts them back."""
+    import json
+    out, exprs, i, in_str = [], [], 0, False
+    while i < len(body):
+        ch = body[i]
+        if in_str:
+            out.append(ch)
+            if ch == "\\" and i + 1 < len(body):
+                out.append(body[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+            i += 1
+            continue
+        if body.startswith("${", i):
+            depth, j = 0, i
+            while j < len(body):
+                if body.startswith("${", j):
+                    depth += 1
+                    j += 2
+                    continue
+                if body[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            exprs.append(body[i:j + 1])
+            out.append(json.dumps(_EXPR.format(len(exprs) - 1)))
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
+    return json.loads("".join(out)), exprs
+
+
+def _json_template_dump(data: Any, exprs: list[str]) -> str:
+    import json
+    text = json.dumps(data, ensure_ascii=False)
+    for n, e in enumerate(exprs):
+        text = text.replace(json.dumps(_EXPR.format(n)), e)
+    return text
+
+
+def json_quote(text: str) -> str:
+    import json
+    return json.dumps(text, ensure_ascii=False)
+
+
+def _unquote(v: str) -> str:
+    from urllib.parse import unquote_plus
+    return v if "${" in v else unquote_plus(v)
+
+
+def fields(text: str) -> list[dict[str, Any]]:
+    """Request values that can be bound to a data column: form and query parameters, JSON body values, headers."""
+    import json
+    root = parse(text)
+    out: list[dict[str, Any]] = []
+
+    def add(nid: str, sampler: str, kind: str, key: str, label: str, value: Any) -> None:
+        out.append({"node": nid, "sampler": sampler, "kind": kind, "key": key, "label": label,
+                    "value": value if isinstance(value, str) else json.dumps(value),
+                    "bound": isinstance(value, str) and "${" in value})
+
+    def walk(container: ET.Element, prefix: str, parent_on: bool) -> None:
+        for i, (el, ht) in enumerate(_pairs(container)):
+            nid = f"{prefix}{i}"
+            on = enabled(el) and parent_on
+            if on and el.tag in SAMPLER_TAGS:
+                name = el.get("testname") or el.tag
+                props = simple_props(el)
+                path = props.get("HTTPSampler.path", "")
+                if "?" in path:
+                    for k, v in (_form_pairs(path.split("?", 1)[1]) or []):
+                        add(nid, name, "query", k, f"query {k}", _unquote(v))
+                _, body = _raw_body(el)
+                if body is not None:
+                    pairs = _form_pairs(body)
+                    if pairs is not None:
+                        for k, v in pairs:
+                            add(nid, name, "form", k, f"form {_unquote(k)}", _unquote(v))
+                    else:
+                        try:
+                            data, exprs = _json_template_load(body)
+                        except ValueError:
+                            data, exprs = None, []
+                        if data is not None:
+                            for p, v in _json_leaves(data):
+                                if v is None or isinstance(v, (dict, list)):
+                                    continue
+                                m = re.fullmatch(r"__QA_EXPR_(\d+)__", v) if isinstance(v, str) else None
+                                expr = exprs[int(m.group(1))] if m else v
+                                g = re.fullmatch(_GROOVY_JSON, expr) if m else None
+                                add(nid, name, "json", p, f"JSON {p}", "${" + g.group(1) + "}" if g else expr)
+                else:
+                    for a in _arguments(_args_collection(el, "HTTPsampler.Arguments")):
+                        if a["name"]:
+                            add(nid, name, "param", a["name"], f"parameter {a['name']}", a["value"])
+                for cel, _ in (_pairs(ht) if ht is not None else []):
+                    if cel.tag == "HeaderManager" and enabled(cel):
+                        for h in _headers(cel):
+                            if h["name"].lower() not in ("content-type", "accept", "user-agent", "accept-language"):
+                                add(nid, name, "header", h["name"], f"header {h['name']}", h["value"])
+            if ht is not None:
+                walk(ht, nid + "/", on)
+    walk(_top(root), "", True)
+    return out
+
+
+def _json_set(data: Any, path: str, value: Any) -> Any:
+    import json
+    parts = re.findall(r"\.([A-Za-z_][A-Za-z0-9_]*)|\[(\d+)\]|\[(\"(?:[^\"\\\\]|\\\\.)*\")\]", path[1:])
+    if not path.startswith("$") or not parts:
+        raise _err(f"Unknown JSON path {path}.")
+    cur = data
+    for n, (key, idx, quoted) in enumerate(parts):
+        k: Any = key or (int(idx) if idx else json.loads(quoted))
+        last = n == len(parts) - 1
+        try:
+            if last:
+                cur[k] = value
+            else:
+                cur = cur[k]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise _err(f"The request body has no value at {path}.") from exc
+    return data
+
+
+def bind_field(root: ET.Element, op: dict[str, Any]) -> None:
+    """Replace one request value with ${variable}: op {node, kind, key, var, raw}. raw (numbers, true/false) puts the
+    variable without quotes into a JSON body. Form and query values are URL-encoded when the request is sent."""
+    import json
+    var = str(op.get("var") or "").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,59}", var):
+        raise _err("Choose the data column to use.")
+    el, ht, _ = locate(root, op["node"])
+    if el.tag not in SAMPLER_TAGS:
+        raise _err("Only values of HTTP requests can be bound.")
+    kind, key = op.get("kind"), str(op.get("key") or "")
+    ref = "${" + var + "}"
+    enc = "${__urlencode(" + ref + ")}"
+    if kind in ("form", "query"):
+        if kind == "form":
+            q, body = _raw_body(el)
+            source = body
+        else:
+            props = simple_props(el)
+            q, source = None, props.get("HTTPSampler.path", "")
+            if "?" not in source:
+                raise _err("The request has no query parameters.")
+        head, query = (source.split("?", 1) if kind == "query" else ("", source))
+        pairs = _form_pairs(query or "")
+        if not pairs or key not in [k for k, _ in pairs]:
+            raise _err(f"The request has no {kind} value named {key}.")
+        query = "&".join(f"{k}={enc if k == key else v}" for k, v in pairs)
+        if kind == "form":
+            assert q is not None
+            q.text = query
+        else:
+            _set_simple(el, "HTTPSampler.path", f"{head}?{query}")
+        return
+    if kind == "json":
+        q, body = _raw_body(el)
+        if q is None:
+            raise _err("The request has no JSON body.")
+        marker = "__QA_BIND_7f3a__"
+        try:
+            data, exprs = _json_template_load(body or "null")
+        except ValueError as exc:
+            raise _err("The request body is not JSON.") from exc
+        data = _json_set(data, key, marker)
+        # A text value is written by JMeter's built-in Groovy JSON encoder, so quotes, backslashes and line breaks
+        # in the data stay valid JSON; numbers and true/false (raw) go in as they are
+        value = ref if op.get("raw") else "${__groovy(groovy.json.JsonOutput.toJson(vars.get('" + var + "')))}"
+        q.text = _json_template_dump(data, exprs).replace(f'"{marker}"', value)
+        return
+    if kind == "param":
+        coll = _args_collection(el, "HTTPsampler.Arguments")
+        for ep in (coll if coll is not None else []):
+            if not _is_element(ep):
+                continue
+            vals = {x.get("name"): x for x in ep if _is_element(x)}
+            n = vals.get("Argument.name")
+            if n is not None and (n.text or "") == key:
+                vals["Argument.value"].text = ref
+                if "HTTPArgument.always_encode" in vals:
+                    vals["HTTPArgument.always_encode"].text = "true"
+                return
+        raise _err(f"The request has no parameter named {key}.")
+    if kind == "header":
+        for cel, _ in (_pairs(ht) if ht is not None else []):
+            if cel.tag == "HeaderManager":
+                coll = _collection(cel, "HeaderManager.headers")
+                for ep in (coll if coll is not None else []):
+                    vals = {x.get("name"): x for x in ep if _is_element(x)}
+                    if (vals.get("Header.name") is not None and (vals["Header.name"].text or "").lower() == key.lower()
+                            and vals.get("Header.value") is not None):
+                        vals["Header.value"].text = ref
+                        return
+        raise _err(f"The request has no header named {key}.")
+    raise _err(f"Unknown field kind {kind}.")
