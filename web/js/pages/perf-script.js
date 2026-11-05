@@ -371,7 +371,7 @@ export async function scriptEditor(view, planId, backHref) {
     try {
       const r = await api(`/api/performance/plans/${encodeURIComponent(planId)}/run`, { method: "POST", body: {} });
       toast("Queued. The pre-run checks run before any request is sent.", "success");
-      location.hash = `#/perf-results?run=${encodeURIComponent(r.run_id)}`;
+      location.hash = `#/perf-live?run=${encodeURIComponent(r.run_id)}`;
     } catch (err) { toast(err.message, "error"); }
   });
   const renderSecrets = (items) => {

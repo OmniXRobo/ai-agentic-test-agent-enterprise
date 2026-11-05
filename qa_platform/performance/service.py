@@ -41,6 +41,7 @@ from ..logging_setup import get_logger
 from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from . import generator, jtl, preflight, sla, tools
+from . import live as live_metrics
 from . import recording as recmod
 from .dataset_store import DatasetStore
 from . import script as jscript
@@ -99,6 +100,7 @@ class PerformanceService:
         self._stopping: dict[str, str] = {}  # run id -> graceful | emergency
         self._monitors: dict[str, generator.GeneratorMonitor] = {}
         self._live: dict[str, dict[str, Any]] = {}
+        self._dash: dict[str, live_metrics.LiveMetrics] = {}  # 23.3.27: the live dashboard of the running test
         self._wake = threading.Event()
         self._closing = threading.Event()
         self._worker: threading.Thread | None = None
@@ -1037,6 +1039,7 @@ class PerformanceService:
                     secret_file.unlink(missing_ok=True)
                 raise
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if tools.WINDOWS else 0  # type: ignore[attr-defined]
+            started_ms = int(time.time() * 1000)
             try:
                 proc = subprocess.Popen(cmd, cwd=folder, env=tools.jmeter_env(java), stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, creationflags=flags)
@@ -1059,8 +1062,9 @@ class PerformanceService:
             total_s = total if total is not None else preflight.UNKNOWN_DURATION_TIMEOUT_S
             grace = 60 if plan.mode == "validation" else RUN_GRACE_S if total is not None else 0
             deadline = time.monotonic() + total_s + grace
-            tail = jtl.LiveTail(folder / "results.jtl")
-            started, last_emit = time.monotonic(), 0.0
+            dash = self._live_metrics(plan, folder, started_ms)
+            self._dash[run_id] = dash
+            started, last_emit, last_poll = time.monotonic(), 0.0, 0.0
             try:
                 while proc.poll() is None:
                     if time.monotonic() > deadline:
@@ -1073,11 +1077,19 @@ class PerformanceService:
                                         f"{preflight.UNKNOWN_DURATION_TIMEOUT_S // 3600} hours and JMeter was stopped "
                                         "(execution timeout).")
                         break
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                     now = time.monotonic()
+                    if now - last_poll >= 2:  # the dashboard reads the results every 2 s
+                        last_poll = now
+                        try:
+                            dash.poll()
+                        except Exception as exc:  # the live view must never break a run
+                            log.warning(f"Live metrics of {run_id}: {exc}")
+                        self._live[run_id] = {**dash.summary(), "elapsed_s": round(now - started),
+                                              "generator": monitor.latest()}
                     if now - last_emit >= 5:
                         last_emit = now
-                        live = tail.poll()
+                        live = {**dash.summary(), "elapsed_s": round(now - started)}
                         gen = monitor.latest()
                         live["elapsed_s"] = round(now - started)
                         live["generator"] = gen
@@ -1094,6 +1106,7 @@ class PerformanceService:
                     f.unlink(missing_ok=True)
                 self._procs.pop(run_id, None)
                 self._live.pop(run_id, None)
+                self._dash.pop(run_id, None)
                 self._monitors.pop(run_id, None)
                 reader.join(timeout=5)
                 out["generator"] = monitor.stop()
@@ -1266,6 +1279,50 @@ class PerformanceService:
 
     def live(self, run_id: str) -> dict[str, Any] | None:
         return self._live.get(run_id)
+
+    # ---- 23.3.27: live dashboard ----------------------------------------------------------------------
+
+    @staticmethod
+    def _live_metrics(plan: PerfPlan, folder: Path, started_ms: int) -> live_metrics.LiveMetrics:
+        transactions: set[str] = set()
+        if plan.script:
+            try:
+                transactions = {r["transaction"] for r in jscript.analyze_cached(plan.script)["summary"]["requests"]
+                                if r["transaction"]}
+            except QAError:
+                transactions = set()
+        groups = plan.thread_groups()
+        known = plan.mode != "validation" and all(g.duration_known and g.duration_s for g in groups)
+        w = plan.workload
+        return live_metrics.LiveMetrics(
+            folder / "results.jtl", started_ms=started_ms, transactions=transactions,
+            planned=[g.model_dump() for g in groups] if known else [],
+            planned_duration_s=plan.total_duration_s() if known else None,
+            targets=plan.sla.model_dump() if plan.mode != "validation" else {},
+            rate_target=w.target_rps if plan.shaped and w and w.model == "rate" else None)
+
+    def live_dashboard(self, run_id: str) -> dict[str, Any]:
+        """What the live dashboard shows: the run's state and, while JMeter runs, the metrics read from its results
+        so far and the load generator's CPU and memory. After the run, the page links to the full results."""
+        row = self.db.query_one("SELECT run_id, plan_id, name, kind, state, verdict, partial, queued_at, started_at,"
+                                " finished_at, error, state_reason, scenario_id, environment_id, config FROM perf_runs"
+                                " WHERE run_id = ?", (run_id,))
+        if not row:
+            raise QAError("PERF_RUN_NOT_FOUND", f"Performance run {run_id} does not exist.", status=404)
+        config = loads(row.pop("config")) if row.get("config") else {}
+        plan = config.get("plan") or {}
+        row["validation_run"] = plan.get("mode") == "validation"
+        row["environment"] = (config.get("environment") or {}).get("name")
+        if row["state"] == "QUEUED":
+            row["position"] = next((q["position"] for q in self.queue() if q["run_id"] == run_id), None)
+        dash = self._dash.get(run_id)
+        monitor = self._monitors.get(run_id)
+        out: dict[str, Any] = {"run": row, "dashboard": dash.snapshot(int(time.time() * 1000)) if dash else None,
+                               "generator": None}
+        if monitor is not None:
+            out["generator"] = {"available": generator.available(), "samples": monitor.samples[-300:],
+                                "flags": list(monitor.flags.values())}
+        return out
 
     # ---- recovery -----------------------------------------------------------------------------------
 

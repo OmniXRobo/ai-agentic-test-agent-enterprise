@@ -52,6 +52,10 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
 * 23.3.26: Workload tab: load, stress, spike and soak shapes from plain thread groups (saved script unchanged), a
   request-rate target that paces a fixed user pool with the Precise Throughput Timer (achieved rate shown next to the
   target), and a one-user validation run with correlation checks and a per-request result. See PATCH_23.3.26.md.
+* 23.3.27: Live Dashboard for a running test, read only from the results JMeter is writing: users against the
+  planned shape, requests per second against the rate target, per-second 95th percentile, errors, per-request
+  figures, live target indications (not the verdict), generator CPU and memory, Stop and Emergency stop. See
+  PATCH_23.3.27.md.
 
 ## Quality
 
