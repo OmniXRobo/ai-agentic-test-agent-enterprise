@@ -208,6 +208,7 @@ class PerfEnvironment(BaseModel):
     max_users: int = Field(default=50, ge=1, le=100000)
     max_duration_s: int | None = Field(default=None, ge=10, le=7 * 86400)
     third_party: bool = Field(default=False, description="A public site this team does not own: keep load minimal")
+    build: str = Field(default="", max_length=120, description="23.3.28: the application build deployed there now")
     notes: str = ""
     created_at: str | None = None
     updated_at: str | None = None

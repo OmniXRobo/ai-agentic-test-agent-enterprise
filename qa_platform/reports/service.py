@@ -77,6 +77,8 @@ class ReportService:
         self.design = design
         self.analytics = analytics
         self.agent = ReportingAgent(bus)
+        if performance is not None and hasattr(performance, "finished_hooks"):
+            performance.finished_hooks.append(self.on_perf_finished)  # 23.3.28: a report after every run
         # a report cannot still be running when the application starts
         db.execute("UPDATE reports SET status = 'failed', finished_at = ?, error = ? WHERE status = 'running'",
                    (now_iso(), "Interrupted because the application stopped while the report was being generated."))
@@ -166,6 +168,137 @@ class ReportService:
             self.db.execute("UPDATE reports SET status = ?, finished_at = ?, error = ? WHERE id = ?",
                             ("failed", now_iso(), message, report_id))
             self.agent.emit(names.REPORT_FAILED, f"{title}: {message}", run_id=report_id)
+
+    # ---- 23.3.28: performance run, comparison and consolidated reports ------------------------------------
+
+    def perf_run_report(self, run_id: str, *, pdf: bool = True) -> dict[str, Any]:
+        """The report of one performance run from its saved results: qa-report.html and qa-report.pdf in the run
+        folder. Generated after every run that ended (completed, failed, stopped or interrupted) and again on
+        request; nothing is re-run."""
+        from . import perf_report as pr
+        run = self.performance.get_run(run_id)
+        if run["state"] in ("QUEUED", "VALIDATING", "RUNNING", "STOPPING"):
+            raise QAError("PERF_RUN_NOT_FINISHED", "The report is made when the run has ended.", status=409)
+        ctx = pr.gather(self.performance, self.defects, run_id)
+        generated = pr.local_time(now_iso())
+        page = pr.run_report_html(ctx, generated)
+        folder = Path(run["folder"])
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "qa-report.html").write_text(page, encoding="utf-8")
+        out: dict[str, Any] = {"run_id": run_id, "html": True, "pdf": False, "pages": None, "error": None,
+                               "generated_at": now_iso()}
+        if pdf:
+            target = folder / "qa-report.pdf"
+            tmp = folder / "qa-report.pdf.part"
+            try:
+                print_pdf(page, tmp)
+                problems = pr.secret_scan(pr.pdf_text(tmp), self._known_secrets(run))
+                if problems:
+                    tmp.unlink(missing_ok=True)
+                    raise QAError("REPORT_SECRET_FOUND", "The PDF was not saved: it contained a stored secret value.",
+                                  status=500)
+                tmp.replace(target)
+                out["pdf"], out["pages"] = True, pr.pdf_pages(target)
+            except QAError as exc:
+                out["error"] = exc.message
+            except Exception as exc:  # the HTML report is still there
+                tmp.unlink(missing_ok=True)
+                out["error"] = f"PDF not created: {exc}"
+        (folder / "qa-report.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
+        return out
+
+    def _known_secrets(self, run: dict[str, Any]) -> list[str]:
+        """Stored secret values of the run's script, to make sure none of them is printed."""
+        try:
+            plan = (run.get("config") or {}).get("plan") or {}
+            return [v for n in plan.get("secret_names") or []
+                    if (v := self.performance._secret(run["plan_id"], n))]
+        except Exception:
+            return []
+
+    def perf_run_report_file(self, run_id: str, kind: str = "pdf") -> Path:
+        run = self.performance.get_run(run_id)
+        name = "qa-report.pdf" if kind == "pdf" else "qa-report.html"
+        path = Path(run["folder"]) / name
+        if not path.exists():
+            result = self.perf_run_report(run_id, pdf=kind == "pdf")
+            if kind == "pdf" and not result["pdf"]:
+                raise QAError("REPORT_PDF_FAILED", result["error"] or "The PDF could not be created.", status=500)
+        return path
+
+    def on_perf_finished(self, run_id: str, verdict: str | None) -> None:
+        """Called when a performance run ends: make its report in the background (after the automatic defect
+        draft of a failed run, so the report lists it)."""
+        if not self.performance.settings.section("performance").get("auto_report", True):
+            return
+
+        def work() -> None:
+            try:
+                if verdict == "FAIL" and self.defects is not None:
+                    self.defects.wait_for_automatic(run_id, 30)
+                self.perf_run_report(run_id)
+            except Exception as exc:  # never disturbs the run; the report can be made again from the run page
+                log.info(f"Run report not created: {exc}", extra={"run_id": run_id})
+
+        threading.Thread(target=work, name=f"report-{run_id}", daemon=True).start()
+
+    def perf_report(self, kind: str, run_ids: list[str], title: str | None = None) -> dict[str, Any]:
+        """A comparison (the first run is the baseline) or a consolidated report across test types, as a PDF in
+        the Reports list."""
+        from . import perf_report as pr
+        ids = list(dict.fromkeys(run_ids))
+        if kind not in ("comparison", "consolidated"):
+            raise QAError("VALIDATION_FAILED", "The report kind must be comparison or consolidated.", status=422)
+        if not (2 if kind == "comparison" else 1) <= len(ids) <= pr.MAX_COMPARE:
+            raise QAError("VALIDATION_FAILED", f"Choose 2 to {pr.MAX_COMPARE} runs to compare." if kind == "comparison"
+                          else f"Choose 1 to {pr.MAX_COMPARE} runs.", status=422)
+        ctxs = []
+        for rid in ids:
+            run = self.performance.get_run(rid)
+            if run["state"] in ("QUEUED", "VALIDATING", "RUNNING", "STOPPING"):
+                raise QAError("PERF_RUN_NOT_FINISHED", f"{rid} has not ended yet.", status=409)
+            ctxs.append(pr.gather(self.performance, self.defects, rid))
+        title = (title or "").strip() or ("Performance comparison" if kind == "comparison" else
+                                          "Consolidated performance report")
+        report_id = f"RPT-{now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+        scope = f"perf_{kind}"
+        self.db.execute("INSERT INTO reports (id, title, scope, params, status, created_at) VALUES (?,?,?,?,?,?)",
+                        (report_id, title, scope, dumps({"run_ids": ids}), "running", now_iso()))
+        try:
+            generated = pr.local_time(now_iso())
+            page = (pr.comparison_html if kind == "comparison" else pr.consolidated_html)(ctxs, title, generated)
+            folder = self._folder(report_id)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "report.html").write_text(page, encoding="utf-8")
+            summary: dict[str, Any] = {"perf_runs": len(ids)}
+            if kind == "comparison":
+                summary["comparable"] = pr.compare_data(ctxs)["comparable"]
+            try:
+                print_pdf(page, folder / "report.pdf")
+                secrets = [s for c in ctxs for s in self._known_secrets(c["run"])]
+                if pr.secret_scan(pr.pdf_text(folder / "report.pdf"), secrets):
+                    (folder / "report.pdf").unlink(missing_ok=True)
+                    summary["pdf_error"] = "The PDF was not saved: it contained a stored secret value."
+                else:
+                    summary["pages"] = pr.pdf_pages(folder / "report.pdf")
+            except Exception as exc:
+                summary["pdf_error"] = f"PDF not created: {exc}"
+            self.db.execute("UPDATE reports SET status = ?, finished_at = ?, summary = ? WHERE id = ?",
+                            ("ready", now_iso(), dumps(summary), report_id))
+            self.agent.emit(names.REPORT_COMPLETED, title, run_id=report_id, details={"link": f"#/reports?id={report_id}"})
+        except Exception as exc:
+            message = exc.message if isinstance(exc, QAError) else f"{type(exc).__name__}: {exc}"
+            self.db.execute("UPDATE reports SET status = ?, finished_at = ?, error = ? WHERE id = ?",
+                            ("failed", now_iso(), message, report_id))
+            raise
+        return self.get(report_id)
+
+    def perf_compare(self, run_ids: list[str]) -> dict[str, Any]:
+        from . import perf_report as pr
+        ids = list(dict.fromkeys(run_ids))
+        if not 2 <= len(ids) <= pr.MAX_COMPARE:
+            raise QAError("VALIDATION_FAILED", f"Choose 2 to {pr.MAX_COMPARE} runs to compare.", status=422)
+        return pr.compare_data([pr.gather(self.performance, self.defects, rid) for rid in ids])
 
     # ---- data ----------------------------------------------------------------------------------
 

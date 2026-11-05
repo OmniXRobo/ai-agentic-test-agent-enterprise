@@ -8,6 +8,7 @@ import { analyzeRun } from "./defect-review.js";
 import { scriptEditor, importCard } from "./perf-script.js";
 import { recordCard, recorderView } from "./perf-record.js";
 import { validationCard, rateKpi } from "./perf-workload.js";
+import { compareView, reportButtons, bindReportButtons, makePerfReport } from "./perf-compare.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
 const ROUTE_FOR_KIND = { load: "perf-load", stress: "perf-stress", spike: "perf-spike", soak: "perf-soak" };
@@ -345,7 +346,8 @@ async function runDetail(view, runId) {
       ${run.has_report ? `<a class="btn" href="${file("report/index.html")}" target="_blank" rel="noopener">JMeter HTML report</a>` : ""}
       ${run.scenario_id ? `<a class="btn" href="#/perf-scenarios?scenario=${esc(run.scenario_id)}">Open scenario</a>` : ""}
       <a class="btn" href="#/${ROUTE_FOR_KIND[run.kind]}?plan=${esc(run.plan_id)}">Open plan</a></div>
-      <p class="muted">${esc(run.run_id)} · ${esc(TRIGGERS[run.trigger] || run.trigger || "Manual")} · ${run.state === "QUEUED" ? `queued ${esc(dateTimeOf(run.queued_at))}` : `started ${esc(dateTimeOf(run.started_at))}`}${run.finished_at ? ` · ended ${esc(dateTimeOf(run.finished_at))}` : ""}${m ? ` · ${fmtDuration(Math.round(m.duration_s))} · peak ${m.peak_threads} users` : ""}${run.config?.environment ? ` · environment ${esc(run.config.environment.name)}` : ""}</p>
+      ${reportButtons(run)}
+      <p class="muted">${esc(run.run_id)} · ${esc(TRIGGERS[run.trigger] || run.trigger || "Manual")} · ${run.state === "QUEUED" ? `queued ${esc(dateTimeOf(run.queued_at))}` : `started ${esc(dateTimeOf(run.started_at))}`}${run.finished_at ? ` · ended ${esc(dateTimeOf(run.finished_at))}` : ""}${m ? ` · ${fmtDuration(Math.round(m.duration_s))} · peak ${m.peak_threads} users` : ""}${run.config?.environment ? ` · environment ${esc(run.config.environment.name)}` : ""}${run.build ? ` · build ${esc(run.build)}` : ""}</p>
       ${run.partial ? '<p class="pill WARN">Partial results: the run did not complete, so these numbers cover only part of the planned load and cannot pass or fail it.</p>' : ""}
       ${run.state_reason ? `<p class="muted">${esc(run.state_reason)}</p>` : ""}
       ${run.error ? `<p class="pill FAIL">${esc(run.error)}</p>` : ""}
@@ -381,6 +383,7 @@ async function runDetail(view, runId) {
     </div>
     <div class="card" style="margin-top:12px"><div class="row"><h3 style="margin:0">AI performance analysis</h3><span class="spacer"></span>
       <button class="btn" id="analyze">${run.analysis ? "Analyze again" : "Analyze with On-Premise AI"}</button></div><div id="analysis">${analysisHtml(run.analysis)}</div></div>` : ""}`;
+  bindReportButtons(view, run);
   view.querySelector("#analyzeFailure")?.addEventListener("click", async (e) => {
     e.target.disabled = true;
     try { await analyzeRun("performance", run.run_id); } catch (err) { toast(err.message, "error"); e.target.disabled = false; }
@@ -416,9 +419,12 @@ async function runDetail(view, runId) {
 
 async function runList(view) {
   const p = params();
-  const filters = { q: p.get("q") || "", state: p.get("state") || "", verdict: p.get("verdict") || "", kind: p.get("kind") || "", trigger: p.get("trigger") || "" };
+  const filters = { q: p.get("q") || "", state: p.get("state") || "", verdict: p.get("verdict") || "", kind: p.get("kind") || "", trigger: p.get("trigger") || "",
+    scenario_id: p.get("scenario_id") || "", environment_id: p.get("environment_id") || "", build: p.get("build") || "", date_from: p.get("date_from") || "", date_to: p.get("date_to") || "" };
   const qs = new URLSearchParams({ limit: "300", ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) });
-  const [{ items }, { items: queue }] = await Promise.all([api(`/api/performance/runs?${qs}`), api("/api/performance/queue")]);
+  const [{ items }, { items: queue }, { items: scenarios }, { items: envs }] = await Promise.all([api(`/api/performance/runs?${qs}`), api("/api/performance/queue"),
+    api("/api/performance/scenarios").catch(() => ({ items: [] })), api("/api/performance/environments").catch(() => ({ items: [] }))]);
+  const names = (list) => Object.fromEntries(list.map((x) => [x.id, x.name]));
   const opt = (name, values, labels) => `<select name="${name}"><option value="">All</option>${values.map((v) => `<option value="${v}" ${filters[name] === v ? "selected" : ""}>${esc(labels[v] || v)}</option>`).join("")}</select>`;
   view.innerHTML = `
     <div class="card"><div class="row"><h3 style="margin:0">Run queue</h3><span class="muted">Runs start one at a time on this PC, oldest first. Closing the browser does not stop them; closing the application does.</span></div>
@@ -433,14 +439,36 @@ async function runList(view) {
       <label>Verdict ${opt("verdict", Object.keys(VERDICT_LABEL), VERDICT_LABEL)}</label>
       <label>Type ${opt("kind", Object.keys(KINDS), KINDS)}</label>
       <label>Started by ${opt("trigger", ["manual", "schedule"], TRIGGERS)}</label>
+      <label>Scenario ${opt("scenario_id", scenarios.map((x) => x.id), names(scenarios))}</label>
+      <label>Environment ${opt("environment_id", envs.map((x) => x.id), names(envs))}</label>
+      <label>Build <input name="build" value="${esc(filters.build)}" placeholder="Exact build" size="12"></label>
+      <label>From <input type="date" name="date_from" value="${esc(filters.date_from)}"></label>
+      <label>To <input type="date" name="date_to" value="${esc(filters.date_to)}"></label>
       <button class="btn" type="submit">Filter</button></form>
-    <div class="card" style="margin-top:12px">${items.length ? `<table class="data"><thead><tr><th>Run</th><th>Type</th><th>Plan</th><th>State</th><th>Verdict</th><th>Samples</th><th>Errors</th><th>95th pct</th><th>Req/s</th><th>Started</th></tr></thead><tbody>
-    ${items.map((r) => `<tr class="clickable" data-run="${esc(r.run_id)}"><td>${esc(r.run_id)}${r.trigger && r.trigger !== "manual" ? `<div class="muted">${esc(TRIGGERS[r.trigger] || r.trigger)}</div>` : ""}</td><td>${esc(KINDS[r.kind])}</td><td>${esc(r.name)}</td>
+    <div class="card row" id="cmpBar" style="margin-top:12px;flex-wrap:wrap"><span class="muted" id="cmpCount">Tick runs to compare them (the first ticked is the baseline) or to make one report across test types.</span><span class="spacer"></span>
+      <button class="btn" id="cmpOpen" disabled>Compare</button><button class="btn" id="cmpPdf" disabled>Comparison PDF</button><button class="btn" id="consPdf" disabled>Consolidated PDF</button></div>
+    <div class="card" style="margin-top:12px">${items.length ? `<table class="data"><thead><tr><th></th><th>Run</th><th>Type</th><th>Plan</th><th>State</th><th>Verdict</th><th>Samples</th><th>Errors</th><th>95th pct</th><th>Req/s</th><th>Started</th></tr></thead><tbody>
+    ${items.map((r) => `<tr class="clickable" data-run="${esc(r.run_id)}"><td><input type="checkbox" class="pick" value="${esc(r.run_id)}" aria-label="Select ${esc(r.run_id)}" ${["QUEUED", ...ACTIVE].includes(r.state) ? "disabled" : ""}></td><td>${esc(r.run_id)}${r.build ? `<div class="muted">build ${esc(r.build)}</div>` : ""}${r.trigger && r.trigger !== "manual" ? `<div class="muted">${esc(TRIGGERS[r.trigger] || r.trigger)}</div>` : ""}</td><td>${esc(KINDS[r.kind])}</td><td>${esc(r.name)}</td>
       <td>${statePill(r.state)}${r.partial ? ' <span class="muted">partial</span>' : ""}</td><td>${verdictPill(r.verdict)}</td>
       <td>${r.overall ? r.overall.samples.toLocaleString() : ""}</td><td>${r.overall ? `${r.overall.error_pct}%` : ""}</td>
       <td>${r.overall ? ms(r.overall.p95_ms) : ""}</td><td>${r.overall ? r.overall.throughput : ""}</td><td>${esc(dateTimeOf(r.started_at))}</td></tr>`).join("")}
     </tbody></table>` : '<p class="muted">No performance runs match. Create a scenario under Performance Scenarios and run it with JMeter.</p>'}</div>`;
-  view.querySelectorAll("tr[data-run]").forEach((tr) => tr.addEventListener("click", () => { location.hash = `#/perf-results?run=${encodeURIComponent(tr.dataset.run)}`; }));
+  view.querySelectorAll("tr[data-run]").forEach((tr) => tr.addEventListener("click", (e) => { if (e.target.closest("input")) return; location.hash = `#/perf-results?run=${encodeURIComponent(tr.dataset.run)}`; }));
+  const picked = [];
+  const sync = () => {
+    view.querySelector("#cmpCount").textContent = picked.length ? `${picked.length} selected: ${picked.join(", ")}${picked.length > 6 ? " (at most 6)" : ""}` : "Tick runs to compare them (the first ticked is the baseline) or to make one report across test types.";
+    const ok2 = picked.length >= 2 && picked.length <= 6;
+    view.querySelector("#cmpOpen").disabled = !ok2; view.querySelector("#cmpPdf").disabled = !ok2;
+    view.querySelector("#consPdf").disabled = !(picked.length >= 1 && picked.length <= 6);
+  };
+  view.querySelectorAll("input.pick").forEach((cb) => cb.addEventListener("change", () => {
+    const i = picked.indexOf(cb.value);
+    if (cb.checked && i < 0) picked.push(cb.value); else if (!cb.checked && i >= 0) picked.splice(i, 1);
+    sync();
+  }));
+  view.querySelector("#cmpOpen").addEventListener("click", () => { location.hash = `#/perf-results?compare=${picked.map(encodeURIComponent).join(",")}`; });
+  view.querySelector("#cmpPdf").addEventListener("click", (e) => makePerfReport(e.target, "comparison", picked));
+  view.querySelector("#consPdf").addEventListener("click", (e) => makePerfReport(e.target, "consolidated", picked));
   view.querySelector("#runFilters").addEventListener("submit", (e) => {
     e.preventDefault();
     const f = Object.fromEntries([...new FormData(e.target)].filter(([, v]) => v));
@@ -465,6 +493,7 @@ function envForm(e = {}) {
     <label>Max concurrent users <input name="max_users" type="number" min="1" value="${e.max_users ?? 50}" required></label>
     <label>Max duration (s) <input name="max_duration_s" type="number" min="10" value="${e.max_duration_s ?? ""}" placeholder="No limit"></label>
     <label class="row" style="align-items:center"><input type="checkbox" name="third_party" ${e.third_party ? "checked" : ""}> Public site we do not own</label>
+    <label>Application build deployed <input name="build" value="${esc(e.build || "")}" placeholder="e.g. 2.14.0-rc3" maxlength="120"></label>
     <label>Notes <input name="notes" value="${esc(e.notes || "")}"></label>
     <div class="row"><button class="btn primary" type="submit">${e.id ? "Save" : "Add environment"}</button>
       ${e.id ? `<button class="link-btn" type="button" data-del-env="${esc(e.id)}">Delete</button>` : ""}</div></form>`;
@@ -479,7 +508,7 @@ async function environmentsCard(box) {
   box.querySelectorAll("form.env-form").forEach((form) => form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(form);
-    const body = { name: f.get("name"), base_url: f.get("base_url"), notes: f.get("notes"), third_party: f.get("third_party") === "on",
+    const body = { name: f.get("name"), base_url: f.get("base_url"), notes: f.get("notes"), third_party: f.get("third_party") === "on", build: f.get("build") || "",
       allowed_hosts: String(f.get("allowed_hosts") || "").split(",").map((h) => h.trim()).filter(Boolean),
       max_users: Number(f.get("max_users")), max_duration_s: num(f.get("max_duration_s")) };
     try {
@@ -546,6 +575,7 @@ async function scenarioEditor(view, id) {
         ${isNew ? "" : `<span class="muted">${esc(sc.id)}</span>${sc.archived ? ' <span class="pill WARN">Archived</span>' : ""}`}<span class="spacer"></span>
         ${isNew ? "" : `<button class="btn" type="button" id="checkBtn">Check before run</button>
           <button class="btn" type="button" id="validateBtn" ${sc.plan_id && !sc.archived ? "" : "disabled"} title="Every thread group once with one user: checks requests and correlations before a load test">Validate (1 user)</button>
+          <input id="runBuild" placeholder="Build under test (optional)" maxlength="120" size="18" title="Recorded on the run for history, comparisons and reports. Empty: the environment's current build.">
           <button class="btn" type="button" id="runBtn" ${sc.plan_id && !sc.archived ? "" : "disabled"}>Run now</button>
           <button class="btn" type="button" id="cloneBtn">Clone</button>
           <button class="btn" type="button" id="archiveBtn">${sc.archived ? "Restore" : "Archive"}</button>`}
@@ -596,7 +626,7 @@ async function scenarioEditor(view, id) {
     finally { e.target.disabled = false; }
   });
   view.querySelector("#runBtn").addEventListener("click", async () => {
-    try { const r = await post("run", {}); toast("Queued. It starts when no other performance test is running.", "success"); location.hash = `#/perf-live?run=${encodeURIComponent(r.run_id)}`; }
+    try { const build = view.querySelector("#runBuild").value.trim(); const r = await post("run", build ? { build } : {}); toast("Queued. It starts when no other performance test is running.", "success"); location.hash = `#/perf-live?run=${encodeURIComponent(r.run_id)}`; }
     catch (err) { toast(err.message, "error"); }
   });
   view.querySelector("#validateBtn").addEventListener("click", async () => {
@@ -644,8 +674,10 @@ export const perfSpike = page("spike");
 export const perfSoak = page("soak");
 export const perfResults = {
   async mount(view) {
-    const runId = params().get("run");
-    if (runId) await runDetail(view, runId); else await runList(view);
+    const runId = params().get("run"), compare = params().get("compare");
+    if (runId) await runDetail(view, runId);
+    else if (compare) await compareView(view, compare.split(",").filter(Boolean));
+    else await runList(view);
   },
   unmount() { cleanups.forEach((fn) => fn()); cleanups = []; },
 };

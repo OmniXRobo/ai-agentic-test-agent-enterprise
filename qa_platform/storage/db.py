@@ -472,6 +472,12 @@ MIGRATIONS: list[str] = [
         updated_at TEXT NOT NULL
     );
     """,
+    # 15 (23.3.28): the application build under test, recorded on each performance run (history filter, reports)
+    """
+    ALTER TABLE perf_runs ADD COLUMN build TEXT;
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_build ON perf_runs(build);
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_started ON perf_runs(started_at);
+    """,
 ]
 
 
