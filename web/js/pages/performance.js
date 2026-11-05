@@ -337,6 +337,7 @@ async function runDetail(view, runId) {
     <div class="card"><div class="row"><h2 style="margin:0">${run.config?.plan?.mode === "validation" ? `One-user validation: ${esc(run.name.replace(/ \(one-user validation\)$/, ""))}` : `${esc(KINDS[run.kind])} test: ${esc(run.name)}`}</h2>
       ${statePill(run.state)} ${m?.validation ? `<span class="pill ${{ PASS: "PASS", FAIL: "FAIL" }[m.validation.status] || "WARN"}" title="One-user validation">Validation ${esc(m.validation.status)}</span>` : run.config?.plan?.mode === "validation" ? '<span class="pill WAITING">One-user validation</span>' : verdictPill(run.verdict)}
       <span class="spacer"></span>
+      ${run.state === "QUEUED" || ACTIVE.includes(run.state) ? `<a class="btn primary" href="#/perf-live?run=${esc(run.run_id)}">Live dashboard</a>` : ""}
       ${run.state === "QUEUED" ? '<button class="btn" id="cancelRun">Cancel</button>' : ""}
       ${["VALIDATING", "RUNNING"].includes(run.state) ? '<button class="btn" id="stopRun" title="JMeter stops cleanly and writes its results and report">Stop</button>' : ""}
       ${ACTIVE.includes(run.state) ? '<button class="btn" id="killRun" title="Ends JMeter at once; the HTML report may be missing">Emergency stop</button>' : ""}
@@ -595,7 +596,7 @@ async function scenarioEditor(view, id) {
     finally { e.target.disabled = false; }
   });
   view.querySelector("#runBtn").addEventListener("click", async () => {
-    try { const r = await post("run", {}); toast("Queued. It starts when no other performance test is running.", "success"); location.hash = `#/perf-results?run=${encodeURIComponent(r.run_id)}`; }
+    try { const r = await post("run", {}); toast("Queued. It starts when no other performance test is running.", "success"); location.hash = `#/perf-live?run=${encodeURIComponent(r.run_id)}`; }
     catch (err) { toast(err.message, "error"); }
   });
   view.querySelector("#validateBtn").addEventListener("click", async () => {

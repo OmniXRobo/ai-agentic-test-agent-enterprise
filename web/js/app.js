@@ -21,6 +21,7 @@ import * as appCredentials from "./pages/app-credentials.js";
 import { perfScenarios, perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
 import { defectReview, perfDefects } from "./pages/defect-review.js";
 import { perfData } from "./pages/perf-data.js";
+import { perfLive } from "./pages/perf-live.js";
 import * as voicePage from "./pages/voice.js";
 import * as reports from "./pages/reports.js";
 import * as analytics from "./pages/analytics.js";
@@ -63,6 +64,7 @@ const NAV = [
     ["perf-stress", "Stress Tests", perfStress],
     ["perf-spike", "Spike Tests", perfSpike],
     ["perf-soak", "Soak Tests", perfSoak],
+    ["perf-live", "Live Dashboard", perfLive],
     ["perf-results", "Performance Results", perfResults],
     ["perf-defects", "Performance Defects", perfDefects],
   ]],

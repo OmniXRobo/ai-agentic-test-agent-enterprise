@@ -619,6 +619,12 @@ def get_run(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "run": rt.performance.get_run(run_id)}
 
 
+@router.get("/runs/{run_id}/live")
+def live_dashboard(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.3.27: the live dashboard of a run: state, and while JMeter runs, the metrics recorded so far."""
+    return {"ok": True, **rt.performance.live_dashboard(run_id)}
+
+
 @router.post("/runs/{run_id}/analysis")
 def analyze(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "analysis": rt.performance.analyze(run_id)}
