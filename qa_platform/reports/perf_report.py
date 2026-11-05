@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 import html
 import json
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -803,6 +804,7 @@ def run_body(ctx: dict[str, Any], *, section: bool = False, generated: str = "")
 
 
 EXTRA_CSS = """
+body, table, td, th { font-variant-ligatures: none; font-feature-settings: "liga" 0, "clig" 0; }
 table.kv th { width: 30%; text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 600; color: var(--text); }
 table.dense th, table.dense td { padding: 5px 5px; font-size: 11.5px; }
 td.num { white-space: nowrap; }
@@ -1002,7 +1004,9 @@ def _reader(path: Path) -> Any:
 
 def plain(text: str) -> str:
     """Letters and digits only. Text read back from a PDF can map punctuation to other characters (it depends on
-    the font), so comparisons are made on letters and digits."""
+    the font), and some fonts join letters such as "fi" into one ligature character, so the text is normalised
+    (NFKC turns a ligature back into its letters) and comparisons are made on letters and digits."""
+    text = unicodedata.normalize("NFKC", text)
     return "".join(ch for ch in text if ch.isascii() and ch.isalnum()).lower()
 
 

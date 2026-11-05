@@ -212,3 +212,10 @@ def test_reports_history_and_defects_from_real_runs(client, site):
     leak = client.post(f"/api/performance/runs/{r4}/report").json()
     assert not leak["pdf"] and "secret" in leak["error"]
     assert not (Path(client.get(f"/api/performance/runs/{r4}").json()["run"]["folder"]) / "qa-report.pdf").exists()
+
+
+def test_text_read_from_a_pdf_with_ligatures_still_matches():
+    """Some fonts print "fi" and "fl" as one ligature character; the read-back text and the secret check still match."""
+    assert pr.plain("Result ﬁles · Session ﬂow") == "resultfilessessionflow"
+    assert pr.secret_scan("token: abﬁcd123", ["abficd123"]) == ["abficd123"]
+    assert "font-variant-ligatures: none" in pr.EXTRA_CSS
