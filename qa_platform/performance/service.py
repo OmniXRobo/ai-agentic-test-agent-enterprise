@@ -428,7 +428,7 @@ class PerformanceService:
                 raise QAError("DATASET_COLUMNS_CONFLICT", f"Two elements read data set {b['dataset_id']} with different "
                               "columns. Use the same columns in both.", status=409)
             m = self.datasets.materialize(b["dataset_id"], b["variables"])
-            path.write_text(m["text"], encoding="utf-8")
+            path.write_bytes(m["text"].encode("utf-8"))  # exactly as hashed: no \r\n added on Windows
             done[key] = str(path)
             if m["has_secrets"]:
                 to_delete.append(path)
