@@ -5,6 +5,7 @@ import { api } from "../api.js";
 import { esc, toast, dateTimeOf, openModal } from "../util.js";
 import { fmtDuration } from "../charts.js";
 import { secretsHtml, bindSecrets } from "./perf-record.js";
+import { dataTab } from "./perf-data.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
 const CATEGORY_ICON = { plan: "▣", thread_group: "◉", sampler: "➜", controller: "▤", extractor: "⇲", assertion: "✓",
@@ -103,7 +104,7 @@ export async function scriptEditor(view, planId, backHref) {
         </form><p class="muted">Users and duration come from the script's thread groups. Leave a target empty for no limit.</p></details>
     </div>
     <div class="tabs" role="tablist" style="margin-top:12px">
-      <a class="tab active" href="#" data-tab="tree">Tree</a><a class="tab" href="#" data-tab="raw">Raw JMX</a><a class="tab" href="#" data-tab="versions">Versions</a></div>
+      <a class="tab active" href="#" data-tab="tree">Tree</a><a class="tab" href="#" data-tab="raw">Raw JMX</a><a class="tab" href="#" data-tab="data">Test data</a><a class="tab" href="#" data-tab="versions">Versions</a></div>
     <div id="pane"></div>`;
   const pane = view.querySelector("#pane");
   const meta = view.querySelector("#meta");
@@ -302,7 +303,7 @@ export async function scriptEditor(view, planId, backHref) {
 
   const renderTab = () => {
     view.querySelectorAll("[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === st.tab));
-    ({ tree: renderTree, raw: renderRaw, versions: renderVersions })[st.tab]();
+    ({ tree: renderTree, raw: renderRaw, versions: renderVersions, data: () => dataTab(pane, st, applyOps) })[st.tab]();
   };
   view.querySelectorAll("[data-tab]").forEach((t) => t.addEventListener("click", (e) => {
     e.preventDefault();

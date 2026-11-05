@@ -41,6 +41,7 @@ from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from . import generator, jtl, preflight, sla, tools
 from . import recording as recmod
+from .dataset_store import DatasetStore
 from . import script as jscript
 from .jmx import build_jmx
 from .models import (HttpRequest, PerfEnvironment, PerfPlan, PerfScenario, new_environment_id, new_plan_id,
@@ -100,6 +101,7 @@ class PerformanceService:
         self._closing = threading.Event()
         self._worker: threading.Thread | None = None
         self.secrets: Any = None  # SecretStore, set by the runtime (23.3.24: secrets of recorded scripts)
+        self.datasets = DatasetStore(db, lambda: self.secrets, ai)  # 23.3.25: test data for scripts
         self.recorder: recmod.PerfRecording | None = None
 
     # ---- plans -----------------------------------------------------------------------------
@@ -405,6 +407,40 @@ class PerformanceService:
         path.write_text("\n".join(lines) + "\n", encoding="latin-1", errors="backslashreplace")
         return path
 
+    def _write_data_files(self, plan: PerfPlan, folder: Path) -> list[Path]:
+        """23.3.25: datasets/<id>.csv for each data set the script reads (next to plan.jmx, where JMeter looks for a
+        relative file). Returns the files to delete when JMeter ends: the ones with secret columns. What was written
+        is added to config.json."""
+        if not plan.script or "datasets/DS-" not in plan.script:
+            return []
+        to_delete: list[Path] = []
+        written: list[dict[str, Any]] = []
+        done: dict[tuple[str, tuple[str, ...]], str] = {}
+        (folder / "datasets").mkdir(exist_ok=True)
+        for b in jscript.data_sets(jscript.parse(plan.script)):
+            if not b["enabled"] or not b["dataset_id"]:
+                continue
+            key = (b["dataset_id"], tuple(b["variables"]))
+            path = folder / "datasets" / f"{b['dataset_id']}.csv"
+            if key in done:
+                continue
+            if any(k[0] == b["dataset_id"] for k in done):
+                raise QAError("DATASET_COLUMNS_CONFLICT", f"Two elements read data set {b['dataset_id']} with different "
+                              "columns. Use the same columns in both.", status=409)
+            m = self.datasets.materialize(b["dataset_id"], b["variables"])
+            path.write_text(m["text"], encoding="utf-8")
+            done[key] = str(path)
+            if m["has_secrets"]:
+                to_delete.append(path)
+            written.append({**m["info"], "secret_columns": m["secret_columns"],
+                            "kept_in_run_folder": not m["has_secrets"]})
+        cfg_path = folder / "config.json"
+        if written and cfg_path.exists():
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            cfg["test_data"] = written
+            cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        return to_delete
+
     def script_secrets(self, plan_id: str) -> list[dict[str, Any]]:
         plan = self.get_plan(plan_id)
         return [{"name": n, "set": bool(self._secret(plan_id, n)), "usage": f"${{__P({n})}}"} for n in plan.secret_names]
@@ -624,6 +660,7 @@ class PerformanceService:
                            "detail": detail, "fix": "Fix it in the script editor." if problems else ""})
             if summary:
                 checks += self._script_file_checks(summary)
+                checks += self._dataset_checks(plan, summary)
             missing = [n for n in plan.secret_names if not self._secret(plan.id, n)]
             if plan.secret_names:
                 checks.append({"id": "secrets", "name": "Saved secrets", "status": "FAIL" if missing else "PASS",
@@ -647,10 +684,45 @@ class PerformanceService:
                            "fix": "Apply the 23.3.22 patch again; it installs psutil."})
         return {"status": preflight.summarize(checks), "checks": checks, "tools": info, "checked_at": now_iso()}
 
+    def _dataset_checks(self, plan: PerfPlan, summary: dict[str, Any]) -> list[dict[str, Any]]:
+        """23.3.25: each data set the script reads: it exists, has the columns the script names, valid values and
+        enough rows for the users."""
+        checks = []
+        for b in jscript.data_sets(jscript.parse(plan.script or "")):
+            if not b["enabled"] or not b["dataset_id"]:
+                continue
+            c = self.datasets.check(b["dataset_id"], b["variables"])
+            label = f"Test data {b['name'] or b['dataset_id']}"
+            if not c["exists"]:
+                checks.append({"id": "dataset", "name": label, "status": "FAIL",
+                               "detail": f"Data set {b['dataset_id']} does not exist (deleted?).",
+                               "fix": "Choose another data set under Test data in the script editor."})
+                continue
+            fails = [p["message"] for p in c["problems"] if p["level"] == "FAIL"]
+            warns = [p["message"] for p in c["problems"] if p["level"] == "WARN"]
+            if c["missing"]:
+                fails.insert(0, f"The script reads column(s) {', '.join(c['missing'])}, which {c['name']} does not have.")
+            if not c["rows"]:
+                fails.append(f"{c['name']} has no rows.")
+            users = summary["peak_users"]
+            if c["rows"] and not b["recycle"] and b["share"] == "all" and c["rows"] < users:
+                warns.append(f"{c['rows']} row(s) for {users} users without \"recycle at end of file\": users stop "
+                             "or read <EOF> once the rows run out.")
+            detail = " ".join(fails or warns) or (
+                f"{c['name']}: {c['rows']} row(s), columns {', '.join(b['variables'])}"
+                + (f"; secret column(s) {', '.join(c['secret_columns'])} are written for the run only and deleted "
+                   "when JMeter ends" if c["secret_columns"] else "") + ".")
+            checks.append({"id": "dataset", "name": label, "status": "FAIL" if fails else "WARN" if warns else "PASS",
+                           "detail": detail, "fix": "Fix the values on the Performance Test Data page."
+                           if fails or warns else ""})
+        return checks
+
     @staticmethod
     def _script_file_checks(summary: dict[str, Any]) -> list[dict[str, Any]]:
         checks = []
         for f in summary["csv_files"]:
+            if jscript.DATASET_FILE.match(f.replace("\\", "/")):
+                continue  # a data set of this application: written into the run folder for each run
             path = Path(f)
             if "${" in f or not path.is_absolute() or not path.exists():
                 checks.append({"id": "csv", "name": "Data file", "status": "FAIL",
@@ -902,6 +974,12 @@ class PerformanceService:
             secret_file = self._write_secret_file(plan, folder)
             if secret_file:
                 cmd += ["-q", secret_file.name]
+            try:
+                data_files = self._write_data_files(plan, folder)
+            except Exception:
+                if secret_file:
+                    secret_file.unlink(missing_ok=True)
+                raise
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if tools.WINDOWS else 0  # type: ignore[attr-defined]
             try:
                 proc = subprocess.Popen(cmd, cwd=folder, env=tools.jmeter_env(java), stdout=subprocess.PIPE,
@@ -909,6 +987,8 @@ class PerformanceService:
             except OSError as exc:
                 if secret_file:
                     secret_file.unlink(missing_ok=True)
+                for f in data_files:
+                    f.unlink(missing_ok=True)
                 raise QAError("JMETER_START_FAILED", f"JMeter could not start: {exc}", status=500) from exc
             self._procs[run_id] = proc
             self._set(run_id, pid=proc.pid)
@@ -951,6 +1031,8 @@ class PerformanceService:
             finally:
                 if secret_file:  # the secrets never stay in the run folder
                     secret_file.unlink(missing_ok=True)
+                for f in data_files:  # data files with secret columns neither
+                    f.unlink(missing_ok=True)
                 self._procs.pop(run_id, None)
                 self._live.pop(run_id, None)
                 self._monitors.pop(run_id, None)

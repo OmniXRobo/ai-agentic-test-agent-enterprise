@@ -45,6 +45,10 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
 * 23.3.24: record performance scripts from a browser journey (steps as transactions, other hosts and static files
   left out), automatic token handling (JSON and Boundary extractors), typed passwords saved as secrets and passed
   to JMeter only during runs, HAR import. See PATCH_23.3.24.md.
+* 23.3.25: Performance Test Data: data sets with typed columns, CSV import/export that keeps leading zeros and
+  Unicode, secret columns in the Credential Manager, rule and AI row generators, binding of request values (JSON,
+  form, query, header) to columns, pre-run checks for missing columns, wrong types and too few rows. See
+  PATCH_23.3.25.md.
 
 ## Quality
 

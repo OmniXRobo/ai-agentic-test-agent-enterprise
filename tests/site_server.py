@@ -18,6 +18,11 @@ SITE = Path(__file__).parent / "site"
 PERF_SESSIONS: dict[str, dict] = {}  # sid -> {"csrf": ..., "user": ...}
 PERF_TOKENS: set[str] = set()
 PERF_PASSWORD = "S3cret+pass/1"
+# 23.3.25: users a data-driven script logs in with (password per user), and what the server saw
+PERF_USERS = {"user001": ("Pässwörd1!", "Zoë Müller"), "user002": ("p,a\"ss2", "東京 太郎"),
+              "user003": ("pass 3", "O'Brien")}
+PERF_ACCOUNTS = {"00123", "00456", "07890"}
+PERF_SEEN: dict[str, set] = {"logins": set(), "names": set(), "accounts": set()}
 
 LOGIN_PAGE = """<!doctype html><html><head><title>Perf login</title></head><body>
 <form method="post" action="/perf/login"><input type="hidden" name="csrf" value="{csrf}">
@@ -70,6 +75,14 @@ class SiteHandler(SimpleHTTPRequestHandler):
             else:
                 self._send(200, HOME_PAGE.format(user=s["user"]).encode())
             return True
+        if path == "/perf/api/account":
+            from urllib.parse import parse_qs, urlsplit
+            acc = (parse_qs(urlsplit(self.path).query).get("id") or [""])[0]
+            ok = acc in PERF_ACCOUNTS
+            if ok:
+                PERF_SEEN["accounts"].add(acc)
+            self._send(200 if ok else 404, json.dumps({"id": acc, "found": ok}).encode(), "application/json")
+            return True
         if path == "/perf/api/orders":
             auth = self.headers.get("Authorization") or ""
             ok = auth.startswith("Bearer ") and auth[7:] in PERF_TOKENS
@@ -90,6 +103,20 @@ class SiteHandler(SimpleHTTPRequestHandler):
                 self._send(302, headers={"Location": "/perf/home"})
             else:
                 self._send(403, b"Forbidden: bad token or password")
+            return
+        if path == "/perf/api/login":
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                data = {}
+            user = PERF_USERS.get(data.get("username"))
+            if user and user[0] == data.get("password") and user[1] == data.get("display_name"):
+                PERF_SEEN["logins"].add(data["username"])
+                PERF_SEEN["names"].add(data["display_name"])
+                self._send(200, json.dumps({"ok": True, "user": data["username"]}).encode(), "application/json")
+            else:
+                self._send(401, json.dumps({"ok": False, "got": {k: data.get(k) for k in ("username", "display_name")}},
+                                           ensure_ascii=False).encode(), "application/json")
             return
         if path == "/perf/api/token":
             s = PERF_SESSIONS.get(_perf_sid(self) or "")
