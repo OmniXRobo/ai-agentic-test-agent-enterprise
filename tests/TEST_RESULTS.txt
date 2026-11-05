@@ -1,9 +1,9 @@
 23.3.27 (5 Nov 2026): full suite 500 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
-  new: test_perf_live_23327.py (6 tests): a synthetic results file read in two parts (a half-written last row is not
+  new: test_perf_live_23327.py (7 tests): a synthetic results file read in two parts (a half-written last row is not
   read): totals, transactions counted apart, a second with no samples shown as 0, open seconds, per-second 95th
   percentile, rolling 30 s percentiles and error rate, live target indications, per-request figures, top and latest
   errors; long runs merged to at most 600 points with bounded memory; the rate early in a run over the seconds seen;
-  planned users from thread groups; unknown run 404; a real JMeter run polled while it runs (samples never more
+  planned users from thread groups; unknown run 404; a run that starts while its state is read; a real JMeter run polled while it runs (samples never more
   than the server received, users, planned curve, transactions, targets) and after it ends.
   UI checked in Chromium (desktop and phone width): no test running (opens the run once queued), a 3-step stress
   run while running, and after it ended. No script errors on the page.

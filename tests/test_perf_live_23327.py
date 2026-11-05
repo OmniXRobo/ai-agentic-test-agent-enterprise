@@ -173,3 +173,13 @@ def test_early_in_a_run_the_rate_is_over_the_seconds_seen_not_the_whole_window(t
     w = m.snapshot(T0 + 2500)["window"]
     assert w["seconds"] == 2 and w["throughput"] == 2.0  # 4 requests in 2 s, not 4 in 30 s
     assert m.summary()["recent_throughput"] == 2.0
+
+
+def test_a_queued_run_that_starts_while_read_has_no_position(client, monkeypatch):
+    """The run row is read as QUEUED, then the queue shows it running (it started in between): no error."""
+    rt = client.app.state.runtime
+    rt.db.execute("INSERT INTO perf_runs (run_id, plan_id, kind, name, status, state, queued_at, started_at, folder)"
+                  " VALUES ('PERF-race', 'p', 'load', 'Race', 'RUNNING', 'QUEUED', '2026-11-05T00:00:00', '', ?)", (str(Path("x")),))
+    monkeypatch.setattr(rt.performance, "queue", lambda: [{"run_id": "PERF-race", "state": "RUNNING"}])
+    r = client.get("/api/performance/runs/PERF-race/live")
+    assert r.status_code == 200 and r.json()["run"]["position"] is None

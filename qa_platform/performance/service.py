@@ -1314,7 +1314,7 @@ class PerformanceService:
         row["validation_run"] = plan.get("mode") == "validation"
         row["environment"] = (config.get("environment") or {}).get("name")
         if row["state"] == "QUEUED":
-            row["position"] = next((q["position"] for q in self.queue() if q["run_id"] == run_id), None)
+            row["position"] = next((q.get("position") for q in self.queue() if q["run_id"] == run_id), None)  # it may have just started
         dash = self._dash.get(run_id)
         monitor = self._monitors.get(run_id)
         out: dict[str, Any] = {"run": row, "dashboard": dash.snapshot(int(time.time() * 1000)) if dash else None,
