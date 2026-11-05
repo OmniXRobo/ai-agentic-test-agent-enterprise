@@ -7,6 +7,7 @@ import { lineChart, fmtDuration } from "../charts.js";
 import { analyzeRun } from "./defect-review.js";
 import { scriptEditor, importCard } from "./perf-script.js";
 import { recordCard, recorderView } from "./perf-record.js";
+import { validationCard, rateKpi } from "./perf-workload.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
 const ROUTE_FOR_KIND = { load: "perf-load", stress: "perf-stress", spike: "perf-spike", soak: "perf-soak" };
@@ -333,8 +334,8 @@ async function runDetail(view, runId) {
   const file = (path) => `/api/performance/runs/${encodeURIComponent(run.run_id)}/files/${path}`;
   view.innerHTML = `
     <p><a href="#/perf-results">← Performance Results</a></p>
-    <div class="card"><div class="row"><h2 style="margin:0">${esc(KINDS[run.kind])} test: ${esc(run.name)}</h2>
-      ${statePill(run.state)} ${verdictPill(run.verdict)}
+    <div class="card"><div class="row"><h2 style="margin:0">${run.config?.plan?.mode === "validation" ? `One-user validation: ${esc(run.name.replace(/ \(one-user validation\)$/, ""))}` : `${esc(KINDS[run.kind])} test: ${esc(run.name)}`}</h2>
+      ${statePill(run.state)} ${m?.validation ? `<span class="pill ${{ PASS: "PASS", FAIL: "FAIL" }[m.validation.status] || "WARN"}" title="One-user validation">Validation ${esc(m.validation.status)}</span>` : run.config?.plan?.mode === "validation" ? '<span class="pill WAITING">One-user validation</span>' : verdictPill(run.verdict)}
       <span class="spacer"></span>
       ${run.state === "QUEUED" ? '<button class="btn" id="cancelRun">Cancel</button>' : ""}
       ${["VALIDATING", "RUNNING"].includes(run.state) ? '<button class="btn" id="stopRun" title="JMeter stops cleanly and writes its results and report">Stop</button>' : ""}
@@ -358,15 +359,17 @@ async function runDetail(view, runId) {
       ${kpi("Average", ms(o.avg_ms), `min ${ms(o.min_ms)} · max ${ms(o.max_ms)}`)}
       ${kpi("95th percentile", ms(o.p95_ms), `90th ${ms(o.p90_ms)} · 99th ${ms(o.p99_ms)}`)}
       ${kpi("Throughput", `${o.throughput.toFixed(1)} req/s`, `${o.received_kb_s} KB/s received`)}
+      ${rateKpi(m.rate)}
     </div>
+    ${validationCard(m.validation)}
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:12px">
       <div class="card" id="cResp"></div><div class="card" id="cTput"></div>
       <div class="card" id="cErr"></div><div class="card" id="cUsers"></div>
     </div>
-    <div class="card" style="margin-top:12px"><h3>SLA checks</h3>
+    ${m.validation ? "" : `<div class="card" style="margin-top:12px"><h3>SLA checks</h3>
       ${sla?.checks.length ? `<table class="data"><thead><tr><th>Check</th><th>Scope</th><th>Limit</th><th>Actual</th><th>Result</th></tr></thead><tbody>
         ${sla.checks.map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.scope)}</td><td>${c.name === "Throughput" ? "≥" : "≤"} ${esc(c.limit)} ${esc(c.unit)}</td><td>${esc(c.actual)} ${esc(c.unit)}</td><td><span class="pill ${esc(c.status)}">${esc(c.status)}</span></td></tr>`).join("")}
-      </tbody></table>` : '<p class="muted">Target not specified: no limits were set on this plan, so the measurements are reported without PASS or FAIL.</p>'}</div>
+      </tbody></table>` : '<p class="muted">Target not specified: no limits were set on this plan, so the measurements are reported without PASS or FAIL.</p>'}</div>`}
     <div class="card" style="margin-top:12px"><h3>Requests</h3><div style="overflow-x:auto">
       <table class="data"><thead><tr><th>Request</th><th>Samples</th><th>Errors</th><th>Avg</th><th>90th</th><th>95th</th><th>99th</th><th>Max</th><th>Req/s</th><th>Codes</th></tr></thead><tbody>
       ${[...m.requests, o].map((r) => `<tr${r === o ? ' style="font-weight:600"' : ""}><td>${esc(r.label)}</td><td>${r.samples}</td><td>${r.error_pct}%</td><td>${ms(r.avg_ms)}</td><td>${ms(r.p90_ms)}</td><td>${ms(r.p95_ms)}</td><td>${ms(r.p99_ms)}</td><td>${ms(r.max_ms)}</td><td>${r.throughput}</td>
@@ -541,6 +544,7 @@ async function scenarioEditor(view, id) {
       <div class="row"><h2 style="margin:0">${isNew ? "New performance scenario" : esc(sc.name)}</h2>
         ${isNew ? "" : `<span class="muted">${esc(sc.id)}</span>${sc.archived ? ' <span class="pill WARN">Archived</span>' : ""}`}<span class="spacer"></span>
         ${isNew ? "" : `<button class="btn" type="button" id="checkBtn">Check before run</button>
+          <button class="btn" type="button" id="validateBtn" ${sc.plan_id && !sc.archived ? "" : "disabled"} title="Every thread group once with one user: checks requests and correlations before a load test">Validate (1 user)</button>
           <button class="btn" type="button" id="runBtn" ${sc.plan_id && !sc.archived ? "" : "disabled"}>Run now</button>
           <button class="btn" type="button" id="cloneBtn">Clone</button>
           <button class="btn" type="button" id="archiveBtn">${sc.archived ? "Restore" : "Archive"}</button>`}
@@ -592,6 +596,10 @@ async function scenarioEditor(view, id) {
   });
   view.querySelector("#runBtn").addEventListener("click", async () => {
     try { const r = await post("run", {}); toast("Queued. It starts when no other performance test is running.", "success"); location.hash = `#/perf-results?run=${encodeURIComponent(r.run_id)}`; }
+    catch (err) { toast(err.message, "error"); }
+  });
+  view.querySelector("#validateBtn").addEventListener("click", async () => {
+    try { const r = await post("validate", {}); toast("Validation run queued: one user, one iteration.", "success"); location.hash = `#/perf-results?run=${encodeURIComponent(r.run_id)}`; }
     catch (err) { toast(err.message, "error"); }
   });
   view.querySelector("#cloneBtn").addEventListener("click", async () => {

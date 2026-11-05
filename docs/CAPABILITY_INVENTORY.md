@@ -49,6 +49,9 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
   Unicode, secret columns in the Credential Manager, rule and AI row generators, binding of request values (JSON,
   form, query, header) to columns, pre-run checks for missing columns, wrong types and too few rows. See
   PATCH_23.3.25.md.
+* 23.3.26: Workload tab: load, stress, spike and soak shapes from plain thread groups (saved script unchanged), a
+  request-rate target that paces a fixed user pool with the Precise Throughput Timer (achieved rate shown next to the
+  target), and a one-user validation run with correlation checks and a per-request result. See PATCH_23.3.26.md.
 
 ## Quality
 

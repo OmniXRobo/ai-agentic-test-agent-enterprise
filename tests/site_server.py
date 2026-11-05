@@ -22,7 +22,7 @@ PERF_PASSWORD = "S3cret+pass/1"
 PERF_USERS = {"user001": ("Pässwörd1!", "Zoë Müller"), "user002": ("p,a\"ss2", "東京 太郎"),
               "user003": ("pass 3", "O'Brien")}
 PERF_ACCOUNTS = {"00123", "00456", "07890"}
-PERF_SEEN: dict[str, set] = {"logins": set(), "names": set(), "accounts": set()}
+PERF_SEEN: dict = {"logins": set(), "names": set(), "accounts": set(), "hits": []}
 
 LOGIN_PAGE = """<!doctype html><html><head><title>Perf login</title></head><body>
 <form method="post" action="/perf/login"><input type="hidden" name="csrf" value="{csrf}">
@@ -83,6 +83,13 @@ class SiteHandler(SimpleHTTPRequestHandler):
                 PERF_SEEN["accounts"].add(acc)
             self._send(200 if ok else 404, json.dumps({"id": acc, "found": ok}).encode(), "application/json")
             return True
+        if path == "/perf/api/profile":  # 23.3.26: needs the session id from /perf/api/session
+            from urllib.parse import parse_qs, urlsplit
+            sid = (parse_qs(urlsplit(self.path).query).get("session") or [""])[0]
+            PERF_SEEN["hits"].append(path)
+            ok = sid in PERF_TOKENS
+            self._send(200 if ok else 401, json.dumps({"ok": ok}).encode(), "application/json")
+            return True
         if path == "/perf/api/orders":
             auth = self.headers.get("Authorization") or ""
             ok = auth.startswith("Bearer ") and auth[7:] in PERF_TOKENS
@@ -117,6 +124,12 @@ class SiteHandler(SimpleHTTPRequestHandler):
             else:
                 self._send(401, json.dumps({"ok": False, "got": {k: data.get(k) for k in ("username", "display_name")}},
                                            ensure_ascii=False).encode(), "application/json")
+            return
+        if path == "/perf/api/session":  # 23.3.26: hands out a session id to correlate
+            token = secrets.token_hex(8)
+            PERF_TOKENS.add(token)
+            PERF_SEEN["hits"].append(path)
+            self._send(200, json.dumps({"session": token}).encode(), "application/json")
             return
         if path == "/perf/api/token":
             s = PERF_SESSIONS.get(_perf_sid(self) or "")

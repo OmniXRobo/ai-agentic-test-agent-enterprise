@@ -12,7 +12,8 @@ from ..errors import QAError
 from ..logging_setup import get_logger
 from ..performance import script as jscript
 from ..performance.jmx import build_jmx
-from ..performance.models import PerfEnvironment, PerfPlan, PerfScenario
+from ..performance import workload as wl
+from ..performance.models import PerfEnvironment, PerfPlan, PerfScenario, Workload
 from ..runtime import Runtime
 from .deps import runtime
 
@@ -443,6 +444,39 @@ def run_plan(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "run_id": run_id, "state": "QUEUED"}
 
 
+# ---- 23.3.26: workload and the one-user validation run ------------------------------------------------------
+
+class WorkloadPreviewIn(BaseModel):
+    workload: Workload
+    plan_id: str | None = None
+
+
+@router.get("/workload/shapes")
+def workload_shapes() -> dict[str, Any]:
+    return {"ok": True, "shapes": wl.SHAPES, "models": wl.MODELS, "rate_shapes": list(wl.RATE_SHAPES)}
+
+
+@router.post("/workload/preview")
+def workload_preview(body: WorkloadPreviewIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """The planned users over time, peak, duration and problems of a workload. Nothing is saved or run."""
+    return {"ok": True, **rt.performance.workload_preview(body.workload, body.plan_id)}
+
+
+@router.put("/plans/{plan_id}/workload")
+def save_workload(plan_id: str, body: Workload, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Keep the workload of a script. Saving never starts a run."""
+    return {"ok": True, **rt.performance.save_workload(plan_id, body)}
+
+
+@router.post("/plans/{plan_id}/validate", status_code=202)
+def validate_plan(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Queue the one-user validation run: every thread group once with one user, one after another."""
+    rt.performance.get_plan(plan_id)
+    _require_tools(rt)
+    run_id = rt.performance.validate(plan_id)
+    return {"ok": True, "run_id": run_id, "state": "QUEUED"}
+
+
 class StopIn(BaseModel):
     mode: str = Field(default="graceful", pattern="^(graceful|emergency)$")
 
@@ -565,6 +599,18 @@ def run_scenario(scenario_id: str, rt: Runtime = Depends(runtime)) -> dict[str, 
     rt.performance.get_scenario(scenario_id)
     _require_tools(rt)
     run_id = rt.performance.run_scenario(scenario_id, trigger="manual")
+    return {"ok": True, "run_id": run_id, "state": "QUEUED"}
+
+
+@router.post("/scenarios/{scenario_id}/validate", status_code=202)
+def validate_scenario(scenario_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.3.26: the one-user validation run of the scenario's script, against the scenario's environment."""
+    sc = rt.performance.get_scenario(scenario_id)
+    if not sc.plan_id:
+        raise QAError("PERF_SCENARIO_NO_SCRIPT", "This scenario has no script yet. Create or choose one first.",
+                      status=409)
+    _require_tools(rt)
+    run_id = rt.performance.validate(sc.plan_id, scenario_id=sc.id)
     return {"ok": True, "run_id": run_id, "state": "QUEUED"}
 
 

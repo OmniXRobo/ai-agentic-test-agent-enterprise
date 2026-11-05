@@ -1,7 +1,7 @@
 """23.3.22: checks before a performance run starts.
 
 Each check is ``{"id", "name", "status": PASS|WARN|FAIL, "detail", "fix"}``. Any FAIL blocks the run; WARN is shown and
-recorded. Nothing here sends traffic to the target: the one-user validation run arrives with the workload milestone.
+recorded. Nothing here sends traffic to the target (the one-user validation run, 23.3.26, is a run of its own).
 """
 
 from __future__ import annotations
@@ -140,6 +140,7 @@ def target_checks(plan: PerfPlan, env: PerfEnvironment | None) -> list[dict[str,
         hosts = sorted({(urlsplit(r.url).hostname or "").lower() for r in plan.requests})
     peak = plan.peak_users()
     duration = plan.total_duration_s()
+    validation = plan.mode == "validation"  # one user, one iteration: bounded by its own timeout
     if unresolved:
         # A host only known at run time (a variable without a default, or a -J property) cannot be checked
         strict = env is not None and bool(env.allowed_hosts)
@@ -148,7 +149,7 @@ def target_checks(plan: PerfPlan, env: PerfEnvironment | None) -> list[dict[str,
                              f"The host of {len(unresolved)} request(s) is not known before the run: {shown}.",
                              "Give the variable a value under the Test Plan's variables or HTTP Request Defaults, "
                              "so the host can be checked."))
-    if duration is None:
+    if duration is None and not validation:
         limited = env is not None and bool(env.max_duration_s)
         checks.append(_check("duration_unknown", "Duration", "FAIL" if limited else "WARN",
                              "The script's duration depends on loop counts, so it is not known before the run"
@@ -175,7 +176,7 @@ def target_checks(plan: PerfPlan, env: PerfEnvironment | None) -> list[dict[str,
             checks.append(_check("hosts", "Allowed hosts", "WARN",
                                  f"{env.name} has no allowed hosts, so requests may go to any host: {', '.join(hosts)}.",
                                  "List the hosts you are authorized to test in the environment."))
-        if env.max_duration_s and duration is not None and duration > env.max_duration_s:
+        if env.max_duration_s and duration is not None and duration > env.max_duration_s and not validation:
             checks.append(_check("duration", "Duration limit", "FAIL",
                                  f"The test lasts {duration} s; {env.name} allows at most {env.max_duration_s} s.",
                                  "Shorten the test or raise the environment's limit."))
