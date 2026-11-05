@@ -23,6 +23,7 @@ MIN_JAVA = 8
 DEFAULT_MIN_FREE_MB = 1024
 DEFAULT_MAX_USERS = 50  # used when a scenario has no environment
 REQUIRED_PLUGINS: list[str] = []  # generated plans use built-in JMeter elements only
+UNKNOWN_DURATION_TIMEOUT_S = 2 * 3600  # a script that runs a number of loops: end it after this long
 
 
 def _check(cid: str, name: str, status: str, detail: str, fix: str = "") -> dict[str, Any]:
@@ -130,9 +131,30 @@ def disk_check(folder: Path, min_free_mb: int) -> dict[str, Any]:
 
 def target_checks(plan: PerfPlan, env: PerfEnvironment | None) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
-    hosts = sorted({(urlsplit(r.url).hostname or "").lower() for r in plan.requests})
+    unresolved: list[str] = []
+    if plan.script:
+        from .script import analyze_cached
+        summary = analyze_cached(plan.script)["summary"]
+        hosts, unresolved = summary["hosts"], summary["unresolved_urls"]
+    else:
+        hosts = sorted({(urlsplit(r.url).hostname or "").lower() for r in plan.requests})
     peak = plan.peak_users()
-    duration = max(g.delay_s + g.duration_s for g in plan.thread_groups())
+    duration = plan.total_duration_s()
+    if unresolved:
+        # A host only known at run time (a variable without a default, or a -J property) cannot be checked
+        strict = env is not None and bool(env.allowed_hosts)
+        shown = ", ".join(sorted(set(unresolved))[:5])
+        checks.append(_check("hosts_unresolved", "Request hosts", "FAIL" if strict else "WARN",
+                             f"The host of {len(unresolved)} request(s) is not known before the run: {shown}.",
+                             "Give the variable a value under the Test Plan's variables or HTTP Request Defaults, "
+                             "so the host can be checked."))
+    if duration is None:
+        limited = env is not None and bool(env.max_duration_s)
+        checks.append(_check("duration_unknown", "Duration", "FAIL" if limited else "WARN",
+                             "The script's duration depends on loop counts, so it is not known before the run"
+                             + (f"; {env.name} allows at most {env.max_duration_s} s." if limited
+                                else f". The run is ended after {UNKNOWN_DURATION_TIMEOUT_S // 3600} hours."),
+                             "Tick \"Use duration\" on the thread groups and set a duration."))
     if env is None:
         checks.append(_check("environment", "Target environment", "WARN",
                              "No environment is set on this scenario, so no host allowlist applies.",
@@ -153,7 +175,7 @@ def target_checks(plan: PerfPlan, env: PerfEnvironment | None) -> list[dict[str,
             checks.append(_check("hosts", "Allowed hosts", "WARN",
                                  f"{env.name} has no allowed hosts, so requests may go to any host: {', '.join(hosts)}.",
                                  "List the hosts you are authorized to test in the environment."))
-        if env.max_duration_s and duration > env.max_duration_s:
+        if env.max_duration_s and duration is not None and duration > env.max_duration_s:
             checks.append(_check("duration", "Duration limit", "FAIL",
                                  f"The test lasts {duration} s; {env.name} allows at most {env.max_duration_s} s.",
                                  "Shorten the test or raise the environment's limit."))

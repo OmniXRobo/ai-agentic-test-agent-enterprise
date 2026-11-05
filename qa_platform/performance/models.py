@@ -61,27 +61,47 @@ class ThreadGroupSpec(BaseModel):
     ramp_up_s: int
     delay_s: int
     duration_s: int
+    duration_known: bool = True  # 23.3.23: False when a script's thread group runs a number of loops instead
 
 
 class PerfPlan(BaseModel):
     id: str = ""
     name: str = Field(min_length=1, max_length=200)
     kind: Kind = "load"
-    requests: list[HttpRequest] = Field(min_length=1)
+    requests: list[HttpRequest] = []
     profile: LoadProfile = LoadProfile()
     sla: Sla = Sla()
-    source: str | None = None  # e.g. "discovery DISC-..." or "manual"
+    source: str | None = None  # e.g. "discovery DISC-...", "manual", "import plan.jmx"
+    # 23.3.23: when set, the plan is a script (JMX) edited in the script editor. The JMX is then what runs, and
+    # `requests` and `profile` are a read-only summary of it, kept for lists, checks and reports.
+    script: str | None = None
+    script_version: int = 0
+    # 23.3.24: values JMeter reads as ${__P(name)} from the Windows Credential Manager at run time (never in the JMX)
+    secret_names: list[str] = []
+    recording: dict | None = None  # what the recorder kept, left out and correlated
     created_at: str | None = None
     updated_at: str | None = None
 
+    @property
+    def is_script(self) -> bool:
+        return bool(self.script)
+
     @model_validator(mode="after")
     def _spike_window(self) -> "PerfPlan":
+        if not self.requests and not self.script:
+            raise ValueError("A plan needs at least one request.")
+        if self.script:
+            return self
         p = self.profile
         if self.kind == "spike" and p.spike_at_s + p.spike_duration_s > p.duration_s:
             raise ValueError("The spike must end before the test duration.")
         return self
 
     def thread_groups(self) -> list[ThreadGroupSpec]:
+        if self.script:
+            from .script import thread_group_specs
+            return [g for g in thread_group_specs(self.script) if g.users or g.duration_s] or [
+                ThreadGroupSpec(name="(none)", users=0, ramp_up_s=0, delay_s=0, duration_s=0, duration_known=False)]
         p = self.profile
         if self.kind == "stress":
             base, extra = divmod(p.users, p.steps)
@@ -104,7 +124,17 @@ class PerfPlan(BaseModel):
         return [ThreadGroupSpec(name="Users", users=p.users, ramp_up_s=p.ramp_up_s, delay_s=0, duration_s=p.duration_s)]
 
     def peak_users(self) -> int:
+        if self.script:
+            from .script import analyze_cached
+            return analyze_cached(self.script)["summary"]["peak_users"]
         return sum(g.users for g in self.thread_groups())
+
+    def total_duration_s(self) -> int | None:
+        """How long the test lasts, or None when a script's duration depends on loop counts."""
+        if self.script:
+            from .script import analyze_cached
+            return analyze_cached(self.script)["summary"]["total_duration_s"]
+        return max(g.delay_s + g.duration_s for g in self.thread_groups())
 
 
 def new_plan_id() -> str:

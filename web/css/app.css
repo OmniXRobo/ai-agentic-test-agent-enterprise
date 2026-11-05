@@ -513,3 +513,19 @@ dl.meta dd { margin: 0; overflow-wrap: anywhere; }
 .data-menu { position: absolute; z-index: 70; width: 260px; max-height: 320px; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; box-shadow: var(--shadow); }
 .data-opt { text-align: left; background: transparent; border: 0; color: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; font: inherit; }
 .data-opt:hover, .data-opt:focus-visible { background: var(--accent-soft, rgba(37, 99, 235, .12)); }
+
+/* ---- 23.3.23 performance script editor ---- */
+.jtree-wrap { max-height: 620px; overflow: auto; margin-top: 8px; }
+.jtree { list-style: none; margin: 0; padding-left: 16px; }
+.jtree-wrap > .jtree { padding-left: 0; }
+.jnode { padding: 3px 6px; border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jnode:hover, .jnode:focus-visible { background: var(--surface-2); outline: none; }
+.jnode.sel { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.jnode.off { opacity: .55; text-decoration: line-through; }
+.jnode .jicon { display: inline-block; width: 1.2em; text-align: center; color: var(--accent); }
+.problems { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+.pairs { table-layout: fixed; width: 100%; }
+.pairs input { width: 100%; min-width: 0; box-sizing: border-box; }
+.pairs th:last-child, .pairs td:last-child { width: 76px; }
+.problems ul { margin: 4px 0 0; padding-left: 18px; }
+pre.code.diff.jdiff span { display: block; }

@@ -1000,7 +1000,9 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
                 raise out["error"]
             return self._performance_result(out["result"], progress), f"#/perf-results?run={run_id}"
 
-        return Outcome("accepted", f"Preparing and running a {_duration_words(plan.profile.duration_s)} "
+        total = plan.total_duration_s()
+        length = _duration_words(total) if total is not None else "loop-based"
+        return Outcome("accepted", f"Preparing and running a {length} "
                                    f"{plan.name} {kind} test with {users} virtual users.",
                        navigate="#/workflow", job=job, owner="jmeter_load",
                        job_title=f"Voice: {users}-user {plan.name} {kind} test",

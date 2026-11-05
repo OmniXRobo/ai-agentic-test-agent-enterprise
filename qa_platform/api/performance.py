@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..errors import QAError
 from ..logging_setup import get_logger
+from ..performance import script as jscript
 from ..performance.jmx import build_jmx
 from ..performance.models import PerfEnvironment, PerfPlan, PerfScenario
 from ..runtime import Runtime
@@ -29,6 +30,36 @@ class FromDiscoveryIn(BaseModel):
     name: str = ""
     kind: str = Field(default="load", pattern="^(load|stress|spike|soak)$")
     include_pages: bool = True
+
+
+class ImportIn(BaseModel):
+    jmx: str = Field(min_length=1)
+    filename: str = ""
+    name: str = ""
+    kind: str = Field(default="load", pattern="^(load|stress|spike|soak)$")
+
+
+class ScriptIn(BaseModel):
+    script: str = Field(min_length=1)
+
+
+class ApplyIn(BaseModel):
+    script: str = Field(min_length=1)
+    ops: list[dict[str, Any]] = []
+
+
+class NodeIn(BaseModel):
+    script: str = Field(min_length=1)
+    node: str
+
+
+class SaveScriptIn(BaseModel):
+    script: str = Field(min_length=1)
+    base_version: int | None = None
+    note: str = ""
+    name: str | None = None
+    kind: str | None = Field(default=None, pattern="^(load|stress|spike|soak)$")
+    sla: dict[str, Any] | None = None
 
 
 @router.get("/environment")
@@ -76,6 +107,8 @@ def update_plan(plan_id: str, body: PerfPlan, rt: Runtime = Depends(runtime)) ->
     current = rt.performance.get_plan(plan_id)
     body.id = plan_id
     body.source = current.source
+    if current.script:  # the form cannot change a script; only its name, type and targets
+        body.script, body.script_version = current.script, current.script_version
     return {"ok": True, "plan": rt.performance.save_plan(body).model_dump()}
 
 
@@ -88,8 +121,181 @@ def delete_plan(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 @router.get("/plans/{plan_id}/jmx", response_class=PlainTextResponse)
 def plan_jmx(plan_id: str, rt: Runtime = Depends(runtime)) -> PlainTextResponse:
     plan = rt.performance.get_plan(plan_id)
-    return PlainTextResponse(build_jmx(plan), media_type="application/xml",
+    return PlainTextResponse(plan.script or build_jmx(plan), media_type="application/xml",
                              headers={"Content-Disposition": f'attachment; filename="{plan_id}.jmx"'})
+
+
+# ---- 23.3.23: script editor ----------------------------------------------------------------------------------------
+
+@router.post("/plans/import", status_code=201)
+def import_plan(body: ImportIn, scenario_id: str | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Import a JMX file. Elements the editor has no form for are kept unchanged. Nothing is run."""
+    plan = rt.performance.import_script(body.jmx, name=body.name, kind=body.kind, filename=body.filename,
+                                        scenario_id=scenario_id)
+    return {"ok": True, "plan": plan.model_dump(exclude={"script"})}
+
+
+@router.post("/plans/{plan_id}/script/convert")
+def convert_plan(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    plan = rt.performance.convert_to_script(plan_id)
+    return {"ok": True, "plan": plan.model_dump(exclude={"script"})}
+
+
+@router.get("/plans/{plan_id}/script")
+def get_script(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **rt.performance.script_view(plan_id), "templates": jscript.templates()}
+
+
+@router.put("/plans/{plan_id}/script")
+def save_script(plan_id: str, body: SaveScriptIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Save the script as a new version. Saving never starts a run."""
+    plan = rt.performance.save_script(plan_id, body.script, base_version=body.base_version, note=body.note,
+                                      name=body.name, kind=body.kind, sla_=body.sla)
+    return {"ok": True, **rt.performance.script_view(plan.id)}
+
+
+@router.post("/script/analyze")
+def analyze_script(body: ScriptIn) -> dict[str, Any]:
+    """Validate JMX text (the Raw JMX view): the tree, what it does and any problems. Nothing is saved."""
+    return {"ok": True, "script": jscript.normalize(body.script), **jscript.analyze(body.script)}
+
+
+@router.post("/script/apply")
+def apply_script(body: ApplyIn) -> dict[str, Any]:
+    """Apply editor operations to a working copy of the script. Nothing is saved until PUT .../script."""
+    return {"ok": True, **jscript.apply(body.script, body.ops)}
+
+
+@router.post("/script/node")
+def script_node(body: NodeIn) -> dict[str, Any]:
+    return {"ok": True, "node": jscript.node_details(body.script, body.node)}
+
+
+@router.get("/plans/{plan_id}/versions")
+def script_versions(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": rt.performance.script_versions(plan_id)}
+
+
+@router.get("/plans/{plan_id}/versions/{version}", response_class=PlainTextResponse)
+def script_version(plan_id: str, version: int, rt: Runtime = Depends(runtime)) -> PlainTextResponse:
+    return PlainTextResponse(rt.performance.script_version(plan_id, version), media_type="application/xml",
+                             headers={"Content-Disposition": f'attachment; filename="{plan_id}-v{version}.jmx"'})
+
+
+@router.get("/plans/{plan_id}/diff")
+def script_diff(plan_id: str, a: int, b: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "diff": rt.performance.script_diff(plan_id, a, b)}
+
+
+@router.post("/plans/{plan_id}/versions/{version}/restore")
+def restore_version(plan_id: str, version: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    plan = rt.performance.restore_version(plan_id, version)
+    return {"ok": True, "version": plan.script_version}
+
+
+# ---- 23.3.24: browser recording, HAR import, saved secrets --------------------------------------------------------
+
+class RecordIn(BaseModel):
+    url: str = Field(min_length=1, pattern=r"^https?://")
+    allowed_hosts: list[str] = []
+    include_static: bool = False
+    auto_steps: bool = True
+    browser: str = Field(default="chromium", pattern="^(chromium|msedge|chrome|firefox)$")
+
+
+class StepIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class RecordPreviewIn(BaseModel):
+    allowed_hosts: list[str] = []
+    include_static: bool | None = None
+    exclude_ids: list[int] = []
+
+
+class RecordScriptIn(RecordPreviewIn):
+    name: str = ""
+    kind: str = Field(default="load", pattern="^(load|stress|spike|soak)$")
+    scenario_id: str | None = None
+
+
+class HarIn(BaseModel):
+    har: dict[str, Any]
+    name: str = ""
+    kind: str = Field(default="load", pattern="^(load|stress|spike|soak)$")
+    allowed_hosts: list[str] = Field(min_length=1)
+    include_static: bool = False
+    filename: str = ""
+    scenario_id: str | None = None
+
+
+class SecretIn(BaseModel):
+    value: str = Field(min_length=1)
+
+
+@router.post("/recordings", status_code=201)
+def start_recording(body: RecordIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Open a browser and record the requests of what the tester does in it. Nothing is load tested."""
+    return {"ok": True, "recording": rt.performance.start_recording(
+        body.url, allowed_hosts=body.allowed_hosts, include_static=body.include_static, auto_steps=body.auto_steps,
+        browser=body.browser)}
+
+
+@router.get("/recordings/current")
+def current_recording(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "recording": rt.performance.recording_view()}
+
+
+@router.post("/recordings/{rec_id}/step")
+def recording_step(rec_id: str, body: StepIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "recording": rt.performance.recording_step(rec_id, body.name)}
+
+
+@router.post("/recordings/{rec_id}/stop")
+def stop_recording(rec_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "recording": rt.performance.stop_recording(rec_id)}
+
+
+@router.post("/recordings/{rec_id}/preview")
+def recording_preview(rec_id: str, body: RecordPreviewIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """What the script would contain: kept and left-out requests, correlated values and secrets. Nothing is saved."""
+    return {"ok": True, **rt.performance.recording_preview(rec_id, allowed_hosts=body.allowed_hosts,
+                                                            include_static=body.include_static,
+                                                            exclude_ids=body.exclude_ids)}
+
+
+@router.post("/recordings/{rec_id}/script", status_code=201)
+def recording_script(rec_id: str, body: RecordScriptIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Save the recording as a script (1 user, 60 s). Nothing is run."""
+    plan = rt.performance.create_from_recording(rec_id, name=body.name, kind=body.kind, scenario_id=body.scenario_id,
+                                                allowed_hosts=body.allowed_hosts, include_static=body.include_static,
+                                                exclude_ids=body.exclude_ids)
+    return {"ok": True, "plan": plan.model_dump(exclude={"script"})}
+
+
+@router.delete("/recordings/{rec_id}")
+def discard_recording(rec_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.performance.discard_recording(rec_id)
+    return {"ok": True}
+
+
+@router.post("/plans/import-har", status_code=201)
+def import_har(body: HarIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    plan = rt.performance.import_har(body.har, name=body.name, kind=body.kind, allowed_hosts=body.allowed_hosts,
+                                     include_static=body.include_static, scenario_id=body.scenario_id,
+                                     filename=body.filename)
+    return {"ok": True, "plan": plan.model_dump(exclude={"script"})}
+
+
+@router.get("/plans/{plan_id}/secrets")
+def plan_secrets(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Names of the script's secrets and whether a value is saved. Values are never returned."""
+    return {"ok": True, "items": rt.performance.script_secrets(plan_id)}
+
+
+@router.put("/plans/{plan_id}/secrets/{name}")
+def save_plan_secret(plan_id: str, name: str, body: SecretIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": rt.performance.save_script_secret(plan_id, name, body.value)}
 
 
 def _require_tools(rt: Runtime) -> None:

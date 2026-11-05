@@ -5,6 +5,8 @@ import { subscribe } from "../store.js";
 import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
 import { lineChart, fmtDuration } from "../charts.js";
 import { analyzeRun } from "./defect-review.js";
+import { scriptEditor, importCard } from "./perf-script.js";
+import { recordCard, recorderView } from "./perf-record.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
 const ROUTE_FOR_KIND = { load: "perf-load", stress: "perf-stress", spike: "perf-spike", soak: "perf-soak" };
@@ -89,8 +91,8 @@ async function environmentCard(box) {
 function planTable(items) {
   if (!items.length) return '<p class="muted">No plans yet.</p>';
   return `<table class="data"><thead><tr><th>Plan</th><th>Type</th><th>Requests</th><th>Peak users</th><th>Duration</th><th>Last run</th></tr></thead><tbody>
-    ${items.map((p) => `<tr class="clickable" data-plan="${esc(p.id)}"><td>${esc(p.name)}<div class="muted">${esc(p.id)}</div></td>
-      <td>${esc(KINDS[p.kind])}</td><td>${p.requests}</td><td>${p.peak_users}</td><td>${esc(fmtDuration(p.duration_s))}</td>
+    ${items.map((p) => `<tr class="clickable" data-plan="${esc(p.id)}" data-script="${p.script ? 1 : ""}"><td>${esc(p.name)}<div class="muted">${esc(p.id)}${p.script ? ` · script v${p.script_version}` : ""}</div></td>
+      <td>${esc(KINDS[p.kind])}</td><td>${p.requests}</td><td>${p.peak_users}</td><td>${p.duration_s === null ? '<span class="muted">by loops</span>' : esc(fmtDuration(p.duration_s))}</td>
       <td>${p.last_run ? `<a href="#/perf-results?run=${esc(p.last_run.run_id)}"><span class="pill ${esc(p.last_run.status)}">${esc(p.last_run.status)}</span></a> <span class="muted">${esc(dateTimeOf(p.last_run.started_at))}</span>` : '<span class="muted">Never</span>'}</td></tr>`).join("")}
     </tbody></table>`;
 }
@@ -99,7 +101,13 @@ async function planList(view, kind) {
   const [{ items }, { items: discoveries }] = await Promise.all([
     api("/api/performance/plans"), api("/api/automation/discoveries").catch(() => ({ items: [] }))]);
   const mine = kind ? items.filter((p) => p.kind === kind) : items;
+  const scenario = params().get("scenario");
+  const imp = importCard((plan) => {
+    location.hash = scenario ? `#/perf-scenarios?scenario=${encodeURIComponent(scenario)}` : `#/${routeName()}?script=${encodeURIComponent(plan.id)}`;
+  }, kind);
+  const rec = recordCard(routeName(), kind);
   view.innerHTML = `
+    ${scenario ? `<p class="muted">The script you create or import here is added to scenario ${esc(scenario)}. <a href="#/perf-scenarios?scenario=${esc(scenario)}">Back to the scenario</a></p>` : ""}
     ${kind ? `<p class="muted">${esc(KIND_HELP[kind])}</p>` : ""}
     <div class="card" id="env"><p class="muted">Checking JMeter…</p></div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:12px">
@@ -111,13 +119,19 @@ async function planList(view, kind) {
           : '<p class="muted">Run an <a href="#/discovery">Application Discovery</a> first to capture your pages and API endpoints.</p>'}
       </form>
       <div class="card"><h3>Create manually</h3><p class="muted">Enter the requests yourself.</p>
-        <a class="btn primary" href="#/${routeName()}?plan=new&kind=${kind || "load"}">New ${esc(KINDS[kind || "load"])} test plan</a></div>
+        <a class="btn primary" href="#/${routeName()}?plan=new&kind=${kind || "load"}${scenario ? `&scenario=${encodeURIComponent(scenario)}` : ""}">New ${esc(KINDS[kind || "load"])} test plan</a></div>
+      ${rec.html}
+      ${imp.html}
     </div>
     <div class="card" style="margin-top:12px"><h3>${kind ? `${esc(KINDS[kind])} test plans` : "All performance test plans"}</h3><div id="plans">${planTable(mine)}</div></div>`;
   environmentCard(view.querySelector("#env"));
+  imp.bind(view);
+  rec.bind(view, (plan) => {
+    location.hash = scenario ? `#/perf-scenarios?scenario=${encodeURIComponent(scenario)}` : `#/${routeName()}?script=${encodeURIComponent(plan.id)}`;
+  });
   view.querySelectorAll("tr[data-plan]").forEach((tr) => tr.addEventListener("click", (e) => {
     if (e.target.closest("a")) return;
-    location.hash = `#/${routeName()}?plan=${encodeURIComponent(tr.dataset.plan)}`;
+    location.hash = `#/${routeName()}?${tr.dataset.script ? "script" : "plan"}=${encodeURIComponent(tr.dataset.plan)}`;
   }));
   view.querySelector("#fromDisc").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -163,6 +177,7 @@ async function planEditor(view, planId) {
     plan = { name: "", kind, requests: [{ name: "Home page", method: "GET", url: "", headers: {} }], profile: { ...DEFAULT_PROFILES[kind] }, sla: { p95_ms: 2000, max_error_pct: 1 } };
   } else {
     ({ plan, thread_groups: groups } = await api(`/api/performance/plans/${encodeURIComponent(planId)}`));
+    if (plan.script) { await scriptEditor(view, plan.id, `#/${routeName()}`); return; }
   }
   const p = plan.profile, s = plan.sla;
   const field = (name, label, value, attrs = "") => `<label>${label}<input name="${name}" type="number" value="${value ?? ""}" ${attrs}></label>`;
@@ -173,7 +188,8 @@ async function planEditor(view, planId) {
         <div class="row"><h2 style="margin:0">${isNew ? "New performance test plan" : esc(plan.name)}</h2>
           ${isNew ? "" : `<span class="muted">${esc(plan.id)}${plan.source ? ` · from ${esc(plan.source)}` : ""}</span>`}
           <span class="spacer"></span>
-          ${isNew ? "" : `<a class="btn" href="/api/performance/plans/${esc(plan.id)}/jmx">Download JMX</a>
+          ${isNew ? "" : `<button class="btn" type="button" id="toScript" title="Edit the JMX as a tree: transactions, extractors, assertions, timers">Open in script editor</button>
+            <a class="btn" href="/api/performance/plans/${esc(plan.id)}/jmx">Download JMX</a>
             <button class="btn" type="button" id="runBtn">Run with JMeter</button><button class="btn" type="button" id="stopBtn" hidden>Stop</button>`}
           <button class="btn primary" type="submit">Save</button></div>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-top:10px">
@@ -245,6 +261,13 @@ async function planEditor(view, planId) {
     }
   });
   if (isNew) return;
+  view.querySelector("#toScript").addEventListener("click", async () => {
+    if (!confirm("Open this plan in the script editor? Its JMX becomes the script and is edited as a tree from now on; this form will no longer change requests or load. Unsaved changes on this form are not included.")) return;
+    try {
+      await api(`/api/performance/plans/${encodeURIComponent(plan.id)}/script/convert`, { method: "POST", body: {} });
+      location.hash = `#/${routeName()}?script=${encodeURIComponent(plan.id)}`;
+    } catch (err) { toast(err.message, "error"); }
+  });
   let runId = null;
   const runBtn = view.querySelector("#runBtn"), stopBtn = view.querySelector("#stopBtn");
   runBtn.addEventListener("click", async () => {
@@ -532,7 +555,7 @@ async function scenarioEditor(view, id) {
       </div>
       <label style="display:block;margin-top:8px">Description <textarea name="description" rows="2" style="width:100%">${esc(sc.description || "")}</textarea></label>
       <label style="display:block;margin-top:8px">Acceptance criteria (performance) <textarea name="acceptance_criteria" rows="2" style="width:100%" placeholder="e.g. Search p95 under 2 s at 10 users">${esc(sc.acceptance_criteria || "")}</textarea></label>
-      ${!isNew ? `<p class="muted">${sc.plan_id ? `<a href="#/${ROUTE_FOR_KIND[sc.kind] || "perf-plans"}?plan=${esc(sc.plan_id)}">Edit the script, workload and targets</a> · ` : ""}<a href="#/perf-plans?plan=new&kind=load&scenario=${esc(sc.id)}">Create a new script for this scenario</a> · The functional browser script and this protocol load script stay separate; JMeter does not run browser JavaScript.</p>` : ""}
+      ${!isNew ? `<p class="muted">${sc.plan_id ? `<a href="#/${ROUTE_FOR_KIND[sc.kind] || "perf-plans"}?plan=${esc(sc.plan_id)}">Edit the script, workload and targets</a> · ` : ""}<a href="#/perf-plans?plan=new&kind=load&scenario=${esc(sc.id)}">Create a new script for this scenario</a> · <a href="#/perf-plans?scenario=${esc(sc.id)}">Import a JMX for it</a> · The functional browser script and this protocol load script stay separate; JMeter does not run browser JavaScript.</p>` : ""}
     </form>
     <div class="card" id="checks" style="margin-top:12px" hidden><h3>Pre-run checks</h3><div id="checkBody"></div></div>
     ${isNew ? "" : `<div class="card" style="margin-top:12px"><h3>Run history</h3>${runs.length ? `<table class="data"><thead><tr><th>Run</th><th>State</th><th>Verdict</th><th>Samples</th><th>95th pct</th><th>Errors</th><th>Started by</th><th>Started</th></tr></thead><tbody>
@@ -595,8 +618,11 @@ export const perfScenarios = {
 function page(kind) {
   return {
     async mount(view) {
-      const planId = params().get("plan");
-      if (planId) await planEditor(view, planId); else await planList(view, kind);
+      const planId = params().get("plan"), scriptId = params().get("script");
+      if (params().get("record")) await recorderView(view, { routeName: routeName(), kind: params().get("kind") || kind,
+        backHref: `#/${routeName()}`, addCleanup: (fn) => cleanups.push(fn) });
+      else if (scriptId) await scriptEditor(view, scriptId, `#/${routeName()}`);
+      else if (planId) await planEditor(view, planId); else await planList(view, kind);
     },
     unmount() { cleanups.forEach((fn) => fn()); cleanups = []; },
   };
