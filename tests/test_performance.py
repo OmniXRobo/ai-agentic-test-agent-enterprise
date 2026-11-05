@@ -175,7 +175,8 @@ def test_real_jmeter_run_metrics_sla_report_and_analysis(client, site):
     assert run["status"] == "FAILED"  # the missing page returns 404 -> error rate SLA fails
     m = run["metrics"]
     labels = {r["label"]: r for r in m["requests"]}
-    assert labels["Login page"]["error_pct"] == 0 and labels["Item API"]["error_pct"] == 0
+    assert labels["Login page"]["error_pct"] == 0 and labels["Item API"]["error_pct"] == 0, (
+        labels["Login page"]["top_errors"], labels["Item API"]["top_errors"])
     assert labels["Missing page"]["error_pct"] == 100 and labels["Missing page"]["response_codes"] == {"404": labels["Missing page"]["samples"]}
     assert run["sla"]["status"] == "FAIL"
     assert any(c["scope"] == "Missing page" and c["name"] == "Error rate" for c in run["sla"]["failed"])
