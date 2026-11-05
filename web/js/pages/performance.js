@@ -6,6 +6,7 @@ import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
 import { lineChart, fmtDuration } from "../charts.js";
 import { analyzeRun } from "./defect-review.js";
 import { scriptEditor, importCard } from "./perf-script.js";
+import { recordCard, recorderView } from "./perf-record.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
 const ROUTE_FOR_KIND = { load: "perf-load", stress: "perf-stress", spike: "perf-spike", soak: "perf-soak" };
@@ -104,6 +105,7 @@ async function planList(view, kind) {
   const imp = importCard((plan) => {
     location.hash = scenario ? `#/perf-scenarios?scenario=${encodeURIComponent(scenario)}` : `#/${routeName()}?script=${encodeURIComponent(plan.id)}`;
   }, kind);
+  const rec = recordCard(routeName(), kind);
   view.innerHTML = `
     ${scenario ? `<p class="muted">The script you create or import here is added to scenario ${esc(scenario)}. <a href="#/perf-scenarios?scenario=${esc(scenario)}">Back to the scenario</a></p>` : ""}
     ${kind ? `<p class="muted">${esc(KIND_HELP[kind])}</p>` : ""}
@@ -118,11 +120,15 @@ async function planList(view, kind) {
       </form>
       <div class="card"><h3>Create manually</h3><p class="muted">Enter the requests yourself.</p>
         <a class="btn primary" href="#/${routeName()}?plan=new&kind=${kind || "load"}${scenario ? `&scenario=${encodeURIComponent(scenario)}` : ""}">New ${esc(KINDS[kind || "load"])} test plan</a></div>
+      ${rec.html}
       ${imp.html}
     </div>
     <div class="card" style="margin-top:12px"><h3>${kind ? `${esc(KINDS[kind])} test plans` : "All performance test plans"}</h3><div id="plans">${planTable(mine)}</div></div>`;
   environmentCard(view.querySelector("#env"));
   imp.bind(view);
+  rec.bind(view, (plan) => {
+    location.hash = scenario ? `#/perf-scenarios?scenario=${encodeURIComponent(scenario)}` : `#/${routeName()}?script=${encodeURIComponent(plan.id)}`;
+  });
   view.querySelectorAll("tr[data-plan]").forEach((tr) => tr.addEventListener("click", (e) => {
     if (e.target.closest("a")) return;
     location.hash = `#/${routeName()}?${tr.dataset.script ? "script" : "plan"}=${encodeURIComponent(tr.dataset.plan)}`;
@@ -613,7 +619,9 @@ function page(kind) {
   return {
     async mount(view) {
       const planId = params().get("plan"), scriptId = params().get("script");
-      if (scriptId) await scriptEditor(view, scriptId, `#/${routeName()}`);
+      if (params().get("record")) await recorderView(view, { routeName: routeName(), kind: params().get("kind") || kind,
+        backHref: `#/${routeName()}`, addCleanup: (fn) => cleanups.push(fn) });
+      else if (scriptId) await scriptEditor(view, scriptId, `#/${routeName()}`);
       else if (planId) await planEditor(view, planId); else await planList(view, kind);
     },
     unmount() { cleanups.forEach((fn) => fn()); cleanups = []; },

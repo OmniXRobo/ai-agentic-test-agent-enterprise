@@ -193,6 +193,111 @@ def restore_version(plan_id: str, version: int, rt: Runtime = Depends(runtime)) 
     return {"ok": True, "version": plan.script_version}
 
 
+# ---- 23.3.24: browser recording, HAR import, saved secrets --------------------------------------------------------
+
+class RecordIn(BaseModel):
+    url: str = Field(min_length=1, pattern=r"^https?://")
+    allowed_hosts: list[str] = []
+    include_static: bool = False
+    auto_steps: bool = True
+    browser: str = Field(default="chromium", pattern="^(chromium|msedge|chrome|firefox)$")
+
+
+class StepIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class RecordPreviewIn(BaseModel):
+    allowed_hosts: list[str] = []
+    include_static: bool | None = None
+    exclude_ids: list[int] = []
+
+
+class RecordScriptIn(RecordPreviewIn):
+    name: str = ""
+    kind: str = Field(default="load", pattern="^(load|stress|spike|soak)$")
+    scenario_id: str | None = None
+
+
+class HarIn(BaseModel):
+    har: dict[str, Any]
+    name: str = ""
+    kind: str = Field(default="load", pattern="^(load|stress|spike|soak)$")
+    allowed_hosts: list[str] = Field(min_length=1)
+    include_static: bool = False
+    filename: str = ""
+    scenario_id: str | None = None
+
+
+class SecretIn(BaseModel):
+    value: str = Field(min_length=1)
+
+
+@router.post("/recordings", status_code=201)
+def start_recording(body: RecordIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Open a browser and record the requests of what the tester does in it. Nothing is load tested."""
+    return {"ok": True, "recording": rt.performance.start_recording(
+        body.url, allowed_hosts=body.allowed_hosts, include_static=body.include_static, auto_steps=body.auto_steps,
+        browser=body.browser)}
+
+
+@router.get("/recordings/current")
+def current_recording(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "recording": rt.performance.recording_view()}
+
+
+@router.post("/recordings/{rec_id}/step")
+def recording_step(rec_id: str, body: StepIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "recording": rt.performance.recording_step(rec_id, body.name)}
+
+
+@router.post("/recordings/{rec_id}/stop")
+def stop_recording(rec_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "recording": rt.performance.stop_recording(rec_id)}
+
+
+@router.post("/recordings/{rec_id}/preview")
+def recording_preview(rec_id: str, body: RecordPreviewIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """What the script would contain: kept and left-out requests, correlated values and secrets. Nothing is saved."""
+    return {"ok": True, **rt.performance.recording_preview(rec_id, allowed_hosts=body.allowed_hosts,
+                                                            include_static=body.include_static,
+                                                            exclude_ids=body.exclude_ids)}
+
+
+@router.post("/recordings/{rec_id}/script", status_code=201)
+def recording_script(rec_id: str, body: RecordScriptIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Save the recording as a script (1 user, 60 s). Nothing is run."""
+    plan = rt.performance.create_from_recording(rec_id, name=body.name, kind=body.kind, scenario_id=body.scenario_id,
+                                                allowed_hosts=body.allowed_hosts, include_static=body.include_static,
+                                                exclude_ids=body.exclude_ids)
+    return {"ok": True, "plan": plan.model_dump(exclude={"script"})}
+
+
+@router.delete("/recordings/{rec_id}")
+def discard_recording(rec_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.performance.discard_recording(rec_id)
+    return {"ok": True}
+
+
+@router.post("/plans/import-har", status_code=201)
+def import_har(body: HarIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    plan = rt.performance.import_har(body.har, name=body.name, kind=body.kind, allowed_hosts=body.allowed_hosts,
+                                     include_static=body.include_static, scenario_id=body.scenario_id,
+                                     filename=body.filename)
+    return {"ok": True, "plan": plan.model_dump(exclude={"script"})}
+
+
+@router.get("/plans/{plan_id}/secrets")
+def plan_secrets(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Names of the script's secrets and whether a value is saved. Values are never returned."""
+    return {"ok": True, "items": rt.performance.script_secrets(plan_id)}
+
+
+@router.put("/plans/{plan_id}/secrets/{name}")
+def save_plan_secret(plan_id: str, name: str, body: SecretIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "items": rt.performance.save_script_secret(plan_id, name, body.value)}
+
+
 def _require_tools(rt: Runtime) -> None:
     env = rt.performance.environment()
     if not env["ready"]:

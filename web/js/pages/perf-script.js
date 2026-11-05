@@ -4,6 +4,7 @@
 import { api } from "../api.js";
 import { esc, toast, dateTimeOf, openModal } from "../util.js";
 import { fmtDuration } from "../charts.js";
+import { secretsHtml, bindSecrets } from "./perf-record.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
 const CATEGORY_ICON = { plan: "▣", thread_group: "◉", sampler: "➜", controller: "▤", extractor: "⇲", assertion: "✓",
@@ -48,7 +49,7 @@ function fieldHtml([key, label, type, def, options]) {
 function pairsEditor(id, rows, nameLabel = "Name", valueLabel = "Value") {
   const row = (r = {}) => `<tr><td><input data-k="name" value="${esc(r.name || "")}"></td><td><input data-k="value" value="${esc(r.value || "")}"></td>
     <td><button class="link-btn" type="button" data-rm>Remove</button></td></tr>`;
-  return `<table class="data" id="${id}"><thead><tr><th>${esc(nameLabel)}</th><th>${esc(valueLabel)}</th><th></th></tr></thead>
+  return `<table class="data pairs" id="${id}"><thead><tr><th>${esc(nameLabel)}</th><th>${esc(valueLabel)}</th><th></th></tr></thead>
     <tbody>${rows.map(row).join("")}</tbody></table><button class="btn" type="button" data-add="${id}">Add</button>
     <template data-row="${id}">${row()}</template>`;
 }
@@ -91,6 +92,7 @@ export async function scriptEditor(view, planId, backHref) {
         <button class="btn primary" type="button" id="saveBtn">Save</button></div>
       <p class="muted">The JMX is the script. Elements without a form here are kept exactly as they are. Saving keeps a new version and never starts a test.</p>
       <div id="summary"></div>
+      <div id="secrets"></div>
       <details style="margin-top:8px"><summary>Name, test type and targets</summary>
         <form id="meta" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:8px">
           <label>Name <input name="name" value="${esc(st.plan.name)}" required></label>
@@ -361,6 +363,12 @@ export async function scriptEditor(view, planId, backHref) {
       location.hash = `#/perf-results?run=${encodeURIComponent(r.run_id)}`;
     } catch (err) { toast(err.message, "error"); }
   });
+  const renderSecrets = (items) => {
+    const box = view.querySelector("#secrets");
+    box.innerHTML = secretsHtml(items, st.plan.recording);
+    bindSecrets(box, st.plan.id, renderSecrets);
+  };
+  renderSecrets(data.secrets || []);
   renderSummary();
   renderTab();
 }

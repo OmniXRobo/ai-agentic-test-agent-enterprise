@@ -1,3 +1,16 @@
+23.3.24 (5 Nov 2026): full suite 480 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_recording_23324.py (4 tests): a login journey recorded in a real browser against a local site with
+  a hidden CSRF field, a session cookie and a JSON bearer token; the CSRF value gets a Boundary extractor and the
+  token a JSON extractor ($.data.access_token); the typed password is a saved secret ${__P(password)} and appears in
+  no response, script or run file; the recorded script runs in JMeter (0% errors, "Log in" reported as a
+  transaction) and secrets.properties is gone after the run; a missing secret fails the pre-run check; HAR import
+  leaves out third-party and static requests and correlates the form token; properties-file escaping.
+  UI checked in Chromium: Record a browser journey card, start form, live steps while recording, review (kept /
+  left out requests, values handled automatically, secrets), Create script, Secrets section in the script editor,
+  HAR import form. No script errors on the pages.
+  Not tested here: recording in Microsoft Edge / Google Chrome on Windows, the Windows Credential Manager itself
+  (an in-memory store stands in), saucedemo / OrangeHRM (not recorded from this container).
+
 23.3.23 (5 Nov 2026): full suite 476 tests, 472 passed and 4 failed on the full run (Linux, real JMeter 5.6.3,
   Chromium); all 4 pass now: 3 in test_offline.py failed because a test copy of the application was using port 8765
   at the time, and test_performance.py's validation check was fixed (a plan with no requests is a clean 422 again;

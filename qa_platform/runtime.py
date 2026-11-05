@@ -110,6 +110,7 @@ def build_runtime(
     design.datasets = TestDataService(design, design.cases)  # suite-aware, versioned test data rows
     automation = AutomationService(paths, settings, bus, db, runs, secrets, tfs, ai)
     performance = PerformanceService(paths, settings, bus, db, runs, ai, automation.discovery)
+    performance.secrets = secrets  # 23.3.24: secrets of recorded scripts
     defects = DefectService(settings, bus, db, tfs, automation, performance)
     voice = VoiceService(settings, bus, db, runs, state, tfs, ai, design, automation, performance, defects,
                          transport=stt_transport)

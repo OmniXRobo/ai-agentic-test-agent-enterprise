@@ -76,6 +76,9 @@ class PerfPlan(BaseModel):
     # `requests` and `profile` are a read-only summary of it, kept for lists, checks and reports.
     script: str | None = None
     script_version: int = 0
+    # 23.3.24: values JMeter reads as ${__P(name)} from the Windows Credential Manager at run time (never in the JMX)
+    secret_names: list[str] = []
+    recording: dict | None = None  # what the recorder kept, left out and correlated
     created_at: str | None = None
     updated_at: str | None = None
 

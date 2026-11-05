@@ -42,6 +42,9 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
 * 23.3.23: performance script editor: JMX import that keeps every element, a tree editor (requests, transactions,
   extractors, assertions, timers, headers, variables), raw JMX with validation, versions with diff and restore,
   pre-run checks that read the script. See PATCH_23.3.23.md.
+* 23.3.24: record performance scripts from a browser journey (steps as transactions, other hosts and static files
+  left out), automatic token handling (JSON and Boundary extractors), typed passwords saved as secrets and passed
+  to JMeter only during runs, HAR import. See PATCH_23.3.24.md.
 
 ## Quality
 

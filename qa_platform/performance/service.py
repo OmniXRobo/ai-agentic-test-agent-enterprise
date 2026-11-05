@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 import subprocess
 import threading
@@ -39,6 +40,7 @@ from ..logging_setup import get_logger
 from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from . import generator, jtl, preflight, sla, tools
+from . import recording as recmod
 from . import script as jscript
 from .jmx import build_jmx
 from .models import (HttpRequest, PerfEnvironment, PerfPlan, PerfScenario, new_environment_id, new_plan_id,
@@ -97,6 +99,8 @@ class PerformanceService:
         self._wake = threading.Event()
         self._closing = threading.Event()
         self._worker: threading.Thread | None = None
+        self.secrets: Any = None  # SecretStore, set by the runtime (23.3.24: secrets of recorded scripts)
+        self.recorder: recmod.PerfRecording | None = None
 
     # ---- plans -----------------------------------------------------------------------------
 
@@ -218,7 +222,7 @@ class PerformanceService:
             raise QAError("PERF_NOT_A_SCRIPT", "This plan is not a script yet. Open it in the script editor first.",
                           status=409)
         return {"plan": plan.model_dump(exclude={"script"}), "script": plan.script, "version": plan.script_version,
-                **jscript.analyze(plan.script)}
+                "secrets": self.script_secrets(plan_id), **jscript.analyze(plan.script)}
 
     def save_script(self, plan_id: str, text: str, *, base_version: int | None = None, note: str = "",
                     name: str | None = None, kind: str | None = None, sla_: dict[str, Any] | None = None) -> PerfPlan:
@@ -255,6 +259,163 @@ class PerformanceService:
         plan = self.get_plan(plan_id)
         plan.script = self.script_version(plan_id, version)
         return self.save_plan(plan, note=f"Restored version {version}")
+
+    # ---- 23.3.24: recording -----------------------------------------------------------------------------------
+
+    def start_recording(self, url: str, *, allowed_hosts: list[str] | None = None, include_static: bool = False,
+                        auto_steps: bool = True, browser: str = "chromium", headless: bool | None = None) -> dict[str, Any]:
+        """Open a browser that records the requests of the person's own browsing. Nothing is load tested."""
+        if self.recorder is not None and self.recorder.active:
+            raise QAError("RECORDING_ACTIVE", "A recording is already open. Stop it first.", status=409)
+        from ..automation.browser import default_headless
+        rec = recmod.PerfRecording(url, allowed_hosts=allowed_hosts, include_static=include_static,
+                                   auto_steps=auto_steps, browser=browser,
+                                   headless=default_headless(None) if headless is None else headless)
+        self.recorder = rec
+        rec.start()
+        self.engineer.emit(names.RECORDING_STARTED, f"Performance recording started at {url}",
+                           details={"recording_id": rec.id})
+        return rec.view()
+
+    def _recording(self, rec_id: str | None = None) -> recmod.PerfRecording:
+        rec = self.recorder
+        if rec is None or (rec_id and rec.id != rec_id):
+            raise QAError("RECORDING_NOT_FOUND", "There is no such recording. Start a new one.", status=404)
+        return rec
+
+    def recording_view(self) -> dict[str, Any] | None:
+        return self.recorder.view() if self.recorder else None
+
+    def recording_step(self, rec_id: str, name: str) -> dict[str, Any]:
+        rec = self._recording(rec_id)
+        if not rec.active:
+            raise QAError("RECORDING_NOT_ACTIVE", "The recording has stopped.", status=409)
+        rec.mark(name)
+        return rec.view()
+
+    def stop_recording(self, rec_id: str) -> dict[str, Any]:
+        rec = self._recording(rec_id)
+        rec.stop()
+        self.engineer.emit(names.RECORDING_COMPLETED,
+                           f"Performance recording stopped: {len(rec.entries)} requests in {len(rec.steps)} steps",
+                           details={"recording_id": rec.id})
+        return rec.view()
+
+    def discard_recording(self, rec_id: str) -> None:
+        rec = self._recording(rec_id)
+        rec.stop()
+        self.recorder = None  # requests, responses and typed secrets are dropped from memory
+
+    def _build(self, entries: list[dict[str, Any]], steps: list[dict[str, Any]], secrets: dict[str, str], *,
+               name: str, allowed_hosts: list[str], include_static: bool, exclude_ids: list[int] | None,
+               users: int, duration_s: int) -> dict[str, Any]:
+        hosts = sorted({h.strip().lower() for h in allowed_hosts if h.strip()})
+        if not hosts:
+            raise QAError("VALIDATION_FAILED", "List at least one allowed host.", status=422)
+        return recmod.build_script(entries, steps, name=name, allowed_hosts=hosts, include_static=include_static,
+                                   secrets=secrets, exclude_ids=set(exclude_ids or []), users=users,
+                                   duration_s=duration_s)
+
+    def recording_preview(self, rec_id: str, *, allowed_hosts: list[str] | None = None,
+                          include_static: bool | None = None, exclude_ids: list[int] | None = None) -> dict[str, Any]:
+        """What the script would contain: kept and left-out requests, correlations, secrets. Nothing is saved."""
+        rec = self._recording(rec_id)
+        entries, steps, secrets = rec.snapshot()
+        out = self._build(entries, steps, secrets, name="preview", allowed_hosts=allowed_hosts or rec.allowed_hosts,
+                          include_static=rec.include_static if include_static is None else include_static,
+                          exclude_ids=exclude_ids, users=1, duration_s=60)
+        requests = [{"id": e["id"], "step": e["step"], "method": e["method"], "url": e["url"], "status": e["status"],
+                     "type": e["resource_type"], "host": e["host"]} for e in entries]
+        return {"recording": rec.view(), "report": out["report"], "requests": requests}
+
+    def create_from_recording(self, rec_id: str, *, name: str, kind: str = "load", scenario_id: str | None = None,
+                              allowed_hosts: list[str] | None = None, include_static: bool | None = None,
+                              exclude_ids: list[int] | None = None) -> PerfPlan:
+        rec = self._recording(rec_id)
+        if rec.active:
+            rec.stop()
+        entries, steps, secrets = rec.snapshot()
+        out = self._build(entries, steps, secrets, name=name or "Recorded journey",
+                          allowed_hosts=allowed_hosts or rec.allowed_hosts,
+                          include_static=rec.include_static if include_static is None else include_static,
+                          exclude_ids=exclude_ids, users=1, duration_s=60)
+        plan = self._save_recorded(out, name=name or "Recorded journey", kind=kind, scenario_id=scenario_id,
+                                   source=f"recording {rec.id} from {rec.start_url}")
+        self.recorder = None  # the recording's requests and typed secrets are dropped from memory
+        return plan
+
+    def import_har(self, har: dict[str, Any], *, name: str = "", kind: str = "load", allowed_hosts: list[str],
+                   include_static: bool = False, scenario_id: str | None = None, filename: str = "") -> PerfPlan:
+        """A script from a HAR file exported by a browser's developer tools (same filtering and correlation).
+        Passwords cannot be told apart in a HAR, so check the script for them."""
+        entries, steps, title = recmod.entries_from_har(har)
+        out = self._build(entries, steps, {}, name=name or title, allowed_hosts=allowed_hosts,
+                          include_static=include_static, exclude_ids=None, users=1, duration_s=60)
+        return self._save_recorded(out, name=name or title, kind=kind, scenario_id=scenario_id,
+                                   source=f"HAR {filename}".strip())
+
+    def _save_recorded(self, out: dict[str, Any], *, name: str, kind: str, scenario_id: str | None,
+                       source: str) -> PerfPlan:
+        if out["secret_values"] and (self.secrets is None or not self.secrets.available):
+            raise QAError("SECRET_STORE_UNAVAILABLE", "The recording has a typed password, but the Windows Credential "
+                          "Manager is not available to keep it. Nothing was saved.", status=503)
+        plan = PerfPlan(name=name[:200], kind=kind if kind in ("load", "stress", "spike", "soak") else "load",  # type: ignore[arg-type]
+                        script=out["script"], source=source[:300], secret_names=sorted(out["secret_values"]),
+                        recording=out["report"])
+        saved = self.save_plan(plan, scenario_id=scenario_id, note=f"Recorded ({source})"[:500])
+        for n, v in out["secret_values"].items():
+            self.set_secret(saved.id, n, v)
+        r = out["report"]
+        self.engineer.emit(names.PERFORMANCE_GENERATION_STARTED,
+                           f"Performance script recorded: {r['kept']} requests, {len(r['correlations'])} correlated "
+                           f"values, {len(r['excluded'])} left out", details={"plan_id": saved.id})
+        return saved
+
+    # ---- 23.3.24: secrets of a script (Windows Credential Manager) ----------------------------------------------
+
+    SECRET_NS = "perfsecret"
+
+    def _secret(self, plan_id: str, name: str) -> str | None:
+        if self.secrets is None:
+            return None
+        try:
+            return self.secrets.get(self.SECRET_NS, f"{plan_id}.{name}")
+        except QAError:
+            return None
+
+    def set_secret(self, plan_id: str, name: str, value: str) -> None:
+        if self.secrets is None or not self.secrets.available:
+            raise QAError("SECRET_STORE_UNAVAILABLE", "The Windows Credential Manager is not available.", status=503)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", name or ""):
+            raise QAError("VALIDATION_FAILED", "Secret names use letters, digits, _ . and - only.", status=422)
+        self.secrets.set(self.SECRET_NS, f"{plan_id}.{name}", value)
+
+    def _write_secret_file(self, plan: PerfPlan, folder: Path) -> Path | None:
+        """JMeter properties with the plan's secrets, read by ${__P(name)}. Deleted when JMeter ends."""
+        if not plan.secret_names:
+            return None
+        lines = []
+        for n in plan.secret_names:
+            value = self._secret(plan.id, n)
+            if not value:
+                raise QAError("PERF_SECRET_MISSING", f"No value is saved for the secret {n}. Enter it in the script "
+                              "editor under Secrets.", status=409)
+            lines.append(f"{n}={_prop_escape(value)}")
+        path = folder / "secrets.properties"
+        path.write_text("\n".join(lines) + "\n", encoding="latin-1", errors="backslashreplace")
+        return path
+
+    def script_secrets(self, plan_id: str) -> list[dict[str, Any]]:
+        plan = self.get_plan(plan_id)
+        return [{"name": n, "set": bool(self._secret(plan_id, n)), "usage": f"${{__P({n})}}"} for n in plan.secret_names]
+
+    def save_script_secret(self, plan_id: str, name: str, value: str) -> list[dict[str, Any]]:
+        plan = self.get_plan(plan_id)
+        self.set_secret(plan_id, name, value)
+        if name not in plan.secret_names:
+            plan.secret_names = sorted({*plan.secret_names, name})
+            self.save_plan(plan)
+        return self.script_secrets(plan_id)
 
     def delete_plan(self, plan_id: str) -> None:
         self.get_plan(plan_id)
@@ -426,6 +587,10 @@ class PerformanceService:
             plan = self.get_plan(src.plan_id).model_copy(deep=True)
             plan.id, plan.name, plan.source = "", copy.name, f"clone of {src.plan_id}"
             copy.plan_id = self.save_plan(plan, link_scenario=False).id
+            for name in plan.secret_names:  # the copy can run without typing the secrets again
+                value = self._secret(src.plan_id, name)
+                if value:
+                    self.set_secret(copy.plan_id, name, value)
         return self.save_scenario(copy)
 
     def _ensure_scenarios(self) -> int:
@@ -459,6 +624,13 @@ class PerformanceService:
                            "detail": detail, "fix": "Fix it in the script editor." if problems else ""})
             if summary:
                 checks += self._script_file_checks(summary)
+            missing = [n for n in plan.secret_names if not self._secret(plan.id, n)]
+            if plan.secret_names:
+                checks.append({"id": "secrets", "name": "Saved secrets", "status": "FAIL" if missing else "PASS",
+                               "detail": (f"No value is saved for {', '.join(missing)}." if missing else
+                                          f"{len(plan.secret_names)} secret(s) are saved in the Credential Manager "
+                                          "and passed to JMeter only for the run."),
+                               "fix": "Enter the value under Secrets in the script editor." if missing else ""})
         else:
             problems = preflight.validate_jmx(build_jmx(plan))
             checks.append({"id": "jmx", "name": "JMeter plan", "status": "FAIL" if problems else "PASS",
@@ -727,11 +899,16 @@ class PerformanceService:
             cmd = [jmeter, "-n", "-t", str(folder / "plan.jmx"), "-l", "results.jtl", "-j", "jmeter.log",
                    "-Jjmeter.save.saveservice.output_format=csv", "-Jjmeter.save.saveservice.print_field_names=true",
                    "-e", "-o", "report"]
+            secret_file = self._write_secret_file(plan, folder)
+            if secret_file:
+                cmd += ["-q", secret_file.name]
             flags = subprocess.CREATE_NEW_PROCESS_GROUP if tools.WINDOWS else 0  # type: ignore[attr-defined]
             try:
                 proc = subprocess.Popen(cmd, cwd=folder, env=tools.jmeter_env(java), stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, creationflags=flags)
             except OSError as exc:
+                if secret_file:
+                    secret_file.unlink(missing_ok=True)
                 raise QAError("JMETER_START_FAILED", f"JMeter could not start: {exc}", status=500) from exc
             self._procs[run_id] = proc
             self._set(run_id, pid=proc.pid)
@@ -772,6 +949,8 @@ class PerformanceService:
                                   + (f" · generator CPU {gen['cpu_pct']}%" if gen else ""),
                                   progress=min(99, int((now - started) * 100 / max(total_s, 1))), **live)
             finally:
+                if secret_file:  # the secrets never stay in the run folder
+                    secret_file.unlink(missing_ok=True)
                 self._procs.pop(run_id, None)
                 self._live.pop(run_id, None)
                 self._monitors.pop(run_id, None)
@@ -1034,3 +1213,24 @@ class PerformanceService:
             act.complete("Performance analysis ready")
         return result
 
+
+def _prop_escape(value: str) -> str:
+    """Escape a value for a Java .properties file (ISO-8859-1 with \\uXXXX for everything else)."""
+    out = []
+    for i, ch in enumerate(value):
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch in "\n\r\t\f":
+            out.append({"\n": "\\n", "\r": "\\r", "\t": "\\t", "\f": "\\f"}[ch])
+        elif ch in "=:#!" or (ch == " " and i == 0):
+            out.append("\\" + ch)
+        elif ord(ch) < 0x20 or ord(ch) > 0x7E:
+            out.extend(f"\\u{u:04x}" for u in _utf16(ch))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _utf16(ch: str) -> list[int]:
+    b = ch.encode("utf-16-be")
+    return [int.from_bytes(b[i:i + 2], "big") for i in range(0, len(b), 2)]
