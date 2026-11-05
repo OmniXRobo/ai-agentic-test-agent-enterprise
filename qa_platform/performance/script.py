@@ -28,7 +28,8 @@ MAX_SCRIPT_BYTES = 20 * 1024 * 1024
 SIMPLE_PROPS = {"stringProp", "boolProp", "intProp", "longProp", "doubleProp", "floatProp"}
 THREAD_GROUPS = {"ThreadGroup", "SetupThreadGroup", "PostThreadGroup"}
 LISTENERS = {"ResultCollector", "BackendListener", "Summariser"}
-# Elements JMeter ships with but whose load the editor cannot compute yet (they arrive with the workload milestone)
+# Built into JMeter, but its number of concurrent users has no upper limit (it starts users at a rate), so the load
+# limit cannot be checked before the run. The workload's request-rate model is used instead (23.3.26).
 UNSIZED_GROUPS = {"OpenModelThreadGroup"}
 
 CATEGORY_BY_TAG = {
@@ -530,8 +531,9 @@ def problems(root: ET.Element, summary: dict[str, Any] | None = None) -> list[st
             out.append(f"Thread group \"{g['name']}\" loops forever without a duration. "
                        "Tick \"Use duration\" and set a duration.")
     if s["unsized_groups"]:
-        out.append("Open Model thread groups are not supported yet (they arrive with the workload milestone): "
-                   + ", ".join(s["unsized_groups"]) + ".")
+        out.append("Open Model thread groups are not supported: they start users at a rate with no upper limit on "
+                   "concurrent users, so the load limit cannot be checked. Disable them and use a normal thread group "
+                   "with the request-rate workload instead: " + ", ".join(s["unsized_groups"]) + ".")
     if not any(g["tag"] == "ThreadGroup" for g in s["thread_groups"]) and s["thread_groups"]:
         out.append("The script has only setUp or tearDown thread groups.")
     return out

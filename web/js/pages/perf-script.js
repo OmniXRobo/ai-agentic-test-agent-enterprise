@@ -6,6 +6,7 @@ import { esc, toast, dateTimeOf, openModal } from "../util.js";
 import { fmtDuration } from "../charts.js";
 import { secretsHtml, bindSecrets } from "./perf-record.js";
 import { dataTab } from "./perf-data.js";
+import { workloadTab } from "./perf-workload.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
 const CATEGORY_ICON = { plan: "▣", thread_group: "◉", sampler: "➜", controller: "▤", extractor: "⇲", assertion: "✓",
@@ -101,10 +102,10 @@ export async function scriptEditor(view, planId, backHref) {
           ${nf("avg_ms", "Average ≤ (ms)", s.avg_ms)}${nf("p90_ms", "90th pct ≤ (ms)", s.p90_ms)}${nf("p95_ms", "95th pct ≤ (ms)", s.p95_ms)}
           ${nf("p99_ms", "99th pct ≤ (ms)", s.p99_ms)}${nf("max_error_pct", "Error rate ≤ (%)", s.max_error_pct, 'step="0.1" min="0" max="100"')}
           ${nf("min_throughput", "Throughput ≥ (req/s)", s.min_throughput, 'step="0.1"')}
-        </form><p class="muted">Users and duration come from the script's thread groups. Leave a target empty for no limit.</p></details>
+        </form><p class="muted">Users and duration come from the Workload tab (or the script's thread groups). Leave a target empty for no limit.</p></details>
     </div>
     <div class="tabs" role="tablist" style="margin-top:12px">
-      <a class="tab active" href="#" data-tab="tree">Tree</a><a class="tab" href="#" data-tab="raw">Raw JMX</a><a class="tab" href="#" data-tab="data">Test data</a><a class="tab" href="#" data-tab="versions">Versions</a></div>
+      <a class="tab active" href="#" data-tab="tree">Tree</a><a class="tab" href="#" data-tab="raw">Raw JMX</a><a class="tab" href="#" data-tab="data">Test data</a><a class="tab" href="#" data-tab="workload">Workload</a><a class="tab" href="#" data-tab="versions">Versions</a></div>
     <div id="pane"></div>`;
   const pane = view.querySelector("#pane");
   const meta = view.querySelector("#meta");
@@ -113,15 +114,19 @@ export async function scriptEditor(view, planId, backHref) {
 
   const renderSummary = () => {
     const sm = st.summary;
+    // 23.3.26: a workload shape sets users, duration and loops of the main thread groups in the run's copy
+    const shaped = st.plan.workload && st.plan.workload.shape !== "script";
+    const problems = shaped ? st.problems.filter((p) => !/loops forever without a duration|number of users is not a number/.test(p)) : st.problems;
     const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
     const groups = sm.thread_groups.map((g) => `${esc(g.name)}: ${g.users === null ? "?" : plural(g.users, "user", "users")}${g.scheduler ? ` for ${fmtDuration(g.duration_s || 0)}${g.delay_s ? ` after ${fmtDuration(g.delay_s)}` : ""}` : `, ${g.loops < 0 ? "loops forever" : `${g.loops ?? "?"} loop(s)`}`}`).join(" · ");
     view.querySelector("#summary").innerHTML = `
       <p>${plural(sm.requests.length, "HTTP request", "HTTP requests")} · peak ${plural(sm.peak_users, "concurrent user", "concurrent users")} · ${sm.duration_known ? `duration ${fmtDuration(sm.total_duration_s)}` : "duration depends on loop counts"}
         · hosts: ${sm.hosts.length ? sm.hosts.map((h) => `<code>${esc(h)}</code>`).join(" ") : '<span class="muted">none</span>'}</p>
       ${groups ? `<p class="muted">${groups}</p>` : ""}
+      ${st.plan.workload && st.plan.workload.shape !== "script" ? `<p>Workload: <b>${esc(st.plan.workload.shape)}</b>${st.plan.workload.model === "rate" ? `, ${esc(st.plan.workload.target_rps)} requests per second with at most ${st.plan.workload.users} users` : ""}. It replaces the thread group settings above in the copy JMeter runs (Workload tab).</p>` : ""}
       ${sm.unresolved_urls.length ? `<p class="muted">Host not known before the run: ${sm.unresolved_urls.slice(0, 5).map((u) => `<code>${esc(u)}</code>`).join(" ")}</p>` : ""}
       ${sm.listeners.length ? `<p class="muted">${sm.listeners.length} listener(s) are switched off during runs; the run records its own results.</p>` : ""}
-      ${st.problems.length ? `<div class="problems"><b>Fix before running:</b><ul>${st.problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>` : '<p><span class="pill PASS">Valid</span> <span class="muted">The full pre-run checks (hosts, load limits, tools) run when the test is queued.</span></p>'}`;
+      ${problems.length ? `<div class="problems"><b>Fix before running:</b><ul>${problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>` : '<p><span class="pill PASS">Valid</span> <span class="muted">The full pre-run checks (hosts, load limits, tools) run when the test is queued.</span></p>'}`;
   };
 
   const take = (r) => {  // a response with script + analysis
@@ -303,7 +308,12 @@ export async function scriptEditor(view, planId, backHref) {
 
   const renderTab = () => {
     view.querySelectorAll("[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === st.tab));
-    ({ tree: renderTree, raw: renderRaw, versions: renderVersions, data: () => dataTab(pane, st, applyOps) })[st.tab]();
+    ({ tree: renderTree, raw: renderRaw, versions: renderVersions, data: () => dataTab(pane, st, applyOps),
+      workload: () => workloadTab(pane, st, planId, { save, onSaved: (plan) => {
+        st.plan = { ...st.plan, ...plan };
+        meta.elements.kind.value = st.plan.kind;
+        renderSummary();
+      } }) })[st.tab]();
   };
   view.querySelectorAll("[data-tab]").forEach((t) => t.addEventListener("click", (e) => {
     e.preventDefault();

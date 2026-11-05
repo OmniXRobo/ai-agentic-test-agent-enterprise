@@ -16,6 +16,7 @@ memory and disk during the run).
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import re
@@ -43,8 +44,9 @@ from . import generator, jtl, preflight, sla, tools
 from . import recording as recmod
 from .dataset_store import DatasetStore
 from . import script as jscript
+from . import workload as wl
 from .jmx import build_jmx
-from .models import (HttpRequest, PerfEnvironment, PerfPlan, PerfScenario, new_environment_id, new_plan_id,
+from .models import (HttpRequest, PerfEnvironment, PerfPlan, PerfScenario, Workload, new_environment_id, new_plan_id,
                      new_scenario_id)
 
 log = get_logger("performance")
@@ -133,6 +135,7 @@ class PerformanceService:
         the JMX changed. Saving never starts a run."""
         is_new = not plan.id
         ts = now_iso()
+        plan.mode = "test"  # the validation copy is never saved
         if plan.script:
             self._summarize_script(plan)
         if not plan.id:
@@ -174,8 +177,8 @@ class PerformanceService:
                 except ValidationError:
                     continue
         plan.requests = reqs
-        plan.profile.users = max(1, summary["peak_users"] or 1)
-        plan.profile.duration_s = max(10, summary["total_duration_s"] or 10)
+        plan.profile.users = max(1, (plan.peak_users() if plan.shaped else summary["peak_users"]) or 1)
+        plan.profile.duration_s = max(10, (plan.total_duration_s() if plan.shaped else summary["total_duration_s"]) or 10)
         plan.profile.ramp_up_s = max((g["ramp_up_s"] for g in summary["thread_groups"]), default=0)
         plan.profile.think_time_ms = 0  # think time lives in the script's timers
 
@@ -649,7 +652,7 @@ class PerformanceService:
         checks, info = preflight.tool_checks(self.settings)
         if plan.script:
             try:
-                analysis = jscript.analyze_cached(plan.script)
+                analysis = jscript.analyze_cached(self.run_script(plan)[0])  # the copy JMeter runs (23.3.26)
                 problems, summary = analysis["problems"], analysis["summary"]
             except QAError as exc:
                 problems, summary = [exc.message], None
@@ -661,6 +664,7 @@ class PerformanceService:
             if summary:
                 checks += self._script_file_checks(summary)
                 checks += self._dataset_checks(plan, summary)
+                checks += self._workload_checks(plan)
             missing = [n for n in plan.secret_names if not self._secret(plan.id, n)]
             if plan.secret_names:
                 checks.append({"id": "secrets", "name": "Saved secrets", "status": "FAIL" if missing else "PASS",
@@ -669,7 +673,7 @@ class PerformanceService:
                                           "and passed to JMeter only for the run."),
                                "fix": "Enter the value under Secrets in the script editor." if missing else ""})
         else:
-            problems = preflight.validate_jmx(build_jmx(plan))
+            problems = preflight.validate_jmx(self.run_script(plan)[0])
             checks.append({"id": "jmx", "name": "JMeter plan", "status": "FAIL" if problems else "PASS",
                            "detail": " ".join(problems) or f"Valid JMX: {len(plan.thread_groups())} thread group(s), "
                                                            f"{len(plan.requests)} request(s).", "fix": ""})
@@ -715,6 +719,46 @@ class PerformanceService:
             checks.append({"id": "dataset", "name": label, "status": "FAIL" if fails else "WARN" if warns else "PASS",
                            "detail": detail, "fix": "Fix the values on the Performance Test Data page."
                            if fails or warns else ""})
+        return checks
+
+    @staticmethod
+    def run_script(plan: PerfPlan) -> tuple[str, dict[str, Any]]:
+        """23.3.26: the JMX JMeter runs (before listeners are switched off): the validation copy, the script with its
+        workload, or the script as saved. Returns the text and what was changed."""
+        text = plan.script or build_jmx(plan)
+        if plan.mode == "validation":
+            return wl.for_validation(text)
+        if plan.shaped:
+            return wl.apply(text, plan.workload)
+        return text, {"applied": False}
+
+    def _workload_checks(self, plan: PerfPlan) -> list[dict[str, Any]]:
+        """23.3.26: a load run of a script that has not passed a validation run in this version, and a rate target
+        the user pool cannot reach (from the validation run's pace)."""
+        if plan.mode == "validation":
+            return []
+        checks = []
+        v = plan.validation or {}
+        if v.get("status") == "PASS" and v.get("script_version") == plan.script_version:
+            checks.append({"id": "validated", "name": "Validation run", "status": "PASS",
+                           "detail": f"Version {plan.script_version} passed the one-user validation run "
+                                     f"{v.get('run_id')}.", "fix": ""})
+        else:
+            why = ("has not had a one-user validation run" if not v else
+                   f"changed since the validation run (version {v.get('script_version')})"
+                   if v.get("script_version") != plan.script_version else "failed its last validation run")
+            checks.append({"id": "validated", "name": "Validation run", "status": "WARN",
+                           "detail": f"Script version {plan.script_version} {why}, so failing requests or missing "
+                                     "correlations may only show under load.",
+                           "fix": "Run the one-user validation run on the Workload tab of the script editor first."})
+        w = plan.workload
+        if plan.shaped and w and w.model == "rate":
+            cap = wl.capacity(w, v if v.get("script_version") == plan.script_version else None)
+            if cap and not cap["enough"]:
+                checks.append({"id": "rate", "name": "Request-rate target", "status": "WARN",
+                               "detail": f"{w.users} users reach about {cap['pool_max_rps']} req/s at the pace of the "
+                                         f"validation run; the target is {w.target_rps} req/s.",
+                               "fix": f"Raise the users to about {cap['users_needed']} or lower the target."})
         return checks
 
     @staticmethod
@@ -807,7 +851,8 @@ class PerformanceService:
         self.db.execute(
             "INSERT INTO perf_runs (run_id, plan_id, kind, name, status, state, started_at, queued_at, folder,"
             " scenario_id, environment_id, trigger, overrides, config) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (run_id, plan.id, plan.kind, plan.name, "QUEUED", "QUEUED", ts, ts, str(folder), sc.id if sc else None,
+            (run_id, plan.id, plan.kind, plan.name + (" (one-user validation)" if plan.mode == "validation" else ""),
+             "QUEUED", "QUEUED", ts, ts, str(folder), sc.id if sc else None,
              env.id if env else None, trigger, dumps(overrides or {}), dumps(config)))
 
     def enqueue(self, plan_id: str, *, scenario_id: str | None = None, trigger: str = "manual",
@@ -816,7 +861,8 @@ class PerformanceService:
         plan, sc, env = self._resolve(plan_id, scenario_id, overrides)
         run_id = run_id or new_run_id("PERF")
         self._create_run(run_id, plan, sc, env, trigger, overrides)
-        self.jmeter.emit(names.PERFORMANCE_GENERATION_STARTED, f"Queued {KIND_TITLES[plan.kind]}: {plan.name}",
+        what = "one-user validation run" if plan.mode == "validation" else KIND_TITLES[plan.kind]
+        self.jmeter.emit(names.PERFORMANCE_GENERATION_STARTED, f"Queued {what}: {plan.name}",
                          run_id=run_id, details={"state": "QUEUED", "link": f"#/perf-results?run={run_id}"})
         self._wake.set()
         return run_id
@@ -864,7 +910,8 @@ class PerformanceService:
         env = PerfEnvironment.model_validate(config["environment"]) if config.get("environment") else None
         folder = Path(row["folder"])
         folder.mkdir(parents=True, exist_ok=True)
-        title = f"{KIND_TITLES[plan.kind]}: {plan.name}"
+        title = (f"One-user validation run: {plan.name}" if plan.mode == "validation"
+                 else f"{KIND_TITLES[plan.kind]}: {plan.name}")
         self._set(run_id, state="VALIDATING", status="RUNNING", started_at=now_iso())
         self.runs.start(run_id, "performance", title)
         record: dict[str, Any] = {"state": "FAILED", "verdict": None, "partial": 0, "metrics": None, "sla": None,
@@ -896,7 +943,11 @@ class PerformanceService:
                 record["state"] = "COMPLETED"
             if record["state"] != "COMPLETED" and has_samples:
                 record["partial"] = 1
-            if has_samples and record["state"] == "COMPLETED":
+            if has_samples:
+                self._after_samples(plan, run_id, folder, record)
+            if plan.mode == "validation":
+                pass  # a functional check of the script with one user: no performance verdict
+            elif has_samples and record["state"] == "COMPLETED":
                 record["sla"] = self._evaluate(plan, run_id, record["metrics"])
                 record["verdict"] = {"PASS": "PASS", "FAIL": "FAIL"}.get(record["sla"]["status"], "NOT_SPECIFIED")
             elif has_samples:
@@ -931,12 +982,10 @@ class PerformanceService:
 
     def _write_snapshot(self, folder: Path, plan: PerfPlan, config: dict[str, Any], check: dict[str, Any]) -> None:
         """What exactly ran: the plan, the JMX, the scenario, environment, tools and versions."""
-        listeners_off = 0
+        text, changed = self.run_script(plan)
+        jmx, listeners_off = jscript.for_run(text)
         if plan.script:
-            jmx, listeners_off = jscript.for_run(plan.script)
             (folder / "script.jmx").write_text(plan.script, encoding="utf-8")  # as saved, listeners included
-        else:
-            jmx = build_jmx(plan)
         (folder / "plan.jmx").write_text(jmx, encoding="utf-8")
         (folder / "plan.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         groups = plan.thread_groups()
@@ -948,7 +997,13 @@ class PerformanceService:
                          "thread_groups": [g.model_dump() for g in groups],
                          "total_duration_s": plan.total_duration_s(),
                          "think_time_ms": None if plan.script else plan.profile.think_time_ms,
-                         "load_model": "closed (concurrent virtual users; not a request-rate target)"},
+                         "load_model": ("one-user validation run: each thread group once with one user, one after "
+                                        "another" if plan.mode == "validation" else wl.describe(plan.workload)
+                                        if plan.script else "closed (concurrent virtual users; not a request-rate "
+                                        "target)"),
+                         "shape": plan.workload.model_dump() if plan.shaped and plan.workload else None,
+                         "applied": changed},
+            "validation_run": plan.mode == "validation",
             "targets": plan.sla.model_dump(),
             "jmx_sha256": hashlib.sha256(jmx.encode("utf-8")).hexdigest(),
             "script": ({"version": plan.script_version, "sha256": jscript.sha256(plan.script),
@@ -960,7 +1015,8 @@ class PerformanceService:
 
     def _execute(self, plan: PerfPlan, run_id: str, folder: Path) -> dict[str, Any]:
         """Run JMeter non-GUI. Returns metrics (also partial ones), how it ended and the generator summary."""
-        title = f"{KIND_TITLES[plan.kind]}: {plan.name}"
+        title = (f"One-user validation run: {plan.name}" if plan.mode == "validation"
+                 else f"{KIND_TITLES[plan.kind]}: {plan.name}")
         out: dict[str, Any] = {"metrics": None, "stopped": None, "error": None, "generator": None}
         java, jmeter = tools.find_java(self.settings), tools.find_jmeter(self.settings)
         with self.jmeter.activity(f"Running {title}", run_id=run_id) as act:
@@ -1001,14 +1057,17 @@ class PerformanceService:
             reader.start()
             total = plan.total_duration_s()
             total_s = total if total is not None else preflight.UNKNOWN_DURATION_TIMEOUT_S
-            deadline = time.monotonic() + total_s + (RUN_GRACE_S if total is not None else 0)
+            grace = 60 if plan.mode == "validation" else RUN_GRACE_S if total is not None else 0
+            deadline = time.monotonic() + total_s + grace
             tail = jtl.LiveTail(folder / "results.jtl")
             started, last_emit = time.monotonic(), 0.0
             try:
                 while proc.poll() is None:
                     if time.monotonic() > deadline:
                         self._kill(proc)
-                        out["error"] = (f"JMeter did not finish within the test duration plus {RUN_GRACE_S // 60} "
+                        out["error"] = (f"The validation run did not finish within {total_s // 60} minutes and was "
+                                        "stopped (execution timeout)." if plan.mode == "validation" else
+                                        f"JMeter did not finish within the test duration plus {RUN_GRACE_S // 60} "
                                         "minutes and was stopped (execution timeout)." if total is not None else
                                         f"The script's loops did not finish within "
                                         f"{preflight.UNKNOWN_DURATION_TIMEOUT_S // 3600} hours and JMeter was stopped "
@@ -1067,6 +1126,71 @@ class PerformanceService:
                             f"{o['error_pct']}%" if o else ": no samples"))
         return out
 
+    def _after_samples(self, plan: PerfPlan, run_id: str, folder: Path, record: dict[str, Any]) -> None:
+        """23.3.26: the validation result (kept on the plan too) and, for a rate target, the rate achieved."""
+        metrics = record["metrics"]
+        results = folder / "results.jtl"
+        transactions = set()
+        if plan.script:
+            try:
+                transactions = {r["transaction"] for r in jscript.analyze_cached(plan.script)["summary"]["requests"]
+                                if r["transaction"]}
+            except QAError:
+                transactions = set()
+        if plan.mode == "validation":
+            with results.open(newline="", encoding="utf-8", errors="replace") as fh:
+                result = wl.validation_result(list(csv.DictReader(fh)), transactions)
+            if record["state"] != "COMPLETED":
+                result["status"] = "INCOMPLETE"
+            result.update(run_id=run_id, script_version=plan.script_version, at=now_iso())
+            (folder / "validation.json").write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
+            metrics["validation"] = {k: v for k, v in result.items()}
+            if plan.script:
+                saved = self.get_plan(plan.id)
+                saved.validation = {k: v for k, v in result.items() if k not in ("samples", "truncated")}
+                self.db.execute("UPDATE perf_plans SET plan = ? WHERE id = ?", (saved.model_dump_json(), plan.id))
+            self.jmeter.emit(names.PERFORMANCE_COMPLETED,
+                             f"Validation run of {plan.name}: {result['status']} ({result['requests']} request(s), "
+                             f"{result['failed']} failed)", run_id=run_id,
+                             details={"link": f"#/perf-results?run={run_id}", "state": record["state"]})
+        elif plan.shaped and plan.workload and plan.workload.model == "rate" and plan.workload.target_rps:
+            w = plan.workload
+            achieved, counted = wl.achieved_rate(results, transactions, w.ramp_up_s)
+            metrics["rate"] = {"target_rps": w.target_rps, "users": w.users, "achieved_rps": achieved,
+                               "requests_counted": counted, "window": f"after the {w.ramp_up_s} s ramp-up",
+                               "reached": achieved is not None and achieved >= 0.95 * w.target_rps,
+                               "note": "HTTP request samples per second over the hold period (transaction samples "
+                                       "are not requests and are left out)."}
+        (folder / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+
+    # ---- 23.3.26: workload ------------------------------------------------------------------------------
+
+    def workload_preview(self, w: Workload, plan_id: str | None = None) -> dict[str, Any]:
+        plan = self.get_plan(plan_id) if plan_id else None
+        v = plan.validation if plan and plan.validation and \
+            plan.validation.get("script_version") == plan.script_version else None
+        return wl.preview(w, v)
+
+    def save_workload(self, plan_id: str, w: Workload) -> dict[str, Any]:
+        """Keep the workload of a script. It changes no script version and never starts a run."""
+        plan = self.get_plan(plan_id)
+        if not plan.script:
+            raise QAError("PERF_NOT_A_SCRIPT", "Workload shapes apply to scripts. Open the plan in the script editor "
+                          "first.", status=409)
+        problems = wl.check(w)
+        if problems:
+            raise QAError("PERF_WORKLOAD_INVALID", " ".join(problems), status=422)
+        if w.shape != "script":
+            wl.apply(plan.script, w)  # fails now, not at run time, when the script has no thread group to shape
+            plan.kind = w.shape  # type: ignore[assignment]
+        plan.workload = w
+        self.save_plan(plan)
+        return {"plan": plan.model_dump(exclude={"script"}), "preview": self.workload_preview(w, plan_id)}
+
+    def validate(self, plan_id: str, *, scenario_id: str | None = None) -> str:
+        """Queue the one-user validation run: each thread group once with one user."""
+        return self.enqueue(plan_id, scenario_id=scenario_id, overrides={"validation": True})
+
     def _evaluate(self, plan: PerfPlan, run_id: str, metrics: dict[str, Any]) -> dict[str, Any]:
         with self.engineer.activity("Evaluating results against SLAs", run_id=run_id) as act:
             result = sla.evaluate(plan.sla, metrics)
@@ -1084,6 +1208,10 @@ class PerformanceService:
     def with_overrides(plan: PerfPlan, overrides: dict[str, Any] | None) -> PerfPlan:
         if not overrides:
             return plan
+        if overrides.get("validation"):
+            data = plan.model_dump()
+            data["mode"] = "validation"
+            return PerfPlan.model_validate(data)
         if plan.script and any(overrides.get(k) for k in ("users", "duration_s", "kind")):
             raise QAError("PERF_SCRIPT_OVERRIDES", "Users and duration of a script are set on its thread groups. "
                           "Change them in the script editor.", status=409)

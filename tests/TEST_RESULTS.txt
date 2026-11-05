@@ -1,3 +1,12 @@
+23.3.26 (5 Nov 2026): full suite 494 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_workload_23326.py (6 tests): stress/spike/load/soak shapes as thread group phases (peak, duration,
+  problems), a shape applied to the run copy keeps every request and splits users and rate over two thread groups,
+  the validation copy (1 user, 1 loop, serialized, throughput timers off, correlation checks), saving a workload makes
+  no script version and no run, environment load limit on the shape; real JMeter runs: a validation run reports the
+  missing correlation (server saw one session + one profile request) and passes after the fix; a 3-step stress run
+  peaks at 3 users; 3 users paced to 6 requests/s for 20 s (server saw about 120 requests).
+  UI checked in Chromium: Workload tab (shapes, rate model, preview chart, save), validation run result page.
+
 23.3.24 (5 Nov 2026): full suite 480 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
   new: test_perf_recording_23324.py (4 tests): a login journey recorded in a real browser against a local site with
   a hidden CSRF field, a session cookie and a JSON bearer token; the CSRF value gets a Boundary extractor and the

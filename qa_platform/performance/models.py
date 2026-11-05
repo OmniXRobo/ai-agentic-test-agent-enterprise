@@ -64,6 +64,25 @@ class ThreadGroupSpec(BaseModel):
     duration_known: bool = True  # 23.3.23: False when a script's thread group runs a number of loops instead
 
 
+class Workload(BaseModel):
+    """23.3.26: the load a script runs with, kept apart from the script. "script" uses the script's own thread groups;
+    the other shapes replace the users, ramp-up and duration of its main thread groups in the copy JMeter runs (the
+    saved script is unchanged). Concurrent users and requests per second are different things: the "rate" model holds
+    a request-rate target with a fixed pool of users (built-in Precise Throughput Timer), it never adds users."""
+    shape: Literal["script", "load", "stress", "spike", "soak"] = "script"
+    model: Literal["users", "rate"] = "users"
+    users: int = Field(default=10, ge=1, le=100000)  # load/soak: users; stress: users added per step; spike: baseline
+    ramp_up_s: int = Field(default=60, ge=0, le=86400)
+    hold_s: int = Field(default=300, ge=10, le=7 * 86400)  # load/soak/spike: time at full load after the ramp-up
+    steps: int = Field(default=4, ge=1, le=50)  # stress
+    step_s: int = Field(default=120, ge=10, le=86400)  # stress: how long each step lasts
+    spike_users: int = Field(default=50, ge=1, le=100000)
+    spike_at_s: int = Field(default=120, ge=0, le=7 * 86400)
+    spike_s: int = Field(default=60, ge=5, le=86400)
+    spike_ramp_s: int = Field(default=5, ge=0, le=3600)
+    target_rps: float | None = Field(default=None, gt=0, le=100000, description="Requests per second, all requests")
+
+
 class PerfPlan(BaseModel):
     id: str = ""
     name: str = Field(min_length=1, max_length=200)
@@ -79,6 +98,12 @@ class PerfPlan(BaseModel):
     # 23.3.24: values JMeter reads as ${__P(name)} from the Windows Credential Manager at run time (never in the JMX)
     secret_names: list[str] = []
     recording: dict | None = None  # what the recorder kept, left out and correlated
+    # 23.3.26: the workload (shape and load model) and the last one-user validation run of the script
+    workload: Workload | None = None
+    validation: dict | None = None
+    # "validation": this copy of the plan is the one-user validation run (one user, one iteration of each thread
+    # group, one after another). Set only on the copy a run uses, never saved.
+    mode: Literal["test", "validation"] = "test"
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -97,7 +122,16 @@ class PerfPlan(BaseModel):
             raise ValueError("The spike must end before the test duration.")
         return self
 
+    @property
+    def shaped(self) -> bool:
+        """A workload shape replaces the script's own thread group settings."""
+        return bool(self.script and self.workload and self.workload.shape != "script")
+
     def thread_groups(self) -> list[ThreadGroupSpec]:
+        if self.shaped:
+            from .workload import groups
+            return [ThreadGroupSpec(name=g["name"], users=g["users"], ramp_up_s=g["ramp_up_s"], delay_s=g["delay_s"],
+                                    duration_s=g["duration_s"]) for g in groups(self.workload)]  # type: ignore[arg-type]
         if self.script:
             from .script import thread_group_specs
             return [g for g in thread_group_specs(self.script) if g.users or g.duration_s] or [
@@ -124,6 +158,11 @@ class PerfPlan(BaseModel):
         return [ThreadGroupSpec(name="Users", users=p.users, ramp_up_s=p.ramp_up_s, delay_s=0, duration_s=p.duration_s)]
 
     def peak_users(self) -> int:
+        if self.mode == "validation":
+            return 1
+        if self.shaped:
+            from .workload import peak
+            return peak(self.workload)  # type: ignore[arg-type]
         if self.script:
             from .script import analyze_cached
             return analyze_cached(self.script)["summary"]["peak_users"]
@@ -131,10 +170,17 @@ class PerfPlan(BaseModel):
 
     def total_duration_s(self) -> int | None:
         """How long the test lasts, or None when a script's duration depends on loop counts."""
+        if self.mode == "validation":
+            return VALIDATION_TIMEOUT_S  # one iteration; the run is ended if it takes longer than this
+        if self.shaped:
+            return max(g.delay_s + g.duration_s for g in self.thread_groups())
         if self.script:
             from .script import analyze_cached
             return analyze_cached(self.script)["summary"]["total_duration_s"]
         return max(g.delay_s + g.duration_s for g in self.thread_groups())
+
+
+VALIDATION_TIMEOUT_S = 600
 
 
 def new_plan_id() -> str:
