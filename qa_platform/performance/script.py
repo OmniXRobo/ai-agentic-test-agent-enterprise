@@ -537,7 +537,7 @@ def problems(root: ET.Element, summary: dict[str, Any] | None = None) -> list[st
     return out
 
 
-@functools.lru_cache(maxsize=32)
+@functools.lru_cache(maxsize=8)  # scripts can be large: keep only the few being edited or run
 def analyze_cached(text: str) -> dict[str, Any]:
     root = parse(text)
     s = summarize(root)

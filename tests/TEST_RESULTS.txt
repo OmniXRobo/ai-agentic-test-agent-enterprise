@@ -1,3 +1,17 @@
+23.3.23 (5 Nov 2026): full suite 476 tests, 472 passed and 4 failed on the full run (Linux, real JMeter 5.6.3,
+  Chromium); all 4 pass now: 3 in test_offline.py failed because a test copy of the application was using port 8765
+  at the time, and test_performance.py's validation check was fixed (a plan with no requests is a clean 422 again;
+  validation errors that carry a Python exception are now sent as text). The performance tests were run again after.
+  new: test_perf_script_23323.py (10 tests, real JMeter 5.6.3 + Java 21 against the local test site): JMX import keeps
+  every element, comment and JSR223 script and export returns it; invalid, DOCTYPE and non-JMeter files refused;
+  plugins and endless loops block the run; tree edits, placement rules, save, stale-version conflict, versions, diff
+  and restore; raw JMX, header and variable forms; a generated plan opened as a script; script checks for hosts from
+  variables, unknown hosts, users from property defaults, loop-based duration and a missing CSV file; disabled
+  elements and listeners; an imported script run in JMeter with a JSON extractor feeding the next request.
+  browser (Chromium, by hand with Playwright): plan list with Import a JMX file, import from a file, script editor
+  tree and property panel, Add (JSON extractor), Raw JMX with an invalid edit refused, Versions with a diff, Open in
+  script editor on a generated plan. No browser errors from the pages.
+
 23.3.22 (4 Nov 2026): full suite 466 passed, 0 failed (Linux, real JMeter 5.6.3, Chromium), after merging the
   23.3.21 test-suite fixes. test_regression_pages.py now lists Performance Scenarios as a new page.
   new: test_perf_foundation_23322.py (10 tests, real JMeter 5.6.3 + Java 21 against the local test site): scenarios
