@@ -39,6 +39,9 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
 * 23.3.22: performance scenarios, target environments with load limits, pre-run checks, a run queue, Stop and
   Emergency stop, execution state apart from the verdict, run snapshots (config.json), load-generator monitoring
   and recovery of interrupted runs. See PATCH_23.3.22.md.
+* 23.3.23: performance script editor: JMX import that keeps every element, a tree editor (requests, transactions,
+  extractors, assertions, timers, headers, variables), raw JMX with validation, versions with diff and restore,
+  pre-run checks that read the script. See PATCH_23.3.23.md.
 
 ## Quality
 

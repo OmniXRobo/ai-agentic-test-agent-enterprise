@@ -445,6 +445,18 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS ix_perf_runs_state ON perf_runs(state);
     CREATE INDEX IF NOT EXISTS ix_perf_runs_scenario ON perf_runs(scenario_id);
     """,
+    # 13 (23.3.23): saved versions of performance scripts (JMX), for the history, diff and restore
+    """
+    CREATE TABLE IF NOT EXISTS perf_plan_versions (
+        plan_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        script TEXT NOT NULL,
+        note TEXT,
+        sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (plan_id, version)
+    );
+    """,
 ]
 
 

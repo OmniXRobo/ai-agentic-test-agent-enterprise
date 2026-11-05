@@ -39,6 +39,7 @@ from ..logging_setup import get_logger
 from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from . import generator, jtl, preflight, sla, tools
+from . import script as jscript
 from .jmx import build_jmx
 from .models import (HttpRequest, PerfEnvironment, PerfPlan, PerfScenario, new_environment_id, new_plan_id,
                      new_scenario_id)
@@ -107,7 +108,9 @@ class PerformanceService:
             last = self.db.query_one("SELECT run_id, status, started_at FROM perf_runs WHERE plan_id = ?"
                                      " ORDER BY started_at DESC LIMIT 1", (r["id"],))
             out.append({"id": r["id"], "name": r["name"], "kind": r["kind"], "requests": len(plan.requests),
-                        "peak_users": plan.peak_users(), "duration_s": plan.profile.duration_s,
+                        "script": plan.is_script, "script_version": plan.script_version,
+                        "peak_users": plan.peak_users(),
+                        "duration_s": plan.total_duration_s() if plan.script else plan.profile.duration_s,
                         "updated_at": r["updated_at"], "last_run": last})
         return out
 
@@ -117,10 +120,15 @@ class PerformanceService:
             raise QAError("PERF_PLAN_NOT_FOUND", f"Performance plan {plan_id} does not exist.", status=404)
         return PerfPlan.model_validate(loads(row["plan"]))
 
-    def save_plan(self, plan: PerfPlan, *, link_scenario: bool = True, scenario_id: str | None = None) -> PerfPlan:
-        """Save a plan. A new plan joins `scenario_id`, or gets its own scenario so it shows under Scenarios."""
+    def save_plan(self, plan: PerfPlan, *, link_scenario: bool = True, scenario_id: str | None = None,
+                  note: str | None = None) -> PerfPlan:
+        """Save a plan. A new plan joins `scenario_id`, or gets its own scenario so it shows under Scenarios.
+        A script plan's JMX is normalized, summarized into `requests` and `profile`, and a new version is kept when
+        the JMX changed. Saving never starts a run."""
         is_new = not plan.id
         ts = now_iso()
+        if plan.script:
+            self._summarize_script(plan)
         if not plan.id:
             plan.id = new_plan_id()
             plan.created_at = ts
@@ -133,6 +141,8 @@ class PerformanceService:
             " ON CONFLICT(id) DO UPDATE SET name = excluded.name, kind = excluded.kind, plan = excluded.plan,"
             " updated_at = excluded.updated_at",
             (plan.id, plan.name, plan.kind, plan.model_dump_json(), plan.created_at, plan.updated_at))
+        if plan.script:
+            self._keep_version(plan, note)
         if scenario_id:
             sc = self.get_scenario(scenario_id)
             sc.plan_id = plan.id
@@ -141,9 +151,115 @@ class PerformanceService:
             self.save_scenario(PerfScenario(name=plan.name, plan_id=plan.id))
         return plan
 
+    # ---- 23.3.23: scripts (JMX) ---------------------------------------------------------------------------
+
+    @staticmethod
+    def _summarize_script(plan: PerfPlan) -> None:
+        """Normalize the JMX and mirror what it does into `requests` and `profile` (read-only for script plans)."""
+        plan.script = jscript.normalize(plan.script or "")
+        summary = jscript.analyze_cached(plan.script)["summary"]
+        reqs = []
+        for r in summary["requests"]:
+            if r["host"] and r["url"].lower().startswith(("http://", "https://")):
+                try:
+                    reqs.append(HttpRequest(name=(r["name"] or r["url"])[:200], method=r["method"]
+                                            if r["method"] in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD",
+                                                               "OPTIONS") else "GET", url=r["url"]))
+                except ValidationError:
+                    continue
+        plan.requests = reqs
+        plan.profile.users = max(1, summary["peak_users"] or 1)
+        plan.profile.duration_s = max(10, summary["total_duration_s"] or 10)
+        plan.profile.ramp_up_s = max((g["ramp_up_s"] for g in summary["thread_groups"]), default=0)
+        plan.profile.think_time_ms = 0  # think time lives in the script's timers
+
+    def _keep_version(self, plan: PerfPlan, note: str | None) -> None:
+        digest = jscript.sha256(plan.script or "")
+        last = self.db.query_one("SELECT version, sha256 FROM perf_plan_versions WHERE plan_id = ?"
+                                 " ORDER BY version DESC LIMIT 1", (plan.id,))
+        if last and last["sha256"] == digest:
+            if plan.script_version != last["version"]:
+                plan.script_version = last["version"]
+                self.db.execute("UPDATE perf_plans SET plan = ? WHERE id = ?", (plan.model_dump_json(), plan.id))
+            return
+        version = (last["version"] if last else 0) + 1
+        self.db.execute("INSERT INTO perf_plan_versions (plan_id, version, script, note, sha256, created_at)"
+                        " VALUES (?,?,?,?,?,?)", (plan.id, version, plan.script, (note or "")[:500], digest, now_iso()))
+        plan.script_version = version
+        self.db.execute("UPDATE perf_plans SET plan = ? WHERE id = ?", (plan.model_dump_json(), plan.id))
+
+    def import_script(self, text: str, *, name: str = "", kind: str = "load", filename: str = "",
+                      scenario_id: str | None = None) -> PerfPlan:
+        """A plan from a JMX file (e.g. saved by the JMeter GUI). Every element is kept as it is, including the ones
+        the editor has no form for. Importing never starts a run."""
+        root = jscript.parse(text)
+        if not name:
+            tp = jscript._pairs(jscript._top(root))
+            name = (tp[0][0].get("testname") if tp else "") or filename.rsplit(".", 1)[0] or "Imported script"
+        plan = PerfPlan(name=name[:200], kind=kind if kind in ("load", "stress", "spike", "soak") else "load",  # type: ignore[arg-type]
+                        script=jscript.dump(root), source=f"import {filename}".strip())
+        saved = self.save_plan(plan, scenario_id=scenario_id, note=f"Imported {filename}".strip())
+        self.engineer.emit(names.PERFORMANCE_GENERATION_STARTED,
+                           f"Performance script imported: {saved.name} ({len(saved.requests)} requests)",
+                           details={"plan_id": saved.id})
+        return saved
+
+    def convert_to_script(self, plan_id: str) -> PerfPlan:
+        """Open a generated plan in the script editor: its JMX becomes the script. The form editor no longer applies."""
+        plan = self.get_plan(plan_id)
+        if plan.script:
+            return plan
+        plan.script = build_jmx(plan)
+        return self.save_plan(plan, note="Converted from the generated plan")
+
+    def script_view(self, plan_id: str) -> dict[str, Any]:
+        plan = self.get_plan(plan_id)
+        if not plan.script:
+            raise QAError("PERF_NOT_A_SCRIPT", "This plan is not a script yet. Open it in the script editor first.",
+                          status=409)
+        return {"plan": plan.model_dump(exclude={"script"}), "script": plan.script, "version": plan.script_version,
+                **jscript.analyze(plan.script)}
+
+    def save_script(self, plan_id: str, text: str, *, base_version: int | None = None, note: str = "",
+                    name: str | None = None, kind: str | None = None, sla_: dict[str, Any] | None = None) -> PerfPlan:
+        plan = self.get_plan(plan_id)
+        if base_version is not None and plan.script and base_version != plan.script_version:
+            raise QAError("PERF_SCRIPT_CONFLICT", f"The script was saved elsewhere (now version {plan.script_version}). "
+                          "Reload it before saving, so no change is lost.", status=409)
+        plan.script = text
+        if name:
+            plan.name = name[:200]
+        if kind in ("load", "stress", "spike", "soak"):
+            plan.kind = kind  # type: ignore[assignment]
+        if sla_ is not None:
+            plan.sla = type(plan.sla).model_validate(sla_)
+        return self.save_plan(plan, note=note or None)
+
+    def script_versions(self, plan_id: str) -> list[dict[str, Any]]:
+        self.get_plan(plan_id)
+        return self.db.query("SELECT version, note, sha256, created_at, length(script) AS size FROM perf_plan_versions"
+                             " WHERE plan_id = ? ORDER BY version DESC", (plan_id,))
+
+    def script_version(self, plan_id: str, version: int) -> str:
+        row = self.db.query_one("SELECT script FROM perf_plan_versions WHERE plan_id = ? AND version = ?",
+                                (plan_id, version))
+        if not row:
+            raise QAError("PERF_VERSION_NOT_FOUND", f"Version {version} of {plan_id} does not exist.", status=404)
+        return row["script"]
+
+    def script_diff(self, plan_id: str, a: int, b: int) -> str:
+        return jscript.diff(self.script_version(plan_id, a), self.script_version(plan_id, b), f"version {a}",
+                            f"version {b}")
+
+    def restore_version(self, plan_id: str, version: int) -> PerfPlan:
+        plan = self.get_plan(plan_id)
+        plan.script = self.script_version(plan_id, version)
+        return self.save_plan(plan, note=f"Restored version {version}")
+
     def delete_plan(self, plan_id: str) -> None:
         self.get_plan(plan_id)
         self.db.execute("DELETE FROM perf_plans WHERE id = ?", (plan_id,))  # run results are kept
+        self.db.execute("DELETE FROM perf_plan_versions WHERE plan_id = ?", (plan_id,))
         for r in self.db.query("SELECT id FROM perf_scenarios WHERE plan_id = ?", (plan_id,)):
             sc = self.get_scenario(r["id"])  # the scenario and its history stay, archived and without a script
             sc.plan_id, sc.archived = None, True
@@ -241,7 +357,7 @@ class PerformanceService:
                                  " ORDER BY COALESCE(queued_at, started_at) DESC LIMIT 1", (sc["id"],))
         sc.update(kind=plan.kind if plan else None, plan_name=plan.name if plan else None,
                   requests=len(plan.requests) if plan else 0, peak_users=plan.peak_users() if plan else None,
-                  duration_s=plan.profile.duration_s if plan else None,
+                  duration_s=(plan.total_duration_s() if plan.script else plan.profile.duration_s) if plan else None,
                   environment_name=env_row["name"] if env_row else None, last_run=last,
                   script_missing=bool(sc["plan_id"]) and plan is None)
         return sc
@@ -330,10 +446,27 @@ class PerformanceService:
 
     def check_plan(self, plan: PerfPlan, env: PerfEnvironment | None) -> dict[str, Any]:
         checks, info = preflight.tool_checks(self.settings)
-        problems = preflight.validate_jmx(build_jmx(plan))
-        checks.append({"id": "jmx", "name": "JMeter plan", "status": "FAIL" if problems else "PASS",
-                       "detail": " ".join(problems) or f"Valid JMX: {len(plan.thread_groups())} thread group(s), "
-                                                       f"{len(plan.requests)} request(s).", "fix": ""})
+        if plan.script:
+            try:
+                analysis = jscript.analyze_cached(plan.script)
+                problems, summary = analysis["problems"], analysis["summary"]
+            except QAError as exc:
+                problems, summary = [exc.message], None
+            detail = " ".join(problems) or (
+                f"Valid JMX: {len(summary['thread_groups'])} thread group(s), {len(summary['requests'])} HTTP "
+                f"request(s), version {plan.script_version}." if summary else "")
+            checks.append({"id": "jmx", "name": "JMeter script", "status": "FAIL" if problems else "PASS",
+                           "detail": detail, "fix": "Fix it in the script editor." if problems else ""})
+            if summary:
+                checks += self._script_file_checks(summary)
+        else:
+            problems = preflight.validate_jmx(build_jmx(plan))
+            checks.append({"id": "jmx", "name": "JMeter plan", "status": "FAIL" if problems else "PASS",
+                           "detail": " ".join(problems) or f"Valid JMX: {len(plan.thread_groups())} thread group(s), "
+                                                           f"{len(plan.requests)} request(s).", "fix": ""})
+        if problems and plan.script:  # the load of a broken script cannot be sized: skip the target checks
+            checks.append(preflight.disk_check(self.paths.performance, self._min_free_mb()))
+            return {"status": preflight.summarize(checks), "checks": checks, "tools": info, "checked_at": now_iso()}
         checks.append(preflight.disk_check(self.paths.performance, self._min_free_mb()))
         checks += preflight.target_checks(plan, env)
         if not generator.available():
@@ -341,6 +474,24 @@ class PerformanceService:
                            "detail": "psutil is not installed, so CPU and memory of this PC will not be recorded.",
                            "fix": "Apply the 23.3.22 patch again; it installs psutil."})
         return {"status": preflight.summarize(checks), "checks": checks, "tools": info, "checked_at": now_iso()}
+
+    @staticmethod
+    def _script_file_checks(summary: dict[str, Any]) -> list[dict[str, Any]]:
+        checks = []
+        for f in summary["csv_files"]:
+            path = Path(f)
+            if "${" in f or not path.is_absolute() or not path.exists():
+                checks.append({"id": "csv", "name": "Data file", "status": "FAIL",
+                               "detail": f"The CSV data file {f} was not found"
+                                         + (" (relative paths are read from the run folder)." if not path.is_absolute()
+                                            else "."),
+                               "fix": "Set the full path of the file in the CSV Data Set element."})
+        if summary["listeners"]:
+            checks.append({"id": "listeners", "name": "Listeners", "status": "PASS",
+                           "detail": f"{len(summary['listeners'])} listener(s) in the script are switched off for the "
+                                     "run; results are recorded by the run itself. The saved script is unchanged.",
+                           "fix": ""})
+        return checks
 
     def check_scenario(self, scenario_id: str) -> dict[str, Any]:
         sc = self.get_scenario(scenario_id)
@@ -536,7 +687,12 @@ class PerformanceService:
 
     def _write_snapshot(self, folder: Path, plan: PerfPlan, config: dict[str, Any], check: dict[str, Any]) -> None:
         """What exactly ran: the plan, the JMX, the scenario, environment, tools and versions."""
-        jmx = build_jmx(plan)
+        listeners_off = 0
+        if plan.script:
+            jmx, listeners_off = jscript.for_run(plan.script)
+            (folder / "script.jmx").write_text(plan.script, encoding="utf-8")  # as saved, listeners included
+        else:
+            jmx = build_jmx(plan)
         (folder / "plan.jmx").write_text(jmx, encoding="utf-8")
         (folder / "plan.json").write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         groups = plan.thread_groups()
@@ -546,11 +702,13 @@ class PerformanceService:
             "tools": check["tools"],
             "workload": {"test_type": plan.kind, "peak_concurrent_users": plan.peak_users(),
                          "thread_groups": [g.model_dump() for g in groups],
-                         "total_duration_s": max(g.delay_s + g.duration_s for g in groups),
-                         "think_time_ms": plan.profile.think_time_ms,
+                         "total_duration_s": plan.total_duration_s(),
+                         "think_time_ms": None if plan.script else plan.profile.think_time_ms,
                          "load_model": "closed (concurrent virtual users; not a request-rate target)"},
             "targets": plan.sla.model_dump(),
             "jmx_sha256": hashlib.sha256(jmx.encode("utf-8")).hexdigest(),
+            "script": ({"version": plan.script_version, "sha256": jscript.sha256(plan.script),
+                        "listeners_disabled_for_run": listeners_off} if plan.script else None),
             "pre_run_checks": check["status"],
         }
         (folder / "config.json").write_text(json.dumps(effective, indent=2, ensure_ascii=False, default=str),
@@ -563,7 +721,8 @@ class PerformanceService:
         java, jmeter = tools.find_java(self.settings), tools.find_jmeter(self.settings)
         with self.jmeter.activity(f"Running {title}", run_id=run_id) as act:
             act.event(names.PERFORMANCE_EXECUTION_STARTED,
-                      f"JMeter non-GUI started: {plan.peak_users()} users, {plan.profile.duration_s}s, "
+                      f"JMeter non-GUI started: {plan.peak_users()} users, "
+                      f"{plan.total_duration_s() or 'loop-based'}{'s' if plan.total_duration_s() else ''}, "
                       f"{len(plan.requests)} requests")
             cmd = [jmeter, "-n", "-t", str(folder / "plan.jmx"), "-l", "results.jtl", "-j", "jmeter.log",
                    "-Jjmeter.save.saveservice.output_format=csv", "-Jjmeter.save.saveservice.print_field_names=true",
@@ -583,8 +742,9 @@ class PerformanceService:
             reader = threading.Thread(target=lambda: output.extend(
                 ln.decode("utf-8", "replace").rstrip() for ln in iter(proc.stdout.readline, b"")), daemon=True)  # type: ignore[union-attr]
             reader.start()
-            total_s = max(g.delay_s + g.duration_s for g in plan.thread_groups())
-            deadline = time.monotonic() + total_s + RUN_GRACE_S
+            total = plan.total_duration_s()
+            total_s = total if total is not None else preflight.UNKNOWN_DURATION_TIMEOUT_S
+            deadline = time.monotonic() + total_s + (RUN_GRACE_S if total is not None else 0)
             tail = jtl.LiveTail(folder / "results.jtl")
             started, last_emit = time.monotonic(), 0.0
             try:
@@ -592,7 +752,10 @@ class PerformanceService:
                     if time.monotonic() > deadline:
                         self._kill(proc)
                         out["error"] = (f"JMeter did not finish within the test duration plus {RUN_GRACE_S // 60} "
-                                        "minutes and was stopped (execution timeout).")
+                                        "minutes and was stopped (execution timeout)." if total is not None else
+                                        f"The script's loops did not finish within "
+                                        f"{preflight.UNKNOWN_DURATION_TIMEOUT_S // 3600} hours and JMeter was stopped "
+                                        "(execution timeout).")
                         break
                     time.sleep(1.0)
                     now = time.monotonic()
@@ -660,6 +823,9 @@ class PerformanceService:
     def with_overrides(plan: PerfPlan, overrides: dict[str, Any] | None) -> PerfPlan:
         if not overrides:
             return plan
+        if plan.script and any(overrides.get(k) for k in ("users", "duration_s", "kind")):
+            raise QAError("PERF_SCRIPT_OVERRIDES", "Users and duration of a script are set on its thread groups. "
+                          "Change them in the script editor.", status=409)
         profile = {k: overrides[k] for k in ("users", "duration_s") if overrides.get(k)}
         data = plan.model_dump()
         data["profile"].update(profile)
