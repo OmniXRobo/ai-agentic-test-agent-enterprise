@@ -92,7 +92,8 @@ def test_functional_analytics_from_recorded_results(env):
     s = c.get("/api/analytics/summary").json()
     assert s["functional"] == {"scripts_run": 2, "passed": 2, "failed": 0, "pass_rate": 100.0}  # latest result per script
     assert s["tfs"]["connected"] and s["tfs"]["requirement"] == 1
-    assert s["acceptance_criteria"] == {"available": True, "criteria": 1, "stories_with_criteria": 1, "stories": 1}
+    assert s["acceptance_criteria"] == {"available": True, "criteria": 1, "in_field": 1, "work_items": 0,
+                                       "stories_with_criteria": 1, "stories": 1}
 
 
 def test_performance_analytics_trends_sla_and_transactions(client, rt):

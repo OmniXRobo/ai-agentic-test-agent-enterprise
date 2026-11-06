@@ -56,15 +56,25 @@ class AnalyticsService:
             return {"connected": False, "reason": f"TFS figures could not be loaded ({type(exc).__name__})."}
 
     def acceptance_criteria(self) -> dict[str, Any]:
-        """Acceptance criteria written on the project's user stories, counted the way test design reads them."""
+        """Acceptance criteria of the project's user stories, counted the way test design reads them: the criteria
+        written in each story's Acceptance Criteria field plus criteria kept as their own work items (23.3.30; before,
+        only the field was counted, so projects that keep criteria as linked work items showed nothing)."""
         try:
-            values = self.tfs.field_values("requirement", "Microsoft.VSTS.Common.AcceptanceCriteria")
+            from ..tfs.hierarchy import HierarchyService
+            cfg = HierarchyService(self.tfs).config()
+            data = self.tfs.acceptance_criteria_items(cfg["requirement_types"] or self.tfs.types_for("requirement"),
+                                                      cfg["acceptance_criteria_types"])
         except QAError as exc:
             return {"available": False, "reason": exc.message}
         except Exception as exc:
             return {"available": False, "reason": f"Acceptance criteria could not be loaded ({type(exc).__name__})."}
-        counts = [len(split_criteria(html_to_text(v))) for v in values if v]
-        return {"available": True, "criteria": sum(counts), "stories_with_criteria": len(counts), "stories": len(values)}
+        in_field = {sid: len(split_criteria(html_to_text(v))) for sid, v in data["stories"].items() if v}
+        in_field = {sid: n for sid, n in in_field.items() if n}
+        linked = {sid for it in data["items"] for sid in it["stories"]}
+        with_criteria = set(in_field) | linked
+        return {"available": True, "criteria": sum(in_field.values()) + len(data["items"]),
+                "in_field": sum(in_field.values()), "work_items": len(data["items"]),
+                "stories_with_criteria": len(with_criteria), "stories": len(data["stories"])}
 
     def automated_test_cases(self) -> set[str]:
         return {str(s["test_case_id"]) for s in self.automation.scripts.list() if s.get("test_case_id")}

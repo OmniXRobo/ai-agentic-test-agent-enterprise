@@ -31,6 +31,7 @@ import time
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any, Callable
 
+from .. import branding
 from ..clock import parse_iso
 from ..errors import QAError
 from ..logging_setup import get_logger
@@ -306,8 +307,8 @@ class PerfScheduler:
         n = self.db.query_one("SELECT COUNT(*) AS n FROM perf_schedules WHERE enabled = 1")["n"]
         nxt = self.db.query_one("SELECT name, next_run_at, spec FROM perf_schedules WHERE enabled = 1 AND"
                                 " next_run_at IS NOT NULL ORDER BY next_run_at LIMIT 1")
-        msg = (f"Application closing: {n} active performance schedule(s) will not start until QA Enterprise AI "
-               "runs again on this PC; a running load test is stopped and kept as INTERRUPTED.")
+        msg = (f"Application closing: {n} active performance schedule(s) will not start until "
+               f"{branding.name()} runs again on this PC; a running load test is stopped and kept as INTERRUPTED.")
         if nxt:
             msg += f" Next due: {nxt['name']} at {local_text(nxt['next_run_at'], loads(nxt['spec']).get('timezone'))}."
         if n:
@@ -771,7 +772,7 @@ class PerfScheduler:
             "next": {"id": nxt["id"], "name": nxt["name"], "at": nxt["next_run_at"],
                      "local": local_text(nxt["next_run_at"], loads(nxt["spec"]).get("timezone"))} if nxt else None,
             "startup": startup.status(),
-            "explain": ("Schedules run only while QA Enterprise AI runs on this PC. Closing the browser does not stop "
+            "explain": (f"Schedules run only while {branding.name()} runs on this PC. Closing the browser does not stop "
                         "a run or a schedule. Closing the application stops a running load test (kept as INTERRUPTED)"
                         " and no schedule starts until the application runs again; times passed meanwhile are "
                         "recorded as missed. Start at Windows sign-in starts it for you without administrator rights."),

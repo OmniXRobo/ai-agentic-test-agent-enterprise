@@ -4,6 +4,7 @@
 // application runs on this PC; "Start at Windows sign-in" starts it without administrator rights.
 
 import { api } from "../api.js";
+import { productName } from "../brand.js";
 import { esc, toast, dateTimeOf, openModal } from "../util.js";
 import { confirmDelete } from "../confirm-delete.js";
 
@@ -165,7 +166,7 @@ async function mount(view) {
     view.querySelector("#startup")?.addEventListener("change", async (e) => {
       try {
         const r = await api("/api/performance/startup", { method: "PUT", body: { enabled: e.target.checked } });
-        toast(r.startup.enabled ? "QA Enterprise AI now starts when you sign in to Windows." : "It no longer starts at sign-in.", "success");
+        toast(r.startup.enabled ? `${productName()} now starts when you sign in to Windows.` : "It no longer starts at sign-in.", "success");
       } catch (err) { e.target.checked = !e.target.checked; toast(err.message, "error", 8000); }
     });
     view.querySelectorAll("#list [data-act]").forEach((b) => b.addEventListener("click", async () => {

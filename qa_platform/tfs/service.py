@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import httpx
 
+from .. import branding
 from ..config import Settings
 from ..credentials import TFS_NAMESPACE, SecretStore
 from ..errors import QAError
@@ -463,6 +464,40 @@ class TfsService:
 
         return self.cache.get_or_set(("field_values", self.active_mode(), wiql, field_ref), lambda: self._with_client(run))
 
+    def acceptance_criteria_items(self, story_types: list[str], ac_types: list[str]) -> dict[str, Any]:
+        """23.3.30: acceptance criteria written in the user stories' Acceptance Criteria field and kept as their own
+        work items (for example an 'Acceptance Criteria' type linked under the story). Field text is returned per
+        story; each criterion work item comes with the stories it is linked to."""
+        field = "Microsoft.VSTS.Common.AcceptanceCriteria"
+
+        def ids_of(types: list[str]) -> str:
+            return ("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND "
+                    "[System.WorkItemType] IN (" + ", ".join(wiql_quote(t) for t in types) + ")")
+
+        def run(c: AzureDevOpsClient) -> dict[str, Any]:
+            story_ids = c.wiql(ids_of(story_types), top=20000)
+            stories = {w["id"]: (w.get("fields") or {}).get(field)
+                       for w in (c.work_items(story_ids, fields=[field]) if story_ids else [])}
+            for sid in story_ids:
+                stories.setdefault(sid, None)
+            items: list[dict[str, Any]] = []
+            if ac_types:
+                ac_ids = c.wiql(ids_of(ac_types), top=20000)
+                for w in c.work_items(ac_ids, expand_relations=True) if ac_ids else []:
+                    linked = set()
+                    for r in w.get("relations") or []:
+                        url = r.get("url", "")
+                        if "/workItems/" in url or "/workitems/" in url:
+                            try:
+                                linked.add(int(url.rsplit("/", 1)[1]))
+                            except ValueError:
+                                continue
+                    items.append({"id": w["id"], "stories": sorted(linked & set(stories))})
+            return {"stories": stories, "items": items}
+
+        key = ("ac_items", self.active_mode(), tuple(story_types), tuple(ac_types))
+        return self.cache.get_or_set(key, lambda: self._with_client(run))
+
     def detail(self, item_id: int) -> dict[str, Any]:
         def run(c: AzureDevOpsClient) -> dict[str, Any]:
             raw = c.work_item(item_id)
@@ -729,7 +764,7 @@ class TfsService:
 
             def result_body(r: dict[str, Any]) -> dict[str, Any]:
                 body = {"outcome": outcome_of.get(str(r.get("status") or "").upper(), "Failed"), "state": "Completed",
-                        "comment": f"QA Enterprise AI run {r.get('run_id') or ''} ({r.get('browser') or 'browser'})"}
+                        "comment": f"{branding.name()} run {r.get('run_id') or ''} ({r.get('browser') or 'browser'})"}
                 if r.get("duration_ms") is not None:
                     body["durationInMs"] = int(r["duration_ms"])
                 if r.get("error"):

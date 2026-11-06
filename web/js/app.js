@@ -30,6 +30,7 @@ import * as commandCenter from "./pages/command-center.js";
 import * as setupPage from "./pages/setup.js";
 import { voice, onVoice, loadSettings, agentName } from "./voice.js";
 import { initVoiceAgent } from "./voice-agent.js";
+import { productName, loadBrand, onBrand } from "./brand.js";
 
 // route -> { title, page }
 const NAV = [
@@ -113,7 +114,7 @@ async function navigate() {
   current = entry;
   document.querySelectorAll(".nav-link").forEach((a) => a.classList.toggle("active", a.dataset.route === entry.route));
   document.getElementById("pageTitle").textContent = entry.title;
-  document.title = `${entry.title} · QA Enterprise AI`;
+  document.title = `${entry.title} · ${productName()}`;
   document.getElementById("sidebar").classList.remove("open");
   const view = document.getElementById("view");
   view.innerHTML = "";
@@ -254,6 +255,8 @@ function initStrip() {
 
 document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
 renderNav();
+loadBrand();
+onBrand(() => { if (current) document.title = `${current.title} · ${productName()}`; });
 initTheme();
 initBell();
 initConnection();

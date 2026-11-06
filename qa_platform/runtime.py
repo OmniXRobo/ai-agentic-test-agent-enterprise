@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from . import branding
 from .agents.orchestration import OrchestrationAgent
 from .ai.gateway import AIGateway
 from .ai.managed import ManagedLLM
@@ -91,6 +92,7 @@ def build_runtime(
 ) -> Runtime:
     paths = (paths or Paths()).ensure()
     settings = Settings(paths.settings_file)
+    branding.configure(settings)
     db = Database(paths.db_file)
     bus = EventBus(db)
     state = AgentStateManager()

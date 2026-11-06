@@ -1,5 +1,5 @@
 // Agent Workflow: Air Force squadron cards driven only by runtime events, plus Live Agent Activity,
-// on a tactical defense backdrop (23.3.14).
+// on a tactical defense backdrop (23.3.14), under an Air Force scene at the top of the page (23.3.30).
 
 import { api } from "../api.js";
 import { state, subscribe, onTick } from "../store.js";
@@ -31,6 +31,34 @@ function backdropHtml() {
   </div></div>`;
 }
 
+// 23.3.30: the Air Force scene at the top of the page, above the cards, where it is not covered: a formation of
+// fighters crossing the sky, radar rings with a sweep and blips, and the squadron status strip.
+function heroHtml() {
+  const jet = (x, y, s) => `<path d="${JET}" transform="translate(${x} ${y}) rotate(90 ${50 * s} ${50 * s}) scale(${s})" class="wf-hero-jet"/>`;
+  const rings = [36, 72, 108, 144].map((r) => `<circle cx="1050" cy="86" r="${r}" class="wf-hero-ring"/>`).join("");
+  return `<div class="wf-hero">
+    <svg class="wf-hero-art" viewBox="0 0 1200 172" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs><pattern id="wfHeroGrid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" class="wf-grid"/></pattern>
+        <linearGradient id="wfTrail" x1="0" x2="1"><stop offset="0" stop-color="#38d6ff" stop-opacity="0"/><stop offset="1" stop-color="#38d6ff" stop-opacity=".55"/></linearGradient></defs>
+      <rect width="1200" height="172" fill="url(#wfHeroGrid)"/>
+      ${rings}<path d="M1050 -70V242M890 86h320" class="wf-hero-ring"/>
+      <circle cx="1002" cy="52" r="3" class="wf-blip"/><circle cx="1110" cy="120" r="3" class="wf-blip b2"/><circle cx="1078" cy="34" r="3" class="wf-blip b3"/>
+      <path d="M0 160h1200" class="wf-hud"/>
+      <g class="wf-flight">
+        <path d="M-60 37H70M-80 19H38M-80 55H38" stroke="url(#wfTrail)" stroke-width="1.6" fill="none"/>
+        ${jet(70, 22, 0.3)}${jet(38, 8, 0.22)}${jet(38, 44, 0.22)}
+      </g>
+    </svg>
+    <div class="wf-hero-sweep" aria-hidden="true"></div>
+    <div class="wf-hero-copy">
+      <div class="wf-hero-kicker">&#9650; Air Defense Operations</div>
+      <div class="wf-hero-title">Agent Squadron</div>
+      <div class="wf-hero-sub">Defense grid online · every card reports real work</div>
+    </div>
+    <div class="wf-hero-strip" id="wfStrip">${statusStripHtml()}</div>
+  </div>`;
+}
+
 function statusStripHtml() {
   const counts = { RUNNING: 0, READY: 0, FAILED: 0 };
   for (const a of state.agents.values()) {
@@ -40,8 +68,6 @@ function statusStripHtml() {
     else counts.READY++;
   }
   return `<div class="wf-strip">
-    <span class="wf-callsign">&#9650; AIR DEFENSE OPERATIONS · AGENT SQUADRON</span>
-    <span class="spacer"></span>
     <span class="wf-count run"><span class="lamp ${counts.RUNNING ? "RUNNING" : ""}"></span>AIRBORNE <b>${counts.RUNNING}</b></span>
     <span class="wf-count"><span class="lamp READY"></span>ON STANDBY <b>${counts.READY}</b></span>
     <span class="wf-count bad"><span class="lamp ${counts.FAILED ? "FAILED" : ""}"></span>DOWN <b>${counts.FAILED}</b></span>
@@ -58,7 +84,7 @@ export async function mount(view) {
   const agents = [...state.agents.values()];
   view.innerHTML = `<div class="wf-defense">
     ${backdropHtml()}
-    <div id="wfStrip">${statusStripHtml()}</div>
+    ${heroHtml()}
     <div class="row" style="margin-bottom:14px">
       <p class="muted" style="margin:0">Cards change only when an agent reports real work: READY, WAITING (queued in the same run), RUNNING, PAUSED (waiting for you), COMPLETED or FAILED.</p>
       <span class="spacer"></span>
