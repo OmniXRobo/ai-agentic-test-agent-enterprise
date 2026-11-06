@@ -25,7 +25,7 @@ def at(text: str) -> datetime:
 # ---- due times (pure) ----------------------------------------------------------------------------------------------
 
 def test_due_times_follow_the_repeat_and_the_time_zone():
-    dubai = {"repeat": "daily", "time": "07:30", "start_date": "2026-11-05", "timezone": "Asia/Dubai"}
+    dubai = {"repeat": "daily", "time": "07:30", "start_date": "2026-11-05", "timezone": "UTC+04:00"}
     assert S.next_after(dubai, at("2026-11-05T00:00:00")) == at("2026-11-05T03:30:00")  # 07:30 in UTC+4
     assert S.next_after(dubai, at("2026-11-05T03:30:00")) == at("2026-11-06T03:30:00")  # strictly after
     once = {"repeat": "once", "time": "09:00", "start_date": "2026-11-07", "timezone": "UTC"}
@@ -47,6 +47,15 @@ def test_due_times_follow_the_repeat_and_the_time_zone():
     assert S.describe({**dubai, "timezone": "system"}) == "Every day at 07:30"
     with pytest.raises(Exception):
         S.zone("Mars/Olympus")
+    assert "UTC+05:30" in S.zones() and S.zone("UTC-03:30").utcoffset(None) == -timedelta(hours=3, minutes=30)
+    try:  # a named zone with daylight saving, where this PC has the time zone data (Windows often has none)
+        london = S.zone("Europe/London")
+    except Exception:
+        london = None
+    if london is not None:
+        summer = {"repeat": "daily", "time": "09:00", "start_date": "2026-03-28", "timezone": "Europe/London"}
+        assert S.next_after(summer, at("2026-03-28T00:00:00")) == at("2026-03-28T09:00:00")  # GMT
+        assert S.next_after(summer, at("2026-03-28T09:00:00")) == at("2026-03-29T08:00:00")  # BST from the 29th
     assert "UTC" in S.system_zone_name()
 
 

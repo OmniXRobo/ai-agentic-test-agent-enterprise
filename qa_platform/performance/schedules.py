@@ -23,6 +23,7 @@ application stops a running test (recorded as INTERRUPTED) and no schedule start
 
 from __future__ import annotations
 
+import re
 import secrets as _secrets
 import sqlite3
 import threading
@@ -78,27 +79,48 @@ def system_zone_name() -> str:
     return f"{name} (UTC{sign}{mins // 60:02d}:{mins % 60:02d})"
 
 
+# Fixed UTC offsets need no time zone data (Windows has none without the tzdata package); they do not follow
+# daylight saving time, which the system time zone and named zones do.
+OFFSETS = ["UTC-12:00", "UTC-11:00", "UTC-10:00", "UTC-09:30", "UTC-09:00", "UTC-08:00", "UTC-07:00", "UTC-06:00",
+           "UTC-05:00", "UTC-04:00", "UTC-03:30", "UTC-03:00", "UTC-02:00", "UTC-01:00", "UTC", "UTC+01:00",
+           "UTC+02:00", "UTC+03:00", "UTC+03:30", "UTC+04:00", "UTC+04:30", "UTC+05:00", "UTC+05:30", "UTC+05:45",
+           "UTC+06:00", "UTC+06:30", "UTC+07:00", "UTC+08:00", "UTC+08:45", "UTC+09:00", "UTC+09:30", "UTC+10:00",
+           "UTC+10:30", "UTC+11:00", "UTC+12:00", "UTC+12:45", "UTC+13:00", "UTC+14:00"]
+_OFFSET = re.compile(r"^UTC([+-])(\d{2}):(\d{2})$")
+
+
 def zones() -> list[str]:
-    """Named time zones this PC has data for (Windows often has none without the tzdata package)."""
+    """Time zones offered besides the system one: fixed UTC offsets always, and named zones (with daylight saving)
+    when this PC has the time zone data."""
     try:
         from zoneinfo import available_timezones
 
-        return sorted(z for z in available_timezones() if "/" in z and not z.startswith(("Etc/", "SystemV/")))
+        named = sorted(z for z in available_timezones() if "/" in z and not z.startswith(("Etc/", "SystemV/")))
     except Exception:
-        return []
+        named = []
+    return OFFSETS + named
 
 
 def zone(name: str | None) -> tzinfo | None:
     """None is the system time zone."""
     if not name or name == "system":
         return None
+    if name == "UTC":
+        return timezone.utc
+    m = _OFFSET.match(name)
+    if m:
+        h, mm = int(m.group(2)), int(m.group(3))
+        if h > 14 or mm >= 60:
+            raise QAError("SCHEDULE_TIMEZONE", f"{name} is not a valid UTC offset.", status=422)
+        off = timedelta(hours=h, minutes=mm) * (1 if m.group(1) == "+" else -1)
+        return timezone(off, name)
     try:
         from zoneinfo import ZoneInfo
 
         return ZoneInfo(name)
     except Exception:
         raise QAError("SCHEDULE_TIMEZONE", f"The time zone {name} is not known on this PC. Use the system time "
-                      "zone, or install the time zone data.", status=422) from None
+                      "zone or a UTC offset, or install the time zone data.", status=422) from None
 
 
 def _to_utc(local: datetime, tz: tzinfo | None) -> datetime:

@@ -14,8 +14,9 @@ schedules keep running after a restart, without administrator rights.
 * Each schedule shows the scenario and environment, the next run in its time zone, the version policy, the overlap
   and missed-run policies, the maximum runtime, the report and email options, and its last result. History lists
   every due time: run, skipped (with the reason), missed, or not started (with the reason).
-* Time zone: the Windows time zone of this PC by default. Other named zones are offered where the PC has the time
-  zone data. There is no time server or GMT service.
+* Time zone: the Windows time zone of this PC by default (it follows daylight saving time). Fixed UTC offsets
+  (UTC, UTC+04:00, UTC-05:30 ...) are always offered; named zones such as Europe/London are offered only where the
+  PC has the time zone data, which Windows usually does not. There is no time server or GMT service.
 * Run now also works from the scenario page (Run now as before; Schedule… opens a new schedule for the scenario).
 
 **Versions (nothing unsaved ever runs)**
