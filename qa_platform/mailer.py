@@ -22,8 +22,10 @@ import tempfile
 from email.message import EmailMessage
 from email.utils import formataddr, getaddresses
 from pathlib import Path
+from html import escape
 from typing import Any
 
+from . import branding
 from .config import Settings
 from .credentials import SecretStore
 from .errors import QAError
@@ -33,9 +35,16 @@ PRESETS = {
     "outlook_com": {"host": "smtp-mail.outlook.com", "port": 587, "security": "starttls"},
 }
 DEFAULTS = {"mode": "smtp", "preset": "office365", "host": "smtp.office365.com", "port": 587, "security": "starttls",
-            "username": "", "sender": "", "sender_name": "QA Enterprise AI", "default_to": "", "verify_tls": True,
+            "username": "", "sender": "", "sender_name": "", "default_to": "", "verify_tls": True,
             "timeout_seconds": 30}
 SECRET_NS, SECRET_NAME = "email", "smtp"
+OLD_DEFAULT_SENDER_NAME = "QA Enterprise AI"
+
+
+def _sender_name(cfg: dict[str, Any]) -> str:
+    """The display name of the sender: the one set in Outlook Email, otherwise the product name (23.3.30)."""
+    value = (cfg.get("sender_name") or "").strip()
+    return branding.name() if not value or value == OLD_DEFAULT_SENDER_NAME else value
 
 
 def split_addresses(value: Any) -> list[str]:
@@ -117,7 +126,7 @@ class Mailer:
             return self._send_outlook_app(recipients, copies, subject, html, files)
         sender = cfg.get("sender") or cfg.get("username")
         msg = EmailMessage()
-        msg["From"] = formataddr((cfg.get("sender_name") or "", sender))
+        msg["From"] = formataddr((_sender_name(cfg), sender))
         msg["To"] = ", ".join(recipients)
         if copies:
             msg["Cc"] = ", ".join(copies)
@@ -196,9 +205,10 @@ class Mailer:
     def send_test(self, to: Any = None) -> dict[str, Any]:
         cfg = self.config()
         to = to or cfg.get("default_to") or cfg.get("sender") or cfg.get("username")
-        html = ("<p>This is a test email from <b>QA Enterprise AI</b>.</p><p>Scheduled run reports will be sent "
+        product = branding.name()
+        html = (f"<p>This is a test email from <b>{escape(product)}</b>.</p><p>Scheduled run reports will be sent "
                 "like this.</p>")
-        return self.send(to, "QA Enterprise AI - test email", html, "This is a test email from QA Enterprise AI.")
+        return self.send(to, f"{product} - test email", html, f"This is a test email from {product}.")
 
 
 def _short(exc: BaseException) -> str:

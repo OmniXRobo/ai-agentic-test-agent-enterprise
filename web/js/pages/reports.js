@@ -33,9 +33,19 @@ async function renderList(view) {
       <td>${r.status === "failed" ? `<span class="muted">${esc(r.error || "")}</span>` : esc(summaryText(r))}${r.summary?.pdf_error ? `<div class="muted">${esc(r.summary.pdf_error)}</div>` : ""}</td>
       <td style="white-space:nowrap">${r.has_html ? `<a class="btn" href="/api/reports/${esc(r.id)}/html" target="_blank" rel="noopener">View</a>
         <a class="btn" href="/api/reports/${esc(r.id)}/html?download=true">HTML</a>` : ""}
-        ${r.has_pdf ? `<a class="btn" href="/api/reports/${esc(r.id)}/pdf?download=true">PDF</a>` : ""}
+        ${r.has_pdf ? `<a class="btn" href="/api/reports/${esc(r.id)}/pdf" target="_blank" rel="noopener">Open PDF</a>
+        <a class="btn" href="/api/reports/${esc(r.id)}/pdf?download=true">Download PDF</a>` : ""}
+        ${r.status === "ready" && r.has_html && !r.has_pdf ? `<button class="btn" data-pdf="${esc(r.id)}">Make PDF</button>` : ""}
         ${r.status !== "running" ? `<button class="link-btn" data-del="${esc(r.id)}">Delete</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>` : '<p class="muted">No reports yet. Choose what to include above and press Generate report.</p>';
+  box.querySelectorAll("[data-pdf]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true; b.textContent = "Printing…";
+    try {
+      const { report } = await api(`/api/reports/${b.dataset.pdf}/pdf`, { method: "POST", body: {} });
+      toast(report.has_pdf ? "PDF ready." : (report.summary?.pdf_error || "The PDF could not be made."), report.has_pdf ? "success" : "error");
+    } catch (err) { toast(err.message, "error"); }
+    renderList(view);
+  }));
   box.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
     if (!confirm(`Delete report ${b.dataset.del} and its files?`)) return;
     try { await api(`/api/reports/${b.dataset.del}`, { method: "DELETE" }); renderList(view); }

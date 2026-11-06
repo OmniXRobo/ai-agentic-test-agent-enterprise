@@ -64,6 +64,10 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
   default), pinned or latest versions, overlap skip/queue, missed-run skip/run-once without a backlog, one run per due
   time (unique job identity), maximum runtime, scheduled PDF and Outlook email, and start at Windows sign-in from the
   user's Startup folder (no administrator rights). See PATCH_23.3.29.md.
+* 23.3.30: SkyGuard QA name, tagline and logo set in Preferences (header, tab titles, reports, PDFs, emails), voice
+  pages in navy and cyan, Air Force scene at the top of Agent Workflow, report PDFs printed from a file with an Edge or
+  Chrome fallback and Make PDF, Dashboard acceptance criteria counted from the field and from criteria work items.
+  See PATCH_23.3.30.md.
 
 ## Quality
 

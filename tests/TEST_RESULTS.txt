@@ -1,3 +1,14 @@
+23.3.30 (6 Nov 2026): full suite 505 passed, 17 skipped, 0 failed (Linux, Python 3.13, headless Chromium; the 17
+  skipped need JMeter/Java, which this build machine did not have).
+  new: test_branding_23330.py (6 tests): default SkyGuard QA name and tagline; Preferences validation of the name,
+  tagline and logo path (missing, unsupported, over 2 MB, pasted with quotes); the logo served with its type and a
+  restrictive CSP, and a logo removed later; the name in schedule messages and the email sender name; branding in
+  the pages and no green left in the voice styles; a report with the name, tagline and logo in its HTML and PDF, and
+  Make PDF after the PDF was removed; the PDF printed by the next browser when the first cannot start, with reasons
+  when none can; dashboard acceptance criteria counted from the field and from linked criteria work items.
+  UI checked in Chromium (desktop and phone width): AI Voice Command Center, Voice & Command Agent, Agent Workflow,
+  Preferences, Dashboard, Reports with a custom logo, and the PDF. No script errors on the pages.
+
 23.3.29 (6 Nov 2026): full suite 516 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
   new: test_perf_schedules_23329.py (8 tests): due times for once, daily, chosen weekdays, every N weeks and every
   N minutes, in a named time zone and the system zone; validation (interval, past time, days, time, time zone,

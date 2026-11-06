@@ -114,7 +114,7 @@ def test_schedules_are_validated_paused_resumed_and_deleted(client, quiet):
                                                                          "time": "06:15"}).json()["schedule"]
     assert edited["next_run_at"] == "2026-11-06T06:15:00+00:00" and edited["name"] == "Nightly"
     listed = client.get("/api/performance/schedules").json()
-    assert {x["id"] for x in listed["items"]} >= {s["id"]} and "only while QA Enterprise AI runs" in listed["host"]["explain"]
+    assert {x["id"] for x in listed["items"]} >= {s["id"]} and "only while SkyGuard QA runs" in listed["host"]["explain"]
     assert client.delete(f"/api/performance/schedules/{s['id']}").json()["ok"]
     assert client.get(f"/api/performance/schedules/{s['id']}").status_code == 404
 

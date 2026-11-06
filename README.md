@@ -10,6 +10,14 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Version 23.3.30: SkyGuard QA
+
+The product is called SkyGuard QA ("Every release, cleared for takeoff."); the name, tagline and a logo file are set
+under Preferences and appear in the header, reports and PDFs. The voice pages use the navy and cyan of the other
+pages, Agent Workflow shows its Air Force scene at the top, report PDFs no longer fail on large reports (with an Edge
+or Chrome fallback and Make PDF), and the Dashboard counts acceptance criteria kept as work items. See
+[docs/PATCH_23.3.30.md](docs/PATCH_23.3.30.md).
+
 ## Test Plans, Test Suites, Test Cases and Test Data
 
 Test plans can be created with or without a sprint, and updated and deleted in TFS. Test suites cover the 11 testing

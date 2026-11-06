@@ -42,6 +42,7 @@ class FakeAzureDevOps:
         self.recycled: dict[int, dict] = {}
         self.deleted_test_cases: list[int] = []
         self.work_item_fields: dict[str, list[tuple[str, str]]] = {}  # type -> extra (referenceName, name)
+        self.extra_types: list[str] = []  # 23.3.30: e.g. an "Acceptance Criteria" work item type
         self.test_case_parameters = True  # False: a process template whose Test Case has no Parameters fields
         if hierarchy:
             self._add_hierarchy()
@@ -122,7 +123,8 @@ class FakeAzureDevOps:
         if path.startswith("/acme/_apis/projects/"):
             return httpx.Response(404, json={"message": "project not found"})
         if path == f"{proj}/_apis/wit/workitemtypes":
-            types = ["User Story", "Test Case", self.bug_type, "Task"] + (["Epic", "Feature"] if self.hierarchy else [])
+            types = (["User Story", "Test Case", self.bug_type, "Task"] + (["Epic", "Feature"] if self.hierarchy else [])
+                     + self.extra_types)
             return httpx.Response(200, json={"value": [{"name": t, "states": [
                 {"name": "Active", "category": "InProgress"}, {"name": "Closed", "category": "Completed"}]} for t in types]})
         if path == f"{proj}/_apis/wit/workitemtypecategories":
