@@ -1,3 +1,15 @@
+23.3.29 (6 Nov 2026): full suite 516 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_schedules_23329.py (8 tests): due times for once, daily, chosen weekdays, every N weeks and every
+  N minutes, in a named time zone and the system zone; validation (interval, past time, days, time, time zone,
+  email, no parallel overlap, maximum runtime shorter than the workload); pause and resume; one run per due time
+  across two ticks and a second scheduler on the same database; overlap skip and queue (one waiting at most);
+  missed times with skip and run-once (latest only) and a ten-day gap without a backlog; restart recovery; pinned
+  script, workload and targets after the plan changed, latest after switching, a changed pinned data set refused;
+  the Startup folder file for start at Windows sign-in; real JMeter runs: a scheduled run with its PDF and an email
+  with the PDF attached, and a run stopped at its maximum runtime with partial results kept.
+  UI checked in Chromium (desktop and phone width): schedule list, new schedule form, history, pause, start at
+  sign-in. No script errors on the page.
+
 23.3.28 (5 Nov 2026): full suite 508 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
   new: test_perf_reports_23328.py (7 tests): planned phase windows and shape text; per-phase figures from a results
   file; comparability between runs (blocking differences, cautions, build as information); defect draft content

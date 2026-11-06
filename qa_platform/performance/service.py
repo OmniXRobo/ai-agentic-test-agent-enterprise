@@ -98,6 +98,7 @@ class PerformanceService:
         self._lock = threading.Lock()  # one JMeter run at a time on this PC (the load generator)
         self._procs: dict[str, subprocess.Popen[bytes]] = {}
         self._stopping: dict[str, str] = {}  # run id -> graceful | emergency
+        self._stop_reasons: dict[str, str] = {}  # 23.3.29: why a run was stopped when it was not the user
         self._monitors: dict[str, generator.GeneratorMonitor] = {}
         self._live: dict[str, dict[str, Any]] = {}
         self._dash: dict[str, live_metrics.LiveMetrics] = {}  # 23.3.27: the live dashboard of the running test
@@ -844,29 +845,51 @@ class PerformanceService:
         return plan, sc, env
 
     def _create_run(self, run_id: str, plan: PerfPlan, sc: PerfScenario | None, env: PerfEnvironment | None,
-                    trigger: str, overrides: dict[str, Any] | None, build: str | None = None) -> None:
+                    trigger: str, overrides: dict[str, Any] | None, build: str | None = None,
+                    schedule: dict[str, Any] | None = None) -> None:
         """The run's record and its snapshot of exactly what will run, taken when it is created. 23.3.28: the
         application build under test is the one given for this run, or the environment's current build."""
         folder = self.paths.performance / run_id
         ts = now_iso()
         build = (build or "").strip()[:120] or (env.build if env else "") or ""
+        overrides = {k: v for k, v in (overrides or {}).items() if k != "script"}  # a pinned script is in the plan
         config = {"plan": plan.model_dump(), "scenario": sc.model_dump() if sc else None,
-                  "environment": env.model_dump() if env else None, "overrides": overrides or {},
-                  "created_at": ts, "trigger": trigger, "build": build}
+                  "environment": env.model_dump() if env else None, "overrides": overrides,
+                  "created_at": ts, "trigger": trigger, "build": build,
+                  "datasets": self.plan_datasets(plan)}  # 23.3.29: the data set versions resolved now
+        if schedule:
+            config["schedule"] = schedule
         self.db.execute(
             "INSERT INTO perf_runs (run_id, plan_id, kind, name, status, state, started_at, queued_at, folder,"
-            " scenario_id, environment_id, trigger, overrides, config, build)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " scenario_id, environment_id, trigger, overrides, config, build, schedule_id)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, plan.id, plan.kind, plan.name + (" (one-user validation)" if plan.mode == "validation" else ""),
              "QUEUED", "QUEUED", ts, ts, str(folder), sc.id if sc else None,
-             env.id if env else None, trigger, dumps(overrides or {}), dumps(config), build or None))
+             env.id if env else None, trigger, dumps(overrides or {}), dumps(config), build or None,
+             (schedule or {}).get("id")))
+
+    def plan_datasets(self, plan: PerfPlan) -> list[dict[str, Any]]:
+        """The data sets a script reads, with their current versions (23.3.29: snapshotted on each run)."""
+        if not plan.script or "datasets/DS-" not in plan.script:
+            return []
+        try:
+            ids = list(dict.fromkeys(b["dataset_id"] for b in jscript.data_sets(jscript.parse(plan.script))
+                                     if b["dataset_id"]))
+        except QAError:
+            return []
+        out = []
+        for ds_id in ids:
+            r = self.db.query_one("SELECT id, name, version FROM perf_datasets WHERE id = ?", (ds_id,))
+            out.append({"id": ds_id, "name": r["name"] if r else None, "version": r["version"] if r else None})
+        return out
 
     def enqueue(self, plan_id: str, *, scenario_id: str | None = None, trigger: str = "manual",
-                overrides: dict[str, Any] | None = None, run_id: str | None = None, build: str | None = None) -> str:
+                overrides: dict[str, Any] | None = None, run_id: str | None = None, build: str | None = None,
+                schedule: dict[str, Any] | None = None) -> str:
         """Queue a run. Runs start one at a time on this PC (the load generator), oldest first."""
         plan, sc, env = self._resolve(plan_id, scenario_id, overrides)
         run_id = run_id or new_run_id("PERF")
-        self._create_run(run_id, plan, sc, env, trigger, overrides, build)
+        self._create_run(run_id, plan, sc, env, trigger, overrides, build, schedule)
         what = "one-user validation run" if plan.mode == "validation" else KIND_TITLES[plan.kind]
         self.jmeter.emit(names.PERFORMANCE_GENERATION_STARTED, f"Queued {what}: {plan.name}",
                          run_id=run_id, details={"state": "QUEUED", "link": f"#/perf-results?run={run_id}"})
@@ -923,6 +946,13 @@ class PerformanceService:
         record: dict[str, Any] = {"state": "FAILED", "verdict": None, "partial": 0, "metrics": None, "sla": None,
                                   "error": None, "reason": None, "generator": None}
         try:
+            changed = self._datasets_changed(config)
+            if changed:  # 23.3.29: a scheduled run uses the data set versions resolved (or pinned) for it
+                record["error"] = changed
+                record["reason"] = "Blocked before start: a data set changed; no load was sent."
+                self.jmeter.emit(names.PERFORMANCE_FAILED, f"{title} did not start: {changed}", run_id=run_id,
+                                 details={"link": f"#/perf-results?run={run_id}", "state": "FAILED"})
+                return
             check = self.check_plan(plan, env)
             self._set(run_id, checks=dumps(check))
             if check["status"] == "FAIL":
@@ -941,8 +971,9 @@ class PerformanceService:
                 record["state"], record["reason"] = "INTERRUPTED", "The application was closed during the run."
             elif outcome["stopped"]:
                 record["state"] = "CANCELLED"
-                record["reason"] = ("Emergency stop: JMeter was ended at once." if outcome["stopped"] == "emergency"
-                                    else "Stopped by the user; results up to the stop are kept.")
+                record["reason"] = self._stop_reasons.pop(run_id, None) or (
+                    "Emergency stop: JMeter was ended at once." if outcome["stopped"] == "emergency"
+                    else "Stopped by the user; results up to the stop are kept.")
             elif outcome["error"]:
                 record["state"], record["error"] = "FAILED", outcome["error"]
             else:
@@ -990,6 +1021,18 @@ class PerformanceService:
                     hook(run_id, record["verdict"])
                 except Exception as exc:  # a report or notification must never break the queue
                     log.warning(f"After-run step failed for {run_id}: {exc}")
+
+    def _datasets_changed(self, config: dict[str, Any]) -> str | None:
+        """For a scheduled run: the data sets must still be at the versions resolved (latest) or pinned for it."""
+        need = (config.get("schedule") or {}).get("require_datasets") or {}
+        problems = []
+        for ds_id, version in need.items():
+            r = self.db.query_one("SELECT name, version FROM perf_datasets WHERE id = ?", (ds_id,))
+            if r is None:
+                problems.append(f"data set {ds_id} was deleted")
+            elif int(r["version"]) != int(version):
+                problems.append(f"data set {r['name']} is now version {r['version']}, not {version}")
+        return ("The data used for this scheduled run changed: " + "; ".join(problems) + ".") if problems else None
 
     def _write_snapshot(self, folder: Path, plan: PerfPlan, config: dict[str, Any], check: dict[str, Any]) -> None:
         """What exactly ran: the plan, the JMX, the scenario, environment, tools and versions."""
@@ -1230,6 +1273,11 @@ class PerformanceService:
     def with_overrides(plan: PerfPlan, overrides: dict[str, Any] | None) -> PerfPlan:
         if not overrides:
             return plan
+        if any(k in overrides for k in ("script_version", "workload", "sla")):
+            plan = PerformanceService._pinned(plan, overrides)
+            overrides = {k: v for k, v in overrides.items() if k not in ("script_version", "workload", "sla")}
+            if not overrides:
+                return plan
         if overrides.get("validation"):
             data = plan.model_dump()
             data["mode"] = "validation"
@@ -1248,12 +1296,35 @@ class PerformanceService:
             raise QAError("VALIDATION_FAILED", "Those load settings are outside the allowed range.", status=422,
                           details=str(exc)) from exc
 
-    def stop(self, run_id: str, mode: str = "graceful") -> bool:
+    @staticmethod
+    def _pinned(plan: PerfPlan, overrides: dict[str, Any]) -> PerfPlan:
+        """23.3.29: a schedule that pins versions runs the saved script version, workload and targets it pinned.
+        The script text comes from the version history (set by the schedule as "script" with the version)."""
+        data = plan.model_dump()
+        if overrides.get("script_version") is not None:
+            text = overrides.get("script")
+            if not text:
+                raise QAError("PERF_VERSION_MISSING", f"Script version {overrides['script_version']} is not available.",
+                              status=409)
+            data["script"], data["script_version"] = text, int(overrides["script_version"])
+        if "workload" in overrides:
+            data["workload"] = overrides["workload"]
+        if "sla" in overrides and overrides["sla"] is not None:
+            data["sla"] = overrides["sla"]
+        try:
+            return PerfPlan.model_validate(data)
+        except ValidationError as exc:
+            raise QAError("VALIDATION_FAILED", "The pinned workload or targets are no longer valid.", status=422,
+                          details=str(exc)) from exc
+
+    def stop(self, run_id: str, mode: str = "graceful", reason: str | None = None) -> bool:
         """graceful: JMeter's StopTestNow, so results and the HTML report are written; ended after 30 s if it hangs.
         emergency: end the JMeter process tree at once (only the process this application started)."""
         proc = self._procs.get(run_id)
         if proc is None:
             return False
+        if reason:
+            self._stop_reasons[run_id] = reason
         self._stopping[run_id] = "emergency" if mode == "emergency" else self._stopping.get(run_id, "graceful")
         self._set(run_id, state="STOPPING")
         if mode == "emergency":

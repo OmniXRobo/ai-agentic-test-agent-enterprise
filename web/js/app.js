@@ -22,6 +22,7 @@ import { perfScenarios, perfPlans, perfLoad, perfStress, perfSpike, perfSoak, pe
 import { defectReview, perfDefects } from "./pages/defect-review.js";
 import { perfData } from "./pages/perf-data.js";
 import { perfLive } from "./pages/perf-live.js";
+import { perfSchedules } from "./pages/perf-schedules.js";
 import * as voicePage from "./pages/voice.js";
 import * as reports from "./pages/reports.js";
 import * as analytics from "./pages/analytics.js";
@@ -65,6 +66,7 @@ const NAV = [
     ["perf-spike", "Spike Tests", perfSpike],
     ["perf-soak", "Soak Tests", perfSoak],
     ["perf-live", "Live Dashboard", perfLive],
+    ["perf-schedules", "Performance Schedules", perfSchedules],
     ["perf-results", "Performance Results", perfResults],
     ["perf-defects", "Performance Defects", perfDefects],
   ]],

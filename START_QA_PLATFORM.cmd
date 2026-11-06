@@ -27,6 +27,7 @@ if not defined QA_HOME set "QA_HOME=%DATA%"
 for /f "usebackq delims=" %%P in (`%PY% -c "import json,pathlib;p=pathlib.Path(r'%QA_HOME%\settings.json');print(json.loads(p.read_text())['server']['port'] if p.exists() else 8765)" 2^>nul`) do set "PORT=%%P"
 if not defined PORT set "PORT=8765"
 
-start "" /b cmd /c "timeout /t 3 /nobreak >nul & start http://127.0.0.1:%PORT%/"
+rem 23.3.29: started at Windows sign-in (QA_NO_BROWSER=1): the server starts without opening the browser
+if not defined QA_NO_BROWSER start "" /b cmd /c "timeout /t 3 /nobreak >nul & start http://127.0.0.1:%PORT%/"
 %PY% -m qa_platform
 endlocal

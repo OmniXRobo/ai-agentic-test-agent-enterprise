@@ -67,10 +67,13 @@ class Runtime:
     setup: FirstRunSetup
     mailer: Any = None  # 23.3.21: Outlook email
     scheduler: Any = None  # 23.3.21: Scheduled Runs
+    perf_scheduler: Any = None  # 23.3.29: performance schedules
 
     def close(self) -> None:
         if self.scheduler is not None:
             self.scheduler.close()
+        if self.perf_scheduler is not None:
+            self.perf_scheduler.close()  # logs what closing means for the schedules
         self.performance.close()  # 23.3.22: a running load test is stopped and recorded as INTERRUPTED
         self.reports.close()  # 23.3.28: a run report being made is finished before the database closes
         self.llm.close()  # only the llama-server this application started
@@ -147,6 +150,14 @@ def build_runtime(
                              reports_dir=paths.reports / "scheduled")
     rt.scheduler.studio = studio
     rt.scheduler.start()
+    # 23.3.29: performance schedules. Queued scheduled runs left from before a shutdown follow their missed-run
+    # policy before the run queue starts; then the schedules are checked every 15 seconds.
+    from .performance.schedules import PerfScheduler
+
+    rt.perf_scheduler = PerfScheduler(performance, reports=reports, notifications=notifications, mailer=rt.mailer,
+                                      defects=defects)
+    rt.perf_scheduler.recover()
     # 23.3.22: performance runs left active by an earlier shutdown become INTERRUPTED; the run queue starts
     performance.start()
+    rt.perf_scheduler.start()
     return rt

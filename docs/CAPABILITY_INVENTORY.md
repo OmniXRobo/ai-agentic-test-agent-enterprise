@@ -60,6 +60,10 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
   findings, limitations, secret scan), run comparison with comparability warnings, consolidated PDF across test
   types, history by build, scenario, environment and date, defect drafts with reproduction workload, expected vs
   actual and severity rationale. See PATCH_23.3.28.md.
+* 23.3.29: performance schedules (once, daily, chosen weekdays, every N weeks, every N minutes; Windows time zone by
+  default), pinned or latest versions, overlap skip/queue, missed-run skip/run-once without a backlog, one run per due
+  time (unique job identity), maximum runtime, scheduled PDF and Outlook email, and start at Windows sign-in from the
+  user's Startup folder (no administrator rights). See PATCH_23.3.29.md.
 
 ## Quality
 

@@ -237,6 +237,9 @@ class ReportService:
         draft of a failed run, so the report lists it)."""
         if not self.performance.settings.section("performance").get("auto_report", True):
             return
+        row = self.db.query_one("SELECT schedule_id FROM perf_runs WHERE run_id = ?", (run_id,))
+        if row and row["schedule_id"]:
+            return  # 23.3.29: a scheduled run's report follows the schedule's own report option
 
         if self._closing.is_set():
             return
@@ -256,6 +259,14 @@ class ReportService:
         t = threading.Thread(target=work, name=f"report-{run_id}", daemon=True)
         self._report_threads.add(t)
         t.start()
+
+    def perf_run_report_serial(self, run_id: str) -> dict[str, Any]:
+        """The run report, made one at a time with the background reports (each prints with Chromium)."""
+        with self._report_lock:
+            if self._closing.is_set():
+                raise QAError("APP_CLOSING", "The application is closing; make the report from the run page later.",
+                              status=409)
+            return self.perf_run_report(run_id)
 
     def close(self, timeout: float = 60) -> None:
         """No new background reports; a report being made is finished (up to the timeout) and the waiting ones are
