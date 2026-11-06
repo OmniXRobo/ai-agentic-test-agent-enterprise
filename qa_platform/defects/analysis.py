@@ -110,8 +110,57 @@ def functional_draft(execution: dict[str, Any], script: dict[str, Any], healing:
     }
 
 
+def _run_config(run: dict[str, Any]) -> dict[str, Any]:
+    """The run's effective configuration: config.json in the run folder, else what was stored at queue time."""
+    import json
+    from pathlib import Path
+    try:
+        path = Path(run.get("folder") or "") / "config.json"
+        if run.get("folder") and path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    return run.get("config") or {}
+
+
+def _local(ts: str | None) -> str:
+    if not ts:
+        return "?"
+    try:
+        from ..clock import parse_iso
+        d = parse_iso(ts).astimezone()
+        off = d.strftime("%z")
+        return f"{d.strftime('%Y-%m-%d %H:%M:%S')} (UTC{off[:3]}:{off[3:]})"
+    except (ValueError, ImportError):
+        return ts
+
+
+def severity_for(category: str, failed: list[dict[str, Any]]) -> tuple[int, str]:
+    """Suggested severity (1 critical to 4 low) with the reason, from the failed targets only."""
+    def ratio(c: dict[str, Any]) -> float:
+        if c["name"] == "Throughput":
+            return (c["limit"] / c["actual"]) if c["actual"] else 99.0
+        return (c["actual"] / c["limit"]) if c["limit"] else 99.0
+    worst = max(failed, key=ratio)
+    if category == "performance_errors":
+        err = next(c for c in failed if c["name"] == "Error rate")
+        if err["actual"] >= 10:
+            return 1, (f"Critical: {err['actual']}% of requests failed ({err['scope']}), against an allowed "
+                       f"{err['limit']}%; many users would see failures.")
+        return 2, (f"High: {err['actual']}% of requests failed ({err['scope']}), above the allowed {err['limit']}%; "
+                   "some users would see failures.")
+    r = ratio(worst)
+    if r >= 2:
+        return 2, (f"High: {worst['name'].lower()} ({worst['scope']}) is {r:.1f} times the limit "
+                   f"({worst['actual']} {worst['unit']} against {worst['limit']} {worst['unit']}), while requests succeed.")
+    return 3, (f"Medium: {worst['name'].lower()} ({worst['scope']}) misses the limit by {abs(r - 1) * 100:.0f}% "
+               f"({worst['actual']} {worst['unit']} against {worst['limit']} {worst['unit']}); requests succeed.")
+
+
 def performance_draft(run: dict[str, Any], plan: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Draft for a performance run whose SLA failed. Returns None when no SLA failed."""
+    """Draft for a performance run whose targets failed. Returns None when no target failed. 23.3.28: the draft
+    carries the environment and build, the workload to reproduce it, the affected transaction, expected against
+    actual, the run's times, the result files and a suggested severity with its reason."""
     sla = run.get("sla") or {}
     failed = sla.get("failed") or []
     if not failed:
@@ -123,25 +172,68 @@ def performance_draft(run: dict[str, Any], plan: dict[str, Any] | None) -> dict[
         category = "performance_throughput"
     else:
         category = "performance_latency"
-    product, severity, finding = CATEGORIES[category]
+    product, _default, finding = CATEGORIES[category]
+    severity, rationale = severity_for(category, failed)
     worst = max(failed, key=lambda c: (c["actual"] / c["limit"]) if c["name"] != "Throughput" and c["limit"] else 0)
-    o = (run.get("metrics") or {}).get("overall", {})
+    metrics = run.get("metrics") or {}
+    o = metrics.get("overall", {})
+    cfg = _run_config(run)
+    env = cfg.get("environment") or {}
+    build = run.get("build") or cfg.get("build") or ""
+    wl = cfg.get("workload") or {}
     profile = (plan or {}).get("profile") or {}
+    esc = html.escape
     title = (f"Performance: {run['name']} - {worst['name'].lower()} {worst['actual']} {worst['unit']} "
              f"exceeds {worst['limit']} {worst['unit']} ({worst['scope']})")
-    rows = "".join(f"<tr><td>{html.escape(c['name'])}</td><td>{html.escape(c['scope'])}</td><td>{c['limit']} {html.escape(c['unit'])}</td>"
-                   f"<td>{c['actual']} {html.escape(c['unit'])}</td></tr>" for c in failed)
+    rows = "".join(f"<tr><td>{esc(c['name'])}</td><td>{esc(c['scope'])}</td>"
+                   f"<td>{'at least' if c['name'] == 'Throughput' else 'at most'} {c['limit']} {esc(c['unit'])}</td>"
+                   f"<td>{c['actual']} {esc(c['unit'])}</td></tr>" for c in failed)
+    affected = sorted({c["scope"] for c in failed if c["scope"] != "ALL REQUESTS"}) or ["all requests"]
+    req = {r["label"]: r for r in metrics.get("requests") or []}
+    affected_rows = "".join(
+        f"<tr><td>{esc(lb)}</td><td>{req[lb]['samples']}</td><td>{req[lb]['error_pct']}%</td><td>{req[lb]['avg_ms']} ms</td>"
+        f"<td>{req[lb]['p95_ms']} ms</td><td>{req[lb]['p99_ms']} ms</td></tr>" for lb in affected if lb in req)
+    if wl:
+        workload = (f"{wl.get('peak_concurrent_users', '?')} concurrent users at peak, planned duration "
+                    f"{wl.get('total_duration_s') or 'set by loop counts'}{' s' if wl.get('total_duration_s') else ''}; "
+                    f"{wl.get('load_model') or ''}")
+        groups = "".join(f"<li>{esc(g['name'])}: {g['users']} users, ramp-up {g['ramp_up_s']} s, start {g['delay_s']} s, "
+                         f"runs {g['duration_s']} s</li>" for g in wl.get("thread_groups") or [])
+    else:
+        workload = (f"{profile.get('users', '?')} users, ramp-up {profile.get('ramp_up_s', '?')} s, duration "
+                    f"{profile.get('duration_s', '?')} s, think time {profile.get('think_time_ms', '?')} ms")
+        groups = ""
+    script = cfg.get("script") or {}
+    data = cfg.get("test_data") or []
     top_errors = o.get("top_errors") or []
+    folder = run.get("folder") or ""
+    files = [f"{folder}/{n}" for n in ("qa-report.pdf", "results.jtl", "metrics.json", "config.json", "plan.jmx",
+                                       "jmeter.log")] + [f"{folder}/report/index.html"]
     repro = (
-        f"<p><strong>Observed:</strong> {html.escape(finding)}</p>"
-        f"<p><strong>Test:</strong> {html.escape(run['kind'])} test '{html.escape(run['name'])}' (plan {html.escape(run['plan_id'])}), "
-        f"{profile.get('users', '?')} users, ramp-up {profile.get('ramp_up_s', '?')} s, duration {profile.get('duration_s', '?')} s, "
-        f"think time {profile.get('think_time_ms', '?')} ms. Run {html.escape(run['run_id'])} at {html.escape(run.get('started_at') or '')}.</p>"
-        f"<table><tr><th>SLA</th><th>Request</th><th>Limit</th><th>Actual</th></tr>{rows}</table>"
+        f"<p><strong>Summary:</strong> {esc(finding)} {esc(title)}.</p>"
+        f"<p><strong>Environment and build:</strong> {esc(env.get('name') or 'not set')}"
+        f"{' (' + esc(env.get('base_url')) + ')' if env.get('base_url') else ''}; build "
+        f"{esc(build) if build else 'not recorded'}.</p>"
+        f"<p><strong>Reproduction workload:</strong> {esc(run['kind'])} test '{esc(run['name'])}' "
+        f"(plan {esc(run['plan_id'])}{', script version ' + str(script.get('version')) if script.get('version') else ''}), "
+        f"{esc(workload)}.</p>" + (f"<ul>{groups}</ul>" if groups else "")
+        + (f"<p>Test data: {esc('; '.join(str(d.get('name')) + ' version ' + str(d.get('version')) for d in data))}.</p>"
+           if data else "")
+        + f"<p><strong>Affected transaction or request:</strong> {esc(', '.join(affected))}.</p>"
+        + (f"<table><tr><th>Request</th><th>Samples</th><th>Errors</th><th>Avg</th><th>95th</th><th>99th</th></tr>"
+           f"{affected_rows}</table>" if affected_rows else "")
+        + f"<p><strong>Expected against actual:</strong></p>"
+        f"<table><tr><th>Target</th><th>Scope</th><th>Expected</th><th>Actual</th></tr>{rows}</table>"
         f"<p><strong>Overall:</strong> {o.get('samples')} samples, avg {o.get('avg_ms')} ms, p95 {o.get('p95_ms')} ms, "
-        f"errors {o.get('error_pct')}%, {o.get('throughput')} req/s.</p>"
+        f"errors {o.get('error_pct')}%, {o.get('throughput')} samples/s, peak {metrics.get('peak_threads', '?')} users.</p>"
         + ("<p><strong>Most frequent errors:</strong></p>" + _li([f"{e['error']} ({e['count']})" for e in top_errors[:5]])
            if top_errors else "")
+        + f"<p><strong>Run:</strong> {esc(run['run_id'])}, started {esc(_local(run.get('started_at')))}, ended "
+        f"{esc(_local(run.get('finished_at')))}.</p>"
+        + "<p><strong>Supporting charts and results:</strong> the run report (charts of response time, throughput, "
+          "errors and users), the JMeter results and the JMeter HTML dashboard, in the run folder:</p>"
+        + _li(files)
+        + f"<p><strong>Suggested severity {severity}:</strong> {esc(rationale)}</p>"
         + "<p><strong>Root cause:</strong> not determined from the load test results; server-side measurements are needed.</p>"
     )
     return {
@@ -155,8 +247,11 @@ def performance_draft(run: dict[str, Any], plan: dict[str, Any] | None) -> dict[
         "priority": 2 if severity <= 2 else 3,
         "repro_steps": repro,
         "facts": {"failed_checks": failed, "overall": {k: o.get(k) for k in ("samples", "avg_ms", "p95_ms", "error_pct", "throughput")},
-                  "finding": finding, "plan_id": run["plan_id"]},
-        "evidence": [{"kind": "file", "path": f"{run['folder']}/metrics.json"}],
+                  "finding": finding, "plan_id": run["plan_id"], "severity_rationale": rationale,
+                  "environment": env.get("name"), "build": build or None, "affected": affected,
+                  "workload": workload, "started_at": run.get("started_at"), "finished_at": run.get("finished_at")},
+        # attached to the TFS bug when it is created (the report PDF once it exists); the rest are referenced above
+        "evidence": [{"kind": "file", "path": f"{folder}/qa-report.pdf"}, {"kind": "file", "path": f"{folder}/metrics.json"}],
         "test_case_id": None,
         "user_story_id": None,
     }

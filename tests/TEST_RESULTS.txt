@@ -1,3 +1,14 @@
+23.3.28 (5 Nov 2026): full suite 508 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_reports_23328.py (7 tests): planned phase windows and shape text; per-phase figures from a results
+  file; comparability between runs (blocking differences, cautions, build as information); defect draft content
+  (environment, build, workload, affected transactions, expected against actual, run times, files) and suggested
+  severity with its reason; real JMeter runs: the run report made when a run ends holds every required section,
+  history filters by build and dates, the environment build used when none is given, baseline found, compare
+  endpoint, comparison and consolidated PDFs, a failed run's defect draft referenced in its report, making a report
+  again, and a report with a secret in the plan description refused.
+  PDFs rendered and read page by page; UI checked in Chromium (desktop and phone width): run list with filters and
+  selection, compare page, run details report buttons, Reports list, Defect Review. No script errors on the page.
+
 23.3.27 (5 Nov 2026): full suite 500 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
   new: test_perf_live_23327.py (7 tests): a synthetic results file read in two parts (a half-written last row is not
   read): totals, transactions counted apart, a second with no samples shown as 0, open seconds, per-second 95th

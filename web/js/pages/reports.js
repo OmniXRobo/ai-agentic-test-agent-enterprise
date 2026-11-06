@@ -5,6 +5,7 @@ import { subscribe } from "../store.js";
 import { esc, toast, dateTimeOf } from "../util.js";
 
 const SCOPES = { both: "Functional and performance", functional: "Functional", performance: "Performance" };
+const SCOPE_EXTRA = { perf_comparison: "Performance comparison", perf_consolidated: "Performance, consolidated" };  // 23.3.28: made from Performance Results
 const STATUS = { ready: "PASS", failed: "FAIL", running: "RUNNING" };
 let unsub = null;
 
@@ -14,7 +15,7 @@ function summaryText(r) {
   const s = r.summary || {};
   const parts = [];
   if (s.executions !== undefined) parts.push(`${s.executions} executions${s.pass_rate !== null && s.pass_rate !== undefined ? `, ${s.pass_rate}% passed` : ""}`);
-  if (s.perf_runs !== undefined) parts.push(`${s.perf_runs} performance run${s.perf_runs === 1 ? "" : "s"}, SLA ${s.sla_pass} passed / ${s.sla_fail} failed`);
+  if (s.perf_runs !== undefined) parts.push(`${s.perf_runs} performance run${s.perf_runs === 1 ? "" : "s"}${s.sla_pass !== undefined ? `, SLA ${s.sla_pass} passed / ${s.sla_fail} failed` : ""}${s.comparable === false ? ", not all comparable" : ""}`);
   return parts.join(" · ");
 }
 
@@ -27,7 +28,7 @@ async function renderList(view) {
   box.innerHTML = items.length ? `<div style="overflow-x:auto"><table class="data"><thead><tr><th>Report</th><th>Scope</th><th>Created</th><th>Status</th><th>Contents</th><th></th></tr></thead><tbody>
     ${items.map((r) => `<tr${r.id === focus ? ' class="selected"' : ""}>
       <td><strong>${esc(r.title)}</strong><div class="muted" style="font-size:12px">${esc(r.id)}${r.params?.user_story_id ? ` · user story ${esc(r.params.user_story_id)}` : ""} · last ${esc(r.params?.days ?? 30)} days</div></td>
-      <td>${esc(SCOPES[r.scope] || r.scope)}</td><td>${esc(dateTimeOf(r.created_at))}</td>
+      <td>${esc(SCOPES[r.scope] || SCOPE_EXTRA[r.scope] || r.scope)}</td><td>${esc(dateTimeOf(r.created_at))}</td>
       <td><span class="pill ${STATUS[r.status] || "WAITING"}">${esc(r.status.toUpperCase())}</span></td>
       <td>${r.status === "failed" ? `<span class="muted">${esc(r.error || "")}</span>` : esc(summaryText(r))}${r.summary?.pdf_error ? `<div class="muted">${esc(r.summary.pdf_error)}</div>` : ""}</td>
       <td style="white-space:nowrap">${r.has_html ? `<a class="btn" href="/api/reports/${esc(r.id)}/html" target="_blank" rel="noopener">View</a>

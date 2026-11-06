@@ -72,6 +72,7 @@ class Runtime:
         if self.scheduler is not None:
             self.scheduler.close()
         self.performance.close()  # 23.3.22: a running load test is stopped and recorded as INTERRUPTED
+        self.reports.close()  # 23.3.28: a run report being made is finished before the database closes
         self.llm.close()  # only the llama-server this application started
         self.voice.fw.close()  # only the Faster-Whisper server this application started
         self.db.close()

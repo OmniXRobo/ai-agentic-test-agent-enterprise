@@ -16,6 +16,7 @@ from ..performance import workload as wl
 from ..performance.models import PerfEnvironment, PerfPlan, PerfScenario, Workload
 from ..runtime import Runtime
 from .deps import runtime
+from .reports import REPORT_CSP
 
 router = APIRouter(prefix="/api/performance")
 log = get_logger("api.performance")
@@ -435,12 +436,16 @@ def _require_tools(rt: Runtime) -> None:
                       status=409)
 
 
+class RunIn(BaseModel):
+    build: str | None = Field(default=None, max_length=120, description="23.3.28: the application build under test")
+
+
 @router.post("/plans/{plan_id}/run", status_code=202)
-def run_plan(plan_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+def run_plan(plan_id: str, body: RunIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     """Queue the plan. Runs start one at a time on this PC; the run page shows the queue position."""
     rt.performance.get_plan(plan_id)
     _require_tools(rt)
-    run_id = rt.performance.enqueue(plan_id, trigger="manual")
+    run_id = rt.performance.enqueue(plan_id, trigger="manual", build=(body or RunIn()).build)
     return {"ok": True, "run_id": run_id, "state": "QUEUED"}
 
 
@@ -507,9 +512,11 @@ def run_queue(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 def runs(plan_id: str | None = None, kind: str | None = None, scenario_id: str | None = None,
          environment_id: str | None = None, state: str | None = None, verdict: str | None = None,
          trigger: str | None = None, q: str = "", limit: int = Query(100, ge=1, le=1000),
+         build: str | None = None, date_from: str | None = None, date_to: str | None = None,
          rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     items = rt.performance.list_runs(plan_id, kind, limit, scenario_id=scenario_id, environment_id=environment_id,
-                                     state=state, verdict=verdict, trigger=trigger, q=q)
+                                     state=state, verdict=verdict, trigger=trigger, q=q, build=build,
+                                     date_from=date_from, date_to=date_to)
     return {"ok": True, "items": items, "running": rt.performance.running()}
 
 
@@ -595,10 +602,10 @@ def check_scenario(scenario_id: str, rt: Runtime = Depends(runtime)) -> dict[str
 
 
 @router.post("/scenarios/{scenario_id}/run", status_code=202)
-def run_scenario(scenario_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+def run_scenario(scenario_id: str, body: RunIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     rt.performance.get_scenario(scenario_id)
     _require_tools(rt)
-    run_id = rt.performance.run_scenario(scenario_id, trigger="manual")
+    run_id = rt.performance.run_scenario(scenario_id, trigger="manual", build=(body or RunIn()).build)
     return {"ok": True, "run_id": run_id, "state": "QUEUED"}
 
 
@@ -628,6 +635,46 @@ def live_dashboard(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any
 @router.post("/runs/{run_id}/analysis")
 def analyze(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "analysis": rt.performance.analyze(run_id)}
+
+
+# ---- 23.3.28: reports, comparisons --------------------------------------------------------------------------------
+
+@router.get("/runs/{run_id}/report")
+def run_report_file(run_id: str, format: str = Query("pdf", pattern="^(pdf|html)$"), download: bool = False,
+                    rt: Runtime = Depends(runtime)) -> FileResponse:
+    """The run's report (made after the run; made now if it is missing)."""
+    path = rt.reports.perf_run_report_file(run_id, format)
+    return FileResponse(path, media_type="application/pdf" if format == "pdf" else "text/html",
+                        filename=f"{run_id}-report.{format}",
+                        content_disposition_type="attachment" if download else "inline",
+                        headers=REPORT_CSP if format == "html" else None)
+
+
+@router.post("/runs/{run_id}/report")
+def regenerate_run_report(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Make the run's report again from its saved results (nothing is re-run)."""
+    return {"ok": True, **rt.reports.perf_run_report(run_id)}
+
+
+class CompareIn(BaseModel):
+    run_ids: list[str] = Field(min_length=1, max_length=6)
+
+
+class PerfReportIn(CompareIn):
+    kind: str = Field(pattern="^(comparison|consolidated)$")
+    title: str = Field(default="", max_length=200)
+
+
+@router.post("/compare")
+def compare_runs(body: CompareIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Runs side by side (the first is the baseline) with what differs between them in a way that matters."""
+    return {"ok": True, **rt.reports.perf_compare(body.run_ids)}
+
+
+@router.post("/reports", status_code=201)
+def create_perf_report(body: PerfReportIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """A comparison or consolidated PDF; it is listed under Reports."""
+    return {"ok": True, "report": rt.reports.perf_report(body.kind, body.run_ids, body.title)}
 
 
 @router.get("/runs/{run_id}/files/{path:path}")

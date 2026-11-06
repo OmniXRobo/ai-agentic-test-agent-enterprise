@@ -101,6 +101,7 @@ class PerformanceService:
         self._monitors: dict[str, generator.GeneratorMonitor] = {}
         self._live: dict[str, dict[str, Any]] = {}
         self._dash: dict[str, live_metrics.LiveMetrics] = {}  # 23.3.27: the live dashboard of the running test
+        self.finished_hooks: list[Any] = []  # 23.3.28: called with (run_id, verdict) when a run has ended
         self._wake = threading.Event()
         self._closing = threading.Event()
         self._worker: threading.Thread | None = None
@@ -843,40 +844,43 @@ class PerformanceService:
         return plan, sc, env
 
     def _create_run(self, run_id: str, plan: PerfPlan, sc: PerfScenario | None, env: PerfEnvironment | None,
-                    trigger: str, overrides: dict[str, Any] | None) -> None:
-        """The run's record and its snapshot of exactly what will run, taken when it is created."""
+                    trigger: str, overrides: dict[str, Any] | None, build: str | None = None) -> None:
+        """The run's record and its snapshot of exactly what will run, taken when it is created. 23.3.28: the
+        application build under test is the one given for this run, or the environment's current build."""
         folder = self.paths.performance / run_id
         ts = now_iso()
+        build = (build or "").strip()[:120] or (env.build if env else "") or ""
         config = {"plan": plan.model_dump(), "scenario": sc.model_dump() if sc else None,
                   "environment": env.model_dump() if env else None, "overrides": overrides or {},
-                  "created_at": ts, "trigger": trigger}
+                  "created_at": ts, "trigger": trigger, "build": build}
         self.db.execute(
             "INSERT INTO perf_runs (run_id, plan_id, kind, name, status, state, started_at, queued_at, folder,"
-            " scenario_id, environment_id, trigger, overrides, config) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " scenario_id, environment_id, trigger, overrides, config, build)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, plan.id, plan.kind, plan.name + (" (one-user validation)" if plan.mode == "validation" else ""),
              "QUEUED", "QUEUED", ts, ts, str(folder), sc.id if sc else None,
-             env.id if env else None, trigger, dumps(overrides or {}), dumps(config)))
+             env.id if env else None, trigger, dumps(overrides or {}), dumps(config), build or None))
 
     def enqueue(self, plan_id: str, *, scenario_id: str | None = None, trigger: str = "manual",
-                overrides: dict[str, Any] | None = None, run_id: str | None = None) -> str:
+                overrides: dict[str, Any] | None = None, run_id: str | None = None, build: str | None = None) -> str:
         """Queue a run. Runs start one at a time on this PC (the load generator), oldest first."""
         plan, sc, env = self._resolve(plan_id, scenario_id, overrides)
         run_id = run_id or new_run_id("PERF")
-        self._create_run(run_id, plan, sc, env, trigger, overrides)
+        self._create_run(run_id, plan, sc, env, trigger, overrides, build)
         what = "one-user validation run" if plan.mode == "validation" else KIND_TITLES[plan.kind]
         self.jmeter.emit(names.PERFORMANCE_GENERATION_STARTED, f"Queued {what}: {plan.name}",
                          run_id=run_id, details={"state": "QUEUED", "link": f"#/perf-results?run={run_id}"})
         self._wake.set()
         return run_id
 
-    def run_scenario(self, scenario_id: str, *, trigger: str = "manual") -> str:
+    def run_scenario(self, scenario_id: str, *, trigger: str = "manual", build: str | None = None) -> str:
         sc = self.get_scenario(scenario_id)
         if sc.archived:
             raise QAError("PERF_SCENARIO_ARCHIVED", "This scenario is archived. Restore it before running it.", status=409)
         if not sc.plan_id:
             raise QAError("PERF_SCENARIO_NO_SCRIPT", "This scenario has no script yet. Create or choose one first.",
                           status=409)
-        return self.enqueue(sc.plan_id, scenario_id=sc.id, trigger=trigger)
+        return self.enqueue(sc.plan_id, scenario_id=sc.id, trigger=trigger, build=build)
 
     def run(self, plan_id: str, run_id: str, overrides: dict[str, Any] | None = None, *,
             scenario_id: str | None = None, trigger: str = "manual") -> dict[str, Any]:
@@ -981,6 +985,11 @@ class PerformanceService:
                 "samples": overall.get("samples"), "error_pct": overall.get("error_pct"),
                 "p95_ms": overall.get("p95_ms"), "throughput": overall.get("throughput"),
             })
+            for hook in self.finished_hooks:
+                try:
+                    hook(run_id, record["verdict"])
+                except Exception as exc:  # a report or notification must never break the queue
+                    log.warning(f"After-run step failed for {run_id}: {exc}")
 
     def _write_snapshot(self, folder: Path, plan: PerfPlan, config: dict[str, Any], check: dict[str, Any]) -> None:
         """What exactly ran: the plan, the JMX, the scenario, environment, tools and versions."""
@@ -1388,10 +1397,12 @@ class PerformanceService:
 
     def list_runs(self, plan_id: str | None = None, kind: str | None = None, limit: int = 100, *,
                   scenario_id: str | None = None, environment_id: str | None = None, state: str | None = None,
-                  verdict: str | None = None, trigger: str | None = None, q: str = "") -> list[dict[str, Any]]:
+                  verdict: str | None = None, trigger: str | None = None, q: str = "", build: str | None = None,
+                  date_from: str | None = None, date_to: str | None = None) -> list[dict[str, Any]]:
         clauses, params = [], []
         for col, val in (("plan_id", plan_id), ("kind", kind), ("scenario_id", scenario_id),
-                         ("environment_id", environment_id), ("state", state), ("verdict", verdict)):
+                         ("environment_id", environment_id), ("state", state), ("verdict", verdict),
+                         ("build", build)):
             if val:
                 clauses.append(f"{col} = ?")
                 params.append(val)
@@ -1401,11 +1412,15 @@ class PerformanceService:
             clauses.append("trigger = ?")
             params.append(trigger)
         if q.strip():
-            clauses.append("(run_id LIKE ? OR name LIKE ?)")
-            params += [f"%{q.strip()}%"] * 2
+            clauses.append("(run_id LIKE ? OR name LIKE ? OR build LIKE ?)")
+            params += [f"%{q.strip()}%"] * 3
+        for bound, op, end in ((date_from, ">=", False), (date_to, "<", True)):
+            if bound:  # a day in this PC's time zone; stored times are UTC
+                clauses.append(f"COALESCE(started_at, queued_at) {op} ?")
+                params.append(_day_start_utc(bound, next_day=end))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self.db.query(f"SELECT run_id, plan_id, scenario_id, environment_id, kind, name, status, state, verdict,"
-                             f" partial, trigger, queued_at, started_at, finished_at, metrics, sla, error, state_reason"
+                             f" build, partial, trigger, queued_at, started_at, finished_at, metrics, sla, error, state_reason"
                              f" FROM perf_runs {where} ORDER BY COALESCE(queued_at, started_at) DESC LIMIT ?",
                              [*params, limit])
         for r in rows:
@@ -1479,6 +1494,19 @@ class PerformanceService:
             self.db.execute("UPDATE perf_runs SET analysis = ? WHERE run_id = ?", (dumps(result), run_id))
             act.complete("Performance analysis ready")
         return result
+
+
+def _day_start_utc(day: str, next_day: bool = False) -> str:
+    """The start of a local calendar day (YYYY-MM-DD) as a UTC ISO time, for comparing with stored times."""
+    from datetime import date, datetime, time as dtime, timedelta, timezone
+    try:
+        d = date.fromisoformat(day.strip()[:10])
+    except ValueError as exc:
+        raise QAError("VALIDATION_FAILED", f"'{day}' is not a date (YYYY-MM-DD).", status=422) from exc
+    if next_day:
+        d += timedelta(days=1)
+    local = datetime.combine(d, dtime.min).astimezone()
+    return local.astimezone(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def _prop_escape(value: str) -> str:

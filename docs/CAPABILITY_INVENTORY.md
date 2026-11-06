@@ -56,6 +56,10 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
   planned shape, requests per second against the rate target, per-second 95th percentile, errors, per-request
   figures, live target indications (not the verdict), generator CPU and memory, Stop and Emergency stop. See
   PATCH_23.3.27.md.
+* 23.3.28: performance run report PDF after every run (all template sections, test-specific analysis, baseline,
+  findings, limitations, secret scan), run comparison with comparability warnings, consolidated PDF across test
+  types, history by build, scenario, environment and date, defect drafts with reproduction workload, expected vs
+  actual and severity rationale. See PATCH_23.3.28.md.
 
 ## Quality
 
