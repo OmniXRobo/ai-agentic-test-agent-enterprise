@@ -31,6 +31,8 @@ import * as setupPage from "./pages/setup.js";
 import { voice, onVoice, loadSettings, agentName } from "./voice.js";
 import { initVoiceAgent } from "./voice-agent.js";
 import { productName, loadBrand, onBrand } from "./brand.js";
+import * as usersPage from "./pages/users.js";
+import { ensureSignedIn, initUserMenu, isAdmin, canEdit } from "./auth.js";
 
 // route -> { title, page }
 const NAV = [
@@ -85,6 +87,7 @@ const NAV = [
     ["app-credentials", "Application Credentials", appCredentials],
     ["email-settings", "Outlook Email", emailSettings],
     ["voice", "Voice & Command Agent", voicePage],
+    ["users", "Users & Network Access", usersPage],
   ]],
 ];
 
@@ -95,9 +98,19 @@ for (const [, items] of NAV) {
 // The earlier single-script AI generation page stays available (and opens its scripts) without a nav entry.
 ROUTES.set("ai-automation-classic", { route: "ai-automation", title: "AI-Driven Automation (single script)", page: aiAutomation });
 
+// 23.3.34: view-only accounts do not see the Settings pages; only an admin sees Users & Network Access.
+function visibleNav() {
+  return NAV.map(([group, items]) => [group, items.filter(([route]) =>
+    route === "users" ? isAdmin() : group === "Settings" ? canEdit() : true)]).filter(([, items]) => items.length);
+}
+
+function allowed(route) {
+  return visibleNav().some(([, items]) => items.some(([r]) => r === route)) || route === "ai-automation-classic";
+}
+
 function renderNav() {
   const nav = document.getElementById("nav");
-  nav.innerHTML = NAV.map(([group, items]) => `
+  nav.innerHTML = visibleNav().map(([group, items]) => `
     <div class="nav-group">${esc(group)}</div>
     ${items.map(([route, title]) => `
       <a class="nav-link" href="#/${route}" data-route="${route}"><span>${esc(title)}</span></a>`).join("")}
@@ -109,7 +122,7 @@ let current = null;
 async function navigate() {
   const route = (location.hash.replace(/^#\/?/, "").split("?")[0]) || "dashboard";
   const requested = route;
-  const entry = ROUTES.get(route) || ROUTES.get("dashboard");
+  const entry = (allowed(route) && ROUTES.get(route)) || ROUTES.get("dashboard");
   if (current?.page.unmount) current.page.unmount();
   current = entry;
   document.querySelectorAll(".nav-link").forEach((a) => a.classList.toggle("active", a.dataset.route === entry.route));
@@ -136,7 +149,7 @@ export function routeTable() { return [...ROUTES.values()].map(({ route, title }
 function setTheme(theme, persist = true) {
   document.documentElement.dataset.theme = theme;
   try { localStorage.setItem("qa.theme", theme); } catch { /* storage may be blocked */ }
-  if (persist) api("/api/settings", { method: "PATCH", body: { ui: { theme } } }).catch(() => {});
+  if (persist && canEdit()) api("/api/settings", { method: "PATCH", body: { ui: { theme } } }).catch(() => {});
 }
 
 async function initTheme() {
@@ -158,7 +171,7 @@ async function initExit() {
   const btn = document.getElementById("exitBtn");
   let info;
   try { info = await api("/api/app/status"); } catch { return; }
-  if (!info.desktop) return;
+  if (!info.desktop || !isAdmin()) return; // 23.3.34: only an admin can stop SkyGuard QA for everyone
   btn.hidden = false;
   btn.addEventListener("click", async () => {
     const extra = info.active_schedules ? " Scheduled runs will not start until you open it again." : "";
@@ -273,23 +286,31 @@ function initStrip() {
   api("/api/health").then((h) => { document.getElementById("appVersion").textContent = `Version ${h.version}`; }).catch(() => {});
 }
 
-document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
-renderNav();
-loadBrand();
-onBrand(() => { if (current) document.title = `${current.title} · ${productName()}`; });
-initTheme();
-initExit();
-initBell();
-initConnection();
-initVoiceAgent(document.getElementById("voiceAgent"));
-initStrip();
-window.addEventListener("hashchange", navigate);
-
 // A new install opens First-Run Setup until TFS and the local LLM model are set (or the screen is skipped).
 async function firstRun() {
+  if (!canEdit()) return;
   try {
     const s = await api("/api/setup");
     if (s.needed && !location.hash.replace(/^#\/?/, "")) history.replaceState(null, "", "#/setup"); // no hashchange: navigate() runs next
   } catch { /* the dashboard still opens */ }
 }
-start().then(firstRun).then(navigate);
+// 23.3.34: nothing loads before the account is signed in (the sign-in screen shows first when needed).
+async function boot() {
+  loadBrand();
+  await ensureSignedIn();
+  document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
+  renderNav();
+  onBrand(() => { if (current) document.title = `${current.title} · ${productName()}`; });
+  initUserMenu(document.getElementById("userMenu"));
+  initTheme();
+  initExit();
+  initBell();
+  initConnection();
+  initVoiceAgent(document.getElementById("voiceAgent"));
+  initStrip();
+  window.addEventListener("hashchange", navigate);
+  await start();
+  await firstRun();
+  await navigate();
+}
+boot();

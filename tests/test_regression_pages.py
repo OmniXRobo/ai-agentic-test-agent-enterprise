@@ -4,6 +4,8 @@ from pathlib import Path
 import httpx, pytest
 from playwright.sync_api import sync_playwright
 
+from tests.auth_helper import sign_in
+
 ROOT = Path(__file__).resolve().parents[1]
 APP = Path(os.environ.get("APP_DIR", ROOT / "app"))
 # The 23.2.2 application to compare with: a base-app folder next to the patch, BASE_APP_DIR, or (in the repository)
@@ -47,7 +49,7 @@ def crawl(base):
     out = {}
     with sync_playwright() as p:
         b = p.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
-        ctx = b.new_context(); ctx.add_init_script(FAKE_MEDIA)
+        ctx = b.new_context(); ctx.add_init_script(FAKE_MEDIA); sign_in(ctx, base)  # 23.3.34
         page = ctx.new_page()
         errs = []
         page.on("pageerror", lambda e: errs.append(str(e)))
@@ -70,7 +72,8 @@ def test_every_page_loads_like_before(tmp_path):
     finally:
         p1.terminate(); p2.terminate()
     # 23.3.21, 23.3.22, 23.3.25 and 23.3.27: new pages, they must load without errors
-    added = {"scheduled-runs", "email-settings", "perf-scenarios", "perf-data", "perf-live", "perf-schedules"}
+    # 23.3.34: Users & Network Access (admin)
+    added = {"scheduled-runs", "email-settings", "perf-scenarios", "perf-data", "perf-live", "perf-schedules", "users"}
     assert set(old) == set(new) - added and len(new) >= 30
     for r in added & set(new):
         assert not new[r]["failed"] and not new[r]["errors"], (r, new[r])

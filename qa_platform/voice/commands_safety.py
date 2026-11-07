@@ -62,6 +62,12 @@ class SafetyCommands:
         kind = KIND.get(intent.command, "read")
         if intent.command == "automation_settings" and not {k for k in intent.params if k != "confirmed"} - {"framework"}:
             kind = "read"  # reading the settings back
+        from ..auth import current_user  # 23.3.34: a view-only account may look things up and run tests only
+
+        user = current_user()
+        if user is not None and user.view_only and kind not in ("read", "run"):
+            return Outcome("failed", f"Your account is view only, which doesn't allow {WHAT[kind]}, so I didn't do it. "
+                                     "Ask your admin if you need more access.")
         role = self.voice_role()
         if kind in ALLOWED[role]:
             return None

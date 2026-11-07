@@ -10,6 +10,13 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Version 23.3.34: sign-in with roles, Network access for colleagues
+
+Everyone signs in (first time: admin / admin, then choose a new password). The admin creates accounts with the roles
+Admin, Tester (full access), Developer and Manager (view only), and can turn on Network access so colleagues open
+SkyGuard QA from their own browser at `http://<this PC>:8765/` with nothing to install. See
+[docs/PATCH_23.3.34.md](docs/PATCH_23.3.34.md).
+
 ## Version 23.3.33: Microsoft Edge, installing over a running older version
 
 The dashboard window and, by default, test runs and recordings use Microsoft Edge. The installer stops programs still running from the version it replaces (an older version's local AI or speech

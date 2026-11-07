@@ -61,7 +61,8 @@ MAX_RELATIVE_PATH = 185
 VC_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
            "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll", "concrt140.dll")
 TEMPLATES = REPO / "packaging" / "templates"
-APP_ITEMS = ("qa_platform", "web", "docs", "README.md", "requirements.txt", "START_QA_PLATFORM.cmd")
+APP_ITEMS = ("qa_platform", "web", "docs", "README.md", "requirements.txt", "START_QA_PLATFORM.cmd",
+             "ALLOW_NETWORK_ACCESS.cmd")  # 23.3.34
 # Pure-Python packages published only as source (hash-checked like the rest); vosk needs srt.
 SOURCE_ONLY = ("srt",)
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")

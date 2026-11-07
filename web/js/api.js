@@ -1,4 +1,5 @@
 // Fetch wrapper that never parses an HTML error page as JSON.
+import { signInExpired } from "./auth.js";
 
 export class ApiError extends Error {
   constructor(status, body) {
@@ -41,6 +42,7 @@ export async function api(path, { method = "GET", body, rawBody, contentType, si
     try { data = await resp.json(); } catch { data = null; }
   }
   if (!resp.ok) {
+    if (resp.status === 401 && data?.error_code === "AUTH_REQUIRED") signInExpired(); // 23.3.34: sign in again
     throw new ApiError(resp.status, data || { error_code: `HTTP_${resp.status}`, message: FRIENDLY[resp.status] || `HTTP ${resp.status}` });
   }
   if (data === null) {
