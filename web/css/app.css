@@ -589,6 +589,7 @@ pre.code.diff.jdiff span { display: block; }
   .user-chip span:not(.user-dot), .user-chip b { display: none; }
   .user-chip { padding: 6px; }
   .topbar-actions { gap: 4px; } /* room for the account chip on a phone */
+  .topbar .sys-clock { letter-spacing: .02em; }
 }
 .user-new { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; align-items: end; }
 .user-new .row { margin: 0; }

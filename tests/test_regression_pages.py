@@ -72,7 +72,8 @@ def test_every_page_loads_like_before(tmp_path):
     finally:
         p1.terminate(); p2.terminate()
     # 23.3.21, 23.3.22, 23.3.25 and 23.3.27: new pages, they must load without errors
-    added = {"scheduled-runs", "email-settings", "perf-scenarios", "perf-data", "perf-live", "perf-schedules"}
+    # 23.3.34: Users & Network Access (admin)
+    added = {"scheduled-runs", "email-settings", "perf-scenarios", "perf-data", "perf-live", "perf-schedules", "users"}
     assert set(old) == set(new) - added and len(new) >= 30
     for r in added & set(new):
         assert not new[r]["failed"] and not new[r]["errors"], (r, new[r])
