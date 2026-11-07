@@ -46,6 +46,18 @@ LIST_FIELDS = [
     "Microsoft.VSTS.Common.Priority", "Microsoft.VSTS.Common.Severity",
 ]
 
+# 23.3.32: read for linked work items so Acceptance Criteria items bring their detail, not only their title.
+LINK_DETAIL_FIELDS = ["System.Description", "Microsoft.VSTS.Common.AcceptanceCriteria"]
+
+
+def _link_detail(item: dict[str, Any]) -> dict[str, Any]:
+    """The Description and Acceptance Criteria (HTML) of an Acceptance Criteria work item; nothing for other types."""
+    f = item.get("fields", {})
+    if "acceptance" not in str(f.get("System.WorkItemType") or "").lower():
+        return {}
+    return {"description": f.get("System.Description"), "acceptance_criteria": f.get("Microsoft.VSTS.Common.AcceptanceCriteria")}
+
+
 EDITABLE_FIELDS = {
     "title": "System.Title",
     "description": "System.Description",
@@ -509,8 +521,10 @@ class TfsService:
                         related_ids[int(url.rsplit("/", 1)[1])] = RELATION_NAMES.get(rel.get("rel"), rel.get("rel"))
                     except ValueError:
                         continue
-            linked = c.work_items(related_ids.keys(), fields=LIST_FIELDS) if related_ids else []
-            links = [{**simplify(w), "relation": related_ids.get(w["id"])} for w in linked]
+            # 23.3.32: the description and acceptance criteria of linked items are read too, so a criterion kept as
+            # its own work item reaches the AI with its detail, not its title alone (Discussion is never read).
+            linked = c.work_items(related_ids.keys(), fields=LIST_FIELDS + LINK_DETAIL_FIELDS) if related_ids else []
+            links = [{**simplify(w), "relation": related_ids.get(w["id"]), **_link_detail(w)} for w in linked]
             attachments = [
                 {"name": (r.get("attributes") or {}).get("name"), "url": r.get("url")}
                 for r in raw.get("relations", []) or [] if r.get("rel") == "AttachedFile"

@@ -33,7 +33,7 @@ from ..storage.db import dumps, loads
 from . import models, testing_types
 from .tfs_test_data import rows_from_lines, tab_values, write_with_fallback
 from ..automation.generator import parse_tfs_steps
-from .service import DesignService, html_to_text, steps_xml
+from .service import DesignService, html_to_text, linked_criteria, steps_xml
 
 log = get_logger("design.suite_cases")
 
@@ -96,6 +96,12 @@ _SCHEMA_TOKENS = 720
 _CONTEXT_LEVELS = [(4000, 30, 60, 300), (1500, 8, 20, 160), (600, 0, 0, 0)]
 _SPLIT_ERRORS = {"AI_TIMEOUT", "AI_OUTPUT_INVALID", "AI_OUTPUT_TRUNCATED", "AI_CONTEXT_EXCEEDED"}
 _SHRINK_ERRORS = {"AI_OUTPUT_TRUNCATED", "AI_CONTEXT_EXCEEDED"}
+
+
+def _detail_text(criterion: dict[str, Any], limit: int) -> str:
+    """23.3.32: the description and detail of a criterion kept as its own work item, under its title."""
+    detail = _cut(criterion.get("detail") or "", limit)
+    return ("\n  Detail: " + detail.replace("\n", "\n  ")) if detail else ""
 
 
 def _cut(text: str, limit: int) -> str:
@@ -510,9 +516,18 @@ class SuiteCaseService:
     def read_story(self, story_id: int) -> dict[str, Any]:
         item = self.tfs.detail(story_id)
         lines = criteria_lines(item.get("acceptance_criteria"))
-        linked = [l["title"] for l in item["traceability"]["acceptance_criteria"] if l.get("title")]
-        lines += [t for t in linked if t not in lines]
+        details: dict[str, str] = {}
+        for title, detail in linked_criteria(item):
+            if title not in lines:
+                lines.append(title)
+            if detail:
+                details[title] = detail
         criteria = assign_ids(lines, self._previous_criteria(story_id))
+        # 23.3.32: a criterion kept as its own work item brings its description and detail. The id and change
+        # tracking stay on the title, so test cases made before this version are not reported as out of date.
+        for c in criteria:
+            if details.get(c["text"]):
+                c["detail"] = details[c["text"]]
         return {
             "story": {"id": item["id"], "title": item["title"], "state": item["state"], "rev": item.get("rev"),
                       "iteration": item.get("iteration_path"), "area_path": item.get("area_path"),
@@ -666,7 +681,8 @@ class SuiteCaseService:
                    f"Existing test cases linked to this story: {len(data['existing'])} (titles left out to fit the "
                    "model's context)")
                 + "\n\nWrite test cases now only for these acceptance criteria:\n"
-                + "\n".join(f"{c['id']}: {c['text']}" for c in crit) + f"\n\nConditions:\n{conds}")
+                + "\n".join(f"{c['id']}: {c['text']}" + _detail_text(c, desc_max) for c in crit)
+                + f"\n\nConditions:\n{conds}")
 
     def _design_chunk(self, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
                       ttype: dict[str, Any], budget: int, level: int = 0) -> tuple[models.SuiteCaseSet, str]:
