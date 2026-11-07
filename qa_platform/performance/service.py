@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .. import __version__
 from ..agents.base import BaseAgent, new_run_id
-from ..ai.gateway import AIGateway
+from ..ai.gateway import AIGateway, capped_schema
 from ..clock import now_iso
 from ..config import Paths, Settings
 from ..errors import QAError
@@ -1559,8 +1559,15 @@ class PerformanceService:
                 "You are a performance engineer reviewing JMeter results. Use only the metrics provided. Every observation "
                 "and suspected bottleneck must cite the metric values that support it. Do not invent causes such as "
                 "database, CPU or memory problems unless the metrics directly show them; when the cause cannot be "
-                "determined from these results, say so under 'undetermined' and suggest what to measure next.",
-                json.dumps(facts, ensure_ascii=False), PerfAnalysis, max_tokens=3000)
+                "determined from these results, say so under 'undetermined' and suggest what to measure next. "
+                "Keep it short: one sentence per point, at most 6 observations, 4 suspected bottlenecks, 5 "
+                "recommendations and 4 open questions.",
+                json.dumps(facts, ensure_ascii=False, separators=(",", ":")), PerfAnalysis, max_tokens=1600,
+                # 23.3.34: the long-answer time limit (a local model on a PC without a GPU needs minutes) and a grammar
+                # that keeps the answer short.
+                timeout=self.ai.long_timeout(),
+                enforce_schema=capped_schema(PerfAnalysis, {"observations": 6, "suspected_bottlenecks": 4,
+                                                            "recommendations": 5, "undetermined": 4}))
             result = {**analysis.model_dump(), "created_at": now_iso(), "model": self.ai.config().get("model")}
             self.db.execute("UPDATE perf_runs SET analysis = ? WHERE run_id = ?", (dumps(result), run_id))
             act.complete("Performance analysis ready")
