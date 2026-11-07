@@ -52,8 +52,9 @@ def test_environment_port_and_window_command(tmp_path, monkeypatch):
     exe = app / "runtime" / "ms-playwright" / "chromium-1200" / "chrome-win64" / "chrome.exe"
     exe.write_bytes(b"")
     (app / "INSTALLED.json").write_text("{}")
-    for k in ("QA_HOME", "PLAYWRIGHT_BROWSERS_PATH", "HF_HUB_OFFLINE"):
-        monkeypatch.delenv(k, raising=False)
+    for k in ("QA_HOME", "PLAYWRIGHT_BROWSERS_PATH", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        monkeypatch.setenv(k, "")  # registers the original value (or its absence) to restore after the test
+        monkeypatch.delenv(k)
     data = launcher.prepare_environment(app)
     assert data == tmp_path / "data"
     import os
