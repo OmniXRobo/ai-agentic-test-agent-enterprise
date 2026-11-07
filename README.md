@@ -10,6 +10,14 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Version 23.3.35: Edge for tests and the dashboard, a steady top bar
+
+Play, Run selected and new recordings open in the browser chosen under Settings > Preferences > Browser for tests
+(Microsoft Edge when it is installed), including tests recorded earlier in Chromium. The desktop icon opens the
+dashboard as a normal Edge window with an address bar (Preferences > Open SkyGuard QA as), and the top bar keeps the
+same two-row layout on every page. See
+[docs/PATCH_23.3.35.md](docs/PATCH_23.3.35.md).
+
 ## Version 23.3.34: sign-in with roles, Network access for colleagues
 
 Everyone signs in (first time: admin / admin, then choose a new password). The admin creates accounts with the roles

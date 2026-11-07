@@ -66,8 +66,14 @@ def test_environment_port_and_window_command(tmp_path, monkeypatch):
     (data / "settings.json").write_text(json.dumps({"server": {"port": 9123}}))
     assert launcher.configured_port(data) == 9123
     cmd = launcher.window_command([str(exe)], "http://127.0.0.1:9123/", data / "window-profile")
-    assert cmd[0] == str(exe) and "--app=http://127.0.0.1:9123/" in cmd
+    # 23.3.35: a normal browser window with an address bar by default, an app window when chosen in Preferences
+    assert cmd[0] == str(exe) and "http://127.0.0.1:9123/" in cmd and not any(a.startswith("--app=") for a in cmd)
     assert any(a.startswith("--user-data-dir=") for a in cmd)
+    assert launcher.open_as(data) == "browser"
+    (data / "settings.json").write_text(json.dumps({"server": {"port": 9123}, "ui": {"open_as": "app"}}))
+    assert launcher.open_as(data) == "app"
+    cmd = launcher.window_command([str(exe)], "http://127.0.0.1:9123/", data / "window-profile", launcher.open_as(data))
+    assert "--app=http://127.0.0.1:9123/" in cmd
 
 
 def test_hidden_children_flag_is_added_only_on_windows(monkeypatch):

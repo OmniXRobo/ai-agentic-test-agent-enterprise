@@ -80,9 +80,13 @@ class Runner:
     def run(self, script_id: str, run_id: str, *, dataset: dict[str, Any] | None = None,
             headless: bool | None = None, data_label: str | None = None, browser: str | None = None) -> dict[str, Any]:
         script = self.scripts.get(script_id)
-        if browser:  # 23.3.21: the same script in another browser
-            script = script.model_copy(update={"browser": browser})
         playback = self.settings.section("playback")
+        # 23.3.21: a schedule or voice command can ask for another browser for this run. 23.3.35: otherwise Play uses
+        # the browser chosen under Settings > Preferences (Microsoft Edge when the installer found it), not the browser
+        # the script happened to be recorded in, so one setting decides where every test opens.
+        chosen = browser or playback.get("browser")
+        if chosen:
+            script = script.model_copy(update={"browser": chosen})
         visual = bool(playback.get("visual_cursor", True) or playback.get("highlight", True))
         headless = default_headless(playback.get("headless")) if headless is None else headless
         agent = self.playback if script.mode in ("guided", "manual") else self.execution
