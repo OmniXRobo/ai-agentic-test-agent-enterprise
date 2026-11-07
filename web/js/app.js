@@ -153,6 +153,21 @@ async function initTheme() {
   }
 }
 
+// ---- 23.3.32: Exit (only when started from the desktop icon) ----
+async function initExit() {
+  const btn = document.getElementById("exitBtn");
+  let info;
+  try { info = await api("/api/app/status"); } catch { return; }
+  if (!info.desktop) return;
+  btn.hidden = false;
+  btn.addEventListener("click", async () => {
+    const extra = info.active_schedules ? " Scheduled runs will not start until you open it again." : "";
+    if (!window.confirm(`Exit SkyGuard QA? Running tests, load tests, the local AI and the speech server stop.${extra}`)) return;
+    try { await api("/api/app/exit", { method: "POST" }); } catch (err) { toast(err.message, "error"); return; }
+    document.body.innerHTML = '<p style="font:16px system-ui;padding:40px">SkyGuard QA has stopped. You can close this window.</p>';
+  });
+}
+
 // ---- notification bell ----
 function renderBadge() {
   const badge = document.getElementById("unreadBadge");
@@ -258,6 +273,7 @@ renderNav();
 loadBrand();
 onBrand(() => { if (current) document.title = `${current.title} · ${productName()}`; });
 initTheme();
+initExit();
 initBell();
 initConnection();
 initVoiceAgent(document.getElementById("voiceAgent"));

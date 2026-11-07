@@ -76,6 +76,10 @@ class Runtime:
             self.scheduler.close()
         if self.perf_scheduler is not None:
             self.perf_scheduler.close()  # logs what closing means for the schedules
+        try:
+            self.studio.runner.close()  # 23.3.32: test runs (pytest and their browsers) this application started
+        except Exception:  # closing goes on whatever one part does
+            pass
         self.performance.close()  # 23.3.22: a running load test is stopped and recorded as INTERRUPTED
         self.reports.close()  # 23.3.28: a run report being made is finished before the database closes
         self.llm.close()  # only the llama-server this application started

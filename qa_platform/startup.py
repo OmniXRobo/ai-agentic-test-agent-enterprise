@@ -45,8 +45,12 @@ def _content(app_dir: Path) -> str:
         "rem Starts QA Enterprise AI when this Windows user signs in, so scheduled runs can start.",
         "rem Created from QA Enterprise AI > Performance Schedules. Delete this file to stop it.",
         'set "QA_NO_BROWSER=1"',
-        f'start "QA Enterprise AI" /min cmd /c ""{start}""',
     ]
+    pythonw = app_dir / "runtime" / "python" / "pythonw.exe"
+    if pythonw.is_file():  # 23.3.32: the desktop start in the background, with no console window
+        lines += [f'cd /d "{app_dir}"', f'start "" "{pythonw}" -E -s -m qa_platform.launcher --background']
+    else:
+        lines.append(f'start "QA Enterprise AI" /min cmd /c ""{start}""')
     return "\r\n".join(lines) + "\r\n"
 
 

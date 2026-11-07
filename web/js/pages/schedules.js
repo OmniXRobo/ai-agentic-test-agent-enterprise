@@ -237,6 +237,7 @@ async function mountEmail(view) {
     <label>From name <input name="sender_name" value="${esc(e.sender_name || "")}" placeholder="Product name from Preferences"></label>
     <label>Default recipients <input name="default_to" value="${esc(e.default_to || "")}" placeholder="lead@company.com; team@company.com"></label>
     <p class="muted" data-app style="grid-column:1/-1;margin:0">Outlook (classic desktop) must be installed and signed in for the Windows user that runs ${esc(productName())}. The mail is sent from that mailbox and appears in its Sent Items.</p>
+    <p role="alert" data-cloud style="grid-column:1/-1;margin:0;color:var(--fail);font-weight:600">Microsoft 365 and Outlook.com are on the Internet: on a PC without Internet these emails cannot be sent. Choose "Company Exchange / other SMTP server" with your company's mail server, or "Outlook app on this PC" connected to your company's Exchange.</p>
     <p class="muted" data-smtp style="grid-column:1/-1;margin:0">The password is kept in the Windows Credential Manager, never in the settings file. Microsoft 365 needs SMTP sign-in (SMTP AUTH) allowed for this mailbox; with multi-factor sign-in use an app password.</p>
     <div class="row" style="grid-column:1/-1;gap:8px"><span class="muted">${e.configured ? "Ready to send." : "Not set up yet."}</span><span class="spacer"></span>
       ${e.has_password ? '<button class="btn" type="button" id="clearPw">Remove saved password</button>' : ""}
@@ -248,6 +249,7 @@ async function mountEmail(view) {
     const app = f.mode.value === "outlook_app", custom = f.preset.value === "custom";
     f.querySelectorAll("[data-smtp]").forEach((x) => { x.hidden = app || (x.hasAttribute("data-custom") && !custom); });
     f.querySelectorAll("[data-app]").forEach((x) => { x.hidden = !app; });
+    f.querySelectorAll("[data-cloud]").forEach((x) => { x.hidden = app || custom; });  // 23.3.32: offline PCs
   };
   f.mode.addEventListener("change", sync); f.preset.addEventListener("change", sync); sync();
   const save = async (extra = {}) => {

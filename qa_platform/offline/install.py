@@ -29,7 +29,8 @@ from ..clock import now, now_iso
 from ..config import APP_ROOT
 from . import manifest as mf
 
-APP_NAME = "AI Agentic Test Agent Enterprise"
+APP_NAME = "SkyGuard QA"  # 23.3.32
+OLD_SHORTCUT_NAMES = ("AI Agentic Test Agent Enterprise",)
 FOLDER_NAME = "AIAgenticTestAgent"
 WINDOWS = sys.platform == "win32"
 LAUNCHERS = ("START_QA_PLATFORM.cmd", "VALIDATE_OFFLINE.cmd", "ROLLBACK_OFFLINE.cmd")
@@ -142,19 +143,34 @@ def _write_launchers(target: Path) -> None:
 
 
 def _shortcuts(target: Path, log: Log) -> None:
-    """Start Menu and Desktop shortcuts for this user. Best effort: the launchers work without them."""
+    """Start Menu and Desktop shortcuts for this user. Best effort: the launchers work without them.
+
+    23.3.32: "SkyGuard QA" with the robot icon. It starts the application with pythonw (no console window) and opens
+    the dashboard in its own window; START_QA_PLATFORM.cmd stays for troubleshooting."""
     if not WINDOWS:
         return
+    app = target / "app"
+    pythonw = app / "runtime" / "python" / "pythonw.exe"
+    icon = app / "web" / "img" / "skyguard.ico"
+    if pythonw.is_file():
+        exe, args = str(pythonw), "-E -s -m qa_platform.launcher"
+    else:
+        exe, args = str(target / "START_QA_PLATFORM.cmd"), ""
+    old = ",".join(f"'{n}.lnk'" for n in OLD_SHORTCUT_NAMES)
     script = (
         "$s=New-Object -ComObject WScript.Shell;"
         "foreach($d in @([Environment]::GetFolderPath('Programs'),[Environment]::GetFolderPath('Desktop'))){"
+        f"foreach($o in @({old})){{$p=Join-Path $d $o; if(Test-Path $p){{Remove-Item $p -Force}}}};"
         f"$l=$s.CreateShortcut((Join-Path $d '{APP_NAME}.lnk'));"
-        f"$l.TargetPath='{target / 'START_QA_PLATFORM.cmd'}';$l.WorkingDirectory='{target}';$l.Save()}}"
+        f"$l.TargetPath='{exe}';$l.Arguments='{args}';$l.WorkingDirectory='{app}';"
+        f"$l.Description='{APP_NAME}: Every release, cleared for takeoff.';"
+        + (f"$l.IconLocation='{icon},0';" if icon.is_file() else "")
+        + "$l.Save()}"
     )
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True,
                              text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        log("Shortcuts created in the Start Menu and on the Desktop." if out.returncode == 0
+        log("Shortcuts 'SkyGuard QA' created in the Start Menu and on the Desktop." if out.returncode == 0
             else f"Shortcuts were not created ({out.stderr.strip()[:200]}). Use START_QA_PLATFORM.cmd in {target}.")
     except (OSError, subprocess.SubprocessError) as exc:
         log(f"Shortcuts were not created ({exc}). Use START_QA_PLATFORM.cmd in {target}.")
