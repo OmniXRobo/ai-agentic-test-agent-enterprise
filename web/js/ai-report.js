@@ -71,7 +71,7 @@ export async function mountAiReport(box, { kind, id, intro = "", analyzeLabel = 
   };
 
   const ACTIONS = {
-    analyze: () => call("The On-Premise AI is writing the analysis… (this can take a minute on a PC without a GPU)",
+    analyze: () => call("The On-Premise AI is writing the analysis… (this can take a few minutes on a PC without a GPU)",
       () => api(`${base(kind, id)}/analyze`, { method: "POST", body: {} })),
     edit: () => { editing = true; draw(); },
     cancel: () => { editing = false; draw(); },

@@ -127,6 +127,19 @@ def _compact_schema(obj: Any) -> Any:
     return obj
 
 
+def capped_schema(model: type[BaseModel], caps: dict[str, int]) -> dict[str, Any]:
+    """23.3.34: the model's schema with at most ``caps[name]`` items in each list, for the server's grammar only.
+
+    A small local model then writes a short answer and stops, instead of filling the answer limit (minutes on a PC
+    without a GPU). The Pydantic model itself is not capped, so a server that ignores the grammar is not refused."""
+    schema = _compact_schema(model.model_json_schema())
+    for name, n in caps.items():
+        prop = schema.get("properties", {}).get(name)
+        if isinstance(prop, dict) and prop.get("type") == "array":
+            prop["maxItems"] = n
+    return schema
+
+
 class AIGateway:
     def __init__(self, settings: Settings, bus: EventBus, transport: httpx.BaseTransport | None = None,
                  secrets: SecretStore | None = None) -> None:
@@ -172,6 +185,11 @@ class AIGateway:
             "cloud": {"base_url": (cloud.get("base_url") or "").rstrip("/"), "model": cloud.get("model") or "",
                       "has_api_key": self.has_api_key()},
         }
+
+    def long_timeout(self) -> float:
+        """23.3.34: the time allowed for a request that writes a long answer (an analysis, generated test cases)."""
+        cfg = self.config()
+        return max(cfg["timeout_seconds"], cfg.get("generation_timeout_seconds") or 600)
 
     def set_api_key(self, value: str | None) -> None:
         if self.secrets is None or not self.secrets.available:
