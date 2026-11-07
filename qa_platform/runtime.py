@@ -140,6 +140,10 @@ def build_runtime(
     if stt_transport is None and voice.fw.selected() and voice.fw.config()["auto_start"]:
         voice.fw.start_in_background()
     llm = ManagedLLM(settings, paths)
+    # 23.3.33: while the model loads the status light says "Starting", and it is checked again once loading ends,
+    # instead of showing a cached "Offline" from the first seconds after start.
+    health.llm = llm
+    llm.on_state.append(lambda state: health.forget("ai"))
     if llm.config().get("auto_start") and ai_transport is None:
         try:
             llm.start(wait=False)  # once, when the application starts; never on page navigation

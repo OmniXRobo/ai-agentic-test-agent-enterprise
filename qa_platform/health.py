@@ -35,6 +35,11 @@ class HealthService:
         self.tfs, self.ai, self.orchestration, self.voice = tfs, ai, orchestration, voice
         self._lock = threading.Lock()
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.llm: Any = None  # 23.3.33: the managed local AI server, so "still loading" is not shown as offline
+
+    def forget(self, key: str) -> None:
+        with self._lock:
+            self._cache.pop(key, None)
 
     def remember(self, key: str, item: dict[str, Any]) -> None:
         with self._lock:
@@ -50,7 +55,8 @@ class HealthService:
         except Exception as exc:  # a status light must never break the dashboard
             log.exception("Status check %s failed", key)
             item = _item(key, key.upper(), "FAIL", "Error", f"The check itself failed ({type(exc).__name__}).")
-        self.remember(key, item)
+        if item.get("value") not in ("Starting", "Loading"):  # 23.3.33: a starting service is checked again next time
+            self.remember(key, item)
         return item
 
     # ---- individual checks -------------------------------------------------------------------
@@ -84,11 +90,20 @@ class HealthService:
         try:
             models = self.ai.models(timeout=3)
         except QAError as exc:
+            if self._llm_starting():
+                return _item("ai", "Local AI", "WARN", "Starting",
+                             "The local AI model is loading on this PC; it is ready in about a minute.")
             return _item("ai", "Local AI", "FAIL", "Offline", exc.message)
         wanted = cfg.get("model") or ""
         if wanted and models and wanted not in models:
             return _item("ai", "Local AI", "WARN", "Model missing", f"{wanted} is not loaded; the server has {', '.join(models[:3])}.")
         return _item("ai", "Local AI", "PASS", "Ready", wanted or (models[0] if models else "Server answering"))
+
+    def _llm_starting(self) -> bool:
+        try:
+            return bool(self.llm) and self.llm.status()["state"] == "STARTING"
+        except Exception:  # noqa: BLE001 - a status light must never break the dashboard
+            return False
 
     def ai_tested(self, result: dict[str, Any]) -> None:
         ok = bool(result.get("ok"))

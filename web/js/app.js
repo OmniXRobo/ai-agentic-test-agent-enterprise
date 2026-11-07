@@ -239,7 +239,7 @@ function renderStrip() {
 }
 
 function initStrip() {
-  let lastForced = 0, ticks = 0;
+  let lastForced = 0, ticks = 0, startingTimer = null;
   const clock = document.getElementById("sysClock");
   const showClock = () => {
     const d = new Date();
@@ -251,7 +251,12 @@ function initStrip() {
     if (++ticks % 300 === 0) loadHealth(); // the runtime answers from its 5-minute cache
   });
   subscribe((c) => {
-    if (c.type === "health") renderStrip();
+    if (c.type === "health") {
+      renderStrip();
+      // 23.3.33: while the local AI model or the speech server is still starting, check again every 5 seconds.
+      clearTimeout(startingTimer);
+      if ((state.health?.items || []).some((i) => i.value === "Starting" || i.value === "Loading")) startingTimer = setTimeout(() => loadHealth(true), 5000);
+    }
     // A real failure reported by TFS or the AI re-checks at once (at most once a minute).
     if (c.type === "event" && (c.event.name === "tfs.unavailable" || c.event.name === "ai.unavailable") && Date.now() - lastForced > 60000) {
       lastForced = Date.now();
