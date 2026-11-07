@@ -585,7 +585,11 @@ pre.code.diff.jdiff span { display: block; }
 .role-help { margin: 8px 0 12px; padding-left: 18px; font-size: 12.5px; }
 .net-links { list-style: none; padding: 0; display: grid; gap: 6px; }
 .net-links code { font-size: 13px; }
-@media (max-width: 760px) { .user-chip span:not(.user-dot) { display: none; } }
+@media (max-width: 760px) {
+  .user-chip span:not(.user-dot), .user-chip b { display: none; }
+  .user-chip { padding: 6px; }
+  .topbar-actions { gap: 4px; } /* room for the account chip on a phone */
+}
 .user-new { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; align-items: end; }
 .user-new .row { margin: 0; }
 #netCard h3 { margin-top: 18px; }
