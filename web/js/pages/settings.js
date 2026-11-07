@@ -33,7 +33,7 @@ export async function mount(view) {
       <label>Click volume <input type="range" name="click_volume" min="0" max="1" step="0.05" value="${settings.playback.click_volume ?? 0.35}"></label>
       <h3>Automation runs</h3>
       <label>Browser <select name="browser">
-          ${[["chromium", "Chromium (included)"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"], ["firefox", "Firefox"], ["webkit", "WebKit"]]
+          ${[["chromium", "Chromium (included)"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"]]
             .map(([v, l]) => `<option value="${v}" ${(settings.playback.browser || "chromium") === v ? "selected" : ""}>${l}</option>`).join("")}
         </select></label>
       <label>Element timeout (seconds) <input type="number" name="timeout_seconds" min="1" max="120" step="1" value="${settings.playback.timeout_seconds ?? 10}" style="width:110px"></label>

@@ -527,7 +527,7 @@ async function renderEditor(view, scriptId) {
         <label>TFS Test Case ID <input name="test_case_id" value="${esc(script.test_case_id || "")}" inputmode="numeric"></label>
         <label>Application <input name="application" value="${esc(script.application || "")}"></label>
         <label>Credential role <input name="credential_role" value="${esc(script.credential_role || "")}" placeholder="e.g. admin"></label>
-        <label>Browser <select name="browser">${["chromium", "msedge", "chrome", "firefox", "webkit"].map((b) => `<option ${b === script.browser ? "selected" : ""}>${b}</option>`).join("")}</select></label>
+        <label>Browser <select name="browser">${["chromium", "msedge", "chrome"].map((b) => `<option ${b === script.browser ? "selected" : ""}>${b}</option>`).join("")}</select></label>
       </form>
       ${script.notes ? `<p class="pill WARN" style="white-space:pre-wrap">${esc(script.notes)}</p>` : ""}
     </div>
@@ -789,7 +789,7 @@ async function guidedPanel(view, { appendTo = null } = {}) {
       <label>Credential role <input name="credential_role" list="roles" value="${esc(target?.credential_role || "")}" placeholder="passwords become {{CRED:role.password}}"></label>
       <datalist id="roles">${roles.map((r) => `<option value="${esc(r)}">`).join("")}</datalist>
       <label>Application <input name="application" value="${esc(target?.application || "")}"></label>
-      <label>Browser <select name="browser"><option>chromium</option><option>msedge</option><option>chrome</option><option>firefox</option></select></label>
+      <label>Browser <select name="browser"><option>chromium</option><option>msedge</option><option>chrome</option></select></label>
       ${target ? `<label style="grid-column:1/-1;display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="replay" style="width:auto;margin:0" ${(replayParam || n) && firstAt > 1 ? "checked" : ""}>
         <span>Play the script's steps before this position first (<span id="replayRange"></span>), so the browser is already on the right screen</span></label>` : ""}
       <div class="row" style="align-self:end"><button class="btn primary" type="submit">${target ? "Open browser" : "Start recording"}</button></div>

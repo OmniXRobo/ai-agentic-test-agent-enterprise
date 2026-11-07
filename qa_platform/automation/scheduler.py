@@ -31,7 +31,7 @@ from ..logging_setup import get_logger
 log = get_logger("scheduler")
 
 REPEATS = ("once", "daily", "weekdays", "weekly", "hourly")
-BROWSERS = ("chromium", "msedge", "chrome", "firefox")
+BROWSERS = ("chromium", "msedge", "chrome")  # 23.3.32: Firefox is not included
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 HISTORY_KEEP = 300
 

@@ -158,7 +158,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     # 23.3.3: AI-Driven Automation by voice
     CommandSpec("automation_settings", "read or change the automation run settings: browser, element timeout, "
                                        "screenshots, video, trace, background (headless) runs",
-                (Param("browser", "enum", "browser", ("chromium", "chrome", "msedge", "firefox", "webkit")),
+                (Param("browser", "enum", "browser", ("chromium", "chrome", "msedge")),
                  Param("timeout_seconds", "int", "element timeout in seconds"),
                  Param("step_screenshots", "bool", "screenshot after every step"), Param("video", "bool", "record video"),
                  Param("trace", "bool", "save a Playwright trace"), Param("headless", "bool", "run in the background")),

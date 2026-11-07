@@ -4,7 +4,7 @@ import { productName } from "../brand.js";
 import { esc, toast, dateTimeOf, openModal } from "../util.js";
 import { confirmDelete } from "../confirm-delete.js";
 
-const BROWSERS = [["chromium", "Chromium"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"], ["firefox", "Firefox"]];
+const BROWSERS = [["chromium", "Chromium"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"]];
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const PAGES = ["AI-Driven Automation", "Guided Browser Automation", "Hybrid Test Automation", "Application Discovery & Update"];
 const pill = (status) => status ? `<span class="pill ${esc({ PASSED: "PASS", FAILED: "FAIL", ERROR: "FAIL", RUNNING: "RUNNING", QUEUED: "WAITING", STOPPED: "WARN" }[status] || "WAITING")}">${esc(status)}</span>` : '<span class="muted">-</span>';
