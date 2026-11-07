@@ -35,7 +35,13 @@ def start_playwright() -> Any:
     return sync_playwright().start()
 
 
+SUPPORTED = ("chromium", "msedge", "chrome")  # 23.3.32: Firefox and WebKit are not part of the installation
+
+
 def launch(pw: Any, browser: str = "chromium", headless: bool = False) -> Any:
+    if browser not in SUPPORTED:
+        raise QAError("BROWSER_NOT_INCLUDED", f"{browser} is not included in this installation. Choose Chromium, "
+                      "Microsoft Edge or Google Chrome.", status=422)
     kind = "chromium" if browser in ("chromium", "msedge", "chrome") else browser
     options: dict[str, Any] = {"headless": headless}
     if browser in ("msedge", "chrome"):

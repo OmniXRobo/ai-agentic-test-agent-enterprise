@@ -1,3 +1,109 @@
+23.3.31 (7 Nov 2026): full suite 512 passed, 17 skipped, 0 failed (Linux, Python 3.13, headless Chromium; the 17
+  skipped need JMeter/Java, which this build machine did not have).
+  new: test_ai_reports_23331.py (7 tests): a screenshot after each of the 8 steps of a real Chromium run, kept with
+  its step; the run analysis prompt (steps, result, no password), an edit, the PDF with the edited text and every
+  step's screenshot, the PDF out of date after an edit and made again for the email, the email draft (default
+  recipient, subject, body) and the sent mail with the PDF attached; the dashboard analysis with its figures, PDF and
+  email; the performance analysis shared with the run page, a bottleneck edit, its PDF and email; invalid kinds, ids
+  and runs; no PDF or email before an analysis; email refused when Outlook Email is not set up.
+  UI checked in Chromium (desktop and phone width): Recent Runs on AI-Driven Automation and Guided Browser Automation
+  with step screenshots and the large view, the run report panel (analysis, edit, PDF, email form), Performance
+  Results and the Dashboard. No script errors on the pages.
+
+23.3.30 (6 Nov 2026): full suite 505 passed, 17 skipped, 0 failed (Linux, Python 3.13, headless Chromium; the 17
+  skipped need JMeter/Java, which this build machine did not have).
+  new: test_branding_23330.py (6 tests): default SkyGuard QA name and tagline; Preferences validation of the name,
+  tagline and logo path (missing, unsupported, over 2 MB, pasted with quotes); the logo served with its type and a
+  restrictive CSP, and a logo removed later; the name in schedule messages and the email sender name; branding in
+  the pages and no green left in the voice styles; a report with the name, tagline and logo in its HTML and PDF, and
+  Make PDF after the PDF was removed; the PDF printed by the next browser when the first cannot start, with reasons
+  when none can; dashboard acceptance criteria counted from the field and from linked criteria work items.
+  UI checked in Chromium (desktop and phone width): AI Voice Command Center, Voice & Command Agent, Agent Workflow,
+  Preferences, Dashboard, Reports with a custom logo, and the PDF. No script errors on the pages.
+
+23.3.29 (6 Nov 2026): full suite 516 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_schedules_23329.py (8 tests): due times for once, daily, chosen weekdays, every N weeks and every
+  N minutes, in a named time zone and the system zone; validation (interval, past time, days, time, time zone,
+  email, no parallel overlap, maximum runtime shorter than the workload); pause and resume; one run per due time
+  across two ticks and a second scheduler on the same database; overlap skip and queue (one waiting at most);
+  missed times with skip and run-once (latest only) and a ten-day gap without a backlog; restart recovery; pinned
+  script, workload and targets after the plan changed, latest after switching, a changed pinned data set refused;
+  the Startup folder file for start at Windows sign-in; real JMeter runs: a scheduled run with its PDF and an email
+  with the PDF attached, and a run stopped at its maximum runtime with partial results kept.
+  UI checked in Chromium (desktop and phone width): schedule list, new schedule form, history, pause, start at
+  sign-in. No script errors on the page.
+
+23.3.28 (5 Nov 2026): full suite 508 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_reports_23328.py (7 tests): planned phase windows and shape text; per-phase figures from a results
+  file; comparability between runs (blocking differences, cautions, build as information); defect draft content
+  (environment, build, workload, affected transactions, expected against actual, run times, files) and suggested
+  severity with its reason; real JMeter runs: the run report made when a run ends holds every required section,
+  history filters by build and dates, the environment build used when none is given, baseline found, compare
+  endpoint, comparison and consolidated PDFs, a failed run's defect draft referenced in its report, making a report
+  again, and a report with a secret in the plan description refused.
+  PDFs rendered and read page by page; UI checked in Chromium (desktop and phone width): run list with filters and
+  selection, compare page, run details report buttons, Reports list, Defect Review. No script errors on the page.
+
+23.3.27 (5 Nov 2026): full suite 500 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_live_23327.py (7 tests): a synthetic results file read in two parts (a half-written last row is not
+  read): totals, transactions counted apart, a second with no samples shown as 0, open seconds, per-second 95th
+  percentile, rolling 30 s percentiles and error rate, live target indications, per-request figures, top and latest
+  errors; long runs merged to at most 600 points with bounded memory; the rate early in a run over the seconds seen;
+  planned users from thread groups; unknown run 404; a run that starts while its state is read; a real JMeter run polled while it runs (samples never more
+  than the server received, users, planned curve, transactions, targets) and after it ends.
+  UI checked in Chromium (desktop and phone width): no test running (opens the run once queued), a 3-step stress
+  run while running, and after it ended. No script errors on the page.
+
+23.3.26 (5 Nov 2026): full suite 494 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_workload_23326.py (6 tests): stress/spike/load/soak shapes as thread group phases (peak, duration,
+  problems), a shape applied to the run copy keeps every request and splits users and rate over two thread groups,
+  the validation copy (1 user, 1 loop, serialized, throughput timers off, correlation checks), saving a workload makes
+  no script version and no run, environment load limit on the shape; real JMeter runs: a validation run reports the
+  missing correlation (server saw one session + one profile request) and passes after the fix; a 3-step stress run
+  peaks at 3 users; 3 users paced to 6 requests/s for 20 s (server saw about 120 requests).
+  UI checked in Chromium: Workload tab (shapes, rate model, preview chart, save), validation run result page.
+
+23.3.24 (5 Nov 2026): full suite 480 passed, 0 failed (Linux, Python 3.13, real JMeter 5.6.3, headless Chromium).
+  new: test_perf_recording_23324.py (4 tests): a login journey recorded in a real browser against a local site with
+  a hidden CSRF field, a session cookie and a JSON bearer token; the CSRF value gets a Boundary extractor and the
+  token a JSON extractor ($.data.access_token); the typed password is a saved secret ${__P(password)} and appears in
+  no response, script or run file; the recorded script runs in JMeter (0% errors, "Log in" reported as a
+  transaction) and secrets.properties is gone after the run; a missing secret fails the pre-run check; HAR import
+  leaves out third-party and static requests and correlates the form token; properties-file escaping.
+  UI checked in Chromium: Record a browser journey card, start form, live steps while recording, review (kept /
+  left out requests, values handled automatically, secrets), Create script, Secrets section in the script editor,
+  HAR import form. No script errors on the pages.
+  Not tested here: recording in Microsoft Edge / Google Chrome on Windows, the Windows Credential Manager itself
+  (an in-memory store stands in), saucedemo / OrangeHRM (not recorded from this container).
+
+23.3.23 (5 Nov 2026): full suite 476 tests, 472 passed and 4 failed on the full run (Linux, real JMeter 5.6.3,
+  Chromium); all 4 pass now: 3 in test_offline.py failed because a test copy of the application was using port 8765
+  at the time, and test_performance.py's validation check was fixed (a plan with no requests is a clean 422 again;
+  validation errors that carry a Python exception are now sent as text). The performance tests were run again after.
+  new: test_perf_script_23323.py (10 tests, real JMeter 5.6.3 + Java 21 against the local test site): JMX import keeps
+  every element, comment and JSR223 script and export returns it; invalid, DOCTYPE and non-JMeter files refused;
+  plugins and endless loops block the run; tree edits, placement rules, save, stale-version conflict, versions, diff
+  and restore; raw JMX, header and variable forms; a generated plan opened as a script; script checks for hosts from
+  variables, unknown hosts, users from property defaults, loop-based duration and a missing CSV file; disabled
+  elements and listeners; an imported script run in JMeter with a JSON extractor feeding the next request.
+  browser (Chromium, by hand with Playwright): plan list with Import a JMX file, import from a file, script editor
+  tree and property panel, Add (JSON extractor), Raw JMX with an invalid edit refused, Versions with a diff, Open in
+  script editor on a generated plan. No browser errors from the pages.
+
+23.3.22 (4 Nov 2026): full suite 466 passed, 0 failed (Linux, real JMeter 5.6.3, Chromium), after merging the
+  23.3.21 test-suite fixes. test_regression_pages.py now lists Performance Scenarios as a new page.
+  new: test_perf_foundation_23322.py (10 tests, real JMeter 5.6.3 + Java 21 against the local test site): scenarios
+  create / edit / clone / archive / search; hosts, users and duration limits block a run before any request; JMX
+  validation and version reading; earlier plans and runs upgraded (scenario per plan, state and verdict split,
+  RUNNING -> Interrupted with partial results, QUEUED -> Skipped); a simulated crash where JMeter is left running
+  is ended on the next start while an unrelated process is left alone; queue order, positions and cancel;
+  Completed / Target not specified and Completed / Targets missed; config.json snapshot; generator monitoring;
+  graceful and emergency stop keep partial results with an Inconclusive verdict; closing the application interrupts
+  a running test; generator saturation flag.
+  browser (Chromium, by hand with Playwright): Performance Scenarios list, scenario editor with Check before run and
+  run history, Performance Results queue, live run page with Stop / Emergency stop, completed run with state,
+  verdict, pre-run checks and load generator charts.
+
 23.3.16 (3 Nov 2026): 121 passed (115 on 23.3.15 + 6 new). The same 12 failed and 4 errors occur on 23.3.15 in
   this Linux test environment (Faster-Whisper stand-ins, tests that start Chromium from Python, folder layout);
   test_voice_ui.py not run here (browser-only).

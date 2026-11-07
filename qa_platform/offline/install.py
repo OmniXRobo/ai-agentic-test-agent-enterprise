@@ -29,7 +29,8 @@ from ..clock import now, now_iso
 from ..config import APP_ROOT
 from . import manifest as mf
 
-APP_NAME = "AI Agentic Test Agent Enterprise"
+APP_NAME = "SkyGuard QA"  # 23.3.32
+OLD_SHORTCUT_NAMES = ("AI Agentic Test Agent Enterprise",)
 FOLDER_NAME = "AIAgenticTestAgent"
 WINDOWS = sys.platform == "win32"
 LAUNCHERS = ("START_QA_PLATFORM.cmd", "VALIDATE_OFFLINE.cmd", "ROLLBACK_OFFLINE.cmd")
@@ -141,20 +142,63 @@ def _write_launchers(target: Path) -> None:
         'endlocal\r\n', encoding="utf-8")
 
 
+def bundled_defaults(app: Path, settings_path: Path) -> list[str]:
+    """23.3.32: point the settings at the AI model and the Faster-Whisper model inside the package, so First-Run
+    Setup only asks for TFS. Settings already chosen (an upgrade, or values pre-filled by IT) are kept."""
+    from ..config import Settings
+
+    settings = Settings(settings_path)
+    done: list[str] = []
+    ai = settings.section("ai")
+    managed = dict(ai.get("managed") or {})
+    models = sorted(p for p in (app / "runtime" / "ai" / "models").glob("*.gguf") if "mmproj" not in p.name.lower())
+    servers = sorted((app / "runtime" / "ai").rglob("llama-server.exe" if WINDOWS else "llama-server"))
+    if models and servers and not (managed.get("model_path") and Path(managed["model_path"]).is_file()):
+        managed.update({"model_path": str(models[0]), "server_path": str(servers[0]), "auto_start": True,
+                        "alias": "qwen", "context_size": max(8192, int(managed.get("context_size") or 8192))})
+        settings.update({"ai": {"mode": "on_premise", "model": "qwen", "managed": managed}})
+        done.append(f"On-Premise AI: {models[0].name}, started with the application by the included llama-server.")
+    fw = app / "runtime" / "faster-whisper"
+    fw_models = sorted(p.parent.name for p in (fw / "models").glob("*/model.bin")) if (fw / "models").is_dir() else []
+    voice = settings.section("voice")
+    if fw_models and (fw / "lib").is_dir() and voice.get("stt_api") != "faster_whisper":
+        port = int(voice.get("fw_port") or 8766)
+        settings.update({"voice": {"stt_engine": "local", "stt_api": "faster_whisper",
+                                   "stt_url": f"http://127.0.0.1:{port}", "fw_model": fw_models[0], "fw_port": port,
+                                   "fw_auto_start": True}})
+        done.append(f"Speech recognition: Faster-Whisper {fw_models[0]} on this PC.")
+    return done
+
+
 def _shortcuts(target: Path, log: Log) -> None:
-    """Start Menu and Desktop shortcuts for this user. Best effort: the launchers work without them."""
+    """Start Menu and Desktop shortcuts for this user. Best effort: the launchers work without them.
+
+    23.3.32: "SkyGuard QA" with the robot icon. It starts the application with pythonw (no console window) and opens
+    the dashboard in its own window; START_QA_PLATFORM.cmd stays for troubleshooting."""
     if not WINDOWS:
         return
+    app = target / "app"
+    pythonw = app / "runtime" / "python" / "pythonw.exe"
+    icon = app / "web" / "img" / "skyguard.ico"
+    if pythonw.is_file():
+        exe, args = str(pythonw), "-E -s -m qa_platform.launcher"
+    else:
+        exe, args = str(target / "START_QA_PLATFORM.cmd"), ""
+    old = ",".join(f"'{n}.lnk'" for n in OLD_SHORTCUT_NAMES)
     script = (
         "$s=New-Object -ComObject WScript.Shell;"
         "foreach($d in @([Environment]::GetFolderPath('Programs'),[Environment]::GetFolderPath('Desktop'))){"
+        f"foreach($o in @({old})){{$p=Join-Path $d $o; if(Test-Path $p){{Remove-Item $p -Force}}}};"
         f"$l=$s.CreateShortcut((Join-Path $d '{APP_NAME}.lnk'));"
-        f"$l.TargetPath='{target / 'START_QA_PLATFORM.cmd'}';$l.WorkingDirectory='{target}';$l.Save()}}"
+        f"$l.TargetPath='{exe}';$l.Arguments='{args}';$l.WorkingDirectory='{app}';"
+        f"$l.Description='{APP_NAME}: Every release, cleared for takeoff.';"
+        + (f"$l.IconLocation='{icon},0';" if icon.is_file() else "")
+        + "$l.Save()}"
     )
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True,
                              text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        log("Shortcuts created in the Start Menu and on the Desktop." if out.returncode == 0
+        log("Shortcuts 'SkyGuard QA' created in the Start Menu and on the Desktop." if out.returncode == 0
             else f"Shortcuts were not created ({out.stderr.strip()[:200]}). Use START_QA_PLATFORM.cmd in {target}.")
     except (OSError, subprocess.SubprocessError) as exc:
         log(f"Shortcuts were not created ({exc}). Use START_QA_PLATFORM.cmd in {target}.")
@@ -232,6 +276,11 @@ def install(source: Path, target: Path, *, validation: Validation = subprocess_v
                 log(f"Pre-filled First-Run Setup ({', '.join(sorted(applied))}); the TFS PAT is entered there.")
             except Exception as exc:  # the install itself succeeded; the setup screen asks instead
                 log(f"Setup values were not pre-filled ({getattr(exc, 'message', exc)}). Enter them in First-Run Setup.")
+        try:
+            for line in bundled_defaults(target / "app", data / "settings.json"):
+                log(line)
+        except Exception as exc:  # the install succeeded; the setup screen can still choose them
+            log(f"The bundled AI and speech models were not set up ({exc}). Choose them in First-Run Setup.")
         if shortcuts:
             _shortcuts(target, log)
         log(f"Installed. Start it with {target / 'START_QA_PLATFORM.cmd'}")

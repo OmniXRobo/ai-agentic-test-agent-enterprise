@@ -58,6 +58,11 @@ class FrameworkRunner:
     def running(self) -> list[str]:
         return list(self.processes)
 
+    def close(self) -> None:
+        """23.3.32: the application is closing: stop every test run it started, with its browsers."""
+        for run_id in list(self.processes):
+            self.stop(run_id)
+
     def run(self, record: dict[str, Any], run_id: str, *, workspace: Path, env_extra: dict[str, str],
             secrets: list[str], combination: str | None = None, headless: bool | None = None,
             on_finish: Callable[[dict[str, Any]], None] | None = None, browser: str | None = None) -> dict[str, Any]:
@@ -132,7 +137,9 @@ class FrameworkRunner:
                     kwargs: dict[str, Any] = {"cwd": str(workspace), "env": env, "stdout": log,
                                               "stderr": subprocess.STDOUT, "text": True}
                     if sys.platform == "win32":
-                        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                        # 23.3.32: no console window of its own (the desktop start has no console to share)
+                        kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                                                   | 0x08000000)  # CREATE_NO_WINDOW
                     else:
                         kwargs["start_new_session"] = True
                     proc = subprocess.Popen(cmd, **kwargs)

@@ -127,6 +127,7 @@ class Validator:
             ("Dashboard port", self.check_port),
             ("On-Premise AI files", self.check_ai_files),
             ("Offline speech model", self.check_speech_files),
+            ("Faster-Whisper speech recognition", self.check_faster_whisper),
         ]
         if self.quick:  # used by the installer before switching versions: skip the slow launches
             items = [i for i in items if i[0] not in ("JMeter", "Chromium for Playwright")]
@@ -321,6 +322,29 @@ class Validator:
             return Check("Offline speech model", "INFO", "No speech model is bundled. Voice commands can be typed, "
                                                          "or use a local speech server.")
         return Check("Offline speech model", "PASS", f"Voice commands are recognized on this PC with {models[0].name}.")
+
+
+    def check_faster_whisper(self) -> Check:
+        """23.3.32: the Faster-Whisper packages and model in the package load on this PC, without Internet."""
+        home = self.app / "runtime" / "faster-whisper"
+        lib = home / "lib"
+        models = sorted(p.parent for p in (home / "models").glob("*/model.bin")) if (home / "models").is_dir() else []
+        if not lib.is_dir() or not models:
+            status = "FAIL" if self.manifest is not None and self.manifest.get("faster_whisper") else "INFO"
+            return Check("Faster-Whisper speech recognition", status,
+                         f"Not included in {home}; voice commands use the built-in recognizer.")
+        if self.quick:
+            return Check("Faster-Whisper speech recognition", "PASS", f"Model {models[0].name} and packages present.")
+        py = Path(sys.executable)
+        code = ("import sys;sys.path.insert(0,sys.argv[1]);from faster_whisper import WhisperModel;"
+                "WhisperModel(sys.argv[2],device='cpu',compute_type='int8',local_files_only=True);print('loaded')")
+        env = {**{k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}, "HF_HUB_OFFLINE": "1"}
+        out = _run([str(py), "-E", "-s", "-c", code, str(lib), str(models[0])], timeout=240, env=env) if py else None
+        if out is None or out.returncode != 0 or "loaded" not in out.stdout:
+            detail = " ".join(((out.stdout + out.stderr) if out else "no Python").split())[-300:]
+            fix = " Install the Microsoft Visual C++ runtime files (see README)." if "DLL" in detail else ""
+            return Check("Faster-Whisper speech recognition", "FAIL", f"The model did not load: {detail}.{fix}")
+        return Check("Faster-Whisper speech recognition", "PASS", f"Model {models[0].name} loads offline (CPU, int8).")
 
 
 # ---- report ----------------------------------------------------------------------------------------

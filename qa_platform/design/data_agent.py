@@ -22,6 +22,7 @@ import re
 from datetime import datetime
 from typing import Any, Callable
 
+from .. import branding
 from ..automation.framework.template.utilities import runtime_values
 from ..automation.generator import parse_tfs_steps
 from ..clock import now_iso
@@ -813,7 +814,7 @@ class TestDataService:
         rows = list(reversed(rows))
         keys = sorted({r.get("dataset_key") or f"DS-{tc_id}" for r in rows})
         version = max(int(r.get("version") or 1) for r in rows)
-        marker = (f"Dataset {', '.join(keys)} v{version} · {len(rows)} combinations · written by QA Enterprise AI on "
+        marker = (f"Dataset {', '.join(keys)} v{version} · {len(rows)} combinations · written by {branding.name()} on "
                   f"{now_iso()[:10]}. Passwords and tokens are secret references.")
         datasets = [{"name": r.get("row_key") or r["name"], "kind": r.get("scenario") or r.get("kind"),
                      "values": r["dataset"] if isinstance(r["dataset"], dict) else {}} for r in rows]

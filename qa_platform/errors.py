@@ -90,7 +90,10 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
-            error_body("VALIDATION_FAILED", "Request validation failed.", exc.errors()),
+            # ctx can hold the ValueError raised by a model validator, which JSON cannot carry: keep its text
+            error_body("VALIDATION_FAILED", "Request validation failed.",
+                       [{**e, "ctx": {k: str(v) for k, v in e["ctx"].items()}} if isinstance(e.get("ctx"), dict) else e
+                        for e in exc.errors()]),
             status_code=422,
         )
 

@@ -409,6 +409,108 @@ MIGRATIONS: list[str] = [
         at TEXT NOT NULL
     );
     """,
+    # 12 (23.3.22): performance scenarios and environments; execution state kept apart from the verdict; run queue
+    """
+    CREATE TABLE IF NOT EXISTS perf_environments (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS perf_scenarios (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        plan_id TEXT,
+        environment_id TEXT,
+        archived INTEGER NOT NULL DEFAULT 0,
+        data TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_perf_scenarios_plan ON perf_scenarios(plan_id);
+    ALTER TABLE perf_runs ADD COLUMN state TEXT;
+    ALTER TABLE perf_runs ADD COLUMN verdict TEXT;
+    ALTER TABLE perf_runs ADD COLUMN partial INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE perf_runs ADD COLUMN scenario_id TEXT;
+    ALTER TABLE perf_runs ADD COLUMN environment_id TEXT;
+    ALTER TABLE perf_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'manual';
+    ALTER TABLE perf_runs ADD COLUMN queued_at TEXT;
+    ALTER TABLE perf_runs ADD COLUMN overrides TEXT;
+    ALTER TABLE perf_runs ADD COLUMN config TEXT;
+    ALTER TABLE perf_runs ADD COLUMN checks TEXT;
+    ALTER TABLE perf_runs ADD COLUMN generator TEXT;
+    ALTER TABLE perf_runs ADD COLUMN pid INTEGER;
+    ALTER TABLE perf_runs ADD COLUMN state_reason TEXT;
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_state ON perf_runs(state);
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_scenario ON perf_runs(scenario_id);
+    """,
+    # 13 (23.3.23): saved versions of performance scripts (JMX), for the history, diff and restore
+    """
+    CREATE TABLE IF NOT EXISTS perf_plan_versions (
+        plan_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        script TEXT NOT NULL,
+        note TEXT,
+        sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (plan_id, version)
+    );
+    """,
+    # 14 (23.3.25): test data sets for performance scripts (secret cells are kept in the Credential Manager)
+    """
+    CREATE TABLE IF NOT EXISTS perf_datasets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        columns TEXT NOT NULL,
+        rows TEXT NOT NULL,
+        secret_chunks INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 1,
+        source TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    # 15 (23.3.28): the application build under test, recorded on each performance run (history filter, reports)
+    """
+    ALTER TABLE perf_runs ADD COLUMN build TEXT;
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_build ON perf_runs(build);
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_started ON perf_runs(started_at);
+    """,
+    # 16 (23.3.29): performance schedules. A job is one due time of one schedule; (schedule_id, job_key) is unique,
+    # so a due time can never start two runs (two ticks, a restart, or two copies of the application)
+    """
+    CREATE TABLE IF NOT EXISTS perf_schedules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        scenario_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        spec TEXT NOT NULL,
+        next_run_at TEXT,
+        last_run_id TEXT,
+        last_job_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS perf_schedule_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_id TEXT NOT NULL,
+        job_key TEXT NOT NULL,
+        due_at TEXT,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        run_id TEXT,
+        reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (schedule_id, job_key)
+    );
+    CREATE INDEX IF NOT EXISTS ix_perf_jobs_schedule ON perf_schedule_jobs(schedule_id, created_at);
+    CREATE INDEX IF NOT EXISTS ix_perf_jobs_run ON perf_schedule_jobs(run_id);
+    ALTER TABLE perf_runs ADD COLUMN schedule_id TEXT;
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_schedule ON perf_runs(schedule_id);
+    """,
 ]
 
 

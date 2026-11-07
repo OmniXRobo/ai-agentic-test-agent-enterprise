@@ -50,7 +50,8 @@ class Paths:
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8765},
-    "ui": {"theme": "dark"},
+    "ui": {"theme": "dark", "brand_name": "SkyGuard QA", "brand_tagline": "Every release, cleared for takeoff.",
+           "logo_path": ""},  # 23.3.30: product name, tagline and logo (Preferences)
     "tfs": {
         # "online" = Azure DevOps Online, "offline" = local TFS / Azure DevOps Server
         "active_mode": "online",
@@ -65,7 +66,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "generation_timeout_seconds": 600,
     },
     "defects": {"creation_mode": "review"},  # review | automatic | disabled
-    "performance": {"jmeter_home": "", "java_home": ""},
+    "performance": {"jmeter_home": "", "java_home": "", "min_free_disk_mb": 1024},
     # Visible playback: the tactical cursor moves to each element, the element is highlighted, then Playwright acts.
     "playback": {"visual_cursor": True, "highlight": True, "cursor_speed_ms": 450, "click_sound": True,
                  "click_volume": 0.35},

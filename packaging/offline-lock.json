@@ -44,5 +44,42 @@
     "publisher": "ggml-org (llama.cpp)",
     "checksum_source": "GitHub release asset digest, re-verified on download",
     "license": "MIT"
-  }
+  },
+  "llm_model": {
+    "name": "Qwen2.5-1.5B-Instruct GGUF (Q4_K_M), the On-Premise AI model",
+    "version": "Q4_K_M",
+    "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+    "files": [
+      "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+    ],
+    "revision": "91cad51170dc346986eccefdc2dd33a9da36ead9",
+    "sha256": {
+      "qwen2.5-1.5b-instruct-q4_k_m.gguf": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+    },
+    "publisher": "Qwen (Alibaba Cloud) on Hugging Face",
+    "checksum_source": "SHA-256 (Git LFS object id) Hugging Face publishes for each file of the revision",
+    "license": "Apache-2.0"
+  },
+  "fw_model": {
+    "name": "Faster-Whisper small.en (CTranslate2), speech recognition model",
+    "version": "small.en",
+    "repo": "Systran/faster-whisper-small.en",
+    "files": [
+      "model.bin",
+      "config.json",
+      "tokenizer.json",
+      "vocabulary.txt"
+    ],
+    "revision": "d1d751a5f8271d482d14ca55d9e2deeebbae577f",
+    "sha256": {
+      "model.bin": "62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a",
+      "config.json": "666a9605530ac1f61fa8177f3702b4dacec9966749e42610839fcc32661d5fae",
+      "tokenizer.json": "929c5252409436dce1b38a75d1abbcb5e132d170d8e324e4e04ed915fa2d22df",
+      "vocabulary.txt": "ff77588746d3a2595d32ab5b69ffd7b95ce2441ac57533cb66fc3eb575a115cf"
+    },
+    "publisher": "SYSTRAN on Hugging Face (OpenAI Whisper small.en converted)",
+    "checksum_source": "SHA-256 (Git LFS) or Git blob SHA-1 Hugging Face publishes for each file of the revision",
+    "license": "MIT"
+  },
+  "_comment_models": "Models come from Hugging Face. With an empty revision the build takes the repository's current revision, checks every file against the checksum Hugging Face publishes for it, and prints the revision and SHA-256 to pin here (revision, sha256 {file: hash}); once pinned, a file that differs is refused."
 }

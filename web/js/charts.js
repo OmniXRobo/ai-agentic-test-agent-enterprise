@@ -36,12 +36,21 @@ export function fmtDuration(s) {
  *          xLabel?:(t:number)=>string, tipLabel?:(i:number)=>string}} opts
  *   xLabel formats axis ticks (default: elapsed time); tipLabel names a point in the tooltip.
  */
-export function lineChart(host, points, { key, title, unit, color = "var(--accent)", integer = false, xLabel = fmtDuration, tipLabel = null }) {
+export function lineChart(host, points, { key, title, unit, color = "var(--accent)", integer = false, xLabel = fmtDuration, tipLabel = null,
+  overlay = null, ref = null, xMaxHint = 0 }) {
+  // 23.3.27: overlay = {key, label} draws a second, dashed series from the same points (e.g. planned users);
+  // ref = {value, label} draws a dashed horizontal line (e.g. a target); xMaxHint keeps the x axis at least this long.
   host.classList.add("chart");
   host.innerHTML = "";
   const head = document.createElement("div");
   head.className = "chart-title";
   head.textContent = title;
+  if (overlay || ref) {
+    const leg = document.createElement("span");
+    leg.className = "chart-legend";
+    leg.textContent = ` — ${overlay ? `dashed: ${overlay.label}` : `dashed: ${ref.label} ${fmt(Number(ref.value))} ${unit}`}`;
+    head.append(leg);
+  }
   host.append(head);
   if (!points.length) {
     const p = document.createElement("p");
@@ -52,8 +61,10 @@ export function lineChart(host, points, { key, title, unit, color = "var(--accen
   }
   const W = 380, H = 160, L = 40, R = 10, T = 8, B = 22;
   const xs = points.map((p) => p.t), ys = points.map((p) => Number(p[key]) || 0);
-  const xMax = Math.max(1, xs[xs.length - 1]);
-  const yMax = integer ? Math.max(4, Math.ceil(niceMax(Math.max(...ys)) / 4) * 4) : niceMax(Math.max(...ys));
+  const xMax = Math.max(1, xs[xs.length - 1], xMaxHint);
+  const ys2 = overlay ? points.map((p) => (p[overlay.key] === null || p[overlay.key] === undefined ? null : Number(p[overlay.key]))) : [];
+  const top = Math.max(...ys, ...ys2.filter((v) => v !== null), ref ? Number(ref.value) : 0);
+  const yMax = integer ? Math.max(4, Math.ceil(niceMax(top) / 4) * 4) : niceMax(top);
   const x = (t) => L + (t / xMax) * (W - L - R);
   const y = (v) => T + (1 - v / yMax) * (H - T - B);
   const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${title} over time` });
@@ -75,6 +86,11 @@ export function lineChart(host, points, { key, title, unit, color = "var(--accen
     lbl.textContent = text;
     svg.append(lbl);
   });
+  if (overlay) {
+    const d2 = points.map((p, i) => (ys2[i] === null ? "" : `${i && ys2[i - 1] !== null ? "L" : "M"}${x(p.t).toFixed(1)},${y(ys2[i]).toFixed(1)}`)).join("");
+    if (d2) svg.append(el("path", { d: d2, fill: "none", stroke: "var(--muted)", "stroke-width": 1.5, "stroke-dasharray": "5 4" }));
+  }
+  if (ref) svg.append(el("line", { x1: L, x2: W - R, y1: y(Number(ref.value)), y2: y(Number(ref.value)), stroke: "var(--warn)", "stroke-width": 1.5, "stroke-dasharray": "5 4" }));
   const d = points.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)},${y(ys[i]).toFixed(1)}`).join("");
   svg.append(el("path", { d, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
   if (points.length <= 40) {
@@ -97,7 +113,7 @@ export function lineChart(host, points, { key, title, unit, color = "var(--accen
     const px = x(points[i].t), py = y(ys[i]);
     hair.setAttribute("x1", px); hair.setAttribute("x2", px); hair.setAttribute("visibility", "visible");
     dot.setAttribute("cx", px); dot.setAttribute("cy", py); dot.setAttribute("visibility", "visible");
-    tv.textContent = `${fmt(ys[i])} ${unit}`;
+    tv.textContent = `${fmt(ys[i])} ${unit}${overlay && ys2[i] !== null ? ` (${overlay.label} ${fmt(ys2[i])})` : ""}`;
     tl.textContent = tipLabel ? ` ${tipLabel(i)}` : ` at ${fmtDuration(points[i].t)}`;
     tip.hidden = false;
     const box = svg.getBoundingClientRect(), scale = box.width / W;
@@ -199,7 +215,13 @@ export function barChart(host, rows, { title, label, series, unit = "" }) {
   if (series.length > 1) {
     const legend = document.createElement("div");
     legend.className = "legend";
-    legend.innerHTML = series.map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join("");
+    // 23.3.32: labels are names from results (transactions, scripts); build them as text, never as HTML.
+  legend.replaceChildren(...series.map((s) => {
+    const span = document.createElement("span"), dot = document.createElement("i");
+    dot.style.background = s.color;
+    span.append(dot, String(s.label ?? ""));
+    return span;
+  }));
     host.append(legend);
   }
 }

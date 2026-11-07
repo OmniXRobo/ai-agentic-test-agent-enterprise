@@ -13,10 +13,12 @@ import html
 import json
 import shutil
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
 
+from .. import branding
 from ..agents.base import BaseAgent
 from ..clock import now, now_iso, parse_iso
 from ..config import Paths
@@ -77,6 +79,13 @@ class ReportService:
         self.design = design
         self.analytics = analytics
         self.agent = ReportingAgent(bus)
+        if performance is not None and hasattr(performance, "finished_hooks"):
+            performance.finished_hooks.append(self.on_perf_finished)  # 23.3.28: a report after every run
+        # 23.3.28: background run reports are made one at a time (each prints with Chromium) and are waited for when
+        # the application closes, so none is left writing to a closed database
+        self._report_lock = threading.Lock()
+        self._closing = threading.Event()
+        self._report_threads: set[threading.Thread] = set()
         # a report cannot still be running when the application starts
         db.execute("UPDATE reports SET status = 'failed', finished_at = ?, error = ? WHERE status = 'running'",
                    (now_iso(), "Interrupted because the application stopped while the report was being generated."))
@@ -166,6 +175,198 @@ class ReportService:
             self.db.execute("UPDATE reports SET status = ?, finished_at = ?, error = ? WHERE id = ?",
                             ("failed", now_iso(), message, report_id))
             self.agent.emit(names.REPORT_FAILED, f"{title}: {message}", run_id=report_id)
+
+    def remake_pdf(self, report_id: str) -> dict[str, Any]:
+        """23.3.30: prints the PDF of a ready report again from its saved HTML (after a PDF could not be made)."""
+        report = self.get(report_id)
+        if report["status"] != "ready":
+            raise QAError("REPORT_NOT_READY", "Only a finished report can be printed again.", status=409)
+        folder = self._folder(report_id)
+        source = folder / "report.html"
+        if not source.exists():
+            raise QAError("REPORT_FILE_MISSING", "This report has no HTML file to print from.", status=404)
+        summary = dict(report["summary"] or {})
+        summary.pop("pdf_error", None)
+        target = folder / "report.pdf"
+        with self._report_lock:
+            try:
+                print_pdf(source.read_text(encoding="utf-8"), target)
+                if report["scope"].startswith("perf_") and self.performance is not None:
+                    from . import perf_report as pr
+                    secrets: list[str] = []
+                    for rid in (report["params"] or {}).get("run_ids") or []:
+                        try:
+                            secrets += self._known_secrets(self.performance.get_run(rid))
+                        except QAError:
+                            continue
+                    if pr.secret_scan(pr.pdf_text(target), secrets):
+                        target.unlink(missing_ok=True)
+                        summary["pdf_error"] = "The PDF was not saved: it contained a stored secret value."
+            except QAError as exc:
+                summary["pdf_error"] = f"PDF not created: {exc.message}"
+            except Exception as exc:
+                summary["pdf_error"] = f"PDF not created: {exc}"
+        self.db.execute("UPDATE reports SET summary = ? WHERE id = ?", (dumps(summary), report_id))
+        return self.get(report_id)
+
+    # ---- 23.3.28: performance run, comparison and consolidated reports ------------------------------------
+
+    def perf_run_report(self, run_id: str, *, pdf: bool = True) -> dict[str, Any]:
+        """The report of one performance run from its saved results: qa-report.html and qa-report.pdf in the run
+        folder. Generated after every run that ended (completed, failed, stopped or interrupted) and again on
+        request; nothing is re-run."""
+        from . import perf_report as pr
+        run = self.performance.get_run(run_id)
+        if run["state"] in ("QUEUED", "VALIDATING", "RUNNING", "STOPPING"):
+            raise QAError("PERF_RUN_NOT_FINISHED", "The report is made when the run has ended.", status=409)
+        ctx = pr.gather(self.performance, self.defects, run_id)
+        generated = pr.local_time(now_iso())
+        page = pr.run_report_html(ctx, generated)
+        folder = Path(run["folder"])
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "qa-report.html").write_text(page, encoding="utf-8")
+        out: dict[str, Any] = {"run_id": run_id, "html": True, "pdf": False, "pages": None, "error": None,
+                               "generated_at": now_iso()}
+        if pdf:
+            target = folder / "qa-report.pdf"
+            tmp = folder / "qa-report.pdf.part"
+            try:
+                print_pdf(page, tmp)
+                problems = pr.secret_scan(pr.pdf_text(tmp), self._known_secrets(run))
+                if problems:
+                    tmp.unlink(missing_ok=True)
+                    raise QAError("REPORT_SECRET_FOUND", "The PDF was not saved: it contained a stored secret value.",
+                                  status=500)
+                tmp.replace(target)
+                out["pdf"], out["pages"] = True, pr.pdf_pages(target)
+            except QAError as exc:
+                out["error"] = exc.message
+            except Exception as exc:  # the HTML report is still there
+                tmp.unlink(missing_ok=True)
+                out["error"] = f"PDF not created: {exc}"
+        (folder / "qa-report.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
+        return out
+
+    def _known_secrets(self, run: dict[str, Any]) -> list[str]:
+        """Stored secret values of the run's script, to make sure none of them is printed."""
+        try:
+            plan = (run.get("config") or {}).get("plan") or {}
+            return [v for n in plan.get("secret_names") or []
+                    if (v := self.performance._secret(run["plan_id"], n))]
+        except Exception:
+            return []
+
+    def perf_run_report_file(self, run_id: str, kind: str = "pdf") -> Path:
+        run = self.performance.get_run(run_id)
+        name = "qa-report.pdf" if kind == "pdf" else "qa-report.html"
+        path = Path(run["folder"]) / name
+        if not path.exists():
+            result = self.perf_run_report(run_id, pdf=kind == "pdf")
+            if kind == "pdf" and not result["pdf"]:
+                raise QAError("REPORT_PDF_FAILED", result["error"] or "The PDF could not be created.", status=500)
+        return path
+
+    def on_perf_finished(self, run_id: str, verdict: str | None) -> None:
+        """Called when a performance run ends: make its report in the background (after the automatic defect
+        draft of a failed run, so the report lists it)."""
+        if not self.performance.settings.section("performance").get("auto_report", True):
+            return
+        row = self.db.query_one("SELECT schedule_id FROM perf_runs WHERE run_id = ?", (run_id,))
+        if row and row["schedule_id"]:
+            return  # 23.3.29: a scheduled run's report follows the schedule's own report option
+
+        if self._closing.is_set():
+            return
+
+        def work() -> None:
+            try:
+                if verdict == "FAIL" and self.defects is not None and not self._closing.is_set():
+                    self.defects.wait_for_automatic(run_id, 30)
+                with self._report_lock:
+                    if not self._closing.is_set():
+                        self.perf_run_report(run_id)
+            except Exception as exc:  # never disturbs the run; the report can be made again from the run page
+                log.info(f"Run report not created: {exc}", extra={"run_id": run_id})
+            finally:
+                self._report_threads.discard(threading.current_thread())
+
+        t = threading.Thread(target=work, name=f"report-{run_id}", daemon=True)
+        self._report_threads.add(t)
+        t.start()
+
+    def perf_run_report_serial(self, run_id: str) -> dict[str, Any]:
+        """The run report, made one at a time with the background reports (each prints with Chromium)."""
+        with self._report_lock:
+            if self._closing.is_set():
+                raise QAError("APP_CLOSING", "The application is closing; make the report from the run page later.",
+                              status=409)
+            return self.perf_run_report(run_id)
+
+    def close(self, timeout: float = 60) -> None:
+        """No new background reports; a report being made is finished (up to the timeout) and the waiting ones are
+        skipped. A skipped report can be made from the run page."""
+        self._closing.set()
+        deadline = time.monotonic() + timeout
+        for t in list(self._report_threads):
+            t.join(max(0.0, deadline - time.monotonic()))
+
+    def perf_report(self, kind: str, run_ids: list[str], title: str | None = None) -> dict[str, Any]:
+        """A comparison (the first run is the baseline) or a consolidated report across test types, as a PDF in
+        the Reports list."""
+        from . import perf_report as pr
+        ids = list(dict.fromkeys(run_ids))
+        if kind not in ("comparison", "consolidated"):
+            raise QAError("VALIDATION_FAILED", "The report kind must be comparison or consolidated.", status=422)
+        if not (2 if kind == "comparison" else 1) <= len(ids) <= pr.MAX_COMPARE:
+            raise QAError("VALIDATION_FAILED", f"Choose 2 to {pr.MAX_COMPARE} runs to compare." if kind == "comparison"
+                          else f"Choose 1 to {pr.MAX_COMPARE} runs.", status=422)
+        ctxs = []
+        for rid in ids:
+            run = self.performance.get_run(rid)
+            if run["state"] in ("QUEUED", "VALIDATING", "RUNNING", "STOPPING"):
+                raise QAError("PERF_RUN_NOT_FINISHED", f"{rid} has not ended yet.", status=409)
+            ctxs.append(pr.gather(self.performance, self.defects, rid))
+        title = (title or "").strip() or ("Performance comparison" if kind == "comparison" else
+                                          "Consolidated performance report")
+        report_id = f"RPT-{now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
+        scope = f"perf_{kind}"
+        self.db.execute("INSERT INTO reports (id, title, scope, params, status, created_at) VALUES (?,?,?,?,?,?)",
+                        (report_id, title, scope, dumps({"run_ids": ids}), "running", now_iso()))
+        try:
+            generated = pr.local_time(now_iso())
+            page = (pr.comparison_html if kind == "comparison" else pr.consolidated_html)(ctxs, title, generated)
+            folder = self._folder(report_id)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "report.html").write_text(page, encoding="utf-8")
+            summary: dict[str, Any] = {"perf_runs": len(ids)}
+            if kind == "comparison":
+                summary["comparable"] = pr.compare_data(ctxs)["comparable"]
+            try:
+                print_pdf(page, folder / "report.pdf")
+                secrets = [s for c in ctxs for s in self._known_secrets(c["run"])]
+                if pr.secret_scan(pr.pdf_text(folder / "report.pdf"), secrets):
+                    (folder / "report.pdf").unlink(missing_ok=True)
+                    summary["pdf_error"] = "The PDF was not saved: it contained a stored secret value."
+                else:
+                    summary["pages"] = pr.pdf_pages(folder / "report.pdf")
+            except Exception as exc:
+                summary["pdf_error"] = f"PDF not created: {exc}"
+            self.db.execute("UPDATE reports SET status = ?, finished_at = ?, summary = ? WHERE id = ?",
+                            ("ready", now_iso(), dumps(summary), report_id))
+            self.agent.emit(names.REPORT_COMPLETED, title, run_id=report_id, details={"link": f"#/reports?id={report_id}"})
+        except Exception as exc:
+            message = exc.message if isinstance(exc, QAError) else f"{type(exc).__name__}: {exc}"
+            self.db.execute("UPDATE reports SET status = ?, finished_at = ?, error = ? WHERE id = ?",
+                            ("failed", now_iso(), message, report_id))
+            raise
+        return self.get(report_id)
+
+    def perf_compare(self, run_ids: list[str]) -> dict[str, Any]:
+        from . import perf_report as pr
+        ids = list(dict.fromkeys(run_ids))
+        if not 2 <= len(ids) <= pr.MAX_COMPARE:
+            raise QAError("VALIDATION_FAILED", f"Choose 2 to {pr.MAX_COMPARE} runs to compare.", status=422)
+        return pr.compare_data([pr.gather(self.performance, self.defects, rid) for rid in ids])
 
     # ---- data ----------------------------------------------------------------------------------
 
@@ -293,21 +494,63 @@ def _data_uri(path: Path, root: Path) -> str | None:
         return None
 
 
-def print_pdf(page_html: str, target: Path) -> None:
-    from playwright.sync_api import sync_playwright
+PDF_BROWSERS = (("the included Chromium", {}), ("Microsoft Edge", {"channel": "msedge"}),
+                ("Google Chrome", {"channel": "chrome"}))
+PDF_TIMEOUT_MS = 180_000
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        try:
-            page = browser.new_page()
-            page.set_content(page_html, wait_until="load")
-            page.pdf(path=str(target), format="A4", print_background=True,
-                     margin={"top": "14mm", "bottom": "14mm", "left": "12mm", "right": "12mm"},
-                     display_header_footer=True, header_template="<span></span>",
-                     footer_template='<div style="font-size:8px;width:100%;text-align:center;color:#667">'
-                                     '<span class="pageNumber"></span> / <span class="totalPages"></span></div>')
-        finally:
-            browser.close()
+
+def print_pdf(page_html: str, target: Path) -> None:
+    """Prints the report page to a PDF.
+
+    23.3.30: the page is opened from a file next to the PDF instead of being sent to the browser in one message (a
+    report with many evidence screenshots took longer than the 30-second default and the PDF was not made), the
+    browsers bundled with the package are used even when the application was not started from its launcher, and
+    when the included Chromium cannot start, Microsoft Edge and then Google Chrome print it instead."""
+    from ..automation.browser import ensure_browsers_path
+    ensure_browsers_path()
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise QAError("PLAYWRIGHT_MISSING", "Playwright for Python is not installed, so PDFs cannot be printed.",
+                      status=503) from exc
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source = target.with_name(target.name + ".print.html")
+    source.write_text(page_html, encoding="utf-8")
+    problems: list[str] = []
+    try:
+        with sync_playwright() as p:
+            for label, options in PDF_BROWSERS:
+                try:
+                    browser = p.chromium.launch(headless=True, **options)
+                except Exception as exc:
+                    problems.append(f"{label} could not start ({_first_line(exc)})")
+                    continue
+                try:
+                    page = browser.new_page()
+                    page.set_default_timeout(PDF_TIMEOUT_MS)
+                    page.goto(source.resolve().as_uri(), wait_until="load", timeout=PDF_TIMEOUT_MS)
+                    page.pdf(path=str(target), format="A4", print_background=True,
+                             margin={"top": "14mm", "bottom": "14mm", "left": "12mm", "right": "12mm"},
+                             display_header_footer=True, header_template="<span></span>",
+                             footer_template='<div style="font-size:8px;width:100%;text-align:center;color:#667">'
+                                             f'{html.escape(branding.name())} · '
+                                             '<span class="pageNumber"></span> / <span class="totalPages"></span></div>')
+                    return
+                except Exception as exc:
+                    problems.append(f"{label} could not print it ({_first_line(exc)})")
+                finally:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+    finally:
+        source.unlink(missing_ok=True)
+    raise QAError("REPORT_PDF_FAILED", "The PDF could not be printed: " + "; ".join(problems) + ".", status=500)
+
+
+def _first_line(exc: Exception) -> str:
+    text = str(exc).strip().splitlines()
+    return (text[0] if text else type(exc).__name__)[:200]
 
 
 # ---- HTML ------------------------------------------------------------------------------------------
@@ -370,9 +613,9 @@ def pill(status: str | None) -> str:
 
 def render(title: str, data: dict[str, Any]) -> str:
     parts = [f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>{e(title)}</title><style>{CSS}</style></head><body><main>
-<header class="cover"><h1>{e(title)}</h1>
-<div class="muted">AI Agentic Test Agent Enterprise{' · ' + e(data['project']) if data.get('project') else ''} ·
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>{e(title)}</title><style>{CSS}{branding.REPORT_CSS}</style></head><body><main>
+<header class="cover">{branding.report_header_html()}<h1>{e(title)}</h1>
+<div class="muted">{e(branding.name())}{' · ' + e(data['project']) if data.get('project') else ''} ·
 generated {e(_when(data['generated_at']))} · period: last {data['days']} day{'s' if data['days'] != 1 else ''}</div></header>"""]
     if "functional" in data:
         parts.append(_functional_html(data["functional"]))

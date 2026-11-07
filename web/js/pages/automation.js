@@ -6,6 +6,7 @@ import { subscribe } from "../store.js";
 import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
 import { discoveryPanel as discoveryPanelImpl } from "./discovery.js";
 import { confirmDelete } from "../confirm-delete.js";
+import { mountAiReport, openShots } from "../ai-report.js";
 import { hasRule, openRuleBuilder, previewRule, ruleLabel } from "../date-rules.js";
 
 const ACTIONS = ["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover", "wait",
@@ -419,23 +420,68 @@ function readSteps(table, original) {
 function resultsHtml(items) {
   if (!items.length) return '<p class="muted">This script has not run yet.</p>';
   return items.map((r) => `
-    <details class="tc">
+    <details class="tc" data-run-details="${esc(r.run_id)}">
       <summary><span class="pill ${esc(r.status)}">${esc(r.status)}</span> <a href="#/history?run=${esc(r.run_id)}">${esc(r.run_id)}</a>
         <span class="muted">${esc(dateTimeOf(r.started_at))}${r.failed_step !== null && r.failed_step !== undefined ? ` · failed at step ${r.failed_step + 1}` : ""}</span></summary>
       ${r.error ? `<p class="pill FAIL">${esc(r.error)}</p>` : ""}
       ${executionStepsHtml(r)}
+      ${r.status === "RUNNING" ? "" : `<div class="ai-run-report"><h4>AI analysis report</h4><div data-ai-run="${esc(r.run_id)}"></div></div>`}
     </details>`).join("");
 }
 
+// 23.3.31: the AI analysis report of a run is loaded when its row is opened (not for all 20 runs at once)
+export function bindRunReports(container) {
+  container.querySelectorAll("details[data-run-details]").forEach((d) => {
+    const mount = () => {
+      const box = d.querySelector("[data-ai-run]");
+      if (!d.open || !box || box.dataset.mounted) return;
+      box.dataset.mounted = "1";
+      mountAiReport(box, { kind: "run", id: box.dataset.aiRun, analyzeLabel: "Generate AI analysis report",
+        intro: "The On-Premise AI reviews this run: the steps, results, times, errors and self-healing, and the script's earlier results. Read it, edit it or ask again; when you are satisfied, generate the PDF (with every step's screenshot), download it or email it." });
+    };
+    d.addEventListener("toggle", mount);
+    mount();
+  });
+}
+
+// 23.3.31: the screenshot taken after each step, next to the step; a click opens it large with previous / next
+const runShots = new Map();
+const fileName = (p) => p.split(/[\\/]/).pop();
+
+function shotsOf(r) {
+  const steps = r.steps || [];
+  const byStep = steps.filter((s) => s.screenshot).map((s) => ({ path: s.screenshot, url: evidenceUrl(s.screenshot),
+    label: `Step ${s.index + 1}: ${s.description || s.action}`, status: s.status }));
+  const used = new Set(byStep.map((s) => s.path));
+  const others = (r.evidence?.screenshots || []).filter((p) => !used.has(p)).map((p) => ({ path: p, url: evidenceUrl(p),
+    label: /final\.png$/i.test(p) ? "Final page" : fileName(p), status: "" }));
+  return [...byStep, ...others];
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest?.("[data-step-shot]");
+  if (!b) return;
+  e.preventDefault();
+  const shots = runShots.get(b.dataset.stepShot) || [];
+  openShots(shots, Math.max(0, shots.findIndex((s) => s.path === b.dataset.path)));
+});
+
 export function executionStepsHtml(r) {
-  const shots = r.evidence?.screenshots || [];
-  return `<table class="data"><thead><tr><th>#</th><th>Step</th><th>Result</th><th>Time</th></tr></thead><tbody>
+  const shots = shotsOf(r);
+  runShots.set(r.run_id, shots);
+  const used = new Set((r.steps || []).map((s) => s.screenshot).filter(Boolean));
+  const others = (r.evidence?.screenshots || []).filter((p) => !used.has(p));
+  const thumb = (s) => s.screenshot
+    ? `<button type="button" class="shot-thumb" data-step-shot="${esc(r.run_id)}" data-path="${esc(s.screenshot)}" title="Page after step ${s.index + 1}: click to enlarge"><img src="${evidenceUrl(s.screenshot)}" alt="Screenshot after step ${s.index + 1}" loading="lazy"></button>`
+    : '<span class="muted small">—</span>';
+  return `<div style="overflow-x:auto"><table class="data run-steps"><thead><tr><th>#</th><th>Step</th><th>Result</th><th>Time</th><th>Screenshot</th></tr></thead><tbody>
     ${(r.steps || []).map((s) => `<tr><td>${s.index + 1}</td><td>${esc(s.description || s.action)}
       ${s.healed ? `<div class="pill WARN">Self-healed: ${esc(s.healed.original)} → ${esc(s.healed.healed)} (${Number(s.healed.confidence).toFixed(2)})</div>` : ""}
       ${s.error ? `<div class="muted">${esc(s.error)}</div>` : ""}</td>
-      <td><span class="pill ${esc(s.status)}">${esc(s.status)}</span></td><td>${s.duration_ms ?? ""} ms</td></tr>`).join("")}
-    </tbody></table>
-    ${shots.length ? `<div class="shots">${shots.map((p) => `<a href="${evidenceUrl(p)}" target="_blank" rel="noopener"><img src="${evidenceUrl(p)}" alt="${esc(p.split(/[\\/]/).pop())}" loading="lazy"><span>${esc(p.split(/[\\/]/).pop())}</span></a>`).join("")}</div>` : ""}
+      <td><span class="pill ${esc(s.status)}">${esc(s.status)}</span></td><td>${s.duration_ms ?? ""} ms</td><td>${thumb(s)}</td></tr>`).join("")}
+    </tbody></table></div>
+    ${(r.steps || []).length && !used.size ? '<p class="muted small">Step screenshots are taken from 23.3.31 on; this run has only the evidence below.</p>' : ""}
+    ${others.length ? `<div class="shots">${others.map((p) => `<a href="${evidenceUrl(p)}" data-step-shot="${esc(r.run_id)}" data-path="${esc(p)}"><img src="${evidenceUrl(p)}" alt="${esc(fileName(p))}" loading="lazy"><span>${esc(fileName(p))}</span></a>`).join("")}</div>` : ""}
     ${r.evidence?.video ? `<p><a href="${evidenceUrl(r.evidence.video)}" target="_blank" rel="noopener">Video recording</a></p>` : ""}`;
 }
 
@@ -481,7 +527,7 @@ async function renderEditor(view, scriptId) {
         <label>TFS Test Case ID <input name="test_case_id" value="${esc(script.test_case_id || "")}" inputmode="numeric"></label>
         <label>Application <input name="application" value="${esc(script.application || "")}"></label>
         <label>Credential role <input name="credential_role" value="${esc(script.credential_role || "")}" placeholder="e.g. admin"></label>
-        <label>Browser <select name="browser">${["chromium", "msedge", "chrome", "firefox", "webkit"].map((b) => `<option ${b === script.browser ? "selected" : ""}>${b}</option>`).join("")}</select></label>
+        <label>Browser <select name="browser">${["chromium", "msedge", "chrome"].map((b) => `<option ${b === script.browser ? "selected" : ""}>${b}</option>`).join("")}</select></label>
       </form>
       ${script.notes ? `<p class="pill WARN" style="white-space:pre-wrap">${esc(script.notes)}</p>` : ""}
     </div>
@@ -621,6 +667,7 @@ async function renderEditor(view, scriptId) {
           api(`/api/automation/healing?script_id=${sid}`),
         ]);
         view.querySelector("#results").innerHTML = resultsHtml(items);
+        bindRunReports(view.querySelector("#results"));
         view.querySelector("#healing").innerHTML = healingHtml(heal);
         bindHealing();
       }, 400);
@@ -640,6 +687,7 @@ async function renderEditor(view, scriptId) {
     });
   };
   bindHealing();
+  bindRunReports(view.querySelector("#results"));
   view.querySelectorAll("[data-restore]").forEach((b) => b.addEventListener("click", async () => {
     if (!confirm(`Restore version ${b.dataset.restore}? The current version is kept in history.`)) return;
     try { await api(`/api/automation/scripts/${encodeURIComponent(script.id)}/restore/${b.dataset.restore}`, { method: "POST", body: {} }); renderEditor(view, scriptId); }
@@ -741,7 +789,7 @@ async function guidedPanel(view, { appendTo = null } = {}) {
       <label>Credential role <input name="credential_role" list="roles" value="${esc(target?.credential_role || "")}" placeholder="passwords become {{CRED:role.password}}"></label>
       <datalist id="roles">${roles.map((r) => `<option value="${esc(r)}">`).join("")}</datalist>
       <label>Application <input name="application" value="${esc(target?.application || "")}"></label>
-      <label>Browser <select name="browser"><option>chromium</option><option>msedge</option><option>chrome</option><option>firefox</option></select></label>
+      <label>Browser <select name="browser"><option>chromium</option><option>msedge</option><option>chrome</option></select></label>
       ${target ? `<label style="grid-column:1/-1;display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="replay" style="width:auto;margin:0" ${(replayParam || n) && firstAt > 1 ? "checked" : ""}>
         <span>Play the script's steps before this position first (<span id="replayRange"></span>), so the browser is already on the right screen</span></label>` : ""}
       <div class="row" style="align-self:end"><button class="btn primary" type="submit">${target ? "Open browser" : "Start recording"}</button></div>

@@ -36,6 +36,41 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
 ## Performance
 
 * JMeter load, stress, spike and soak tests, results and performance defects are kept.
+* 23.3.22: performance scenarios, target environments with load limits, pre-run checks, a run queue, Stop and
+  Emergency stop, execution state apart from the verdict, run snapshots (config.json), load-generator monitoring
+  and recovery of interrupted runs. See PATCH_23.3.22.md.
+* 23.3.23: performance script editor: JMX import that keeps every element, a tree editor (requests, transactions,
+  extractors, assertions, timers, headers, variables), raw JMX with validation, versions with diff and restore,
+  pre-run checks that read the script. See PATCH_23.3.23.md.
+* 23.3.24: record performance scripts from a browser journey (steps as transactions, other hosts and static files
+  left out), automatic token handling (JSON and Boundary extractors), typed passwords saved as secrets and passed
+  to JMeter only during runs, HAR import. See PATCH_23.3.24.md.
+* 23.3.25: Performance Test Data: data sets with typed columns, CSV import/export that keeps leading zeros and
+  Unicode, secret columns in the Credential Manager, rule and AI row generators, binding of request values (JSON,
+  form, query, header) to columns, pre-run checks for missing columns, wrong types and too few rows. See
+  PATCH_23.3.25.md.
+* 23.3.26: Workload tab: load, stress, spike and soak shapes from plain thread groups (saved script unchanged), a
+  request-rate target that paces a fixed user pool with the Precise Throughput Timer (achieved rate shown next to the
+  target), and a one-user validation run with correlation checks and a per-request result. See PATCH_23.3.26.md.
+* 23.3.27: Live Dashboard for a running test, read only from the results JMeter is writing: users against the
+  planned shape, requests per second against the rate target, per-second 95th percentile, errors, per-request
+  figures, live target indications (not the verdict), generator CPU and memory, Stop and Emergency stop. See
+  PATCH_23.3.27.md.
+* 23.3.28: performance run report PDF after every run (all template sections, test-specific analysis, baseline,
+  findings, limitations, secret scan), run comparison with comparability warnings, consolidated PDF across test
+  types, history by build, scenario, environment and date, defect drafts with reproduction workload, expected vs
+  actual and severity rationale. See PATCH_23.3.28.md.
+* 23.3.29: performance schedules (once, daily, chosen weekdays, every N weeks, every N minutes; Windows time zone by
+  default), pinned or latest versions, overlap skip/queue, missed-run skip/run-once without a backlog, one run per due
+  time (unique job identity), maximum runtime, scheduled PDF and Outlook email, and start at Windows sign-in from the
+  user's Startup folder (no administrator rights). See PATCH_23.3.29.md.
+* 23.3.30: SkyGuard QA name, tagline and logo set in Preferences (header, tab titles, reports, PDFs, emails), voice
+  pages in navy and cyan, Air Force scene at the top of Agent Workflow, report PDFs printed from a file with an Edge or
+  Chrome fallback and Make PDF, Dashboard acceptance criteria counted from the field and from criteria work items.
+  See PATCH_23.3.30.md.
+* 23.3.31: a screenshot after every step shown next to the step in Recent Runs and Execution History; AI analysis
+  reports of a functional run, a performance run and the Dashboard, edited by the tester, printed as a PDF (open,
+  download) and emailed through Outlook with a written subject and body and the PDF attached. See PATCH_23.3.31.md.
 
 ## Quality
 

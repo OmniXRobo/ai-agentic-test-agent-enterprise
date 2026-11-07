@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 import httpx
 
+from .. import branding
 from ..config import Settings
 from ..credentials import TFS_NAMESPACE, SecretStore
 from ..errors import QAError
@@ -44,6 +45,18 @@ LIST_FIELDS = [
     "System.IterationPath", "System.AreaPath", "System.Tags", "System.ChangedDate",
     "Microsoft.VSTS.Common.Priority", "Microsoft.VSTS.Common.Severity",
 ]
+
+# 23.3.32: read for linked work items so Acceptance Criteria items bring their detail, not only their title.
+LINK_DETAIL_FIELDS = ["System.Description", "Microsoft.VSTS.Common.AcceptanceCriteria"]
+
+
+def _link_detail(item: dict[str, Any]) -> dict[str, Any]:
+    """The Description and Acceptance Criteria (HTML) of an Acceptance Criteria work item; nothing for other types."""
+    f = item.get("fields", {})
+    if "acceptance" not in str(f.get("System.WorkItemType") or "").lower():
+        return {}
+    return {"description": f.get("System.Description"), "acceptance_criteria": f.get("Microsoft.VSTS.Common.AcceptanceCriteria")}
+
 
 EDITABLE_FIELDS = {
     "title": "System.Title",
@@ -463,6 +476,40 @@ class TfsService:
 
         return self.cache.get_or_set(("field_values", self.active_mode(), wiql, field_ref), lambda: self._with_client(run))
 
+    def acceptance_criteria_items(self, story_types: list[str], ac_types: list[str]) -> dict[str, Any]:
+        """23.3.30: acceptance criteria written in the user stories' Acceptance Criteria field and kept as their own
+        work items (for example an 'Acceptance Criteria' type linked under the story). Field text is returned per
+        story; each criterion work item comes with the stories it is linked to."""
+        field = "Microsoft.VSTS.Common.AcceptanceCriteria"
+
+        def ids_of(types: list[str]) -> str:
+            return ("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND "
+                    "[System.WorkItemType] IN (" + ", ".join(wiql_quote(t) for t in types) + ")")
+
+        def run(c: AzureDevOpsClient) -> dict[str, Any]:
+            story_ids = c.wiql(ids_of(story_types), top=20000)
+            stories = {w["id"]: (w.get("fields") or {}).get(field)
+                       for w in (c.work_items(story_ids, fields=[field]) if story_ids else [])}
+            for sid in story_ids:
+                stories.setdefault(sid, None)
+            items: list[dict[str, Any]] = []
+            if ac_types:
+                ac_ids = c.wiql(ids_of(ac_types), top=20000)
+                for w in c.work_items(ac_ids, expand_relations=True) if ac_ids else []:
+                    linked = set()
+                    for r in w.get("relations") or []:
+                        url = r.get("url", "")
+                        if "/workItems/" in url or "/workitems/" in url:
+                            try:
+                                linked.add(int(url.rsplit("/", 1)[1]))
+                            except ValueError:
+                                continue
+                    items.append({"id": w["id"], "stories": sorted(linked & set(stories))})
+            return {"stories": stories, "items": items}
+
+        key = ("ac_items", self.active_mode(), tuple(story_types), tuple(ac_types))
+        return self.cache.get_or_set(key, lambda: self._with_client(run))
+
     def detail(self, item_id: int) -> dict[str, Any]:
         def run(c: AzureDevOpsClient) -> dict[str, Any]:
             raw = c.work_item(item_id)
@@ -474,8 +521,10 @@ class TfsService:
                         related_ids[int(url.rsplit("/", 1)[1])] = RELATION_NAMES.get(rel.get("rel"), rel.get("rel"))
                     except ValueError:
                         continue
-            linked = c.work_items(related_ids.keys(), fields=LIST_FIELDS) if related_ids else []
-            links = [{**simplify(w), "relation": related_ids.get(w["id"])} for w in linked]
+            # 23.3.32: the description and acceptance criteria of linked items are read too, so a criterion kept as
+            # its own work item reaches the AI with its detail, not its title alone (Discussion is never read).
+            linked = c.work_items(related_ids.keys(), fields=LIST_FIELDS + LINK_DETAIL_FIELDS) if related_ids else []
+            links = [{**simplify(w), "relation": related_ids.get(w["id"]), **_link_detail(w)} for w in linked]
             attachments = [
                 {"name": (r.get("attributes") or {}).get("name"), "url": r.get("url")}
                 for r in raw.get("relations", []) or [] if r.get("rel") == "AttachedFile"
@@ -729,7 +778,7 @@ class TfsService:
 
             def result_body(r: dict[str, Any]) -> dict[str, Any]:
                 body = {"outcome": outcome_of.get(str(r.get("status") or "").upper(), "Failed"), "state": "Completed",
-                        "comment": f"QA Enterprise AI run {r.get('run_id') or ''} ({r.get('browser') or 'browser'})"}
+                        "comment": f"{branding.name()} run {r.get('run_id') or ''} ({r.get('browser') or 'browser'})"}
                 if r.get("duration_ms") is not None:
                     body["durationInMs"] = int(r["duration_ms"])
                 if r.get("error"):

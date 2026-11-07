@@ -35,6 +35,20 @@ def html_to_text(value: str | None) -> str:
     return "\n".join(line.strip() for line in text.splitlines() if line.strip())
 
 
+def criterion_detail(link: dict[str, Any]) -> str:
+    """23.3.32: the detail of an Acceptance Criteria work item for the AI: its Description and its own Acceptance
+    Criteria field as plain text (the title is the criterion itself; Discussion comments are not read)."""
+    parts = [html_to_text(link.get("description")), html_to_text(link.get("acceptance_criteria"))]
+    title = (link.get("title") or "").strip().lower()
+    return "\n".join(p for p in parts if p and p.strip().lower() != title)
+
+
+def linked_criteria(item: dict[str, Any]) -> list[tuple[str, str]]:
+    """(title, detail) of each Acceptance Criteria work item linked to a story, in link order."""
+    return [(link["title"], criterion_detail(link)) for link in item["traceability"]["acceptance_criteria"]
+            if link.get("title")]
+
+
 def split_criteria(text: str) -> list[str]:
     items = []
     for line in text.splitlines():
@@ -275,8 +289,14 @@ class DesignService:
             act.event(names.REQUIREMENTS_STARTED, f"Requirements Intelligence Agent reading User Story #{sid}")
             item = self.tfs.detail(user_story_id)
             criteria = split_criteria(html_to_text(item.get("acceptance_criteria")))
-            linked = [l["title"] for l in item["traceability"]["acceptance_criteria"]]
-            criteria += [c for c in linked if c not in criteria]
+            details: dict[str, str] = {}
+            for title, detail in linked_criteria(item):
+                if title not in criteria:
+                    criteria.append(title)
+                if detail:
+                    details[title] = detail
+            # 23.3.32: a linked Acceptance Criteria item comes with its description and detail, not its title alone.
+            criteria = [f"{c}\n  Detail: " + details[c].replace("\n", "\n  ") if c in details else c for c in criteria]
             act.complete(f"Acceptance Criteria retrieved: {len(criteria)}", acceptance_criteria=len(criteria))
         return {
             "id": item["id"],

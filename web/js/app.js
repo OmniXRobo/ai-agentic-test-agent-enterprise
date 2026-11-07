@@ -18,8 +18,11 @@ import * as scriptStudio from "./pages/script-studio.js";
 import { aiAutomation, guidedAutomation, hybridAutomation, discovery } from "./pages/automation.js";
 import { scheduledRuns, emailSettings } from "./pages/schedules.js";
 import * as appCredentials from "./pages/app-credentials.js";
-import { perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
+import { perfScenarios, perfPlans, perfLoad, perfStress, perfSpike, perfSoak, perfResults } from "./pages/performance.js";
 import { defectReview, perfDefects } from "./pages/defect-review.js";
+import { perfData } from "./pages/perf-data.js";
+import { perfLive } from "./pages/perf-live.js";
+import { perfSchedules } from "./pages/perf-schedules.js";
 import * as voicePage from "./pages/voice.js";
 import * as reports from "./pages/reports.js";
 import * as analytics from "./pages/analytics.js";
@@ -27,6 +30,7 @@ import * as commandCenter from "./pages/command-center.js";
 import * as setupPage from "./pages/setup.js";
 import { voice, onVoice, loadSettings, agentName } from "./voice.js";
 import { initVoiceAgent } from "./voice-agent.js";
+import { productName, loadBrand, onBrand } from "./brand.js";
 
 // route -> { title, page }
 const NAV = [
@@ -55,11 +59,15 @@ const NAV = [
     ["scheduled-runs", "Scheduled Runs", scheduledRuns],
   ]],
   ["Performance Testing", [
+    ["perf-scenarios", "Performance Scenarios", perfScenarios],
     ["perf-plans", "Performance Test Plans", perfPlans],
+    ["perf-data", "Performance Test Data", perfData],
     ["perf-load", "Load Tests", perfLoad],
     ["perf-stress", "Stress Tests", perfStress],
     ["perf-spike", "Spike Tests", perfSpike],
     ["perf-soak", "Soak Tests", perfSoak],
+    ["perf-live", "Live Dashboard", perfLive],
+    ["perf-schedules", "Performance Schedules", perfSchedules],
     ["perf-results", "Performance Results", perfResults],
     ["perf-defects", "Performance Defects", perfDefects],
   ]],
@@ -106,7 +114,7 @@ async function navigate() {
   current = entry;
   document.querySelectorAll(".nav-link").forEach((a) => a.classList.toggle("active", a.dataset.route === entry.route));
   document.getElementById("pageTitle").textContent = entry.title;
-  document.title = `${entry.title} · QA Enterprise AI`;
+  document.title = `${entry.title} · ${productName()}`;
   document.getElementById("sidebar").classList.remove("open");
   const view = document.getElementById("view");
   view.innerHTML = "";
@@ -143,6 +151,21 @@ async function initTheme() {
       setTheme(settings.ui.theme || "dark", false);
     } catch { /* keep default */ }
   }
+}
+
+// ---- 23.3.32: Exit (only when started from the desktop icon) ----
+async function initExit() {
+  const btn = document.getElementById("exitBtn");
+  let info;
+  try { info = await api("/api/app/status"); } catch { return; }
+  if (!info.desktop) return;
+  btn.hidden = false;
+  btn.addEventListener("click", async () => {
+    const extra = info.active_schedules ? " Scheduled runs will not start until you open it again." : "";
+    if (!window.confirm(`Exit SkyGuard QA? Running tests, load tests, the local AI and the speech server stop.${extra}`)) return;
+    try { await api("/api/app/exit", { method: "POST" }); } catch (err) { toast(err.message, "error"); return; }
+    document.body.innerHTML = '<p style="font:16px system-ui;padding:40px">SkyGuard QA has stopped. You can close this window.</p>';
+  });
 }
 
 // ---- notification bell ----
@@ -247,7 +270,10 @@ function initStrip() {
 
 document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
 renderNav();
+loadBrand();
+onBrand(() => { if (current) document.title = `${current.title} · ${productName()}`; });
 initTheme();
+initExit();
 initBell();
 initConnection();
 initVoiceAgent(document.getElementById("voiceAgent"));

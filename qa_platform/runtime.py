@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from . import branding
 from .agents.orchestration import OrchestrationAgent
 from .ai.gateway import AIGateway
 from .ai.managed import ManagedLLM
@@ -67,10 +68,20 @@ class Runtime:
     setup: FirstRunSetup
     mailer: Any = None  # 23.3.21: Outlook email
     scheduler: Any = None  # 23.3.21: Scheduled Runs
+    perf_scheduler: Any = None  # 23.3.29: performance schedules
+    ai_reports: Any = None  # 23.3.31: AI analysis reports with PDF and email
 
     def close(self) -> None:
         if self.scheduler is not None:
             self.scheduler.close()
+        if self.perf_scheduler is not None:
+            self.perf_scheduler.close()  # logs what closing means for the schedules
+        try:
+            self.studio.runner.close()  # 23.3.32: test runs (pytest and their browsers) this application started
+        except Exception:  # closing goes on whatever one part does
+            pass
+        self.performance.close()  # 23.3.22: a running load test is stopped and recorded as INTERRUPTED
+        self.reports.close()  # 23.3.28: a run report being made is finished before the database closes
         self.llm.close()  # only the llama-server this application started
         self.voice.fw.close()  # only the Faster-Whisper server this application started
         self.db.close()
@@ -86,6 +97,7 @@ def build_runtime(
 ) -> Runtime:
     paths = (paths or Paths()).ensure()
     settings = Settings(paths.settings_file)
+    branding.configure(settings)
     db = Database(paths.db_file)
     bus = EventBus(db)
     state = AgentStateManager()
@@ -109,6 +121,7 @@ def build_runtime(
     design.datasets = TestDataService(design, design.cases)  # suite-aware, versioned test data rows
     automation = AutomationService(paths, settings, bus, db, runs, secrets, tfs, ai)
     performance = PerformanceService(paths, settings, bus, db, runs, ai, automation.discovery)
+    performance.secrets = secrets  # 23.3.24: secrets of recorded scripts
     defects = DefectService(settings, bus, db, tfs, automation, performance)
     voice = VoiceService(settings, bus, db, runs, state, tfs, ai, design, automation, performance, defects,
                          transport=stt_transport)
@@ -143,5 +156,19 @@ def build_runtime(
     rt.scheduler = Scheduler(automation, paths.root / "schedules.json", tfs=tfs, mailer=rt.mailer,
                              reports_dir=paths.reports / "scheduled")
     rt.scheduler.studio = studio
+    # 23.3.31: AI analysis reports (functional run, performance run, dashboard) with a PDF and an Outlook email
+    from .reports.ai_reports import AiReportService
+
+    rt.ai_reports = AiReportService(paths, ai, automation, performance, analytics, rt.mailer, agent=reports.agent)
     rt.scheduler.start()
+    # 23.3.29: performance schedules. Queued scheduled runs left from before a shutdown follow their missed-run
+    # policy before the run queue starts; then the schedules are checked every 15 seconds.
+    from .performance.schedules import PerfScheduler
+
+    rt.perf_scheduler = PerfScheduler(performance, reports=reports, notifications=notifications, mailer=rt.mailer,
+                                      defects=defects)
+    rt.perf_scheduler.recover()
+    # 23.3.22: performance runs left active by an earlier shutdown become INTERRUPTED; the run queue starts
+    performance.start()
+    rt.perf_scheduler.start()
     return rt

@@ -29,8 +29,16 @@ jobs:
         shell: bash
         run: |
           v=5.6.3
-          curl -sSfL -o jmeter.tgz "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-$v.tgz"
-          echo "$(curl -sSfL "https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-$v.tgz.sha512" | cut -d' ' -f1)  jmeter.tgz" | sha512sum -c -
+          # archive.apache.org often resets or times out from the runners: retry, then try the Apache CDN
+          fetch() {
+            for base in https://archive.apache.org/dist https://dlcdn.apache.org; do
+              curl -sSfL --retry 4 --retry-all-errors --retry-delay 5 --connect-timeout 30 -o "$2" "$base/jmeter/binaries/$1" && return 0
+            done
+            return 1
+          }
+          fetch "apache-jmeter-$v.tgz" jmeter.tgz
+          fetch "apache-jmeter-$v.tgz.sha512" jmeter.sha512
+          echo "$(cut -d' ' -f1 jmeter.sha512)  jmeter.tgz" | sha512sum -c -
           dest="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || echo "$RUNNER_TEMP")"  # Git Bash tar reads "D:" as a remote host
           tar -xzf jmeter.tgz -C "$dest"
           echo "JMETER_HOME=$RUNNER_TEMP/apache-jmeter-$v" >> "$GITHUB_ENV"
@@ -47,6 +55,8 @@ jobs:
       - run: python -m pip install pip-audit==2.10.1
       - name: Audit the exact packages bundled in the offline package
         run: pip-audit --strict --no-deps --disable-pip -r packaging/requirements-offline-win.txt
+      - name: Audit the Faster-Whisper packages bundled in the offline package
+        run: pip-audit --strict --no-deps --disable-pip -r packaging/requirements-faster-whisper-win.txt
   offline-package:
     # Builds the portable package exactly as a user would, validates it with the network blocked,
     # installs it per-user (no administrator rights) and validates the installed copy.
@@ -69,15 +79,15 @@ jobs:
         env:
           QA_NO_PAUSE: "1"
         run: |
-          for /d %%P in (dist_offline\AIAgenticTestAgent-Offline-*) do set "PKG=%%P"
-          call "%PKG%\INSTALL_OFFLINE.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
+          for /d %%P in (dist_offline\SGQA) do set "PKG=%%P"
+          call "%PKG%\INSTALL.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
           call "%RUNNER_TEMP%\qa-install\VALIDATE_OFFLINE.cmd" || exit /b 1
           type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"
       - name: Publish the package for download (Actions run page, Artifacts)
         uses: actions/upload-artifact@v4
         with:
-          name: AIAgenticTestAgent-Offline-windows
-          path: dist_offline/AIAgenticTestAgent-Offline-*/
+          name: SGQA-windows
+          path: dist_offline/SGQA/
           retention-days: 14
           compression-level: 6
           # Bundled JMeter and Python packages contain dot-files that MANIFEST.json lists; without them the
@@ -86,11 +96,11 @@ jobs:
       - name: Publish the zip, its checksum and the SBOM (hand these to the security team)
         uses: actions/upload-artifact@v4
         with:
-          name: AIAgenticTestAgent-Offline-windows-zip
+          name: SGQA-windows-zip
           path: |
-            dist_offline/AIAgenticTestAgent-Offline-*.zip
+            dist_offline/SGQA-*.zip
             dist_offline/SHA256SUMS.txt
-            dist_offline/AIAgenticTestAgent-Offline-*/sbom.cdx.json
+            dist_offline/SGQA/sbom.cdx.json
           retention-days: 14
           compression-level: 0
   offline-package-download:
@@ -101,16 +111,16 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: AIAgenticTestAgent-Offline-windows
-          path: downloaded
+          name: SGQA-windows
+          path: downloaded/SGQA
       - name: Validate and install the downloaded package
         shell: cmd
         env:
           QA_NO_PAUSE: "1"
         run: |
-          rem The artifact holds the package folder itself, as a user sees it after Extract All.
-          for /d %%P in ("%CD%\downloaded\AIAgenticTestAgent-Offline-*") do set "PKG=%%~fP"
+          rem The artifact holds the contents of the SGQA folder, as a user sees it after Extract All.
+          for /d %%P in ("%CD%\downloaded\SGQA") do set "PKG=%%~fP"
           if not defined PKG (echo No package folder in the download & dir /b downloaded & exit /b 1)
-          call "%PKG%\VALIDATE_OFFLINE.cmd" || exit /b 1
-          call "%PKG%\INSTALL_OFFLINE.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
+          call "%PKG%\VALIDATE.cmd" || exit /b 1
+          call "%PKG%\INSTALL.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
           type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"

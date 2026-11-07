@@ -16,7 +16,7 @@ function profileForm(mode, p, active, storeOk) {
     <label>${m.urlLabel}<input name="url" value="${esc(p.url)}" placeholder="${m.placeholder}" autocomplete="off"></label>
     <label>Project<input name="project" value="${esc(p.project)}" autocomplete="off"></label>
     <label>API version<input name="api_version" value="${esc(p.api_version || m.api)}"></label>
-    ${mode === "offline" ? `<label><span><input type="checkbox" name="verify_tls" ${p.verify_tls ? "checked" : ""}> Verify the server's TLS certificate</span></label>` : ""}
+    ${mode === "offline" ? `<label><span><input type="checkbox" name="verify_tls" ${p.verify_tls ? "checked" : ""}> Verify the server's TLS certificate</span></label>${p.verify_tls === false ? `<p role="alert" style="color: var(--fail); font-weight: 600">TLS checking is off: anyone on the network path could read or change TFS traffic, including the PAT. Turn it back on unless your TFS server has no valid certificate.</p>` : ""}` : ""}
     <label>Personal Access Token
       <input name="pat" type="password" autocomplete="new-password"
         placeholder="${p.has_pat ? "Saved. Leave blank to keep it." : "Paste a PAT with Work Items and Test Management scopes"}"
