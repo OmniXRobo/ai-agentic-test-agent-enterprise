@@ -8,6 +8,7 @@ import { analyzeRun } from "./defect-review.js";
 import { scriptEditor, importCard } from "./perf-script.js";
 import { recordCard, recorderView } from "./perf-record.js";
 import { validationCard, rateKpi } from "./perf-workload.js";
+import { mountAiReport } from "../ai-report.js";
 import { compareView, reportButtons, bindReportButtons, makePerfReport } from "./perf-compare.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
@@ -306,17 +307,6 @@ function kpi(label, value, note = "") {
   return `<div class="card"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${esc(value)}</div>${note ? `<div class="kpi-note">${esc(note)}</div>` : ""}</div>`;
 }
 
-function analysisHtml(a) {
-  if (!a) return '<p class="muted">Ask the On-Premise AI to review these metrics. It only sees the numbers on this page and says when a cause cannot be determined from them.</p>';
-  const list = (items) => items?.length ? `<ul>${items.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : '<p class="muted">None.</p>';
-  return `<p>${esc(a.summary)}</p>
-    <strong>Observations</strong>${list(a.observations)}
-    ${a.suspected_bottlenecks?.length ? `<strong>Suspected bottlenecks</strong><ul>${a.suspected_bottlenecks.map((b) => `<li><strong>${esc(b.area)}</strong> (${esc(b.confidence)} confidence): ${esc(b.evidence)}</li>`).join("")}</ul>` : ""}
-    <strong>Recommendations</strong>${list(a.recommendations)}
-    ${a.undetermined?.length ? `<strong>Not determinable from these results</strong>${list(a.undetermined)}` : ""}
-    <p class="muted">AI analysis by ${esc(a.model || "the On-Premise AI")} on ${esc(dateTimeOf(a.created_at))}. Treat it as hypotheses to verify.</p>`;
-}
-
 function generatorCard(g) {
   if (!g) return "";
   if (!g.available) return `<div class="card" style="margin-top:12px"><h3>Load generator (this PC)</h3><p class="muted">${esc(g.reason || "Not monitored.")}</p></div>`;
@@ -381,8 +371,7 @@ async function runDetail(view, runId) {
       <details><summary class="muted">Timeline table</summary><table class="data"><thead><tr><th>Time</th><th>Req/s</th><th>Avg</th><th>Errors</th><th>Users</th></tr></thead><tbody>
         ${m.timeline.map((t) => `<tr><td>${fmtDuration(t.t)}</td><td>${t.throughput}</td><td>${ms(t.avg_ms)}</td><td>${t.errors}</td><td>${t.threads}</td></tr>`).join("")}</tbody></table></details>
     </div>
-    <div class="card" style="margin-top:12px"><div class="row"><h3 style="margin:0">AI performance analysis</h3><span class="spacer"></span>
-      <button class="btn" id="analyze">${run.analysis ? "Analyze again" : "Analyze with On-Premise AI"}</button></div><div id="analysis">${analysisHtml(run.analysis)}</div></div>` : ""}`;
+    <div class="card" style="margin-top:12px"><h3 style="margin:0 0 8px">AI performance analysis</h3><div id="analysis"></div></div>` : ""}`;
   bindReportButtons(view, run);
   view.querySelector("#analyzeFailure")?.addEventListener("click", async (e) => {
     e.target.disabled = true;
@@ -408,13 +397,9 @@ async function runDetail(view, runId) {
   lineChart(view.querySelector("#cTput"), m.timeline, { key: "throughput", title: "Throughput (requests per second)", unit: "req/s" });
   lineChart(view.querySelector("#cErr"), m.timeline, { key: "errors", title: "Errors per interval", unit: "errors", color: "var(--fail)", integer: true });
   lineChart(view.querySelector("#cUsers"), m.timeline, { key: "threads", title: "Active users", unit: "users", integer: true });
-  view.querySelector("#analyze").addEventListener("click", async (e) => {
-    e.target.disabled = true;
-    view.querySelector("#analysis").innerHTML = '<p class="muted">The On-Premise AI is reviewing the metrics…</p>';
-    try { const { analysis } = await api(`/api/performance/runs/${encodeURIComponent(run.run_id)}/analysis`, { method: "POST", body: {} }); view.querySelector("#analysis").innerHTML = analysisHtml(analysis); }
-    catch (err) { view.querySelector("#analysis").innerHTML = analysisHtml(run.analysis); toast(err.message, "error"); }
-    finally { e.target.disabled = false; }
-  });
+  // 23.3.31: the analysis with Edit, Generate PDF, Open / Download PDF and Email PDF
+  mountAiReport(view.querySelector("#analysis"), { kind: "perf", id: run.run_id,
+    intro: "Ask the On-Premise AI to review these metrics. It only sees the numbers on this page and says when a cause cannot be determined from them. When you are satisfied, generate the PDF, download it or email it." });
 }
 
 async function runList(view) {

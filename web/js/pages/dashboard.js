@@ -7,6 +7,7 @@ import { state, subscribe, onTick } from "../store.js";
 import { agentState } from "../agent-state.js";
 import { esc } from "../util.js";
 import { donut, dayColumns, hbars, progressRow } from "../dash-charts.js";
+import { mountAiReport } from "../ai-report.js";
 
 let unsub = null;
 let stopTick = null;
@@ -187,7 +188,11 @@ async function render(view) {
 }
 
 export async function mount(view) {
-  view.innerHTML = `<div id="kpiArea" class="dash"><p class="muted">Loading…</p></div>`;
+  // 23.3.31: AI dashboard analysis (kept outside the figures, which reload when work finishes, so edits are not lost)
+  view.innerHTML = `<section class="card ai-dash" style="margin-bottom:18px"><h3 style="margin:0 0 8px">AI dashboard analysis</h3><div id="aiDash"></div></section>
+    <div id="kpiArea" class="dash"><p class="muted">Loading…</p></div>`;
+  mountAiReport(view.querySelector("#aiDash"), { kind: "dashboard", id: "current", analyzeLabel: "Generate AI analysis",
+    intro: "The On-Premise AI reads the figures on this dashboard (TFS counts, acceptance criteria, coverage, test data, pass / fail, defects and performance) and writes what they show, the gaps and risks, and the next steps. Read it, edit it or ask again; when you are satisfied, generate the PDF, download it or email it." });
   await render(view);
   const redrawAgents = () => { const el = view.querySelector("#agentsDonut"); if (el) el.innerHTML = agentsDonut(); };
   // The agent chart follows runtime events; the figures reload only when work finishes (debounced).

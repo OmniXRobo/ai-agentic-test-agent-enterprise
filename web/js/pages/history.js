@@ -2,6 +2,7 @@ import { api } from "../api.js";
 import { esc, dateTimeOf, elapsed, timeOf, toast } from "../util.js";
 import { executionStepsHtml } from "./automation.js";
 import { analyzeRun } from "./defect-review.js";
+import { mountAiReport } from "../ai-report.js";
 
 function runIdFromHash() {
   const q = location.hash.split("?")[1] || "";
@@ -28,10 +29,14 @@ async function renderDetail(view, runId) {
     </div>
     ${execution ? `<div class="card" style="margin-top:14px"><div class="row"><h3 style="margin:0">Steps and evidence</h3><span class="spacer"></span>
       ${execution.status === "FAILED" ? '<button class="btn" id="analyzeFailure">Analyze failure</button>' : ""}
-      <a href="#/guided-automation?script=${esc(execution.script_id)}">Open script</a></div>${executionStepsHtml(execution)}</div>` : ""}
+      <a href="#/guided-automation?script=${esc(execution.script_id)}">Open script</a></div>${executionStepsHtml(execution)}</div>
+    ${execution.status === "RUNNING" ? "" : '<div class="card" style="margin-top:14px"><h3>AI analysis report</h3><div id="aiRunReport"></div></div>'}` : ""}
     <div class="card" style="margin-top:14px"><h3>Event log</h3>
       <div class="feed">${events.map((e) => `<div class="feed-item"><span class="feed-time">${esc(timeOf(e.timestamp))}</span><span>${esc((e.agent_name ? e.agent_name + " · " : "") + (e.activity || e.name))}</span></div>`).join("")}</div>
     </div>`;
+  const aiBox = view.querySelector("#aiRunReport");
+  if (aiBox) mountAiReport(aiBox, { kind: "run", id: runId, analyzeLabel: "Generate AI analysis report",
+    intro: "The On-Premise AI reviews this run's steps, results, times, errors and self-healing. When you are satisfied, generate the PDF, download it or email it." });
   view.querySelector("#analyzeFailure")?.addEventListener("click", async (e) => {
     e.target.disabled = true;
     try { await analyzeRun("functional", runId); } catch (err) { toast(err.message, "error"); e.target.disabled = false; }

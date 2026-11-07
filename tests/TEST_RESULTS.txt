@@ -1,3 +1,15 @@
+23.3.31 (7 Nov 2026): full suite 512 passed, 17 skipped, 0 failed (Linux, Python 3.13, headless Chromium; the 17
+  skipped need JMeter/Java, which this build machine did not have).
+  new: test_ai_reports_23331.py (7 tests): a screenshot after each of the 8 steps of a real Chromium run, kept with
+  its step; the run analysis prompt (steps, result, no password), an edit, the PDF with the edited text and every
+  step's screenshot, the PDF out of date after an edit and made again for the email, the email draft (default
+  recipient, subject, body) and the sent mail with the PDF attached; the dashboard analysis with its figures, PDF and
+  email; the performance analysis shared with the run page, a bottleneck edit, its PDF and email; invalid kinds, ids
+  and runs; no PDF or email before an analysis; email refused when Outlook Email is not set up.
+  UI checked in Chromium (desktop and phone width): Recent Runs on AI-Driven Automation and Guided Browser Automation
+  with step screenshots and the large view, the run report panel (analysis, edit, PDF, email form), Performance
+  Results and the Dashboard. No script errors on the pages.
+
 23.3.30 (6 Nov 2026): full suite 505 passed, 17 skipped, 0 failed (Linux, Python 3.13, headless Chromium; the 17
   skipped need JMeter/Java, which this build machine did not have).
   new: test_branding_23330.py (6 tests): default SkyGuard QA name and tagline; Preferences validation of the name,
