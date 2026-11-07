@@ -11,9 +11,14 @@ from fastapi.testclient import TestClient
 
 from qa_platform.credentials import MemoryBackend
 from qa_platform.main import create_app
-from qa_platform.reports.perf_report import pdf_text
+from qa_platform.reports.perf_report import pdf_text as _pdf_text
 from tests.fake_llm import FakeLLM
 from tests.test_automation import _login_script, needs_browser
+
+
+def pdf_text(path: Path) -> str:
+    """The PDF's text with line breaks as spaces: where a line wraps depends on the fonts installed."""
+    return " ".join(_pdf_text(path).split())
 
 RUN_REPLY = {
     "summary": "The login test passed all 8 steps in Chromium.",
