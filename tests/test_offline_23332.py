@@ -25,7 +25,10 @@ def _bundle(app: Path) -> None:
     (fw / "models" / "small.en" / "model.bin").write_bytes(b"x")
 
 
-def test_bundled_defaults_set_ai_and_faster_whisper(tmp_path):
+def test_bundled_defaults_set_ai_and_faster_whisper(tmp_path, monkeypatch):
+    from qa_platform import launcher
+
+    monkeypatch.setattr(launcher, "installed_browser", lambda name: None)  # Edge is covered by its own test
     app, settings = tmp_path / "app", tmp_path / "data" / "settings.json"
     _bundle(app)
     done = inst.bundled_defaults(app, settings)

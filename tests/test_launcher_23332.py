@@ -55,6 +55,7 @@ def test_environment_port_and_window_command(tmp_path, monkeypatch):
     for k in ("QA_HOME", "PLAYWRIGHT_BROWSERS_PATH", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
         monkeypatch.setenv(k, "")  # registers the original value (or its absence) to restore after the test
         monkeypatch.delenv(k)
+    monkeypatch.setattr(launcher, "installed_browser", lambda name: None)  # as on a PC without Edge or Chrome
     data = launcher.prepare_environment(app)
     assert data == tmp_path / "data"
     import os
