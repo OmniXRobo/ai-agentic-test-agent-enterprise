@@ -1,35 +1,36 @@
-# Installing on a company PC without Internet (23.1.0)
+# Installing SkyGuard QA on a company PC without Internet (23.3.32)
 
 The offline package is built for one path: copy it in, let the security team scan it, install it as a normal user,
 and enter three things on one screen. No administrator rights, no Internet and no configuration commands.
 
 ## 1. Get the package
 
-GitHub → Actions → the latest green CI run on `main` → Artifacts → **AIAgenticTestAgent-Offline-windows-zip**. It holds:
+GitHub → Actions → the latest green CI run on `main` → Artifacts → **SGQA-windows-zip**. It holds:
 
 | File | What it is for |
 |---|---|
-| `AIAgenticTestAgent-Offline-<version>.zip` | The package. This is the file to scan and copy. |
+| `SGQA-<version>.zip` | The all-in-one package (runtimes, AI model and speech model inside). This is the file to scan and copy. |
 | `SHA256SUMS.txt` | SHA-256 of the zip, to check that the copy on the company PC is the file that was scanned. |
-| `AIAgenticTestAgent-Offline-<version>/sbom.cdx.json` | CycloneDX 1.5 SBOM (also inside the zip). |
+| `SGQA/sbom.cdx.json` | CycloneDX 1.5 SBOM (also inside the zip). |
 
 ## 2. What to give the security team
 
 * **The zip and its SBOM.** The SBOM lists Python, the Temurin JRE, JMeter and every JMeter jar (with SHA-256),
-  Chromium (with its real version), llama-server, the speech model and every Python package (as `pkg:pypi` purls).
+  Chromium (with its real version), llama-server, the Microsoft C++ runtime files, the Qwen AI model, the Faster-Whisper
+  and Vosk speech models (with revision and SHA-256) and every Python package (as `pkg:pypi` purls).
 * **Pinned and hash-checked inputs.** Every download in `packaging/offline-lock.json` has a SHA-256 that was checked
   against the publisher's own checksum before it was pinned; the build refuses a file that does not match. Python
   packages are installed with `pip --require-hashes` from `packaging/requirements-offline-win.txt`; pip itself is
   removed from the package afterwards.
 * **Known-vulnerability check.** CI runs `pip-audit --strict` on the exact Python packages in the package and fails
   on any known advisory.
-* **No network at install or run time.** `VALIDATE_OFFLINE.cmd` runs every check with outbound connections blocked.
+* **No network at install or run time.** `VALIDATE.cmd` runs every check with outbound connections blocked.
   The dashboard listens on `127.0.0.1` only. The only outbound connections are the ones you configure: your TFS
   server, the applications you test and, if you choose a cloud AI, its endpoint.
 * **No administrator rights, no services, no registry changes.** Files go to the user's profile (or a folder chosen
   with `--target`). Shortcuts are per user. Secrets (TFS PAT, application passwords) are kept in Windows Credential
   Manager, never in files or logs.
-* **Per-file integrity.** `MANIFEST.json` holds the SHA-256 of every file; the installer and `VALIDATE_OFFLINE.cmd`
+* **Per-file integrity.** `MANIFEST.json` holds the SHA-256 of every file; the installer and `VALIDATE.cmd`
   refuse a damaged or changed copy.
 
 Not covered, and worth asking IT about: the `.cmd` launchers cannot carry an Authenticode signature (Windows only
@@ -40,25 +41,28 @@ signs `.exe`, `.dll`, `.ps1` and similar), and some companies block programs tha
 
 1. Check the copied zip against `SHA256SUMS.txt` (the security team usually does this).
 2. Right-click the zip → Properties → tick **Unblock** → OK. Then Extract All.
-3. Double-click `INSTALL_OFFLINE.cmd` in the extracted folder. Default folder:
+3. Double-click `INSTALL.cmd` in the extracted folder (`SGQA`). Default folder:
    `%LOCALAPPDATA%\Programs\AIAgenticTestAgent`. It validates Java, JMeter, Chromium, llama-server and the Python
-   packages, and rolls back by itself if anything fails.
+   packages, Faster-Whisper and the AI model, and rolls back by itself if anything fails. `SECURITY.txt` and
+   `README.txt` in the package explain what is inside, what is left out and why.
 
 IT can pre-fill the setup screen for everyone (the PAT is never put on a command line):
 
 ```
-INSTALL_OFFLINE.cmd --tfs-url "https://tfs-server/tfs/DefaultCollection" --tfs-project "MyProject" --llm-model "D:\Models\qwen.gguf"
+INSTALL.cmd --tfs-url "https://tfs-server/tfs/DefaultCollection" --tfs-project "MyProject"
 ```
 
 ## 4. First start: First-Run Setup
 
-Start it from the Desktop or Start Menu shortcut. The first start opens **First-Run Setup**:
+Start it from the **SkyGuard QA** shortcut (robot icon) on the Desktop or in the Start Menu. No command window
+opens; the dashboard opens in its own window. Closing the window stops everything it started (unless a schedule is
+active: then it keeps running in the background, and the Exit button at the top right stops it). The first start
+opens **First-Run Setup**:
 
 1. **TFS**: server URL, project, Personal Access Token. A `dev.azure.com` URL uses Azure DevOps Online; any other
    URL uses Local TFS / Azure DevOps Server. The connection is tested when you save.
-2. **LLM model**: the Qwen `.gguf` file. The bundled llama-server is found automatically (another one can be
-   chosen). It starts at once and with every start of the dashboard.
-3. **Voice model** (optional): a Vosk model folder or `.zip`. Leave it blank to use the bundled offline model.
+2. **LLM model**: already set to the bundled `qwen2.5-1.5b-instruct-q4_k_m.gguf` with the bundled llama-server.
+3. **Speech recognition**: already set to the bundled Faster-Whisper (model `small.en`); Vosk is the backup.
 
 "Skip for now" opens the dashboard; the screen stays under Settings → First-Run Setup.
 

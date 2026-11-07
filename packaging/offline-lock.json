@@ -44,5 +44,35 @@
     "publisher": "ggml-org (llama.cpp)",
     "checksum_source": "GitHub release asset digest, re-verified on download",
     "license": "MIT"
-  }
+  },
+  "llm_model": {
+    "name": "Qwen2.5-1.5B-Instruct GGUF (Q4_K_M), the On-Premise AI model",
+    "version": "Q4_K_M",
+    "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+    "files": [
+      "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+    ],
+    "revision": "",
+    "sha256": {},
+    "publisher": "Qwen (Alibaba Cloud) on Hugging Face",
+    "checksum_source": "SHA-256 (Git LFS object id) Hugging Face publishes for each file of the revision",
+    "license": "Apache-2.0"
+  },
+  "fw_model": {
+    "name": "Faster-Whisper small.en (CTranslate2), speech recognition model",
+    "version": "small.en",
+    "repo": "Systran/faster-whisper-small.en",
+    "files": [
+      "model.bin",
+      "config.json",
+      "tokenizer.json",
+      "vocabulary.txt"
+    ],
+    "revision": "",
+    "sha256": {},
+    "publisher": "SYSTRAN on Hugging Face (OpenAI Whisper small.en converted)",
+    "checksum_source": "SHA-256 (Git LFS) or Git blob SHA-1 Hugging Face publishes for each file of the revision",
+    "license": "MIT"
+  },
+  "_comment_models": "Models come from Hugging Face. With an empty revision the build takes the repository's current revision, checks every file against the checksum Hugging Face publishes for it, and prints the revision and SHA-256 to pin here (revision, sha256 {file: hash}); once pinned, a file that differs is refused."
 }

@@ -1,0 +1,59 @@
+SkyGuard QA - security notes for this package
+=============================================
+
+Scope: the application (23.3.32) and everything bundled with it. Hand this file, sbom.cdx.json and SHA256SUMS.txt to
+the security team together with the zip.
+
+Integrity and supply chain
+--------------------------
+* Every download used to build the package is pinned in packaging/offline-lock.json and checked against its SHA-256
+  before use (the publisher's own checksum). The AI model and the speech model are checked against the checksum
+  Hugging Face publishes for the revision used; sbom.cdx.json records the revision and SHA-256 of every model file.
+* Python packages are installed with pip --require-hashes; pip is removed from the package afterwards.
+* Known vulnerabilities: every bundled Python package (application and Faster-Whisper) is checked with pip-audit
+  against the PyPI / OSV advisory database on every build; the build fails on any finding.
+* MANIFEST.json holds the SHA-256 of every file. INSTALL.cmd and VALIDATE.cmd refuse a damaged or changed copy.
+* sbom.cdx.json (CycloneDX 1.5) lists Python, Java, JMeter and every JMeter jar (with SHA-256), Chromium, llama-server,
+  the Microsoft C++ runtime files, both models and every Python package.
+
+Network
+-------
+* No Internet at install or run time. VALIDATE.cmd runs every check with outbound connections blocked.
+* The dashboard listens on 127.0.0.1 only; other PCs cannot reach it.
+* The only outbound connections are the ones a user configures: the company TFS server, the applications under
+  test, the company mail server, and (only if chosen) a Cloud AI endpoint.
+* The local API refuses requests that name another host (DNS rebinding) and refuses changes sent from any other web
+  page than the dashboard (Origin / Sec-Fetch-Site checks), so a web page open in a browser cannot start test runs,
+  load tests or create TFS work items.
+* Faster-Whisper is started with HF_HUB_OFFLINE=1 and loads its model with local_files_only; llama-server listens on
+  127.0.0.1 only and never downloads models.
+
+Code the AI writes
+------------------
+* Generated test scripts are checked before they are saved or run: syntax, imports, page objects and, from 23.3.32, a
+  safety check that refuses scripts that start programs (subprocess, os.system ...), open network connections
+  (socket, urllib, requests, httpx), run built code (eval, exec, compile, __import__) or delete files
+  (os.remove, shutil.rmtree ...).
+
+Secrets
+-------
+* The TFS Personal Access Token, application passwords, the mail password and any Cloud AI key are kept in Windows
+  Credential Manager, never in files, logs or command lines. Reports and PDFs are checked for stored secret values
+  before they are saved.
+* TFS TLS certificate checking is on by default; the settings page shows a red warning while it is turned off.
+
+Rights and footprint
+--------------------
+* No administrator rights, no Windows services, no registry changes. Files go to the user's profile (or the folder
+  given with --target). Shortcuts are per user. Start at Windows sign-in, when turned on, is one file in the user's
+  Startup folder.
+* The desktop start ties every process it starts to itself with a Windows job object, so nothing it started keeps
+  running after it stops.
+
+Known limits
+------------
+* The .cmd files cannot carry an Authenticode signature (Windows signs .exe, .dll, .ps1 and similar only).
+* Some companies block programs that run from %LOCALAPPDATA% (AppLocker / WDAC): install into an approved folder
+  with INSTALL.cmd --target "<folder>".
+* JMeter's jars are listed with SHA-256 in sbom.cdx.json for the company's own scanner; they are not audited by
+  pip-audit.

@@ -10,6 +10,13 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Version 23.3.32: all-in-one offline package
+
+One zip (`SGQA-23.3.32.zip`) holds everything for a PC without Internet: Python, Chromium, Java, JMeter, the Qwen AI
+model with llama-server, Faster-Whisper and Vosk. SkyGuard QA starts from a robot icon with no command window, and
+closing it stops everything it started. Test cases now use each acceptance criterion's description and detail, and a
+security review hardened the local API and AI-written scripts. See [docs/PATCH_23.3.32.md](docs/PATCH_23.3.32.md).
+
 ## Version 23.3.31: AI analysis reports
 
 Recent Runs shows the screenshot taken after every step next to the step. A run, a performance run and the Dashboard
@@ -245,14 +252,15 @@ git-ignored. Secrets are never written to `settings.json` or logs.
 * **Offline portable Windows package.** On a 64-bit Windows PC with Internet and Python 3.10+, double-click
   `BUILD_OFFLINE_PACKAGE.cmd`, or run
   `py -3 packaging\build_offline_package.py [--zip] [--ai-dir <folder with a Qwen GGUF model>]`. It writes
-  `dist_offline\AIAgenticTestAgent-Offline-<version>\` with `INSTALL_OFFLINE.cmd`, `VALIDATE_OFFLINE.cmd`,
-  `README_OFFLINE.txt` and `payload\` (the application, `runtime\python`, `runtime\jre`, `runtime\apache-jmeter-5.6.3`,
+  `dist_offline\SGQA\` (and `SGQA-<version>.zip`) with `INSTALL.cmd`, `VALIDATE.cmd`, `README.txt`, `SECURITY.txt`
+  and `payload\` (the application, `runtime\python`, `runtime\jre`, `runtime\apache-jmeter-5.6.3`,
   `runtime\ms-playwright`, `runtime\ai\llama.cpp` (llama-server), `MANIFEST.json` with the SHA-256 of every file,
   `DEPENDENCIES.md` and `sbom.cdx.json`).
   Python, the Temurin JRE, JMeter, llama-server and the speech model are pinned with checksums in
   `packaging/offline-lock.json` (`packaging/update_pins.py` refreshes the Java and llama-server pins);
-  Python packages come from `packaging/requirements-offline-win.txt` with `--require-hashes`. Models are never
-  downloaded: `--ai-dir` copies the folder you give it.
+  Python packages come from `packaging/requirements-offline-win.txt` with `--require-hashes`. The Qwen AI model and
+  the Faster-Whisper model are downloaded at build time and checked against Hugging Face's checksums (`--no-models`
+  leaves them out).
 * **VALIDATE_OFFLINE.cmd** checks Windows, administrator rights (not needed), every package file against the manifest,
   the bundled Python and packages, Java, JMeter, a headless Chromium launch, Windows Credential Manager, the data
   folder, the dashboard port and the On-Premise AI files, all with outbound network connections blocked. The report is
@@ -263,8 +271,8 @@ git-ignored. Secrets are never written to `settings.json` or logs.
   data folder is shared between versions and never touched; credentials stay in Windows Credential Manager. Logs go to
   `logs\`. `ROLLBACK_OFFLINE.cmd` in the install folder returns to the previous version.
 * CI builds the package on Windows, validates it, installs it to a temporary folder and validates the installed copy.
-  The tested package is attached to each run as the artifact `AIAgenticTestAgent-Offline-windows` (kept 14 days):
-  GitHub → Actions → the latest CI run → Artifacts. `AIAgenticTestAgent-Offline-windows-zip` holds the same package
+  The tested package is attached to each run as the artifact `SGQA-windows` (kept 14 days):
+  GitHub → Actions → the latest CI run → Artifacts. `SGQA-windows-zip` holds the same package
   as one zip with `SHA256SUMS.txt` and `sbom.cdx.json`, for a security scan.
 
 ## TFS test generation and Python test scripts

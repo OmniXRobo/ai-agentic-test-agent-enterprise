@@ -142,6 +142,34 @@ def _write_launchers(target: Path) -> None:
         'endlocal\r\n', encoding="utf-8")
 
 
+def bundled_defaults(app: Path, settings_path: Path) -> list[str]:
+    """23.3.32: point the settings at the AI model and the Faster-Whisper model inside the package, so First-Run
+    Setup only asks for TFS. Settings already chosen (an upgrade, or values pre-filled by IT) are kept."""
+    from ..config import Settings
+
+    settings = Settings(settings_path)
+    done: list[str] = []
+    ai = settings.section("ai")
+    managed = dict(ai.get("managed") or {})
+    models = sorted(p for p in (app / "runtime" / "ai" / "models").glob("*.gguf") if "mmproj" not in p.name.lower())
+    servers = sorted((app / "runtime" / "ai").rglob("llama-server.exe" if WINDOWS else "llama-server"))
+    if models and servers and not (managed.get("model_path") and Path(managed["model_path"]).is_file()):
+        managed.update({"model_path": str(models[0]), "server_path": str(servers[0]), "auto_start": True,
+                        "alias": "qwen", "context_size": max(8192, int(managed.get("context_size") or 8192))})
+        settings.update({"ai": {"mode": "on_premise", "model": "qwen", "managed": managed}})
+        done.append(f"On-Premise AI: {models[0].name}, started with the application by the included llama-server.")
+    fw = app / "runtime" / "faster-whisper"
+    fw_models = sorted(p.parent.name for p in (fw / "models").glob("*/model.bin")) if (fw / "models").is_dir() else []
+    voice = settings.section("voice")
+    if fw_models and (fw / "lib").is_dir() and voice.get("stt_api") != "faster_whisper":
+        port = int(voice.get("fw_port") or 8766)
+        settings.update({"voice": {"stt_engine": "local", "stt_api": "faster_whisper",
+                                   "stt_url": f"http://127.0.0.1:{port}", "fw_model": fw_models[0], "fw_port": port,
+                                   "fw_auto_start": True}})
+        done.append(f"Speech recognition: Faster-Whisper {fw_models[0]} on this PC.")
+    return done
+
+
 def _shortcuts(target: Path, log: Log) -> None:
     """Start Menu and Desktop shortcuts for this user. Best effort: the launchers work without them.
 
@@ -248,6 +276,11 @@ def install(source: Path, target: Path, *, validation: Validation = subprocess_v
                 log(f"Pre-filled First-Run Setup ({', '.join(sorted(applied))}); the TFS PAT is entered there.")
             except Exception as exc:  # the install itself succeeded; the setup screen asks instead
                 log(f"Setup values were not pre-filled ({getattr(exc, 'message', exc)}). Enter them in First-Run Setup.")
+        try:
+            for line in bundled_defaults(target / "app", data / "settings.json"):
+                log(line)
+        except Exception as exc:  # the install succeeded; the setup screen can still choose them
+            log(f"The bundled AI and speech models were not set up ({exc}). Choose them in First-Run Setup.")
         if shortcuts:
             _shortcuts(target, log)
         log(f"Installed. Start it with {target / 'START_QA_PLATFORM.cmd'}")
