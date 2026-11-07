@@ -8,6 +8,10 @@ http://127.0.0.1:<port>. Two checks stop that without a login:
 * Origin: a browser marks every request with the page it comes from (Origin, Sec-Fetch-Site). A request that changes
   something is refused when it comes from any other page than the dashboard. Programs on this PC (the installer,
   PowerShell, tests) send neither header and are not affected.
+
+23.3.34, Network access on: colleagues open the dashboard by this PC's name or address, so the Host check is off;
+every request then needs a signed-in account (see qa_platform.auth), which a rebinding page never has. The Origin
+check stays: a request that changes something must come from the dashboard page itself.
 """
 
 from __future__ import annotations
@@ -37,11 +41,11 @@ def _host_name(value: str) -> str:
     return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
 
 
-def refusal(method: str, headers: Any) -> str | None:
+def refusal(method: str, headers: Any, network: bool = False) -> str | None:
     """Why this request is refused, or None when it may go on."""
     hosts = allowed_hosts()
     host = _host_name(headers.get("host", ""))
-    if host and host not in hosts:
+    if host and host not in hosts and not network:
         return "This address is not this PC. Open the dashboard at http://127.0.0.1."
     if method.upper() in SAFE_METHODS:
         return None
@@ -51,7 +55,7 @@ def refusal(method: str, headers: Any) -> str | None:
     origin = headers.get("origin")
     if origin:
         parts = urlsplit(origin)
-        if origin == "null" or (parts.hostname or "").lower() not in hosts | {"::1"}:
+        if origin == "null" or (not network and (parts.hostname or "").lower() not in hosts | {"::1"}):
             return "Requests from other web pages are not accepted."
         if host and headers.get("host", "").lower() != (parts.netloc or "").lower():
             return "Requests from other web pages are not accepted."
@@ -61,7 +65,7 @@ def refusal(method: str, headers: Any) -> str | None:
 def install(app: Any) -> None:
     @app.middleware("http")
     async def same_origin_only(request, call_next):  # type: ignore[no-untyped-def]
-        reason = refusal(request.method, request.headers)
+        reason = refusal(request.method, request.headers, bool(getattr(request.app.state, "network_active", False)))
         if reason:
             return JSONResponse(error_body("REQUEST_REFUSED", reason, {}), status_code=403)
         return await call_next(request)

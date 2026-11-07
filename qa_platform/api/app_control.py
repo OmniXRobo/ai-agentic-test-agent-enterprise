@@ -27,8 +27,9 @@ def active_schedules(rt: Runtime) -> int:
 @router.get("/status")
 def status(request: Request, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     launcher = getattr(request.app.state, "launcher", None)
-    return {"desktop": launcher is not None, "active_schedules": active_schedules(rt),
-            "closing_window_stops": launcher is not None and active_schedules(rt) == 0}
+    network = bool(getattr(request.app.state, "network_active", False))
+    return {"desktop": launcher is not None, "active_schedules": active_schedules(rt), "network_active": network,
+            "closing_window_stops": launcher is not None and active_schedules(rt) == 0 and not network}
 
 
 @router.post("/window")

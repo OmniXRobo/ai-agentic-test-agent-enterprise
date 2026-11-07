@@ -12,10 +12,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .api import ai_reports, app_control, automation, core, defects, design, guard, knowledge, perf_schedules, performance, reports, schedules, setup, studio, tfs, voice
+from .api import ai_reports, app_control, auth as auth_api, automation, core, defects, design, guard, knowledge, perf_schedules, performance, reports, schedules, setup, studio, tfs, voice
 from .config import WEB_ROOT, Paths
 from .errors import install_error_handlers
 from .logging_setup import configure_logging, get_logger
+from .auth import UserStore
 from .runtime import build_runtime
 
 log = get_logger("main")
@@ -30,6 +31,9 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
         rt = build_runtime(paths, **runtime_options)
         rt.bus.bind_loop(asyncio.get_running_loop())
         app.state.runtime = rt
+        app.state.users = UserStore(rt.db)  # 23.3.34: accounts and sign-ins
+        # 23.3.34: the server listens on the office network only when Network access was on as it started.
+        app.state.network_active = auth_api.network_enabled(rt.settings)
         log.info(f"Enterprise QA Runtime {__version__} started; data at {paths.root}")
         try:
             yield
@@ -55,6 +59,8 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app.include_router(setup.router)
     app.include_router(schedules.router)  # 23.3.21
     app.include_router(app_control.router)  # 23.3.32: app window and Exit
+    app.include_router(auth_api.router)  # 23.3.34: sign-in, Users, Network access
+    auth_api.install(app)  # 23.3.34: every API request needs an account allowed to make it (runs after the guard)
     guard.install(app)  # 23.3.32: only the dashboard itself may use the API
 
     @app.middleware("http")
@@ -87,8 +93,9 @@ def run() -> None:
     paths = Paths().ensure()
     from .config import Settings
 
-    server = Settings(paths.settings_file).section("server")
-    uvicorn.run(create_app(paths), host=server.get("host", "127.0.0.1"), port=int(server.get("port", 8765)),
+    settings = Settings(paths.settings_file)
+    server = settings.section("server")
+    uvicorn.run(create_app(paths), host=auth_api.bind_host(settings.get()), port=int(server.get("port", 8765)),
                 log_level="warning")
 
 

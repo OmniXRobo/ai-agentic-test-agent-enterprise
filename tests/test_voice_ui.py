@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 
 import httpx
+
+from tests.auth_helper import sign_in
 import pytest
 from playwright.sync_api import sync_playwright, expect
 
@@ -112,6 +114,7 @@ def browser(pw):
 class Harness:
     def __init__(self, page, base):
         self.page, self.base = page, base
+        sign_in(page.context, base)  # 23.3.34
         self.queue: list[str] = []
         self.commands: list[str] = []
         self.errors: list[str] = []

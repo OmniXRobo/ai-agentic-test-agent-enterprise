@@ -9,7 +9,8 @@ The Desktop and Start Menu shortcuts run ``runtime\\python\\pythonw.exe -E -s -m
 3. When that window closes, everything this application started is stopped: test runs and their browsers, load
    tests, the local AI, the speech server and the server itself. When a schedule is active the application keeps
    running in the background instead, so the schedule still runs; double-clicking the icon opens the window again,
-   and Exit in the dashboard stops everything.
+   and Exit in the dashboard stops everything. 23.3.34: the same while Network access is on (colleagues use it),
+   and the server then listens on the office network (0.0.0.0) instead of 127.0.0.1 only.
 4. A Windows job object ties every process started from here to this process: whatever happens, nothing it started
    outlives it.
 
@@ -160,6 +161,16 @@ def configured_port(data: Path) -> int:
         return 8765
 
 
+def configured_host(data: Path) -> str:
+    """23.3.34: 0.0.0.0 with Network access on (colleagues open the dashboard by this PC's name), else 127.0.0.1."""
+    from .api.auth import bind_host
+
+    try:
+        return bind_host(json.loads((data / "settings.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return "127.0.0.1"
+
+
 def _local(port: int, path: str, method: str = "GET", timeout: float = 2.0) -> dict[str, Any] | None:
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method, data=b"{}" if method == "POST" else None,
                                  headers={"Content-Type": "application/json"})
@@ -212,11 +223,21 @@ class Launcher:
             self.window = None
         if self.exiting.is_set():
             return
+        if self.network_on():
+            self.log("The window was closed; Network access is on, so SkyGuard QA keeps running for your colleagues.")
+            return
         if self.keep_running():
             self.log("The window was closed; a schedule is active, so SkyGuard QA keeps running in the background.")
             return
         self.log("The window was closed; stopping SkyGuard QA and everything it started.")
         self.exit()
+
+    def network_on(self) -> bool:
+        """23.3.34: with Network access on, colleagues use the server, so closing this window keeps it (Exit stops)."""
+        try:
+            return bool(self.server.config.app.state.network_active)
+        except Exception:
+            return False
 
     def keep_running(self) -> bool:
         from .api.app_control import active_schedules
@@ -248,7 +269,7 @@ class Launcher:
 
         app = create_app(Paths(self.data))
         app.state.launcher = self
-        self.server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=self.port, log_level="warning",
+        self.server = uvicorn.Server(uvicorn.Config(app, host=configured_host(self.data), port=self.port, log_level="warning",
                                                     log_config=None))
         if not self.background:
             def open_when_ready() -> None:

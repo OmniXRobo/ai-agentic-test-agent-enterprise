@@ -16,7 +16,8 @@ def test_dashboard_and_local_programs_are_accepted(client):
     assert client.post("/api/notifications/read").status_code != 403  # PowerShell, installer: no Origin
     same = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
     assert client.post("/api/notifications/read", headers=same).status_code != 403
-    assert client.get("/api/health", headers={"Origin": "http://evil.example"}).status_code == 200  # reads are fine
+    # reads pass the guard (23.3.34: a browser then still has to sign in)
+    assert client.get("/api/health", headers={"Origin": "http://evil.example"}).status_code != 403
 
 
 def test_foreign_host_name_refused_even_for_reads(client):

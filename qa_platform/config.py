@@ -50,6 +50,8 @@ class Paths:
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8765},
+    # 23.3.34: Network access (Settings > Users): colleagues open http://<this PC>:<port>/ and sign in. Off = this PC only.
+    "network": {"enabled": False},
     "ui": {"theme": "dark", "brand_name": "SkyGuard QA", "brand_tagline": "Every release, cleared for takeoff.",
            "logo_path": ""},  # 23.3.30: product name, tagline and logo (Preferences)
     "tfs": {

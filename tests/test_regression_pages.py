@@ -4,6 +4,8 @@ from pathlib import Path
 import httpx, pytest
 from playwright.sync_api import sync_playwright
 
+from tests.auth_helper import sign_in
+
 ROOT = Path(__file__).resolve().parents[1]
 APP = Path(os.environ.get("APP_DIR", ROOT / "app"))
 # The 23.2.2 application to compare with: a base-app folder next to the patch, BASE_APP_DIR, or (in the repository)
@@ -47,7 +49,7 @@ def crawl(base):
     out = {}
     with sync_playwright() as p:
         b = p.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
-        ctx = b.new_context(); ctx.add_init_script(FAKE_MEDIA)
+        ctx = b.new_context(); ctx.add_init_script(FAKE_MEDIA); sign_in(ctx, base)  # 23.3.34
         page = ctx.new_page()
         errs = []
         page.on("pageerror", lambda e: errs.append(str(e)))
