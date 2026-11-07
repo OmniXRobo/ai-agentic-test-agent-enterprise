@@ -17,8 +17,9 @@ from tests.test_automation import _login_script, needs_browser
 
 
 def pdf_text(path: Path) -> str:
-    """The PDF's text with line breaks as spaces: where a line wraps depends on the fonts installed."""
-    return " ".join(_pdf_text(path).split())
+    """The PDF's text with line breaks as spaces and ligatures (fi, fl) as letters: both depend on the fonts installed."""
+    import unicodedata
+    return " ".join(unicodedata.normalize("NFKC", _pdf_text(path)).split())
 
 RUN_REPLY = {
     "summary": "The login test passed all 8 steps in Chromium.",
