@@ -117,23 +117,36 @@ def show_error(title: str, text: str) -> None:
 # ---- the app window ---------------------------------------------------------------------------------------------
 
 
+def installed_browser(name: str) -> Path | None:
+    """Microsoft Edge ("msedge") or Google Chrome ("chrome") installed on this PC, if any."""
+    rel = "Microsoft/Edge/Application/msedge.exe" if name == "msedge" else "Google/Chrome/Application/chrome.exe"
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
+        if base and (Path(base) / rel).is_file():
+            return Path(base) / rel
+    return None
+
+
 def find_window_browser(app_dir: Path = APP_DIR) -> list[str] | None:
-    """The included Chromium, otherwise Microsoft Edge or Google Chrome, as an app window program."""
+    """The program for the dashboard window: Microsoft Edge (every Windows 10/11 PC has it), then Google Chrome, then
+    the included Chromium. 23.3.33: Edge first, because the included Chromium (Chrome for Testing) shows an "only for
+    automated testing" bar above the dashboard."""
+    for name in ("msedge", "chrome"):
+        exe = installed_browser(name)
+        if exe:
+            return [str(exe)]
     roots = [Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])] if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else []
     roots.append(app_dir / "runtime" / "ms-playwright")
     for root in roots:
         for exe in sorted(root.glob("chromium-*/chrome-win*/chrome.exe"), reverse=True):
             return [str(exe)]
-    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
-        for rel in ("Microsoft/Edge/Application/msedge.exe", "Google/Chrome/Application/chrome.exe"):
-            if base and (Path(base) / rel).is_file():
-                return [str(Path(base) / rel)]
     return None
 
 
 def window_command(browser: list[str], url: str, profile: Path) -> list[str]:
     return [*browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-            "--disable-features=Translate,MediaRouter", "--disable-background-networking", "--disable-sync",
+            "--disable-features=Translate,MediaRouter,msEdgeSidebarV2,msUndersideButton", "--disable-background-networking",
+            "--disable-sync", "--no-service-autorun", "--hide-crash-restore-bubble", "--disable-background-mode",
+            "--disable-extensions",
             "--window-size=1440,900"]
 
 

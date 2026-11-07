@@ -48,3 +48,19 @@ export async function api(path, { method = "GET", body, rawBody, contentType, si
   }
   return data;
 }
+
+// 23.3.33: the browser chosen under Settings > Automation runs (Microsoft Edge when the installer found it), used as
+// the starting choice of every Browser field. Loaded once per page load.
+let browserChoice = null;
+export function defaultBrowser() {
+  browserChoice ??= api("/api/settings").then(({ settings }) => settings?.playback?.browser || "chromium")
+    .catch(() => "chromium");
+  return browserChoice;
+}
+
+export async function preselectBrowser(root) {
+  const b = await defaultBrowser();
+  root?.querySelectorAll('select[name="browser"]').forEach((s) => {
+    if (!s.dataset.keep && [...s.options].some((o) => o.value === b)) s.value = b;
+  });
+}

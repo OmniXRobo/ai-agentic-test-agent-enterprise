@@ -225,6 +225,13 @@ def bundled_defaults(app: Path, settings_path: Path) -> list[str]:
                                    "stt_url": f"http://127.0.0.1:{port}", "fw_model": fw_models[0], "fw_port": port,
                                    "fw_auto_start": True}})
         done.append(f"Speech recognition: Faster-Whisper {fw_models[0]} on this PC.")
+    playback = settings.section("playback")
+    if not playback.get("browser"):
+        from ..launcher import installed_browser
+
+        if installed_browser("msedge"):  # 23.3.33: test runs and recordings use Edge unless another is chosen
+            settings.update({"playback": {"browser": "msedge"}})
+            done.append("Test runs and recordings: Microsoft Edge (change it under Settings > Automation runs).")
     return done
 
 

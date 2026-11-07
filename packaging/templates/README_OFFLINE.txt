@@ -41,7 +41,8 @@ Install
 Start
 -----
 Double-click SkyGuard QA (robot icon) on the Desktop or in the Start Menu.
-* No command window opens. The dashboard opens in its own window.
+* No command window opens. The dashboard opens in its own Microsoft Edge window.
+* Test runs and recordings use Microsoft Edge (Settings > Automation runs can switch to the included Chromium).
 * First start: First-Run Setup asks only for the TFS server URL, project and Personal Access Token. The AI model and
   the speech model are already set.
 * Closing the window stops SkyGuard QA and everything it started: test runs, browsers, JMeter, the local AI and the

@@ -10,9 +10,9 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
-## Version 23.3.33: installing over a running older version
+## Version 23.3.33: Microsoft Edge, installing over a running older version
 
-The installer stops programs still running from the version it replaces (an older version's local AI or speech
+The dashboard window and, by default, test runs and recordings use Microsoft Edge. The installer stops programs still running from the version it replaces (an older version's local AI or speech
 server, Python, Java, Chromium) and retries while Windows releases the folder, instead of stopping with "Access is
 denied". See [docs/PATCH_23.3.33.md](docs/PATCH_23.3.33.md).
 
