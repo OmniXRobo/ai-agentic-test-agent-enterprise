@@ -138,15 +138,15 @@ table.data th { font-family: var(--hud-font); letter-spacing: .08em; font-size: 
 :root[data-theme="light"] .card::before, :root[data-theme="light"] .card::after { display: none; }
 :root[data-theme="light"] .btn.primary { background: var(--accent); border-color: var(--accent); }
 
-/* The voice pages keep the green night-vision tactical console (app.css .cockpit): monospace type, green HUD,
-   amber channel tags, red while receiving. Everything placed inside it (agent cards, handoff, status lights,
+/* The voice pages keep the Air Force tactical console (app.css .cockpit): monospace type, radar, callsign, amber
+   channel tags, red while receiving. 23.3.30: in the same navy and cyan as the other pages (it was night-vision green). Everything placed inside it (agent cards, handoff, status lights,
    settings) takes the same palette. */
 .cockpit {
   --ok: var(--hud);
-  --ok-soft: rgba(93, 255, 122, .12);
+  --ok-soft: rgba(56, 214, 255, .12);
   --run: var(--hud);
-  --glow: 0 0 0 1px rgba(93, 255, 122, .35), 0 0 16px rgba(93, 255, 122, .25);
-  --panel-grad: linear-gradient(180deg, rgba(12, 24, 15, .94), rgba(6, 12, 8, .96));
+  --glow: 0 0 0 1px rgba(56, 214, 255, .35), 0 0 16px rgba(56, 214, 255, .25);
+  --panel-grad: linear-gradient(180deg, rgba(14, 30, 54, .94), rgba(6, 14, 28, .96));
   --hud-font: Consolas, "Cascadia Mono", "Lucida Console", "Courier New", monospace;
 }
 .cockpit .agent-card { background: var(--panel-grad); border: 1px solid var(--border); border-radius: 2px; font-family: inherit; color: var(--text); }
@@ -155,7 +155,7 @@ table.data th { font-family: var(--hud-font); letter-spacing: .08em; font-size: 
 .cockpit .agent-card.FAILED { border-color: var(--fail); }
 .cockpit .agent-card.WAITING, .cockpit .agent-card.PAUSED { border-color: var(--amber); }
 .cockpit .agent-facts dt { color: var(--muted); }
-.cockpit .progress { background: rgba(93, 255, 122, .08); }
+.cockpit .progress { background: rgba(56, 214, 255, .08); }
 .cockpit .progress span { background: var(--hud); }
 .cockpit .handoff { font-family: inherit; }
 .cockpit .handoff .hop { background: rgba(0, 0, 0, .4); border-color: var(--border); border-radius: 2px; color: var(--text); }
@@ -163,12 +163,12 @@ table.data th { font-family: var(--hud-font); letter-spacing: .08em; font-size: 
 .cockpit .handoff .hop.done { border-color: var(--hud); color: var(--hud); }
 .cockpit .handoff .hop.bad { border-color: var(--fail); color: #ff8a80; }
 .cockpit .handoff .arrow { color: var(--hud-dim); }
-.cockpit .pill.READY, .cockpit .pill.PASS, .cockpit .pill.COMPLETED { color: var(--hud); background: rgba(93, 255, 122, .1); }
+.cockpit .pill.READY, .cockpit .pill.PASS, .cockpit .pill.COMPLETED { color: var(--hud); background: rgba(56, 214, 255, .1); }
 .cockpit .pill.RUNNING, .cockpit .pill.EXECUTING { color: var(--hud); }
 .cockpit .pill.WAITING, .cockpit .pill.WARN, .cockpit .pill.PAUSED { color: var(--amber); background: rgba(255, 178, 46, .1); }
 .cockpit .pill.FAIL, .cockpit .pill.FAILED { color: #ff8a80; background: rgba(255, 75, 62, .12); }
 .cockpit .lamp.PASS { background: var(--hud); box-shadow: 0 0 8px var(--hud); }
-.cockpit .card { background: rgba(10, 18, 12, .85); border: 1px solid var(--border); border-radius: 2px; box-shadow: none; }
+.cockpit .card { background: rgba(10, 21, 38, .85); border: 1px solid var(--border); border-radius: 2px; box-shadow: none; }
 .cockpit .card::before, .cockpit .card::after { border-color: var(--hud-dim); }
 .cockpit form.settings label, .cockpit form.settings { color: var(--text); }
 .cockpit input[type=range], .cockpit input[type=checkbox] { accent-color: var(--hud); }
@@ -195,7 +195,7 @@ table.data th { font-family: var(--hud-font); letter-spacing: .08em; font-size: 
 .cc .cc-top .ck-panel, .cc .cc-bottom .ck-panel { margin-bottom: 0; }
 .cc .cc-top, .cc .cc-bottom { margin-bottom: 14px; }
 .cc .vlog { min-height: 260px; max-height: 360px; }
-.cc-agent { text-align: center; font-size: 22px; letter-spacing: .3em; color: var(--hud); text-shadow: 0 0 10px rgba(93, 255, 122, .55); margin-top: 6px; }
+.cc-agent { text-align: center; font-size: 22px; letter-spacing: .3em; color: var(--hud); text-shadow: 0 0 10px rgba(56, 214, 255, .55); margin-top: 6px; }
 .cc-lights { display: grid; gap: 6px; margin-top: 12px; }
 .cc-light { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
 .cc-light b { font-weight: 600; color: var(--amber); }
@@ -205,3 +205,8 @@ table.data th { font-family: var(--hud-font); letter-spacing: .08em; font-size: 
 .cc-switch { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .cc-range { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 @media (max-width: 900px) { .cc .cc-top, .cc .cc-bottom { grid-template-columns: 1fr; } }
+
+/* 23.3.30: a logo chosen in Preferences replaces the emblem; it keeps its own colours */
+.brand-logo-img { object-fit: contain; filter: none; border-radius: 4px; }
+.brand-logo[hidden] { display: none !important; }
+.brand-sub[hidden] { display: none; }

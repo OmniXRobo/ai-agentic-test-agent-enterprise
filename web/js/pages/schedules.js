@@ -1,5 +1,6 @@
 // 23.3.21: Automation Studio > Scheduled Runs, and Settings > Outlook Email.
 import { api } from "../api.js";
+import { productName } from "../brand.js";
 import { esc, toast, dateTimeOf, openModal } from "../util.js";
 import { confirmDelete } from "../confirm-delete.js";
 
@@ -233,9 +234,9 @@ async function mountEmail(view) {
     <label data-smtp>Sign-in user (email) <input name="username" value="${esc(e.username || "")}" placeholder="qa.reports@company.com" autocomplete="off"></label>
     <label data-smtp>Password or app password <input name="secret" type="password" autocomplete="new-password" placeholder="${e.has_password ? "saved (leave empty to keep)" : "not saved"}"></label>
     <label data-smtp>From address <input name="sender" value="${esc(e.sender || "")}" placeholder="qa.reports@company.com"></label>
-    <label>From name <input name="sender_name" value="${esc(e.sender_name || "")}"></label>
+    <label>From name <input name="sender_name" value="${esc(e.sender_name || "")}" placeholder="Product name from Preferences"></label>
     <label>Default recipients <input name="default_to" value="${esc(e.default_to || "")}" placeholder="lead@company.com; team@company.com"></label>
-    <p class="muted" data-app style="grid-column:1/-1;margin:0">Outlook (classic desktop) must be installed and signed in for the Windows user that runs QA Enterprise AI. The mail is sent from that mailbox and appears in its Sent Items.</p>
+    <p class="muted" data-app style="grid-column:1/-1;margin:0">Outlook (classic desktop) must be installed and signed in for the Windows user that runs ${esc(productName())}. The mail is sent from that mailbox and appears in its Sent Items.</p>
     <p class="muted" data-smtp style="grid-column:1/-1;margin:0">The password is kept in the Windows Credential Manager, never in the settings file. Microsoft 365 needs SMTP sign-in (SMTP AUTH) allowed for this mailbox; with multi-factor sign-in use an app password.</p>
     <div class="row" style="grid-column:1/-1;gap:8px"><span class="muted">${e.configured ? "Ready to send." : "Not set up yet."}</span><span class="spacer"></span>
       ${e.has_password ? '<button class="btn" type="button" id="clearPw">Remove saved password</button>' : ""}

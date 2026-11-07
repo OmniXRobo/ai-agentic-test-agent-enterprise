@@ -50,7 +50,8 @@ class Paths:
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8765},
-    "ui": {"theme": "dark"},
+    "ui": {"theme": "dark", "brand_name": "SkyGuard QA", "brand_tagline": "Every release, cleared for takeoff.",
+           "logo_path": ""},  # 23.3.30: product name, tagline and logo (Preferences)
     "tfs": {
         # "online" = Azure DevOps Online, "offline" = local TFS / Azure DevOps Server
         "active_mode": "online",

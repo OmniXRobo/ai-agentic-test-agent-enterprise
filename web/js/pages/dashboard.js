@@ -73,7 +73,7 @@ async function render(view) {
   const quality = [
     link("#/user-stories", kpi("User Stories", t.requirement ?? "—", tfsNote)),
     link("#/acceptance-criteria", kpi("Acceptance Criteria", ac.available ? ac.criteria : "—",
-      ac.available ? `on ${ac.stories_with_criteria} of ${ac.stories} user stories` : tfs.connected ? "Not available" : notConnected)),
+      ac.available ? `on ${ac.stories_with_criteria} of ${ac.stories} user stories` : tfs.connected ? (ac.reason || "Not available") : notConnected)),
     link("#/test-cases", kpi("Test Cases", t.testcase ?? "—", tfsNote)),
     link("#/test-data", kpi("Test Data", a.test_data, td.test_cases ? `Rows across ${td.test_cases} test case${td.test_cases === 1 ? "" : "s"}` : "Saved data rows")),
     link("#/ai-automation", kpi("Automated", cov.automated_test_cases, `${cov.scripts} automated test${cov.scripts === 1 ? "" : "s"}`)),

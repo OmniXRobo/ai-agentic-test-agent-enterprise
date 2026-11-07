@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .. import branding
 from ..clock import parse_iso
 from ..logging_setup import redact_text
 from ..performance.jtl import percentile
@@ -380,7 +381,8 @@ def shape_text(shape: dict[str, Any]) -> str:
 
 def cover(title: str, subtitle_rows: list[tuple[str, str]], generated: str) -> str:
     rows = "".join(f"<tr><th>{e(k)}</th><td>{e(v)}</td></tr>" for k, v in subtitle_rows)
-    return (f'<header class="cover"><h1>{e(title)}</h1><div class="muted">QA Enterprise AI · performance report · '
+    return (f'<header class="cover">{branding.report_header_html()}<h1>{e(title)}</h1><div class="muted">'
+            f'{e(branding.name())} · performance report · '
             f'generated {e(generated)} · all times in {e(time_zone())}</div></header>'
             f'<table class="facts">{rows}</table>')
 
@@ -612,7 +614,7 @@ def run_body(ctx: dict[str, Any], *, section: bool = False, generated: str = "")
             ["Planned peak users", wl.get("peak_concurrent_users", "—")],
             ["Planned duration", _dur(wl.get("total_duration_s")) if wl.get("total_duration_s") else "Depends on loop counts"],
             ["Tools", f"JMeter {tools.get('jmeter_version', '—')} · {tools.get('java_version', 'Java —')} · "
-                      f"QA Enterprise AI {cfg.get('application_version', '—')}"]]
+                      f"{branding.name()} {cfg.get('application_version', '—')}"]]
     shape = wl.get("shape") or {}
     if shape:
         rows.insert(4, ["Workload shape", shape_text(shape)])
@@ -820,7 +822,7 @@ ol li, ul li { margin: 3px 0; }
 def page(title: str, body: str) -> str:
     from .service import CSS
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" '
-            f'content="width=device-width, initial-scale=1"><title>{e(title)}</title><style>{CSS}{EXTRA_CSS}</style>'
+            f'content="width=device-width, initial-scale=1"><title>{e(title)}</title><style>{CSS}{EXTRA_CSS}{branding.REPORT_CSS}</style>'
             f'</head><body><main>{body}</main></body></html>')
 
 

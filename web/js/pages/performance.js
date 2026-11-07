@@ -347,7 +347,7 @@ async function runDetail(view, runId) {
       ${run.scenario_id ? `<a class="btn" href="#/perf-scenarios?scenario=${esc(run.scenario_id)}">Open scenario</a>` : ""}
       <a class="btn" href="#/${ROUTE_FOR_KIND[run.kind]}?plan=${esc(run.plan_id)}">Open plan</a></div>
       ${reportButtons(run)}
-      <p class="muted">${esc(run.run_id)} · ${esc(TRIGGERS[run.trigger] || run.trigger || "Manual")} · ${run.state === "QUEUED" ? `queued ${esc(dateTimeOf(run.queued_at))}` : `started ${esc(dateTimeOf(run.started_at))}`}${run.finished_at ? ` · ended ${esc(dateTimeOf(run.finished_at))}` : ""}${m ? ` · ${fmtDuration(Math.round(m.duration_s))} · peak ${m.peak_threads} users` : ""}${run.config?.environment ? ` · environment ${esc(run.config.environment.name)}` : ""}${run.build ? ` · build ${esc(run.build)}` : ""}</p>
+      <p class="muted">${esc(run.run_id)} · ${esc(TRIGGERS[run.trigger] || run.trigger || "Manual")}${run.config?.schedule ? ` (<a href="#/perf-schedules">${esc(run.config.schedule.name)}</a>, ${esc(run.config.schedule.version_policy === "pinned" ? "pinned versions" : "latest versions")})` : ""} · ${run.state === "QUEUED" ? `queued ${esc(dateTimeOf(run.queued_at))}` : `started ${esc(dateTimeOf(run.started_at))}`}${run.finished_at ? ` · ended ${esc(dateTimeOf(run.finished_at))}` : ""}${m ? ` · ${fmtDuration(Math.round(m.duration_s))} · peak ${m.peak_threads} users` : ""}${run.config?.environment ? ` · environment ${esc(run.config.environment.name)}` : ""}${run.build ? ` · build ${esc(run.build)}` : ""}</p>
       ${run.partial ? '<p class="pill WARN">Partial results: the run did not complete, so these numbers cover only part of the planned load and cannot pass or fail it.</p>' : ""}
       ${run.state_reason ? `<p class="muted">${esc(run.state_reason)}</p>` : ""}
       ${run.error ? `<p class="pill FAIL">${esc(run.error)}</p>` : ""}
@@ -577,6 +577,7 @@ async function scenarioEditor(view, id) {
           <button class="btn" type="button" id="validateBtn" ${sc.plan_id && !sc.archived ? "" : "disabled"} title="Every thread group once with one user: checks requests and correlations before a load test">Validate (1 user)</button>
           <input id="runBuild" placeholder="Build under test (optional)" maxlength="120" size="18" title="Recorded on the run for history, comparisons and reports. Empty: the environment's current build.">
           <button class="btn" type="button" id="runBtn" ${sc.plan_id && !sc.archived ? "" : "disabled"}>Run now</button>
+          ${sc.plan_id && !sc.archived ? `<a class="btn" href="#/perf-schedules?scenario=${encodeURIComponent(sc.id)}" title="Run this scenario once, daily, on chosen days or at an interval">Schedule…</a>` : ""}
           <button class="btn" type="button" id="cloneBtn">Clone</button>
           <button class="btn" type="button" id="archiveBtn">${sc.archived ? "Restore" : "Archive"}</button>`}
         <button class="btn primary" type="submit">Save</button></div>

@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .api import automation, core, defects, design, knowledge, performance, reports, schedules, setup, studio, tfs, voice
+from .api import automation, core, defects, design, knowledge, perf_schedules, performance, reports, schedules, setup, studio, tfs, voice
 from .config import WEB_ROOT, Paths
 from .errors import install_error_handlers
 from .logging_setup import configure_logging, get_logger
@@ -46,6 +46,7 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app.include_router(studio.router)
     app.include_router(automation.router)
     app.include_router(knowledge.router)
+    app.include_router(perf_schedules.router)  # 23.3.29: before /api/performance/{...} catch-alls
     app.include_router(performance.router)
     app.include_router(defects.router)
     app.include_router(voice.router)

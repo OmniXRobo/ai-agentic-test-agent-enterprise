@@ -141,3 +141,40 @@ a.pr-row:hover .pr-lab { color: var(--accent); }
   .agent-card.RUNNING, .agent-card.RUNNING .robot-svg, .agent-card.RUNNING .robot-svg *, .agent-card.RUNNING .pill.RUNNING,
   .agent-card.RUNNING .unit-radar, .wf-sweep { animation: none !important; }
 }
+
+/* ---- 23.3.30: Agent Workflow Air Force scene at the top (above the cards, so it is never covered) ---- */
+.wf-hero {
+  position: relative; overflow: hidden; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap; min-height: 150px; margin: -6px 0 12px; padding: 14px 16px 12px; border-radius: 6px;
+  border: 1px solid rgba(34, 199, 240, .35);
+  background: radial-gradient(700px 200px at 85% 50%, rgba(34, 120, 200, .28), transparent 70%),
+    linear-gradient(180deg, #0b1b33, #060f20);
+  box-shadow: inset 0 0 40px rgba(34, 199, 240, .08), 0 0 18px rgba(34, 199, 240, .12);
+}
+.wf-hero-art { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.wf-hero-ring { fill: none; stroke: rgba(56, 214, 255, .32); stroke-width: 1.2; stroke-dasharray: 5 5; }
+.wf-hero .wf-grid { stroke: rgba(34, 199, 240, .1); }
+.wf-hero .wf-hud { stroke: rgba(56, 214, 255, .35); }
+.wf-hero .wf-hudtxt { fill: rgba(56, 214, 255, .6); font-size: 11px; }
+.wf-hero-jet { fill: rgba(200, 236, 255, .9); stroke: #38d6ff; stroke-width: 2; filter: drop-shadow(0 0 4px rgba(56, 214, 255, .8)); }
+.wf-flight { animation: wfFly 16s linear infinite; }
+@keyframes wfFly { from { transform: translate(-200px, 4px); } 50% { transform: translate(560px, -2px); } to { transform: translate(1320px, 4px); } }
+.wf-blip { fill: #ffb02e; animation: wfBlip 2.4s ease-in-out infinite; }
+.wf-blip.b2 { animation-delay: .8s; } .wf-blip.b3 { animation-delay: 1.6s; }
+@keyframes wfBlip { 0%, 100% { opacity: .15; } 40% { opacity: 1; } }
+.wf-hero-sweep {
+  position: absolute; width: 300px; height: 300px; top: calc(50% - 150px); right: calc(12.5% - 150px); border-radius: 50%;
+  pointer-events: none; background: conic-gradient(from 0deg, rgba(56, 214, 255, 0) 0deg, rgba(56, 214, 255, .4) 45deg, rgba(56, 214, 255, 0) 75deg);
+  animation: sweep 4.5s linear infinite;
+}
+.wf-hero-copy { position: relative; z-index: 1; padding-top: 58px; }
+.wf-hero-kicker { font-family: var(--hud-font); font-size: 12px; letter-spacing: .22em; text-transform: uppercase; color: #ffb02e; }
+.wf-hero-title { font-family: var(--hud-font); font-size: 26px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+  color: #e9f6ff; text-shadow: 0 0 14px rgba(56, 214, 255, .55); }
+.wf-hero-sub { font-size: 12px; color: #9fb6d6; letter-spacing: .06em; }
+.wf-hero-strip { position: relative; z-index: 1; }
+.wf-hero .wf-strip { margin: 0; background: rgba(5, 12, 26, .75); backdrop-filter: blur(2px); }
+.wf-hero .wf-count { color: #b8cbe6; }
+.wf-hero .wf-count b { color: #fff; }
+@media (max-width: 760px) { .wf-hero-title { font-size: 20px; } }
+@media (prefers-reduced-motion: reduce) { .wf-flight, .wf-blip, .wf-hero-sweep { animation: none !important; } }

@@ -22,6 +22,7 @@ import { perfScenarios, perfPlans, perfLoad, perfStress, perfSpike, perfSoak, pe
 import { defectReview, perfDefects } from "./pages/defect-review.js";
 import { perfData } from "./pages/perf-data.js";
 import { perfLive } from "./pages/perf-live.js";
+import { perfSchedules } from "./pages/perf-schedules.js";
 import * as voicePage from "./pages/voice.js";
 import * as reports from "./pages/reports.js";
 import * as analytics from "./pages/analytics.js";
@@ -29,6 +30,7 @@ import * as commandCenter from "./pages/command-center.js";
 import * as setupPage from "./pages/setup.js";
 import { voice, onVoice, loadSettings, agentName } from "./voice.js";
 import { initVoiceAgent } from "./voice-agent.js";
+import { productName, loadBrand, onBrand } from "./brand.js";
 
 // route -> { title, page }
 const NAV = [
@@ -65,6 +67,7 @@ const NAV = [
     ["perf-spike", "Spike Tests", perfSpike],
     ["perf-soak", "Soak Tests", perfSoak],
     ["perf-live", "Live Dashboard", perfLive],
+    ["perf-schedules", "Performance Schedules", perfSchedules],
     ["perf-results", "Performance Results", perfResults],
     ["perf-defects", "Performance Defects", perfDefects],
   ]],
@@ -111,7 +114,7 @@ async function navigate() {
   current = entry;
   document.querySelectorAll(".nav-link").forEach((a) => a.classList.toggle("active", a.dataset.route === entry.route));
   document.getElementById("pageTitle").textContent = entry.title;
-  document.title = `${entry.title} · QA Enterprise AI`;
+  document.title = `${entry.title} · ${productName()}`;
   document.getElementById("sidebar").classList.remove("open");
   const view = document.getElementById("view");
   view.innerHTML = "";
@@ -252,6 +255,8 @@ function initStrip() {
 
 document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
 renderNav();
+loadBrand();
+onBrand(() => { if (current) document.title = `${current.title} · ${productName()}`; });
 initTheme();
 initBell();
 initConnection();

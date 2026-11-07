@@ -74,6 +74,12 @@ def report_pdf(report_id: str, download: bool = False, rt: Runtime = Depends(run
                         content_disposition_type="attachment" if download else "inline")
 
 
+@router.post("/api/reports/{report_id}/pdf")
+def remake_report_pdf(report_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.3.30: print the PDF again from the saved report (nothing is collected again)."""
+    return {"ok": True, "report": rt.reports.remake_pdf(report_id)}
+
+
 @router.delete("/api/reports/{report_id}")
 def delete_report(report_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     rt.reports.delete(report_id)

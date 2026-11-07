@@ -478,6 +478,39 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS ix_perf_runs_build ON perf_runs(build);
     CREATE INDEX IF NOT EXISTS ix_perf_runs_started ON perf_runs(started_at);
     """,
+    # 16 (23.3.29): performance schedules. A job is one due time of one schedule; (schedule_id, job_key) is unique,
+    # so a due time can never start two runs (two ticks, a restart, or two copies of the application)
+    """
+    CREATE TABLE IF NOT EXISTS perf_schedules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        scenario_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        spec TEXT NOT NULL,
+        next_run_at TEXT,
+        last_run_id TEXT,
+        last_job_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS perf_schedule_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_id TEXT NOT NULL,
+        job_key TEXT NOT NULL,
+        due_at TEXT,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        run_id TEXT,
+        reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (schedule_id, job_key)
+    );
+    CREATE INDEX IF NOT EXISTS ix_perf_jobs_schedule ON perf_schedule_jobs(schedule_id, created_at);
+    CREATE INDEX IF NOT EXISTS ix_perf_jobs_run ON perf_schedule_jobs(run_id);
+    ALTER TABLE perf_runs ADD COLUMN schedule_id TEXT;
+    CREATE INDEX IF NOT EXISTS ix_perf_runs_schedule ON perf_runs(schedule_id);
+    """,
 ]
 
 

@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from .. import branding
 from ..agents.base import new_run_id
 from ..errors import QAError
 from ..events import names
@@ -550,8 +551,8 @@ class Scheduler:
                 f"<th style='padding:6px 10px'>Result</th><th style='padding:6px 10px'>Time</th>"
                 f"<th style='padding:6px 10px'>Failure</th><th style='padding:6px 10px'>Run</th></tr></thead>"
                 f"<tbody>{rows}</tbody></table>{tfs_line}"
-                f"<p style='color:#6b7280;font-size:12px'>Evidence (screenshots, logs) is in QA Enterprise AI > "
-                f"Execution History. Sent by QA Enterprise AI.</p></div>")
+                f"<p style='color:#6b7280;font-size:12px'>Evidence (screenshots, logs) is in {html.escape(branding.name())} > "
+                f"Execution History. Sent by {html.escape(branding.name())}.</p></div>")
 
     def _email(self, batch: dict[str, Any], email: dict[str, Any]) -> dict[str, Any]:
         body = self.report_html(batch)

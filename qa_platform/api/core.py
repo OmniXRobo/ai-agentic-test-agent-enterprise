@@ -7,10 +7,10 @@ import json
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from .. import __version__
+from .. import __version__, branding
 from ..agents.registry import AGENTS
 from ..clock import now_iso
 from ..errors import QAError
@@ -229,6 +229,7 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
     theme = patch.get("ui", {}).get("theme")
     if theme is not None and theme not in ("light", "dark"):
         raise QAError("SETTINGS_INVALID", "Theme must be 'light' or 'dark'.")
+    branding.validate(patch.get("ui", {}))  # 23.3.30: product name, tagline and logo path
     pb = patch.get("playback", {})
     if "cursor_speed_ms" in pb and not (isinstance(pb["cursor_speed_ms"], (int, float)) and 0 <= pb["cursor_speed_ms"] <= 2000):
         raise QAError("SETTINGS_INVALID", "Cursor movement time must be between 0 and 2000 ms.")
@@ -245,3 +246,21 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
         return {"ok": True, "settings": rt.settings.update(patch)}
     except ValueError as exc:
         raise QAError("SECRET_IN_SETTINGS", str(exc)) from exc
+
+
+# ---- 23.3.30: branding (Preferences > product name, tagline and logo) ------------------------------------------------
+
+@router.get("/branding")
+def get_branding() -> dict[str, Any]:
+    return {"ok": True, **branding.info()}
+
+
+@router.get("/branding/logo")
+def get_branding_logo() -> FileResponse:
+    path = branding.logo_file()
+    if path is None:
+        raise QAError("LOGO_NOT_SET", "No logo is set, or its file is missing.", status=404)
+    # an SVG opened on its own must not run scripts
+    return FileResponse(path, media_type=branding.LOGO_TYPES[path.suffix.lower()],
+                        headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+                                 "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
