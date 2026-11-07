@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from .. import branding
 from ..clock import now, now_iso, parse_iso
+from ..ai.gateway import capped_schema
 from ..errors import QAError
 from ..logging_setup import get_logger
 from .service import CSS, _data_uri, e, kpi, pill, print_pdf
@@ -46,20 +47,43 @@ class AiAnalysis(BaseModel):
     undetermined: list[str] = Field(default=[], description="Questions this data cannot answer")
 
 
+ANSWER_TOKENS = 1400
+ERROR_CHARS = 400
+CAPS = {"observations": 6, "issues": 5, "recommendations": 5, "undetermined": 4}
+LENGTH_RULE = (" Keep it short: one sentence per point, at most 6 observations, 5 issues, 5 recommendations and 4 "
+               "open questions.")
+
+
 RUN_PROMPT = (
     "You are a senior QA test engineer reviewing one automated browser test run (Playwright). Use only the data "
     "provided. Summarise what the test did and its result. Observations must cite step numbers, results and times. "
     "For a failed step, say what failed and quote the error; give a likely cause only when the error or the steps "
     "show it, otherwise put the question under 'undetermined'. Mention self-healed locators and slow steps (much "
     "slower than the others). Use the earlier results of the same script to say whether it is stable or flaky. "
-    "Recommendations must be specific to this script. Never invent steps, pages or numbers.")
+    "Recommendations must be specific to this script. Never invent steps, pages or numbers." + LENGTH_RULE)
 
 DASHBOARD_PROMPT = (
     "You are a QA manager reviewing a QA dashboard. Use only the figures provided; a missing figure means it is not "
     "available, never zero. Summarise the state of quality and test progress. Observations must cite the figures "
     "(counts and percentages). Issues are gaps and risks: user stories without acceptance criteria, test cases not "
     "automated or without data, failing tests, open defects, performance SLA failures. Recommendations must be "
-    "concrete next steps in priority order. Never invent numbers.")
+    "concrete next steps in priority order. Never invent numbers." + LENGTH_RULE)
+
+
+def _short(text: Any, n: int) -> Any:
+    """The first ``n`` characters of a long text (a Playwright error with its call log), on one line."""
+    if not isinstance(text, str):
+        return text
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def _healed(h: Any) -> Any:
+    """Only what the analysis needs of a self-healing record: the locator that failed and the one that worked."""
+    if not isinstance(h, dict):
+        return _short(str(h), 200)
+    keep = {k: _short(h.get(k), 160) for k in ("original", "healed", "confidence") if h.get(k) is not None}
+    return keep or _short(json.dumps(h, ensure_ascii=False, default=str), 200)
 
 
 def _when(ts: str | None) -> str:
@@ -168,15 +192,26 @@ class AiReportService:
     def run_facts(self, run_id: str) -> dict[str, Any]:
         r = self._run(run_id)
         history = self.automation.runner.results(script_id=r["script_id"], limit=11) if r.get("script_id") else []
-        steps = [{"step": s.get("index", i) + 1, "description": s.get("description") or s.get("action"),
-                  "action": s.get("action"), "result": s.get("status"), "time_ms": s.get("duration_ms"),
-                  **({"error": s["error"]} if s.get("error") else {}),
-                  **({"self_healed": s["healed"]} if s.get("healed") else {})} for i, s in enumerate(r["steps"] or [])]
+        # 23.3.34: kept short (a long Playwright error with its call log, or the whole healing record, made the prompt
+        # slow to read for a local model on a PC without a GPU). Passwords are never in a step's description.
+        steps = []
+        for i, s in enumerate(r["steps"] or []):
+            desc = s.get("description") or s.get("action")
+            step = {"step": s.get("index", i) + 1, "description": _short(desc, 160), "result": s.get("status"),
+                    "time_ms": s.get("duration_ms")}
+            if s.get("action") and s.get("action") != desc:
+                step["action"] = s.get("action")
+            if s.get("error"):
+                step["error"] = _short(s["error"], ERROR_CHARS)
+            if s.get("healed"):
+                step["self_healed"] = _healed(s["healed"])
+            steps.append(step)
         return {
             "script": self._script_name(r.get("script_id")) or r.get("script_id"), "run_id": run_id,
             "result": r["status"], "browser": r.get("browser"), "start_url": r.get("base_url"),
             "test_case_id": r.get("test_case_id"), "started": r.get("started_at"), "finished": r.get("finished_at"),
-            "failed_step": r["failed_step"] + 1 if r.get("failed_step") is not None else None, "error": r.get("error"),
+            "failed_step": r["failed_step"] + 1 if r.get("failed_step") is not None else None,
+            "error": _short(r.get("error"), ERROR_CHARS),
             "steps": steps,
             "total_time_ms": sum(int(s.get("duration_ms") or 0) for s in r["steps"] or []),
             "earlier_results_of_this_script": [{"run_id": h["run_id"], "result": h["status"], "started": h["started_at"],
@@ -213,8 +248,13 @@ class AiReportService:
         label = f"Analyzing run {item_id} with the On-Premise AI" if kind == "run" else "Analyzing the dashboard with the On-Premise AI"
 
         def call() -> AiAnalysis:
-            return self.ai.complete_json(prompt, json.dumps(facts, ensure_ascii=False, default=str), AiAnalysis,
-                                         max_tokens=2500)
+            # 23.3.34: the long-answer time limit (generation_timeout_seconds, 10 minutes by default) instead of the
+            # 2-minute one for short requests, and a grammar that keeps the answer short so it also finishes sooner.
+            sent = {k: v for k, v in facts.items() if v not in (None, [], {})} if kind == "run" else facts
+            facts_json = json.dumps(sent,
+                                    ensure_ascii=False, default=str, separators=(",", ":"))
+            return self.ai.complete_json(prompt, facts_json, AiAnalysis, max_tokens=ANSWER_TOKENS,
+                                         timeout=self.ai.long_timeout(), enforce_schema=capped_schema(AiAnalysis, CAPS))
 
         if self.agent is not None:
             with self.agent.activity(label, run_id=item_id if kind == "run" else None) as act:
