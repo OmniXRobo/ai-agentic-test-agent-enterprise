@@ -527,7 +527,7 @@ async function renderEditor(view, scriptId) {
         <label>TFS Test Case ID <input name="test_case_id" value="${esc(script.test_case_id || "")}" inputmode="numeric"></label>
         <label>Application <input name="application" value="${esc(script.application || "")}"></label>
         <label>Credential role <input name="credential_role" value="${esc(script.credential_role || "")}" placeholder="e.g. admin"></label>
-        <label>Browser <select name="browser">${["chromium", "msedge", "chrome"].map((b) => `<option ${b === script.browser ? "selected" : ""}>${b}</option>`).join("")}</select></label>
+        <p class="muted" style="align-self:end">Plays in the browser chosen under <a href="#/settings">Settings &gt; Preferences</a>.</p>
       </form>
       ${script.notes ? `<p class="pill WARN" style="white-space:pre-wrap">${esc(script.notes)}</p>` : ""}
     </div>
@@ -636,7 +636,7 @@ async function renderEditor(view, scriptId) {
   const save = async () => {
     const f = new FormData(view.querySelector("#meta"));
     const body = { ...script, name: f.get("name"), base_url: f.get("base_url") || null, test_case_id: f.get("test_case_id") || null,
-      application: f.get("application") || null, credential_role: f.get("credential_role") || null, browser: f.get("browser"),
+      application: f.get("application") || null, credential_role: f.get("credential_role") || null, browser: script.browser,
       steps: readSteps(table, steps) };
     for (const k of ["id", "version", "created_at", "updated_at"]) delete body[k];
     await api(`/api/automation/scripts/${encodeURIComponent(script.id)}`, { method: "PUT", body });

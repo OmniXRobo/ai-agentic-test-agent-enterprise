@@ -231,7 +231,7 @@ def bundled_defaults(app: Path, settings_path: Path) -> list[str]:
 
         if installed_browser("msedge"):  # 23.3.33: test runs and recordings use Edge unless another is chosen
             settings.update({"playback": {"browser": "msedge"}})
-            done.append("Test runs and recordings: Microsoft Edge (change it under Settings > Automation runs).")
+            done.append("Test runs and recordings: Microsoft Edge (change it under Settings > Preferences).")
     return done
 
 

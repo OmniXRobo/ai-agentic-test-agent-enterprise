@@ -31,7 +31,7 @@ export async function mount(view) {
       <p class="muted">How long the playback cursor takes to glide to each element before it acts. 0 jumps straight there.</p>
       <label><span><input type="checkbox" name="click_sound" ${settings.playback.click_sound !== false ? "checked" : ""}> Quiet click sound during playback</span></label>
       <label>Click volume <input type="range" name="click_volume" min="0" max="1" step="0.05" value="${settings.playback.click_volume ?? 0.35}"></label>
-      <h3>Automation runs</h3>
+      <h3>Browser for tests and automation runs</h3>
       <label>Browser <select name="browser">
           ${[["chromium", "Chromium (included)"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"]]
             .map(([v, l]) => `<option value="${v}" ${(settings.playback.browser || "chromium") === v ? "selected" : ""}>${l}</option>`).join("")}
@@ -40,7 +40,7 @@ export async function mount(view) {
       <label><span><input type="checkbox" name="step_screenshots" ${settings.playback.step_screenshots !== false ? "checked" : ""}> Screenshot after every step (failures are always captured)</span></label>
       <label><span><input type="checkbox" name="video" ${settings.playback.video ? "checked" : ""}> Record a video of each test</span></label>
       <label><span><input type="checkbox" name="trace" ${settings.playback.trace ? "checked" : ""}> Save a Playwright trace of each test</span></label>
-      <p class="muted">Used when generated Python Playwright scripts run. Edge and Chrome must be installed on this PC. The voice agent can change these too ("change the browser to Edge", "set timeout to 30 seconds").</p>
+      <p class="muted">Every test plays and records in this browser: Play, Run selected, generated Python Playwright scripts and new recordings. Schedules can pick their own browsers. Edge and Chrome must be installed on this PC. The voice agent can change these too ("change the browser to Edge", "set timeout to 30 seconds").</p>
       <p class="muted">Times always follow the Windows system clock. There is no separate time zone setting.</p>
       <div class="row"><button class="btn primary" type="submit">Save</button></div>
     </form>`;
