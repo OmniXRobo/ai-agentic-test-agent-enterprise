@@ -69,6 +69,7 @@ class Runtime:
     mailer: Any = None  # 23.3.21: Outlook email
     scheduler: Any = None  # 23.3.21: Scheduled Runs
     perf_scheduler: Any = None  # 23.3.29: performance schedules
+    ai_reports: Any = None  # 23.3.31: AI analysis reports with PDF and email
 
     def close(self) -> None:
         if self.scheduler is not None:
@@ -151,6 +152,10 @@ def build_runtime(
     rt.scheduler = Scheduler(automation, paths.root / "schedules.json", tfs=tfs, mailer=rt.mailer,
                              reports_dir=paths.reports / "scheduled")
     rt.scheduler.studio = studio
+    # 23.3.31: AI analysis reports (functional run, performance run, dashboard) with a PDF and an Outlook email
+    from .reports.ai_reports import AiReportService
+
+    rt.ai_reports = AiReportService(paths, ai, automation, performance, analytics, rt.mailer, agent=reports.agent)
     rt.scheduler.start()
     # 23.3.29: performance schedules. Queued scheduled runs left from before a shutdown follow their missed-run
     # policy before the run queue starts; then the schedules are checked every 15 seconds.

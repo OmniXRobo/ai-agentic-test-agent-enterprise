@@ -68,6 +68,9 @@ Command Center upgrade. Everything else was kept as it was in the `baseline-v22.
   pages in navy and cyan, Air Force scene at the top of Agent Workflow, report PDFs printed from a file with an Edge or
   Chrome fallback and Make PDF, Dashboard acceptance criteria counted from the field and from criteria work items.
   See PATCH_23.3.30.md.
+* 23.3.31: a screenshot after every step shown next to the step in Recent Runs and Execution History; AI analysis
+  reports of a functional run, a performance run and the Dashboard, edited by the tester, printed as a PDF (open,
+  download) and emailed through Outlook with a written subject and body and the PDF attached. See PATCH_23.3.31.md.
 
 ## Quality
 

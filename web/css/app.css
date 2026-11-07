@@ -248,6 +248,18 @@ table.steps td { padding: 4px 6px; }
 .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-top: 10px; }
 .shots a { display: grid; gap: 4px; font-size: 11.5px; color: var(--muted); text-decoration: none; overflow-wrap: anywhere; }
 .shots img { width: 100%; border: 1px solid var(--border); border-radius: 6px; }
+/* 23.3.31: step screenshots next to each step, the large view, and the AI analysis report panel */
+.shot-thumb { display: block; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2, transparent);
+  cursor: zoom-in; width: 112px; line-height: 0; overflow: hidden; }
+.shot-thumb img { width: 112px; height: 63px; object-fit: cover; object-position: top left; display: block; }
+.shot-thumb:hover, .shot-thumb:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.run-steps td { vertical-align: middle; }
+.shot-large { display: block; width: 100%; height: auto; margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.ai-run-report { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.ai-run-report h4 { margin: 0 0 6px; }
+[data-body] textarea { width: 100%; font: inherit; resize: vertical; }
+[data-body] label { display: block; margin-bottom: 10px; }
+@media (max-width: 640px) { .shot-thumb, .shot-thumb img { width: 80px; } .shot-thumb img { height: 45px; } }
 .grid > label, form.grid label, .card > .grid > label { display: grid; gap: 4px; font-size: 13px; }
 .grid label input:not([type=checkbox]):not([type=radio]), .grid label select { width: 100%; min-width: 0; }
 .grid > span > label { display: grid; gap: 4px; font-size: 13px; }

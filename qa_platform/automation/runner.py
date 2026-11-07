@@ -156,6 +156,7 @@ class Runner:
             raise StepFailed(0, "The script has no steps.")
         delay = int(playback.get("visual_delay_ms", 350))
         video = bool(playback.get("video", False))
+        step_shots = bool(playback.get("step_screenshots", True))  # 23.3.31
         pw = start_playwright()
         browser = context = page = None
         try:
@@ -189,6 +190,10 @@ class Runner:
                     page = self._tab(pages, step, page)
                     self._step(page, script, step, index, act, resolver, record, evidence_dir, visual, delay)
                     entry["status"] = "PASSED"
+                    if step_shots:  # 23.3.31: the page after each step, shown next to the step in Recent Runs
+                        shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}")
+                        if shot:
+                            entry["screenshot"] = shot
                 except StepFailed:
                     entry["status"] = "FAILED"
                     raise

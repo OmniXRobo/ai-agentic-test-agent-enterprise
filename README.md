@@ -10,6 +10,12 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Version 23.3.31: AI analysis reports
+
+Recent Runs shows the screenshot taken after every step next to the step. A run, a performance run and the Dashboard
+each get an AI analysis that the tester can edit, then a PDF to open or download and an Outlook email with the
+subject and body written and the PDF attached. See [docs/PATCH_23.3.31.md](docs/PATCH_23.3.31.md).
+
 ## Version 23.3.30: SkyGuard QA
 
 The product is called SkyGuard QA ("Every release, cleared for takeoff."); the name, tagline and a logo file are set
