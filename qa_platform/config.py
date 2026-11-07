@@ -53,7 +53,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # 23.3.34: Network access (Settings > Users): colleagues open http://<this PC>:<port>/ and sign in. Off = this PC only.
     "network": {"enabled": False},
     "ui": {"theme": "dark", "brand_name": "SkyGuard QA", "brand_tagline": "Every release, cleared for takeoff.",
-           "logo_path": ""},  # 23.3.30: product name, tagline and logo (Preferences)
+           "logo_path": "",  # 23.3.30: product name, tagline and logo (Preferences)
+           # 23.3.35: the desktop icon opens the dashboard as a browser tab with an address bar ("browser") or as its
+           # own app window without one ("app"); Microsoft Edge first either way
+           "open_as": "browser"},
     "tfs": {
         # "online" = Azure DevOps Online, "offline" = local TFS / Azure DevOps Server
         "active_mode": "online",

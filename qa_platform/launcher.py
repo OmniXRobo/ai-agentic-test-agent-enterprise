@@ -4,8 +4,9 @@ The Desktop and Start Menu shortcuts run ``runtime\\python\\pythonw.exe -E -s -m
 
 1. The server runs inside this process. pythonw has no console, and every program it starts (pytest, JMeter, Java,
    llama-server, the speech server, PowerShell) is started without a window too.
-2. The dashboard opens in its own app window: the included Chromium in app mode with its own profile, so it never
-   mixes with the user's Chrome or Edge.
+2. The dashboard opens in Microsoft Edge (then Chrome, then the included Chromium) with its own profile, so it never
+   mixes with the user's own Edge or Chrome. 23.3.35: as a normal browser window with an address bar and tabs;
+   Settings > Preferences > "Open SkyGuard QA as" can switch back to an app window without one.
 3. When that window closes, everything this application started is stopped: test runs and their browsers, load
    tests, the local AI, the speech server and the server itself. When a schedule is active the application keeps
    running in the background instead, so the schedule still runs; double-clicking the icon opens the window again,
@@ -143,8 +144,18 @@ def find_window_browser(app_dir: Path = APP_DIR) -> list[str] | None:
     return None
 
 
-def window_command(browser: list[str], url: str, profile: Path) -> list[str]:
-    return [*browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+def open_as(data: Path) -> str:
+    """23.3.35: "browser" (a normal window with an address bar and tabs, the default) or "app" (an app window)."""
+    try:
+        value = json.loads((data / "settings.json").read_text(encoding="utf-8"))["ui"]["open_as"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return "browser"
+    return "app" if value == "app" else "browser"
+
+
+def window_command(browser: list[str], url: str, profile: Path, mode: str = "browser") -> list[str]:
+    page = f"--app={url}" if mode == "app" else url
+    return [*browser, page, f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
             "--disable-features=Translate,MediaRouter,msEdgeSidebarV2,msUndersideButton", "--disable-background-networking",
             "--disable-sync", "--no-service-autorun", "--hide-crash-restore-bubble", "--disable-background-mode",
             "--disable-extensions",
@@ -205,14 +216,14 @@ class Launcher:
                 return False
             profile = self.data / "window-profile"
             profile.mkdir(parents=True, exist_ok=True)
-            self.window = subprocess.Popen(window_command(browser, self.url, profile))
+            self.window = subprocess.Popen(window_command(browser, self.url, profile, open_as(self.data)))
             threading.Thread(target=self._watch, args=(self.window,), name="app-window", daemon=True).start()
             return True
 
     def _reopen(self) -> bool:
         browser = find_window_browser()
-        if browser:  # the running Chromium opens one more app window and this command ends at once
-            subprocess.Popen(window_command(browser, self.url, self.data / "window-profile"))
+        if browser:  # the running browser opens one more tab (or app window) and this command ends at once
+            subprocess.Popen(window_command(browser, self.url, self.data / "window-profile", open_as(self.data)))
         return True
 
     def _watch(self, proc: subprocess.Popen[bytes]) -> None:

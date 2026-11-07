@@ -62,8 +62,13 @@
 
 .topbar { background: var(--panel-grad); flex-wrap: wrap; row-gap: 8px; }
 :root[data-theme="dark"] .topbar { border-bottom-color: rgba(34, 199, 240, .22); backdrop-filter: blur(6px); }
-.topbar h1 { font-family: var(--hud-font); text-transform: uppercase; letter-spacing: .1em; font-size: 16px; flex: 0 1 auto; min-width: 0; }
-.sys-strip { display: flex; gap: 6px; flex: 1; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+/* 23.3.35: the same top bar on every page. Row 1: page name (cut with "…" when long), clock and buttons. Row 2: the
+   status chips, starting at the left. Before, the chips shared row 1 with the page name and wrapped into one, two or
+   three rows depending on how long the page name was. */
+.topbar h1 { font-family: var(--hud-font); text-transform: uppercase; letter-spacing: .1em; font-size: 16px;
+  flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar-actions { flex: none; }
+.sys-strip { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-start; min-width: 0; order: 3; flex-basis: 100%; }
 .sys-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 4px; border: 1px solid var(--border);
   background: var(--surface-2); font-family: var(--hud-font); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
@@ -175,7 +180,6 @@ table.data th { font-family: var(--hud-font); letter-spacing: .08em; font-size: 
 .cockpit code { color: var(--amber); }
 .cockpit a:not(.btn) { color: var(--hud); }
 
-@media (max-width: 1100px) { .sys-strip { justify-content: flex-start; order: 3; flex-basis: 100%; } }
 @media (prefers-reduced-motion: reduce) {
   .lamp.RUNNING, .lamp.live, .agent-card.RUNNING { animation: none !important; }
 }

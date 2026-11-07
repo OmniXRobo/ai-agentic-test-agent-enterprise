@@ -126,7 +126,9 @@ async function navigate() {
   if (current?.page.unmount) current.page.unmount();
   current = entry;
   document.querySelectorAll(".nav-link").forEach((a) => a.classList.toggle("active", a.dataset.route === entry.route));
-  document.getElementById("pageTitle").textContent = entry.title;
+  const titleEl = document.getElementById("pageTitle");
+  titleEl.textContent = entry.title;
+  titleEl.title = entry.title;  // 23.3.35: a long page name is cut with "…" in the top bar; the full name shows on hover
   document.title = `${entry.title} · ${productName()}`;
   document.getElementById("sidebar").classList.remove("open");
   const view = document.getElementById("view");

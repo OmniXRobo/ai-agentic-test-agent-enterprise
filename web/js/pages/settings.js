@@ -13,6 +13,13 @@ export async function mount(view) {
       <label>Logo file path <input name="logo_path" maxlength="500" placeholder="C:\\Logos\\company-logo.png" value="${esc(settings.ui.logo_path || "")}" style="width:100%"></label>
       <p class="muted" id="logoNote">Shown at the top left, in the browser tab titles and on every report and PDF. The logo is a PNG, JPG, GIF, WEBP or SVG file on this PC, up to 2 MB; a square image looks best. Leave the path empty to use the built-in emblem.</p>
       <h3>Display</h3>
+      <label>Open SkyGuard QA as
+        <select name="open_as">
+          <option value="browser" ${settings.ui.open_as !== "app" ? "selected" : ""}>A browser tab, with address bar (Microsoft Edge)</option>
+          <option value="app" ${settings.ui.open_as === "app" ? "selected" : ""}>Its own app window, without address bar</option>
+        </select>
+      </label>
+      <p class="muted">Used by the desktop icon the next time SkyGuard QA opens. Closing that browser window stops SkyGuard QA, the same as before.</p>
       <label>Theme
         <select name="theme">
           <option value="dark" ${settings.ui.theme === "dark" ? "selected" : ""}>Dark</option>
@@ -52,7 +59,7 @@ export async function mount(view) {
       await api("/api/settings", {
         method: "PATCH",
         body: {
-          ui: { theme, brand_name: String(f.get("brand_name") || "").trim(), brand_tagline: String(f.get("brand_tagline") || "").trim(),
+          ui: { theme, open_as: f.get("open_as") || "browser", brand_name: String(f.get("brand_name") || "").trim(), brand_tagline: String(f.get("brand_tagline") || "").trim(),
                 logo_path: String(f.get("logo_path") || "").trim() },
           defects: { creation_mode: f.get("creation_mode") },
           playback: {

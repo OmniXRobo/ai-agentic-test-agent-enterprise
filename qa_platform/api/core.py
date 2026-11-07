@@ -229,6 +229,9 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
     theme = patch.get("ui", {}).get("theme")
     if theme is not None and theme not in ("light", "dark"):
         raise QAError("SETTINGS_INVALID", "Theme must be 'light' or 'dark'.")
+    open_as = patch.get("ui", {}).get("open_as")
+    if open_as is not None and open_as not in ("browser", "app"):
+        raise QAError("SETTINGS_INVALID", "Open as must be 'browser' or 'app'.")
     branding.validate(patch.get("ui", {}))  # 23.3.30: product name, tagline and logo path
     pb = patch.get("playback", {})
     if "cursor_speed_ms" in pb and not (isinstance(pb["cursor_speed_ms"], (int, float)) and 0 <= pb["cursor_speed_ms"] <= 2000):
