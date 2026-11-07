@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .api import ai_reports, automation, core, defects, design, knowledge, perf_schedules, performance, reports, schedules, setup, studio, tfs, voice
+from .api import ai_reports, automation, core, defects, design, guard, knowledge, perf_schedules, performance, reports, schedules, setup, studio, tfs, voice
 from .config import WEB_ROOT, Paths
 from .errors import install_error_handlers
 from .logging_setup import configure_logging, get_logger
@@ -54,6 +54,8 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app.include_router(ai_reports.router)  # 23.3.31
     app.include_router(setup.router)
     app.include_router(schedules.router)  # 23.3.21
+    guard.install(app)  # 23.3.32: only the dashboard itself may use the API
+
     @app.middleware("http")
     async def revalidate_pages(request, call_next):  # type: ignore[no-untyped-def]
         # Browsers keep ES modules they loaded before; make them ask again (unchanged files answer 304).

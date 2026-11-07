@@ -163,7 +163,7 @@ class ManagedLLM:
 
     def _answering(self, cfg: dict[str, Any], timeout: float = 1.5) -> bool:
         try:
-            r = httpx.get(self._url(cfg) + "/models", timeout=timeout)
+            r = httpx.get(self._url(cfg) + "/models", timeout=timeout, trust_env=False)
             return r.status_code == 200
         except httpx.HTTPError:
             return False

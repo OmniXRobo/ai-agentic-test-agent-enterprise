@@ -190,6 +190,45 @@ def _playwright_members() -> tuple[set[str], set[str]] | None:
     return set(dir(Page)) | set(dir(Locator)), set(dir(LocatorAssertions)) | set(dir(PageAssertions))
 
 
+BLOCKED_MODULES = {"subprocess", "socket", "ctypes", "winreg", "_winapi", "multiprocessing", "pty", "telnetlib",
+                   "ftplib", "smtplib", "http.client", "urllib.request", "requests", "httpx", "pickle", "marshal"}
+BLOCKED_BUILTINS = {"eval", "exec", "compile", "__import__"}
+BLOCKED_ATTRS = {
+    "os": {"system", "popen", "startfile", "remove", "unlink", "rmdir", "removedirs", "kill", "killpg", "fork",
+           "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle",
+           "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "posix_spawn", "posix_spawnp"},
+    "shutil": {"rmtree", "move", "chown"},
+}
+
+
+def unsafe_calls(rel: str, tree: ast.Module) -> list[str]:
+    """Calls a generated test, page object or flow may not make (23.3.32)."""
+    out: list[str] = []
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name in BLOCKED_MODULES or a.name.split(".")[0] in {m for m in BLOCKED_MODULES if "." not in m}:
+                    out.append(f"{rel} line {node.lineno}: importing '{a.name}' is not allowed in a test")
+                aliases[a.asname or a.name.split(".")[0]] = a.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            top = node.module.split(".")[0]
+            if node.module in BLOCKED_MODULES or top in {m for m in BLOCKED_MODULES if "." not in m}:
+                out.append(f"{rel} line {node.lineno}: importing from '{node.module}' is not allowed in a test")
+            for a in node.names:
+                if a.name in BLOCKED_ATTRS.get(top, set()):
+                    out.append(f"{rel} line {node.lineno}: '{top}.{a.name}' is not allowed in a test")
+        elif isinstance(node, ast.Call):
+            f = node.func
+            if isinstance(f, ast.Name) and f.id in BLOCKED_BUILTINS:
+                out.append(f"{rel} line {node.lineno}: '{f.id}()' is not allowed in a test")
+            elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+                module = aliases.get(f.value.id, f.value.id)
+                if f.attr in BLOCKED_ATTRS.get(module, set()):
+                    out.append(f"{rel} line {node.lineno}: '{module}.{f.attr}()' is not allowed in a test")
+    return out
+
+
 def validate(root: Path, files: list[str], *, test_rel: str | None = None, collect: bool = True,
              collect_tests: list[str] | None = None) -> Report:
     """Validate ``files`` (workspace-relative) inside ``root`` (a staging copy or the workspace)."""
@@ -217,6 +256,14 @@ def validate(root: Path, files: list[str], *, test_rel: str | None = None, colle
             json.loads((root / rel).read_text(encoding="utf-8"))
         except (ValueError, OSError) as exc:
             report.add("Test data file", False, f"{rel}: {exc}", error_code="TEST_DATA_INVALID")
+    if problems:
+        return report
+
+    # 1b. 23.3.32: script safety. AI-written code runs with this user's rights, so it may drive the browser and read
+    # its own data, but not start programs, open network connections, run built code or delete files.
+    problems = [p for rel, tree in trees.items() for p in unsafe_calls(rel, tree)]
+    report.add("Script safety", not problems, "; ".join(problems) or "No blocked calls.",
+               error_code="SCRIPT_UNSAFE")
     if problems:
         return report
 

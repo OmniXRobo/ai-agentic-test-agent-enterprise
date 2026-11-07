@@ -215,7 +215,13 @@ export function barChart(host, rows, { title, label, series, unit = "" }) {
   if (series.length > 1) {
     const legend = document.createElement("div");
     legend.className = "legend";
-    legend.innerHTML = series.map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`).join("");
+    // 23.3.32: labels are names from results (transactions, scripts); build them as text, never as HTML.
+  legend.replaceChildren(...series.map((s) => {
+    const span = document.createElement("span"), dot = document.createElement("i");
+    dot.style.background = s.color;
+    span.append(dot, String(s.label ?? ""));
+    return span;
+  }));
     host.append(legend);
   }
 }

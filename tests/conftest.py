@@ -5,6 +5,8 @@ from pathlib import Path
 
 # Patch tests look for the application in APP_DIR (in a patch zip it is the app/ folder; in this repository it is the root).
 os.environ.setdefault("APP_DIR", str(Path(__file__).resolve().parents[1]))
+# 23.3.32: the API accepts only this PC's own names; the test client calls itself "testserver".
+os.environ.setdefault("QA_EXTRA_HOSTS", "testserver")
 import pytest
 from fastapi.testclient import TestClient
 
