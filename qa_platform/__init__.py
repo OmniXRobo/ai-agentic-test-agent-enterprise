@@ -1,3 +1,3 @@
 """AI Agentic Test Agent Enterprise - QA orchestration platform."""
 
-__version__ = "23.3.32"
+__version__ = "23.3.33"
