@@ -394,10 +394,11 @@ ul { margin: 4px 0 10px; padding-left: 20px; } li { margin: 2px 0; }
                         f"<td>{e(c.get('actual'))} {e(c.get('unit'))}</td><td>{pill(c.get('status'))}</td></tr>" for c in sla)
                     + "</tbody></table>") if sla else ""
         body = (self._cover(title, "performance test run")
-                + (f"<div class='kpis'>{kpi('Samples', f'{o.get('samples', 0):,}', f'{o.get('errors', 0):,} errors')}"
-                   f"{kpi('Error rate', f'{o.get('error_pct')}%')}{kpi('Average', _ms(o.get('avg_ms')))}"
-                   f"{kpi('95th percentile', _ms(o.get('p95_ms')))}"
-                   f"{kpi('Throughput', f'{float(o.get('throughput') or 0):.1f} req/s')}</div>" if o else "")
+                + ("<div class='kpis'>"
+                   + kpi("Samples", f"{o.get('samples', 0):,}", f"{o.get('errors', 0):,} errors")
+                   + kpi("Error rate", f"{o.get('error_pct')}%") + kpi("Average", _ms(o.get("avg_ms")))
+                   + kpi("95th percentile", _ms(o.get("p95_ms")))
+                   + kpi("Throughput", f"{float(o.get('throughput') or 0):.1f} req/s") + "</div>" if o else "")
                 + "<table>" + "".join(f"<tr><th style='width:160px'>{e(k)}</th><td>{e(v)}</td></tr>" for k, v in meta) + "</table>"
                 + self.analysis_html(a, "AI performance analysis")
                 + ("<h2>Requests</h2><table><thead><tr><th>Request</th><th class='num'>Samples</th><th class='num'>Errors</th>"
