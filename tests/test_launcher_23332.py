@@ -55,6 +55,7 @@ def test_environment_port_and_window_command(tmp_path, monkeypatch):
     for k in ("QA_HOME", "PLAYWRIGHT_BROWSERS_PATH", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
         monkeypatch.setenv(k, "")  # registers the original value (or its absence) to restore after the test
         monkeypatch.delenv(k)
+    monkeypatch.setattr(launcher, "installed_browser", lambda name: None)  # as on a PC without Edge or Chrome
     data = launcher.prepare_environment(app)
     assert data == tmp_path / "data"
     import os
@@ -83,3 +84,23 @@ def test_sign_in_start_uses_the_hidden_launcher_when_pythonw_is_there(tmp_path):
     (app / "runtime" / "python" / "pythonw.exe").write_bytes(b"")
     text = startup._content(app)
     assert "qa_platform.launcher --background" in text and "QA_NO_BROWSER=1" in text
+
+
+def test_window_prefers_microsoft_edge(tmp_path, monkeypatch):
+    """23.3.33: the included Chromium (Chrome for Testing) shows an "only for automated testing" bar, so the
+    dashboard window opens in Edge when it is installed."""
+    app = tmp_path / "app"
+    bundled = app / "runtime" / "ms-playwright" / "chromium-1200" / "chrome-win64" / "chrome.exe"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_bytes(b"")
+    pf = tmp_path / "pf86"
+    for k in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA", "PLAYWRIGHT_BROWSERS_PATH"):
+        monkeypatch.delenv(k, raising=False)
+    assert launcher.find_window_browser(app) == [str(bundled)]
+    edge = pf / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+    edge.parent.mkdir(parents=True)
+    edge.write_bytes(b"")
+    monkeypatch.setenv("ProgramFiles(x86)", str(pf))
+    assert launcher.find_window_browser(app) == [str(edge)]
+    cmd = launcher.window_command([str(edge)], "http://127.0.0.1:8765/", tmp_path / "profile")
+    assert "--disable-background-mode" in cmd  # closing the window ends the browser, so SkyGuard QA stops too

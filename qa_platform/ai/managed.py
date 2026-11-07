@@ -66,6 +66,7 @@ class ManagedLLM:
         self._died = False
         self.pid_file = paths.root / "managed-llm.json"
         self.log_file = paths.logs / "llama-server.log"
+        self.on_state: list[Any] = []  # 23.3.33: called with the new state when loading finishes (RUNNING or FAILED)
 
     # ---- settings and discovery --------------------------------------------------------------
 
@@ -271,12 +272,21 @@ class ManagedLLM:
             if self._answering(cfg, 2):
                 with self._lock:
                     self._state = "RUNNING"
+                self._notify("RUNNING")
                 return
             time.sleep(1)
         with self._lock:
             self._state = "FAILED"
             self._last_error = f"The model did not finish loading within {cfg['startup_timeout_s']} seconds."
         self.stop()
+        self._notify("FAILED")
+
+    def _notify(self, state: str) -> None:
+        for fn in list(self.on_state):
+            try:
+                fn(state)
+            except Exception:  # noqa: BLE001 - a listener must not stop the server
+                log.exception("Managed LLM state listener failed")
 
     def stop(self) -> dict[str, Any]:
         """Stop the server this application started. Any other process is never touched."""

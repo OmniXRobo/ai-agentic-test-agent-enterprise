@@ -10,6 +10,12 @@ The platform is built in stages; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 It never displays sample or demo data: every number comes from your configured
 systems or from real runs.
 
+## Version 23.3.33: Microsoft Edge, installing over a running older version
+
+The dashboard window and, by default, test runs and recordings use Microsoft Edge. The installer stops programs still running from the version it replaces (an older version's local AI or speech
+server, Python, Java, Chromium) and retries while Windows releases the folder, instead of stopping with "Access is
+denied". See [docs/PATCH_23.3.33.md](docs/PATCH_23.3.33.md).
+
 ## Version 23.3.32: all-in-one offline package
 
 One zip (`SGQA-23.3.32.zip`) holds everything for a PC without Internet: Python, Chromium, Java, JMeter, the Qwen AI

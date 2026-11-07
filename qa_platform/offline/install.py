@@ -22,6 +22,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -82,6 +83,63 @@ def subprocess_validation(app: Path, data: Path, quick: bool) -> tuple[bool, str
     out = subprocess.run(cmd, cwd=app, capture_output=True, text=True, timeout=600, env=env,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return out.returncode == 0, (out.stdout + out.stderr).strip()
+
+
+def programs_running_in(folder: Path) -> list[dict]:
+    """23.3.32: programs started from a folder (Python, llama-server, Faster-Whisper, Java, Chromium...). Windows only:
+    elsewhere a running program does not stop a folder from being renamed."""
+    if not WINDOWS:
+        return []
+    pattern = str(folder.resolve()).replace("'", "''").rstrip("\\") + "\\*"
+    script = ("Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '" + pattern + "' } | "
+              "Select-Object ProcessId, Name, ExecutablePath | ConvertTo-Json -Compress")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True,
+                             text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        found = json.loads(out.stdout or "[]")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    found = [found] if isinstance(found, dict) else list(found or [])
+    return [p for p in found if isinstance(p, dict) and p.get("ProcessId") and int(p["ProcessId"]) != os.getpid()]
+
+
+def stop_programs_in(folder: Path, log: Callable[[str], None]) -> int:
+    """Stop every program running from the folder of the version being replaced (an older version could leave its
+    local AI or speech server running after the dashboard closed). Returns how many were stopped."""
+    running = programs_running_in(folder)
+    if running:
+        names = sorted({str(p.get("Name")) for p in running})
+        log(f"Stopping {len(running)} program(s) still running from {folder.name}: {', '.join(names)}")
+    for p in running:
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(int(p["ProcessId"]))], capture_output=True, timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return len(running)
+
+
+def move_aside(src: Path, dst: Path, log: Callable[[str], None], *, attempts: int = 10,
+               sleep: Callable[[float], None] = time.sleep,
+               stop: Callable[[Path, Callable[[str], None]], int] = stop_programs_in) -> None:
+    """Rename a version folder, stopping its programs first and retrying while Windows still holds files open
+    (a program that is closing, antivirus or the search indexer reading new files). Raises the last OSError."""
+    stop(src, log)
+    for attempt in range(1, attempts + 1):
+        try:
+            src.rename(dst)
+            return
+        except OSError:
+            if attempt == attempts:
+                raise
+            if attempt in (3, 6):
+                stop(src, log)
+            sleep(1 + attempt // 3)
+
+
+def _still_open_hint(target: Path) -> str:
+    return ("SkyGuard QA's own programs were stopped, so something else still has a file open there: close any "
+            f"Explorer, command or editor window open in {target}, then run the installer again. Nothing was changed.")
 
 
 def _dashboard_running(data: Path) -> int | None:
@@ -167,6 +225,13 @@ def bundled_defaults(app: Path, settings_path: Path) -> list[str]:
                                    "stt_url": f"http://127.0.0.1:{port}", "fw_model": fw_models[0], "fw_port": port,
                                    "fw_auto_start": True}})
         done.append(f"Speech recognition: Faster-Whisper {fw_models[0]} on this PC.")
+    playback = settings.section("playback")
+    if not playback.get("browser"):
+        from ..launcher import installed_browser
+
+        if installed_browser("msedge"):  # 23.3.33: test runs and recordings use Edge unless another is chosen
+            settings.update({"playback": {"browser": "msedge"}})
+            done.append("Test runs and recordings: Microsoft Edge (change it under Settings > Automation runs).")
     return done
 
 
@@ -247,12 +312,17 @@ def install(source: Path, target: Path, *, validation: Validation = subprocess_v
         if app.exists():
             if previous.exists():
                 old_previous = target / f"app.old-{stamp}"
-                previous.rename(old_previous)
+                try:
+                    move_aside(previous, old_previous, log)
+                except OSError as exc:
+                    old_previous = None
+                    raise InstallError(f"The version before the current one could not be moved aside ({exc}). "
+                                       f"{_still_open_hint(target)}") from exc
             try:
-                app.rename(previous)
+                move_aside(app, previous, log)
             except OSError as exc:
-                raise InstallError(f"The current version could not be moved aside ({exc}). Close the dashboard and "
-                                   "any window open in its folder, then try again.") from exc
+                raise InstallError(f"The current version could not be moved aside ({exc}). "
+                                   f"{_still_open_hint(target)}") from exc
             log(f"Kept the current version as {previous.name} for rollback.")
         staged.rename(app)
 

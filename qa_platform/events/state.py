@@ -26,6 +26,9 @@ from .bus import QAEvent
 
 TERMINAL = {names.AGENT_COMPLETED: "PASSED", names.AGENT_FAILED: "FAILED"}
 COMPLETED_HOLD_SECONDS = 30
+# 23.3.33: a failed agent shows FAILED for 10 minutes, then READY with "Last result FAILED": the agent is idle and
+# takes new work, so a failure from hours or days ago no longer makes it look down.
+FAILED_HOLD_SECONDS = 600
 
 # Agents that one run passes through in this order (they share the run ID).
 PIPELINES: tuple[tuple[str, ...], ...] = (
@@ -49,7 +52,13 @@ def derive_state(st: dict[str, Any], all_states: dict[str, dict[str, Any]], at: 
             if o.get("status") == "RUNNING" and o.get("run_id") and o.get("run_id") != st.get("run_id"):
                 return {"state": "WAITING", "last_result": last, "waiting_for": other}
     if status == "FAILED":
-        return {"state": "FAILED", "last_result": "FAILED", "waiting_for": None}
+        try:
+            age = ((at or now()) - parse_iso(st["finished_at"])).total_seconds() if st.get("finished_at") else 0.0
+        except (TypeError, ValueError):
+            age = 0.0
+        if age < FAILED_HOLD_SECONDS:
+            return {"state": "FAILED", "last_result": "FAILED", "waiting_for": None}
+        return {"state": "READY", "last_result": "FAILED", "waiting_for": None}
     if status == "PASSED" and st.get("finished_at"):
         try:
             age = ((at or now()) - parse_iso(st["finished_at"])).total_seconds()
@@ -139,6 +148,7 @@ class AgentStateManager:
                         status="FAILED",
                         activity="Interrupted: the runtime stopped before this agent finished.",
                         started_at=row.get("timestamp"),
+                        finished_at=row.get("timestamp"),  # 23.3.33: so it turns READY like any older failure
                     )
                 else:
                     st.update(

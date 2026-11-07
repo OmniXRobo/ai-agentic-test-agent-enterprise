@@ -41,7 +41,8 @@ Install
 Start
 -----
 Double-click SkyGuard QA (robot icon) on the Desktop or in the Start Menu.
-* No command window opens. The dashboard opens in its own window.
+* No command window opens. The dashboard opens in its own Microsoft Edge window.
+* Test runs and recordings use Microsoft Edge (Settings > Automation runs can switch to the included Chromium).
 * First start: First-Run Setup asks only for the TFS server URL, project and Personal Access Token. The AI model and
   the speech model are already set.
 * Closing the window stops SkyGuard QA and everything it started: test runs, browsers, JMeter, the local AI and the
@@ -68,6 +69,9 @@ Troubleshooting
 ---------------
   "Windows protected your PC" or blocked .cmd: the zip was not unblocked (step 2), or AppLocker allows programs only
       in approved folders: install there with --target.
+  "The current version could not be moved aside": the installer already stopped SkyGuard QA's own programs, so a
+      window is still open in the install folder (Explorer, a command window, an editor). Close it and run INSTALL.cmd
+      again; nothing was changed.
   "Port 8765 is used by another program": close that program, or change server > port in data\settings.json.
   The AI answers slowly: normal on an older CPU for the first request; the model stays loaded afterwards.
   Something else: run VALIDATE_OFFLINE.cmd in the install folder and send logs\validation-latest.txt and data\logs\start.log.

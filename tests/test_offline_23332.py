@@ -25,7 +25,10 @@ def _bundle(app: Path) -> None:
     (fw / "models" / "small.en" / "model.bin").write_bytes(b"x")
 
 
-def test_bundled_defaults_set_ai_and_faster_whisper(tmp_path):
+def test_bundled_defaults_set_ai_and_faster_whisper(tmp_path, monkeypatch):
+    from qa_platform import launcher
+
+    monkeypatch.setattr(launcher, "installed_browser", lambda name: None)  # Edge is covered by its own test
     app, settings = tmp_path / "app", tmp_path / "data" / "settings.json"
     _bundle(app)
     done = inst.bundled_defaults(app, settings)
@@ -68,3 +71,51 @@ def test_package_files_have_short_names_and_security_notes():
     assert "What is left out, and why" in readme and "SkyGuard QA" in readme
     lock = json.loads((APP_ROOT / "packaging" / "offline-lock.json").read_text())
     assert lock["llm_model"]["files"] == ["qwen2.5-1.5b-instruct-q4_k_m.gguf"]
+
+
+def test_move_aside_stops_programs_and_retries(tmp_path, monkeypatch):
+    src, dst = tmp_path / "app", tmp_path / "app.previous"
+    src.mkdir()
+    real_rename, calls, stops, waits = Path.rename, {"n": 0}, [], []
+
+    def flaky(self, target):
+        calls["n"] += 1
+        if calls["n"] < 4:  # Windows keeps a file open for a moment after the program stopped
+            raise PermissionError(5, "Access is denied")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky)
+    inst.move_aside(src, dst, lambda m: None, sleep=waits.append, stop=lambda f, log: stops.append(f) or 1)
+    assert dst.is_dir() and not src.exists() and calls["n"] == 4
+    assert stops == [src, src] and len(waits) == 3  # stopped before the first try and again after the third
+
+
+def test_move_aside_gives_up_with_the_error(tmp_path, monkeypatch):
+    src = tmp_path / "app"
+    src.mkdir()
+    monkeypatch.setattr(Path, "rename", lambda self, t: (_ for _ in ()).throw(PermissionError(5, "Access is denied")))
+    with pytest.raises(PermissionError):
+        inst.move_aside(src, tmp_path / "x", lambda m: None, attempts=3, sleep=lambda s: None, stop=lambda f, log: 0)
+
+
+def test_no_program_lookup_off_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(inst, "WINDOWS", False)
+    assert inst.programs_running_in(tmp_path) == [] and inst.stop_programs_in(tmp_path, print) == 0
+
+
+def test_installer_chooses_edge_for_test_runs_when_installed(tmp_path, monkeypatch):
+    app, settings = tmp_path / "app", tmp_path / "data" / "settings.json"
+    _bundle(app)
+    pf = tmp_path / "pf86"
+    (pf / "Microsoft" / "Edge" / "Application").mkdir(parents=True)
+    (pf / "Microsoft" / "Edge" / "Application" / "msedge.exe").write_bytes(b"")
+    for k in ("ProgramFiles", "LOCALAPPDATA"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ProgramFiles(x86)", str(pf))
+    inst.bundled_defaults(app, settings)
+    assert json.loads(settings.read_text())["playback"]["browser"] == "msedge"
+    data = json.loads(settings.read_text())
+    data["playback"]["browser"] = "chromium"  # a choice made later is kept on the next install
+    settings.write_text(json.dumps(data))
+    inst.bundled_defaults(app, settings)
+    assert json.loads(settings.read_text())["playback"]["browser"] == "chromium"

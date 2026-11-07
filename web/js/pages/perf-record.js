@@ -3,7 +3,7 @@
 // grouped in steps (transactions). Values the server hands out (tokens, CSRF fields, ids) are correlated and typed
 // passwords become saved secrets. Nothing is load tested while recording or saving.
 
-import { api } from "../api.js";
+import { api, preselectBrowser } from "../api.js";
 import { esc, toast } from "../util.js";
 
 const KINDS = { load: "Load", stress: "Stress", spike: "Spike", soak: "Soak" };
@@ -86,6 +86,7 @@ export async function recorderView(view, { routeName, kind, backHref, addCleanup
         <label class="row"><input type="checkbox" name="auto" checked> Start a new step on each page navigation</label>
         <label class="row"><input type="checkbox" name="static"> Keep images, styles, scripts and fonts (usually left out: browsers cache them)</label>
         <button class="btn primary" type="submit">Open browser and record</button></form>`;
+    preselectBrowser(view.querySelector("#startRec"));
     view.querySelector("#startRec").addEventListener("submit", async (e) => {
       e.preventDefault();
       const f = e.target;

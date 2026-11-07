@@ -122,7 +122,10 @@ def test_bundled_java_is_found_and_run(tmp_path, monkeypatch):
 # ---- install / rollback -------------------------------------------------------------------------
 
 
-def test_install_upgrade_keeps_one_previous_version_and_data(tmp_path):
+def test_install_upgrade_keeps_one_previous_version_and_data(tmp_path, monkeypatch):
+    from qa_platform import launcher
+
+    monkeypatch.setattr(launcher, "installed_browser", lambda name: None)  # the result must not depend on Edge on this PC
     target = tmp_path / "Programs" / "AIAgenticTestAgent"
     assert inst.install(_payload(tmp_path / "v1"), target, validation=_ok, shortcuts=False) == 0
     app = target / "app"

@@ -1,5 +1,5 @@
 // 23.3.21: Automation Studio > Scheduled Runs, and Settings > Outlook Email.
-import { api } from "../api.js";
+import { api, defaultBrowser } from "../api.js";
 import { productName } from "../brand.js";
 import { esc, toast, dateTimeOf, openModal } from "../util.js";
 import { confirmDelete } from "../confirm-delete.js";
@@ -12,10 +12,12 @@ const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(
 const inAMinute = () => { const d = new Date(Date.now() + 5 * 60000); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 
 let timers = [];
+let chosenBrowser = "chromium";  // 23.3.33: Settings > Automation runs (Edge when installed)
+defaultBrowser().then((b) => { chosenBrowser = b; });
 const every = (ms, fn) => { const t = setInterval(fn, ms); timers.push(t); };
 
 function scheduleForm(selected, current = {}, { runNow = false, emailReady = false } = {}) {
-  const c = { repeat: "daily", time: inAMinute(), start_date: today(), browsers: ["chromium"], parallel: 1, headless: false,
+  const c = { repeat: "daily", time: inAMinute(), start_date: today(), browsers: [chosenBrowser], parallel: 1, headless: false,
     data_rows: "first", catch_up: true, publish_tfs: false, email: { enabled: false, to: "", cc: "", on: "always" }, days: [0, 1, 2, 3, 4], every_hours: 1, ...current };
   const em = c.email || {};
   return `<form class="grid" id="schForm" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">

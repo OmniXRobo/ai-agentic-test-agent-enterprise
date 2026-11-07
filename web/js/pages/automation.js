@@ -1,7 +1,7 @@
 // Automation Studio: AI-Driven, Guided Browser, Discovery & Update and Hybrid automation,
 // plus the shared script editor (steps, Playwright view, versions, self-healing, results).
 
-import { api } from "../api.js";
+import { api, preselectBrowser } from "../api.js";
 import { subscribe } from "../store.js";
 import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
 import { discoveryPanel as discoveryPanelImpl } from "./discovery.js";
@@ -789,7 +789,7 @@ async function guidedPanel(view, { appendTo = null } = {}) {
       <label>Credential role <input name="credential_role" list="roles" value="${esc(target?.credential_role || "")}" placeholder="passwords become {{CRED:role.password}}"></label>
       <datalist id="roles">${roles.map((r) => `<option value="${esc(r)}">`).join("")}</datalist>
       <label>Application <input name="application" value="${esc(target?.application || "")}"></label>
-      <label>Browser <select name="browser"><option>chromium</option><option>msedge</option><option>chrome</option></select></label>
+      <label>Browser <select name="browser"><option value="chromium">Chromium (included)</option><option value="msedge">Microsoft Edge</option><option value="chrome">Google Chrome</option></select></label>
       ${target ? `<label style="grid-column:1/-1;display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="replay" style="width:auto;margin:0" ${(replayParam || n) && firstAt > 1 ? "checked" : ""}>
         <span>Play the script's steps before this position first (<span id="replayRange"></span>), so the browser is already on the right screen</span></label>` : ""}
       <div class="row" style="align-self:end"><button class="btn primary" type="submit">${target ? "Open browser" : "Start recording"}</button></div>
@@ -819,6 +819,7 @@ async function guidedPanel(view, { appendTo = null } = {}) {
     </div>
     <div class="card" id="list" style="margin-top:12px"><p class="muted">Loading…</p></div>`;
   const rec = view.querySelector("#rec");
+  preselectBrowser(rec);  // 23.3.33: starts on the browser chosen in Settings (Edge when installed)
   const wirePlace = (form, prefix) => {
     if (!form) return;
     const mode = form.querySelector(`[name=${prefix}mode]`), to = form.querySelector("[data-replace-to]");
