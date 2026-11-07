@@ -295,6 +295,9 @@ class FasterWhisperService:
         while True:
             found = self.probe(port, 3)
             if found and found.get("status") == "ok":
+                # The server can answer before the start that launched it has pointed the voice settings at it
+                # (it waits 0.5 s to be sure it kept the port): point them now, so callers never see the old URL.
+                self._sync_url(port)
                 return self.url(port)
             if found and found.get("status") == "error":
                 raise QAError("FW_MODEL_FAILED", f"Faster-Whisper could not load the speech model: {found.get('error')}",

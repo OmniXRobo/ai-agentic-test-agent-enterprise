@@ -323,7 +323,8 @@ class Scheduler:
         items = self.store.read()["history"]
         if sid:
             items = [h for h in items if h.get("schedule_id") == sid]
-        live = [dict(b) for b in self.active.values() if not sid or b.get("schedule_id") == sid]
+        # A batch stays RUNNING here until its results are published and emailed and it is saved to the history.
+        live = [{**b, "status": "RUNNING"} for b in self.active.values() if not sid or b.get("schedule_id") == sid]
         return (live + list(reversed(items)))[:limit]
 
     def _view(self, s: dict[str, Any]) -> dict[str, Any]:
