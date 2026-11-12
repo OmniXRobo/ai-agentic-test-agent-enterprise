@@ -32,6 +32,7 @@ import { voice, onVoice, loadSettings, agentName } from "./voice.js";
 import { initVoiceAgent } from "./voice-agent.js";
 import { productName, loadBrand, onBrand } from "./brand.js";
 import * as usersPage from "./pages/users.js";
+import * as opsAgent from "./pages/ops-agent.js";
 import { ensureSignedIn, initUserMenu, isAdmin, canEdit } from "./auth.js";
 import { cmpPages } from "./pages/comparison.js";
 import { tfsIntegration, browserManager, auraMemory } from "./pages/preferences-final.js";
@@ -74,6 +75,9 @@ const NAV = [
     ["perf-schedules", "Performance Schedules", perfSchedules],
     ["perf-results", "Performance Results", perfResults],
     ["perf-defects", "Performance Defects", perfDefects],
+  ]],
+  ["AI Operations Agent", [
+    ["ops-agent", "AI Application Learning & Operations Agent", opsAgent],
   ]],
   ["Application Data Comparison Agent", cmpPages],
   ["Quality", [
@@ -137,6 +141,7 @@ const I = {
   search: "M10 2a8 8 0 1 0 4.9 14.3l5.4 5.4 1.4-1.4-5.4-5.4A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6Z",
 };
 const ICON_BY_ROUTE = [
+  [/^ops-agent/, "bot"],
   [/command-center|voice/, "mic"], [/^dashboard|cmp-dashboard|analytics/, "grid"], [/workflow/, "flow"], [/notif/, "bell"],
   [/history|schedul|perf-schedules/, "clock"], [/test-data|perf-data|cmp-import|cmp-extract/, "data"],
   [/discovery|cmp-discovery|explorer|investigation/, "search"], [/test-|stories|acceptance|plans|suites/, "check"],

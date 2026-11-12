@@ -72,8 +72,14 @@ class Runtime:
     ai_reports: Any = None  # 23.3.31: AI analysis reports with PDF and email
     aura: Any = None  # final patch: AURA learning memory
     comparison: Any = None  # final patch: Application Data Comparison Agent
+    opsagent: Any = None  # 23.5.0: Adaptive AI Application Learning & Operations Agent
 
     def close(self) -> None:
+        if self.opsagent is not None:
+            try:
+                self.opsagent.close()  # its browsers first, then its knowledge database
+            except Exception:
+                pass
         if self.comparison is not None:
             try:
                 self.comparison.close()
@@ -202,6 +208,12 @@ def _final_patch(rt: Runtime, ai_transport: Any) -> None:
         aura_module.install(rt.aura)
     except Exception as exc:  # the application starts without AURA; Preferences > AURA says why
         log.warning(f"AURA did not start: {exc}")
+    try:
+        from .opsagent.service import OpsAgentService
+
+        rt.opsagent = OpsAgentService(rt)
+    except Exception as exc:  # SkyGuard starts without the agent; the AI Operations Agent page says why
+        log.warning(f"AI Operations Agent did not start: {exc}")
     try:
         from .comparison.service import ComparisonService
 
