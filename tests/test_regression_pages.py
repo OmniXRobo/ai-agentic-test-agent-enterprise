@@ -74,6 +74,11 @@ def test_every_page_loads_like_before(tmp_path):
     # 23.3.21, 23.3.22, 23.3.25 and 23.3.27: new pages, they must load without errors
     # 23.3.34: Users & Network Access (admin)
     added = {"scheduled-runs", "email-settings", "perf-scenarios", "perf-data", "perf-live", "perf-schedules", "users"}
+    # 23.4.0 (final patch): TFS Integration, Browser Manager, AURA and the 18 Application Data Comparison pages
+    added |= {"tfs-integration", "browser-manager", "aura"} | {
+        f"cmp-{x}" for x in ("dashboard", "projects", "applications", "discovery", "extract", "screenshots", "import",
+                             "mapping", "filters", "rules", "aggregates", "run", "results", "aggregate-report",
+                             "defects", "investigation", "reports", "evidence")}
     assert set(old) == set(new) - added and len(new) >= 30
     for r in added & set(new):
         assert not new[r]["failed"] and not new[r]["errors"], (r, new[r])

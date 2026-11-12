@@ -44,6 +44,11 @@ class FakeAzureDevOps:
         self.work_item_fields: dict[str, list[tuple[str, str]]] = {}  # type -> extra (referenceName, name)
         self.extra_types: list[str] = []  # 23.3.30: e.g. an "Acceptance Criteria" work item type
         self.test_case_parameters = True  # False: a process template whose Test Case has no Parameters fields
+        # final patch: project-specific mandatory fields {type: {ref: (display name, allowed values)}} reported with
+        # alwaysRequired, and rule-only ones (not reported, enforced on save with TF401320 like a real server)
+        self.required: dict[str, dict[str, tuple[str, list[str]]]] = {}
+        self.rule_only: dict[str, dict[str, tuple[str, list[str]]]] = {}
+        self.validated: list[dict] = []
         if hierarchy:
             self._add_hierarchy()
 
@@ -150,9 +155,17 @@ class FakeAzureDevOps:
             refs += [r for r, _ in extra]
             names_ = dict(extra)
             allowed = {"Microsoft.VSTS.Common.Severity": ["1 - Critical", "2 - High", "3 - Medium", "4 - Low"]}
+            required = self.required.get(m.group(1), {})
+            for table in (required, self.rule_only.get(m.group(1), {})):
+                for r, (n, vals) in table.items():
+                    if r not in refs:
+                        refs.append(r)
+                    names_[r] = n
+                    allowed[r] = vals
             expand = request.url.params.get("$expand") == "allowedValues"
             return httpx.Response(200, json={"value": [
                 {"referenceName": r, "name": names_.get(r, r.rsplit(".", 1)[-1]),
+                 **({"alwaysRequired": True} if r in required else {}),
                  **({"allowedValues": allowed.get(r, [])} if expand else {})} for r in refs]})
         if path == f"{proj}/_apis/wit/attachments" and request.method == "POST":
             aid = f"att-{len(self.attachments) + 1}"
@@ -195,6 +208,16 @@ class FakeAzureDevOps:
         m = re.match(rf"{re.escape(proj)}/_apis/wit/workitems/\$(.+)$", path)
         if m and request.method == "POST":
             assert request.headers["content-type"] == "application/json-patch+json"
+            ops = json.loads(request.content)
+            sent = {op["path"].split("/")[-1]: op.get("value") for op in ops if op["path"].startswith("/fields/")}
+            rules = {**self.required.get(m.group(1), {}), **self.rule_only.get(m.group(1), {})}
+            for r, (n, vals) in rules.items():
+                if r not in sent or (vals and sent[r] not in vals):
+                    return httpx.Response(400, json={"message": f"TF401320: Rule Error for field {n}. Error code: "
+                                                                "Required, HasValues, LimitedToValues, AllowsOldValue, InvalidEmpty."})
+            if request.url.params.get("validateOnly") == "true":
+                self.validated.append(sent)
+                return httpx.Response(200, json={"id": -1, "rev": 0, "fields": sent})
             i = self.next_id
             self.next_id += 1
             self.items[i] = {"System.WorkItemType": m.group(1), "System.State": "New"}
