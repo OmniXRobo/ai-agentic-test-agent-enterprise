@@ -1097,7 +1097,8 @@ class Engine:
         code = info.get("code")
         app = self.kb.application(run["plan"]["app_id"])
         events = info.get("manual_events") or []
-        if code in ("control_not_found", "ambiguous", "control_disabled") and info.get("target"):
+        if code in ("control_not_found", "ambiguous", "control_disabled", "typing_not_accepted", "option_not_found",
+                    "application_validation") and info.get("target"):
             steps = self._current_steps(run, cp)
             step = steps[cp["step"]] if cp.get("sub") == "steps" and cp["step"] < len(steps) else None
             want = step.get("action") if step else "click"
@@ -1173,6 +1174,10 @@ class Engine:
             return self._pause(run, "option_not_found", f"'{target}' has no option matching the planned value. "
                                f"Available: {', '.join((result.get('options') or [])[:10])}. Choose it manually and "
                                "press Resume.", target=target)
+        if err == "TYPING_NOT_ACCEPTED":
+            return self._pause(run, "typing_not_accepted", f"'{target}' did not accept typed text. Please type the "
+                               "value yourself and press Resume (or enable trusted input in the extension options).",
+                               target=target)
         if err == "DISABLED":
             return self._pause(run, "control_disabled", f"'{target}' is disabled. Please resolve it in the application "
                                "and press Resume.", target=target)

@@ -290,12 +290,11 @@
         if (typeof el.select === "function") el.select();
         else document.execCommand("selectAll", false);
         // insertText goes through the browser's editing pipeline (beforeinput/input events, maxlength, pattern)
-        let typed = document.execCommand("insertText", false, String(a.value ?? ""));
-        if (!typed || (("value" in el) && el.value !== String(a.value ?? ""))) {
-          const proto = t === "textarea" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-          const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
-          setter.call(el, String(a.value ?? ""));
-          el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: String(a.value ?? "") }));
+        const typed = document.execCommand("insertText", false, String(a.value ?? ""));
+        if (!typed || (("value" in el) && el.value !== String(a.value ?? "") && el.type !== "date" && el.type !== "time")) {
+          // never assign .value directly (that would skip the application's own input handling): the caller types
+          // with the browser's trusted input instead (Playwright / chrome.debugger), or pauses for the person
+          return { ok: false, error: "TYPING_NOT_ACCEPTED", needs_trusted_input: true, message: "The field did not accept typed text." };
         }
         el.dispatchEvent(new Event("change", { bubbles: true }));
         el.blur();
