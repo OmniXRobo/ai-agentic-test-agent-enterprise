@@ -3,8 +3,8 @@
 
   Finds the installation, stops it, and runs install_patch.py with the application's own Python:
   verify the patch files (SHA-256), check disk space and permissions, back up the files it replaces, the database
-  and settings.json, copy the files, migrate the database (new tables and one column only), verify, and restore
-  everything automatically if any step fails. Then starts the application and checks /api/health.
+  and settings.json, copy the files, create or migrate the agent's own knowledge database (SkyGuard's main database
+  is not changed in 23.5.0), verify, and restore everything automatically if any step fails. Then starts the application and checks /api/health.
 
   Usage (PowerShell, in the extracted patch folder):
     powershell -ExecutionPolicy Bypass -File .\APPLY_PATCH.ps1

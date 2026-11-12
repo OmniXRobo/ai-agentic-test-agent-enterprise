@@ -7,7 +7,7 @@
         runtime\\faster-whisper\\lib\\   Faster-Whisper packages (bundled)
         models\\               qwen GGUF and faster-whisper small.en (copied by Install-Models.ps1, checksum-verified)
         extension\\            the unpacked extension (for Load unpacked)
-        data\\                 config.json, users.json, knowledge.sqlite3, vault\\, backups\\, logs\\
+        data\\                 config.json, users.json, devices.json, opsagent\\ (knowledge.sqlite3, backups), vault\\, logs\\
 """
 
 from __future__ import annotations

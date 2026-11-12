@@ -53,7 +53,8 @@ def run_checks(paths: Paths | None = None) -> dict[str, Any]:
     add("SQLite with WAL support", sqlite3.sqlite_version_info >= (3, 22), sqlite3.sqlite_version)
     found = {name: next((str(p) for p in cands if p.exists()), "") for name, cands in _browser_paths().items()}
     add("Chrome or Edge installed", any(found.values()) or not win,
-        "; ".join(f"{k}: {v or 'not found'}" for k, v in found.items()))
+        "; ".join(f"{k}: {v or 'not found'}" for k, v in found.items()) if win else
+        "not checked: this check looks in the Windows installation folders")
     port = int(cfg.get("port"))
     add(f"Port {port} on 127.0.0.1", _port_free(port) or _running(port), "free" if _port_free(port) else
         ("used by the companion" if _running(port) else "in use by another program (set 'port' in config.json)"))
