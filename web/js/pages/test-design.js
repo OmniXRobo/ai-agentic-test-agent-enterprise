@@ -101,7 +101,12 @@ async function showResult(view, runId) {
   const body = await api(`/api/design/runs/${encodeURIComponent(runId)}`);
   if (body.status === "RUNNING") return;
   if (body.status === "FAILED" || !body.result?.test_cases) {
-    box.innerHTML = `<div class="card"><p class="pill FAIL">Test design failed</p><p>${esc(body.result?.error || "See the activity log.")}</p>
+    const dg = body.result?.diagnostics;
+    const err = body.result?.error || body.summary?.error || "See the activity log.";
+    box.innerHTML = `<div class="card"><p class="pill FAIL">Test design failed</p><p>${esc(err)}</p>
+      ${dg ? `<h4>What was checked (${esc(dg.label)})</h4><table class="data"><tbody>${dg.checks.map((c) => `<tr><td>${esc(c.name)}</td>
+        <td><span class="pill ${esc(c.status === "PASS" ? "PASS" : c.status === "FAIL" ? "FAIL" : "WARN")}">${esc(c.status)}</span></td><td>${esc(c.detail)}</td></tr>`).join("")}</tbody></table>
+        ${dg.hints?.length ? `<h4>What to do</h4><ul>${dg.hints.map((h) => `<li>${esc(h)}</li>`).join("")}</ul>` : ""}` : ""}
       <p class="muted">No test cases are generated without the On-Premise AI. <a href="#/ai-settings">Check On-Premise AI settings</a>.</p></div>`;
     return;
   }

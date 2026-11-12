@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 from ..errors import QAError
@@ -333,6 +333,7 @@ class CsvIn(BaseModel):
     filename: str = ""
     name: str = ""
     mode: str = Field(default="create", pattern="^(create|replace|append)$")
+    sheet: str | None = Field(default=None, max_length=31)  # final patch: an .xlsx sheet (default: the first)
 
 
 class GenerateIn(BaseModel):
@@ -372,7 +373,7 @@ def create_dataset(body: DatasetIn, rt: Runtime = Depends(runtime)) -> dict[str,
 @router.post("/datasets/import", status_code=201)
 def import_dataset(body: CsvIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "dataset": rt.performance.datasets.import_csv(_csv_bytes(body.csv), name=body.name,
-                                                                      filename=body.filename)}
+                                                                      filename=body.filename, sheet=body.sheet)}
 
 
 @router.get("/datasets/{ds_id}")
@@ -399,7 +400,7 @@ def delete_dataset(ds_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]
 def import_into_dataset(ds_id: str, body: CsvIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     mode = body.mode if body.mode != "create" else "replace"
     return {"ok": True, "dataset": rt.performance.datasets.import_csv(_csv_bytes(body.csv), ds_id=ds_id, mode=mode,
-                                                                      filename=body.filename)}
+                                                                      filename=body.filename, sheet=body.sheet)}
 
 
 @router.get("/datasets/{ds_id}/csv", response_class=PlainTextResponse)
@@ -426,6 +427,20 @@ def script_fields(body: ScriptIn) -> dict[str, Any]:
     """Request values of a working copy that can be bound to data columns, and the data sets it reads."""
     return {"ok": True, "fields": jscript.fields(body.script),
             "data_sets": jscript.data_sets(jscript.parse(body.script))}
+
+
+@router.post("/script/parameters")
+def script_parameters(body: ScriptIn) -> dict[str, Any]:
+    """Final patch (defect 10): hard-coded values to parameterize (dates, users, ids, passwords, tokens)."""
+    return {"ok": True, "suggestions": jscript.scan_parameters(body.script)}
+
+
+@router.get("/datasets/{ds_id}/xlsx")
+def export_dataset_xlsx(ds_id: str, rt: Runtime = Depends(runtime)) -> Response:
+    """Final patch (defect 10): the data set as an Excel workbook. Secret columns are exported empty."""
+    data, filename = rt.performance.datasets.export_xlsx(ds_id)
+    return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 def _require_tools(rt: Runtime) -> None:

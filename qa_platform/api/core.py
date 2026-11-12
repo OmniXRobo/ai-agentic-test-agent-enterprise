@@ -218,7 +218,7 @@ def get_settings(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "settings": rt.settings.get()}
 
 
-ALLOWED_SETTINGS_SECTIONS = {"ui", "tfs", "ai", "defects", "performance", "playback"}
+ALLOWED_SETTINGS_SECTIONS = {"ui", "tfs", "ai", "defects", "performance", "playback", "comparison"}
 
 
 @router.patch("/settings")
@@ -233,7 +233,25 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
     if open_as is not None and open_as not in ("browser", "app"):
         raise QAError("SETTINGS_INVALID", "Open as must be 'browser' or 'app'.")
     branding.validate(patch.get("ui", {}))  # 23.3.30: product name, tagline and logo path
+    if "sidebar_collapsed" in patch.get("ui", {}) and not isinstance(patch["ui"]["sidebar_collapsed"], bool):
+        raise QAError("SETTINGS_INVALID", "sidebar_collapsed must be true or false.")
     pb = patch.get("playback", {})
+    # final patch: Browser Manager window placement
+    if "window_mode" in pb and pb["window_mode"] not in ("maximized", "default"):
+        raise QAError("SETTINGS_INVALID", "Window mode must be 'maximized' or 'default'.")
+    if "monitor" in pb and not (pb["monitor"] in ("auto", "primary") or (isinstance(pb["monitor"], int) and 0 <= pb["monitor"] <= 16)):
+        raise QAError("SETTINGS_INVALID", "Monitor must be 'auto', 'primary' or a monitor number.")
+    for flag in ("headless", "headless_recording"):
+        if flag in pb and pb[flag] is not None and not isinstance(pb[flag], bool):
+            raise QAError("SETTINGS_INVALID", f"{flag} must be true or false.")
+    cmp = patch.get("comparison", {})
+    if set(cmp) - {"headless", "browser", "tesseract_path"}:
+        raise QAError("SETTINGS_INVALID", "Unknown comparison settings.")
+    if "browser" in cmp and cmp["browser"] not in (None, "chromium", "chrome", "msedge"):
+        raise QAError("SETTINGS_INVALID", "The comparison browser must be chromium, chrome or msedge.")
+    if "tesseract_path" in cmp and cmp["tesseract_path"] and not str(cmp["tesseract_path"]).lower().endswith("tesseract.exe") \
+            and not str(cmp["tesseract_path"]).endswith("/tesseract"):
+        raise QAError("SETTINGS_INVALID", "The Tesseract path must point to tesseract.exe.")
     if "cursor_speed_ms" in pb and not (isinstance(pb["cursor_speed_ms"], (int, float)) and 0 <= pb["cursor_speed_ms"] <= 2000):
         raise QAError("SETTINGS_INVALID", "Cursor movement time must be between 0 and 2000 ms.")
     if "click_volume" in pb and not (isinstance(pb["click_volume"], (int, float)) and 0 <= pb["click_volume"] <= 1):

@@ -20,6 +20,9 @@ CATEGORIES: dict[str, tuple[bool, int, str]] = {
     "locator": (False, 3, "The element could not be found with the recorded locator or a confident alternative. "
                           "This can be a UI change (test maintenance) or a missing element (defect); review the screenshot."),
     "test_setup": (False, 4, "The test could not run because its own setup is incomplete (credentials or test data)."),
+    # final patch: the browser chosen in Preferences could not start; nothing on the application was tested
+    "browser_environment": (False, 4, "The browser could not start on this PC (browser configuration), so the "
+                                      "application was not tested. This is not an application defect."),
     "performance_errors": (True, 2, "Requests failed under load beyond the allowed error rate."),
     "performance_latency": (True, 3, "Response times exceeded the agreed service levels under load."),
     "performance_throughput": (True, 3, "Throughput stayed below the agreed service level."),
@@ -39,6 +42,8 @@ def signature(*parts: Any) -> str:
 def classify_step_failure(step: dict[str, Any] | None, error: str, healing_failed: bool) -> str:
     text = (error or "").lower()
     action = (step or {}).get("action", "")
+    if "could not start" in text or "browser_launch_failed" in text or "browser is not installed" in text:
+        return "browser_environment"
     if "no saved credential" in text or "test data field" in text or "credential reference" in text \
             or "has no steps" in text or "no url for goto" in text:
         return "test_setup"

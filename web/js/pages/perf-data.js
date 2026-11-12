@@ -45,9 +45,9 @@ async function listView(view) {
         <label>Columns <input name="cols" required placeholder="username, password, account_id"></label>
         <p class="muted">Separate columns with commas. Columns named like password or token become secret. Change types on the next page.</p>
         <button class="btn primary" type="submit">Create</button></form>
-      <form class="card" id="impDs"><h3>Import a CSV file</h3>
-        <p class="muted">The first line names the columns. UTF-8 or Windows-1252 (Excel); comma, semicolon or tab separated.</p>
-        <input type="file" name="file" accept=".csv,.txt" required>
+      <form class="card" id="impDs"><h3>Import a CSV or Excel file</h3>
+        <p class="muted">The first line (or the first row of the first sheet) names the columns. CSV: UTF-8 or Windows-1252; comma, semicolon or tab separated. Excel: .xlsx, cell text kept as shown.</p>
+        <input type="file" name="file" accept=".csv,.txt,.xlsx" required>
         <label>Name <input name="name" placeholder="From the file name"></label>
         <button class="btn primary" type="submit">Import</button></form>
     </div>
@@ -100,6 +100,7 @@ async function detailView(view, id) {
         <span class="muted">${esc(ds.id)} · version ${ds.version} · ${ds.rows_total} row(s)${ds.source ? ` · ${esc(ds.source)}` : ""}</span>
         <span class="pill WARN" id="dirty" ${dirty ? "" : "hidden"}>Unsaved changes</span><span class="spacer"></span>
         <a class="btn" href="/api/performance/datasets/${esc(ds.id)}/csv">Export CSV</a>
+        <a class="btn" href="/api/performance/datasets/${esc(ds.id)}/xlsx">Export Excel</a>
         <button class="btn" type="button" id="del">Delete</button>
         <button class="btn primary" type="button" id="save" ${ds.editable ? "" : "disabled"}>Save</button></div>
         <p class="muted">${ds.used_by.length ? `Used by ${ds.used_by.map((p) => `<a href="#/perf-plans?script=${esc(p.id)}">${esc(p.name)}</a>`).join(", ")}.` : "No script uses this data set yet: add it on the Test data tab of a script."}
@@ -128,7 +129,7 @@ async function detailView(view, id) {
             <div class="row"><label>Rows <input type="number" name="count" value="10" min="1" max="50" style="width:80px"></label><button class="btn" type="submit">Generate with AI</button></div></form>
           <p class="muted">Uses the AI model set up under AI settings (on this PC). Invented values only; secret columns stay empty; rows that do not match the column types are dropped.</p>
           <form id="imp" style="margin-top:12px"><h4>Import a CSV file into this data set</h4>
-            <input type="file" name="file" accept=".csv,.txt" required>
+            <input type="file" name="file" accept=".csv,.txt,.xlsx" required>
             <div class="row"><select name="mode"><option value="append">Add the rows</option><option value="replace">Replace columns and rows</option></select><button class="btn" type="submit">Import</button></div></form></div></div>`;
     const mark = () => { dirty = true; view.querySelector("#dirty").hidden = false; };
     view.querySelector("#desc").addEventListener("input", mark);
@@ -254,6 +255,24 @@ export async function dataTab(pane, st, applyOps) {
           <button class="btn" type="button" data-bind="${i}">Bind</button></div></td></tr>`).join("")}</tbody></table>
         <p class="muted">Form and query values are URL-encoded when sent; JSON text values are written by JMeter's JSON encoder, so quotes in the data are safe. Press Save to keep the changes.</p>`
         : '<p class="muted">The script has no form, query, JSON or header values to bind.</p>'}</div>`;
+  // final patch (defect 10): hard-coded values the script should not send as recorded
+  const scan = document.createElement("div");
+  scan.className = "card"; scan.style.marginTop = "12px";
+  scan.innerHTML = '<h3>Parameters to review</h3><p class="muted">Looking for recorded dates, users, ids, passwords and tokens…</p>';
+  pane.appendChild(scan);
+  api("/api/performance/script/parameters", { method: "POST", body: { script: st.script } }).then(({ suggestions: sg }) => {
+    const TYPE = { date: "Date", data: "Data", secret: "Password", correlation: "Server value" };
+    scan.innerHTML = `<h3>Parameters to review</h3>${sg.length ? `<table class="data"><thead><tr><th>Request</th><th>Value</th><th>Recorded</th><th>Kind</th><th>Suggestion</th><th></th></tr></thead><tbody>
+      ${sg.map((x, i) => `<tr><td>${esc(x.sampler)}</td><td>${esc(x.label)}</td><td><code>${esc(String(x.value).slice(0, 60))}</code></td><td><span class="pill WARN">${TYPE[x.type] || esc(x.type)}</span></td>
+        <td>${esc(x.suggestion)}${x.expr ? `<br><code>${esc(x.expr)}</code>` : ""}${x.column ? `<br><span class="muted">column</span> <code>\${${esc(x.column)}}</code>` : ""}</td>
+        <td>${x.type === "date" ? `<button class="btn" type="button" data-dyn="${i}">Make dynamic</button>` : ""}</td></tr>`).join("")}</tbody></table>
+      <p class="muted">Dates become relative to the day the test runs, so a script recorded today still books a future date next month. For users, ids and passwords add the column to a data set (passwords as a secret column) and bind it above.</p>`
+      : '<p class="muted">No recorded dates, users, ids, passwords or tokens were found in the request values.</p>'}`;
+    scan.querySelectorAll("[data-dyn]").forEach((b) => b.addEventListener("click", async () => {
+      const x = sg[+b.dataset.dyn];
+      await applyOps([{ op: "bind", node: x.node, kind: x.kind, key: x.key, expr: x.expr }]);
+    }));
+  }).catch((err) => { scan.innerHTML = `<h3>Parameters to review</h3><p class="problems">${esc(err.message)}</p>`; });
   pane.querySelector("#addDs").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = e.target, d = byId[f.ds.value];

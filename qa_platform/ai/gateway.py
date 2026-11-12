@@ -321,8 +321,83 @@ class AIGateway:
              timeout: float | None = None) -> str:
         return self.chat_result(messages, json_mode=json_mode, max_tokens=max_tokens, timeout=timeout)[0]
 
+    # ---- final patch: the configured local model, started or replaced when it is not answering ----------------
+
+    llm: Any = None  # ManagedLLM, attached by the runtime
+
+    def _start_local_model(self) -> bool:
+        """When the On-Premise AI does not answer and SkyGuard QA manages the local llama-server (AI Runtime > Local
+        model), start it and wait until the model has loaded. Returns True when it now answers."""
+        llm = self.llm
+        if llm is None or self.mode() != "on_premise":
+            return False
+        try:
+            status = llm.status()
+            if status.get("state") == "RUNNING" or status.get("external_server"):
+                return False
+            if status.get("state") == "STARTING":
+                llm._wait_ready(llm.config())  # the model is still loading: wait for it, do not start a second one
+            else:
+                log.info("On-Premise AI not reachable; starting the local model (managed llama-server)",
+                         extra={"operation": "ai.chat"})
+                llm.start(wait=True)
+            return llm.status().get("state") == "RUNNING"
+        except Exception as exc:  # the original error is reported, with this reason in the log
+            log.info(f"Local model could not be started: {exc}", extra={"operation": "ai.chat"})
+            return False
+
+    def _fallback_model(self, failed: str) -> str | None:
+        """Configured fallback models (AI Runtime > fallback models), then the model the server actually serves."""
+        try:
+            served = self.models(timeout=10.0)
+        except QAError:
+            return None
+        for name in (self.settings.section("ai").get("fallback_models") or []):
+            if name and name != failed and name in served:
+                return name
+        return next((m for m in served if m != failed), None)
+
     def chat_result(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int | None = None,
                     timeout: float | None = None, schema: dict[str, Any] | None = None) -> tuple[str, str]:
+        try:
+            return self._chat_result(messages, json_mode=json_mode, max_tokens=max_tokens, timeout=timeout,
+                                     schema=schema)
+        except QAError as exc:
+            if exc.error_code == "AI_UNREACHABLE" and self._start_local_model():
+                return self._chat_result(messages, json_mode=json_mode, max_tokens=max_tokens, timeout=timeout,
+                                         schema=schema)
+            detail = f"{exc.message} {exc.details or ''}".lower()
+            model = self.config().get("model") or ""
+            if (exc.error_code == "AI_REQUEST_FAILED" and model and "model" in detail
+                    and any(w in detail for w in ("not found", "does not exist", "unknown model", "no such model"))):
+                alt = self._fallback_model(model)
+                if alt:
+                    log.warning(f"AI model '{model}' is not served; using '{alt}' for this request",
+                                extra={"operation": "ai.chat"})
+                    with self._model_override(alt):
+                        return self._chat_result(messages, json_mode=json_mode, max_tokens=max_tokens,
+                                                 timeout=timeout, schema=schema)
+            raise
+
+    _local = threading.local()  # the fallback model of the request running on this thread
+
+    def _model_override(self, model: str) -> Any:
+        local = self._local
+
+        class _Override:
+            def __enter__(self) -> None:
+                local.model = model
+
+            def __exit__(self, *exc: Any) -> None:
+                local.model = None
+        return _Override()
+
+    @property
+    def _override_model(self) -> str | None:
+        return getattr(self._local, "model", None)
+
+    def _chat_result(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int | None = None,
+                     timeout: float | None = None, schema: dict[str, Any] | None = None) -> tuple[str, str]:
         """Returns (content, finish_reason). finish_reason "length" means the answer was cut off.
 
         * The answer budget is reduced so prompt + answer fit the model's context window when it is known; a prompt
@@ -347,8 +422,8 @@ class AIGateway:
             "max_tokens": want,
             "stream": False,
         }
-        if cfg["model"]:
-            body["model"] = cfg["model"]
+        if self._override_model or cfg["model"]:
+            body["model"] = self._override_model or cfg["model"]
         if json_mode:
             body["response_format"] = {"type": "json_object"}
             if schema and cfg["mode"] == "on_premise" and self.settings.section("ai").get("constrained_json", True):
@@ -521,6 +596,60 @@ class AIGateway:
                               status=502, details=str(exc)[:500]) from exc
 
     # ---- diagnostics -----------------------------------------------------------
+
+    def quick_diagnostics(self, error: QAError | None = None) -> dict[str, Any]:
+        """Final patch: why an AI step failed, in seconds (no test completion): configuration, the local model managed
+        by SkyGuard QA, server reachability and the loaded model. Shown on the page next to the error."""
+        cfg = self.config()
+        checks: list[dict[str, str]] = []
+        hints: list[str] = []
+        add = lambda n, st, d: checks.append({"name": n, "status": st, "detail": d})  # noqa: E731
+        if not cfg["base_url"]:
+            add("Configuration", "FAIL", f"No {cfg['label']} server URL is configured (AI Runtime).")
+            hints.append("Open Settings > AI Runtime, choose the local model file and start it, or enter the "
+                         "address of the on-premise AI server.")
+        else:
+            add("Configuration", "PASS", f"{cfg['label']} at {cfg['base_url']}, model "
+                f"'{cfg['model'] or 'server default'}'.")
+        if self.llm is not None and cfg["mode"] == "on_premise":
+            try:
+                st = self.llm.status()
+                state = st.get("state")
+                detail = {"RUNNING": "running", "STARTING": "still loading the model", "FAILED":
+                          f"failed to start: {st.get('error') or 'see logs/llama-server.log'}",
+                          "STOPPED": "not running"}.get(state, str(state))
+                if st.get("external_server"):
+                    detail = "another AI server answers on its port (not managed by SkyGuard QA)"
+                add("Local model (managed)", "PASS" if state == "RUNNING" or st.get("external_server") else
+                    "WARN" if state == "STARTING" else "FAIL", detail)
+                if state == "STARTING":
+                    hints.append("The local model is still loading; wait until AI Runtime shows Running and try "
+                                 "again.")
+                elif state in ("FAILED", "STOPPED") and not st.get("external_server"):
+                    hints.append("Start the local model in Settings > AI Runtime (or turn on Start with SkyGuard QA).")
+            except Exception as exc:  # status is informative only
+                add("Local model (managed)", "SKIP", str(exc)[:200])
+        loaded: list[str] = []
+        if cfg["base_url"]:
+            try:
+                loaded = self.models(timeout=5.0)
+                add("Server Reachability", "PASS", f"Answered; models: {', '.join(loaded) or 'none reported'}.")
+            except QAError as exc:
+                add("Server Reachability", "FAIL", exc.message)
+                hints.append(f"Nothing answers at {cfg['base_url']}. Check the address and port in AI Runtime and "
+                             "that the AI server is running on this PC or network.")
+        if loaded and cfg["model"] and cfg["model"] not in loaded:
+            add("Model Loaded", "WARN", f"Configured model '{cfg['model']}' is not in the server's list "
+                f"({', '.join(loaded)}); the served model is used instead.")
+        if error is not None:
+            if error.error_code == "AI_TIMEOUT":
+                hints.append("The model answered too slowly. Raise the generation timeout in AI Runtime, or use the "
+                             "smaller fast model.")
+            elif error.error_code in ("AI_OUTPUT_INVALID", "AI_OUTPUT_TRUNCATED", "AI_CONTEXT_EXCEEDED"):
+                hints.append("The model's answer could not be used (incomplete or not valid JSON). A larger context "
+                             "(AI Runtime > context size) or fewer test cases per run helps.")
+        return {"label": cfg["label"], "checks": checks, "hints": hints,
+                "error_code": error.error_code if error else None}
 
     def diagnostics(self) -> dict[str, Any]:
         cfg = self.config()

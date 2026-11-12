@@ -174,7 +174,7 @@ def design_result(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]
             result = rt.design.get(run_id)
         except QAError:
             result = None
-    return {"ok": True, "status": run["status"], "result": result}
+    return {"ok": True, "status": run["status"], "result": result, "summary": run.get("summary") or {}}
 
 
 @router.get("/design/stories/{user_story_id}")

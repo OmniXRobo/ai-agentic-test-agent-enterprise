@@ -264,8 +264,11 @@ class DatasetStore:
                           secrets=secrets, source=r["source"], base_version=base_version)
 
     def import_csv(self, data: bytes | str, *, name: str = "", ds_id: str | None = None, mode: str = "create",
-                   filename: str = "") -> dict[str, Any]:
+                   filename: str = "", sheet: str | None = None) -> dict[str, Any]:
         """A CSV file with a header line: a new data set, or replacing or adding to the rows of one."""
+        if isinstance(data, bytes) and data[:4] == b"PK\x03\x04":  # final patch (defect 10): an Excel workbook
+            data = self.xlsx_to_csv(data, sheet)
+            filename = filename or "workbook.xlsx"
         parsed = D.parse_csv(data)
         self._limit(len(parsed["rows"]))
         source = f"CSV {filename}".strip()
@@ -301,6 +304,35 @@ class DatasetStore:
                                  rows=rows_db, secrets=sec, source=source)
         out["import"] = {k: parsed[k] for k in ("encoding", "delimiter", "notes")} | {"rows": len(parsed["rows"])}
         return out
+
+    @staticmethod
+    def xlsx_to_csv(data: bytes, sheet: str | None = None) -> str:
+        """One sheet of an .xlsx (the first, or the one named) as CSV text with its first row as the header.
+        Cell text is kept as shown, so leading zeros stay."""
+        from ..automation.files import read_xlsx
+
+        sheets = read_xlsx(data)
+        if not sheets:
+            raise QAError("DATASET_INVALID", "The workbook has no sheets.", status=422)
+        if sheet and sheet not in sheets:
+            raise QAError("DATASET_INVALID", f"The workbook has no sheet named {sheet}. Sheets: {', '.join(sheets)}.",
+                          status=422)
+        rows = sheets[sheet] if sheet else next(iter(sheets.values()))
+        rows = [r for r in rows if any((c or "").strip() for c in r)]
+        if not rows:
+            raise QAError("DATASET_INVALID", "The sheet is empty.", status=422)
+        width = max(len(r) for r in rows)
+        return D.to_csv([str(c) for c in rows[0]] + [""] * (width - len(rows[0])),
+                        [[str(c) for c in r] + [""] * (width - len(r)) for r in rows[1:]])
+
+    def export_xlsx(self, ds_id: str) -> tuple[bytes, str]:
+        """The data set as an .xlsx workbook (text cells only, no formulas). Secret columns are exported empty."""
+        from ..comparison.reports import xlsx
+
+        r, cols, rows, _ = self._load(ds_id)
+        matrix = [["" if v is None else v for v in vals] for vals in self._matrix(cols, rows, {}, reveal=False)]
+        safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in r["name"])[:60] or ds_id
+        return xlsx([("Data", [c["name"] for c in cols], matrix)]), f"{safe}.xlsx"
 
     def export_csv(self, ds_id: str) -> tuple[str, str]:
         """CSV text and a file name. Secret columns are exported empty."""

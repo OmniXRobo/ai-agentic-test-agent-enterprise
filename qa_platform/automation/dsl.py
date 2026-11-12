@@ -70,6 +70,13 @@ class Target(BaseModel):
     href: str | None = None
     # 23.3.21: the element is inside these iframes (outermost first, each a selector in its parent document)
     frames: list[str] = []
+    # Final patch (defect 7): where the element sits, recorded for the Self-Healing Locator.
+    parent: str | None = None
+    ancestors: list[str] = []
+    siblings: list[str] = []
+    nearby_text: str | None = None
+    form: str | None = None
+    shadow_host: str | None = None
 
 
 class Step(BaseModel):

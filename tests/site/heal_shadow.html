@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Shadow sign in</title></head>
+<body>
+<h2>Account access</h2>
+<form id="login" onsubmit="return false">
+  <label for="username">Username</label>
+  <input id="username" name="username">
+  <qa-actions id="actions"></qa-actions>
+</form>
+<p id="welcome" hidden></p>
+<script>
+  customElements.define("qa-actions", class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = '<span>Continue to your account</span><button type="button" class="go">Proceed</button>'
+        + '<button type="button" class="go">Proceed</button>';
+      root.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+        const msg = document.getElementById("welcome"); msg.hidden = false; msg.textContent = "Welcome " + document.getElementById("username").value;
+      }));
+    }
+  });
+</script>
+</body></html>

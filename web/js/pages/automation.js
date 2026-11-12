@@ -1,6 +1,7 @@
 // Automation Studio: AI-Driven, Guided Browser, Discovery & Update and Hybrid automation,
 // plus the shared script editor (steps, Playwright view, versions, self-healing, results).
 
+import { loginBlock, bindLogin } from "../login-fields.js";
 import { api, preselectBrowser } from "../api.js";
 import { subscribe } from "../store.js";
 import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
@@ -490,13 +491,14 @@ function healingHtml(items) {
   return `<table class="data"><thead><tr><th>When</th><th>Step</th><th>Original</th><th>Healed</th><th>Confidence</th><th>Result</th><th>Evidence</th><th></th></tr></thead><tbody>
     ${items.map((h) => `<tr><td>${esc(dateTimeOf(h.timestamp))}</td><td>${h.step_index + 1}</td><td><code>${esc(h.original_selector)}</code></td>
       <td>${h.healed_selector ? `<code>${esc(h.healed_selector)}</code>` : '<span class="muted">none</span>'}</td>
-      <td>${Number(h.confidence).toFixed(2)}</td><td><span class="pill ${h.result === "failed" ? "FAIL" : h.result === "validated" ? "PASS" : "WARN"}">${esc(h.result)}</span></td>
+      <td>${Number(h.confidence).toFixed(2)}</td><td><span class="pill ${["failed", "rejected"].includes(h.result) ? "FAIL" : ["validated", "confirmed"].includes(h.result) ? "PASS" : "WARN"}">${esc(h.result)}</span></td>
       <td>${h.screenshot ? `<a href="${evidenceUrl(h.screenshot)}" target="_blank" rel="noopener">Screenshot</a>` : ""}
-        <details><summary class="muted">Candidates</summary>${(h.candidates || []).map((c) => `<div><code>${esc(c.selector)}</code> ${Number(c.confidence).toFixed(2)}</div>`).join("")}</details></td>
-      <td>${h.applied ? '<span class="muted">Applied</span>' : h.result === "validated" ? `<button class="btn" data-apply="${h.id}">Update script</button>` : ""}</td></tr>`).join("")}
+        <details ${h.result === "needs_confirmation" ? "open" : ""}><summary class="muted">Candidates</summary>${(h.candidates || []).map((c) => `<div><code>${esc(c.selector)}</code> ${Number(c.confidence).toFixed(2)}${h.result === "needs_confirmation" ? ` <button class="btn" type="button" data-confirm="${h.id}" data-selector="${esc(c.selector)}">Use this</button>` : ""}</div>`).join("")}</details></td>
+      <td>${h.applied ? '<span class="muted">Applied</span>' : h.result === "validated" ? `<button class="btn" data-apply="${h.id}">Update script</button>`
+        : h.result === "needs_confirmation" ? `<button class="btn" type="button" data-reject="${h.id}">None of these</button>` : ""}</td></tr>`).join("")}
     </tbody></table>
     ${items.filter((h) => h.result === "validated" && !h.applied).length > 1 ? `<p><button class="btn primary" data-apply-all>Apply all healed steps (${items.filter((h) => h.result === "validated" && !h.applied).length})</button></p>` : ""}
-    <p class="muted">A healed locator only updates the script after a run using it passed, and only when you choose to apply it. The previous version is kept.</p>`;
+    <p class="muted">A healed locator only updates the script after a run using it passed, and only when you choose to apply it. When confidence is low the run stops and asks: pick the right element under Candidates, or choose "None of these". The previous version is kept.</p>`;
 }
 
 async function renderEditor(view, scriptId) {
@@ -678,6 +680,14 @@ async function renderEditor(view, scriptId) {
       try { await api(`/api/automation/healing/${b.dataset.apply}/apply`, { method: "POST", body: {} }); toast("Script updated with the healed locator", "success"); renderEditor(view, scriptId); }
       catch (err) { toast(err.message, "error"); }
     }));
+    view.querySelectorAll("[data-confirm], [data-reject]").forEach((b) => b.addEventListener("click", async () => {  // final patch, defect 7
+      const id = b.dataset.confirm || b.dataset.reject;
+      try {
+        await api(`/api/automation/healing/${id}/confirm`, { method: "POST", body: { selector: b.dataset.selector || null } });
+        toast(b.dataset.selector ? "Script updated with the element you picked" : "Candidates rejected", "success");
+        renderEditor(view, scriptId);
+      } catch (err) { toast(err.message, "error"); }
+    }));
     view.querySelector("[data-apply-all]")?.addEventListener("click", async () => {  // 23.3.21
       try {
         const r = await api("/api/automation/healing/apply-all", { method: "POST", body: { script_id: scriptId } });
@@ -713,6 +723,7 @@ async function aiPanel(view) {
       <label>Application URL <input name="base_url" required placeholder="https://your-app/"></label>
       <label>Credential role <input name="credential_role" placeholder="e.g. admin"></label>
       <label>Application name <input name="application" placeholder="as saved in Application Credentials"></label>
+      ${loginBlock()}
       <label>Element inventory <select name="discovery_id"><option value="">Latest discovery for this URL (or discover now)</option>
         ${discoveries.map((d) => `<option value="${esc(d.id)}">${esc(d.base_url)} · ${esc(dateTimeOf(d.created_at))}</option>`).join("")}</select></label>
       <div class="row" style="align-self:end"><button class="btn primary" type="submit">Create automation</button></div>
@@ -721,6 +732,7 @@ async function aiPanel(view) {
     <div class="card" id="progress" style="margin-top:12px" hidden><h3>Activity</h3><div class="feed" id="feed"></div><p id="done"></p></div>
     <div class="card" id="list" style="margin-top:12px"><p class="muted">Loading…</p></div>`;
   let runId = null, storyId = null, pending = 0;
+  bindLogin(view.querySelector("#gen"));  // final patch: sign-in fields (defect 4)
   view.querySelector("#gen").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
@@ -789,6 +801,7 @@ async function guidedPanel(view, { appendTo = null } = {}) {
       <label>Credential role <input name="credential_role" list="roles" value="${esc(target?.credential_role || "")}" placeholder="passwords become {{CRED:role.password}}"></label>
       <datalist id="roles">${roles.map((r) => `<option value="${esc(r)}">`).join("")}</datalist>
       <label>Application <input name="application" value="${esc(target?.application || "")}"></label>
+      ${loginBlock()}
       <label>Browser <select name="browser"><option value="chromium">Chromium (included)</option><option value="msedge">Microsoft Edge</option><option value="chrome">Google Chrome</option></select></label>
       ${target ? `<label style="grid-column:1/-1;display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="replay" style="width:auto;margin:0" ${(replayParam || n) && firstAt > 1 ? "checked" : ""}>
         <span>Play the script's steps before this position first (<span id="replayRange"></span>), so the browser is already on the right screen</span></label>` : ""}
@@ -819,6 +832,7 @@ async function guidedPanel(view, { appendTo = null } = {}) {
     </div>
     <div class="card" id="list" style="margin-top:12px"><p class="muted">Loading…</p></div>`;
   const rec = view.querySelector("#rec");
+  bindLogin(rec);  // final patch: sign-in fields for hybrid recording (defect 9)
   preselectBrowser(rec);  // 23.3.33: starts on the browser chosen in Settings (Edge when installed)
   const wirePlace = (form, prefix) => {
     if (!form) return;

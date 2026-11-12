@@ -511,6 +511,195 @@ MIGRATIONS: list[str] = [
     ALTER TABLE perf_runs ADD COLUMN schedule_id TEXT;
     CREATE INDEX IF NOT EXISTS ix_perf_runs_schedule ON perf_runs(schedule_id);
     """,
+    # 17 (final patch 23.4.0): Application Data Comparison Agent. New tables only; nothing existing changes, so the
+    # previous version keeps working on this database after a rollback (it ignores tables it does not know).
+    """
+    CREATE TABLE IF NOT EXISTS cmp_projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        owner TEXT NOT NULL,
+        members TEXT NOT NULL DEFAULT '[]',
+        settings TEXT NOT NULL DEFAULT '{}',
+        archived INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cmp_applications (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        app_type TEXT NOT NULL,
+        base_url TEXT,
+        config TEXT NOT NULL DEFAULT '{}',
+        environment TEXT,
+        auth_method TEXT NOT NULL DEFAULT 'none',
+        credential_role TEXT,
+        description TEXT,
+        connection_status TEXT,
+        connection_detail TEXT,
+        last_connected_at TEXT,
+        profile_version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_apps_project ON cmp_applications(project_id);
+    CREATE TABLE IF NOT EXISTS cmp_screens (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        application_id TEXT NOT NULL REFERENCES cmp_applications(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        location TEXT,
+        discovery TEXT NOT NULL DEFAULT '{}',
+        fingerprint TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_screens_app ON cmp_screens(application_id, created_at);
+    CREATE TABLE IF NOT EXISTS cmp_datasets (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        application_id TEXT NOT NULL REFERENCES cmp_applications(id) ON DELETE CASCADE,
+        screen_id TEXT,
+        kind TEXT NOT NULL,
+        method TEXT NOT NULL,
+        status TEXT NOT NULL,
+        filters TEXT NOT NULL DEFAULT '{}',
+        stats TEXT NOT NULL DEFAULT '{}',
+        aggregates TEXT NOT NULL DEFAULT '{}',
+        checkpoint TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_datasets_app ON cmp_datasets(application_id, created_at);
+    CREATE TABLE IF NOT EXISTS cmp_records (
+        dataset_id TEXT NOT NULL REFERENCES cmp_datasets(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        record_key TEXT,
+        page INTEGER,
+        fields TEXT NOT NULL,
+        PRIMARY KEY (dataset_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_records_key ON cmp_records(dataset_id, record_key);
+    CREATE TABLE IF NOT EXISTS cmp_mappings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        source_app TEXT NOT NULL,
+        target_app TEXT NOT NULL,
+        mappings TEXT NOT NULL,
+        key_fields TEXT NOT NULL DEFAULT '{}',
+        filter_map TEXT NOT NULL DEFAULT '[]',
+        note TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (project_id, source_app, target_app, version)
+    );
+    CREATE TABLE IF NOT EXISTS cmp_evidence (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        application_id TEXT,
+        screen TEXT,
+        kind TEXT NOT NULL,
+        file TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        width INTEGER,
+        height INTEGER,
+        source TEXT NOT NULL,
+        sequence INTEGER,
+        ocr TEXT,
+        notes TEXT,
+        original_name TEXT,
+        captured_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_evidence_project ON cmp_evidence(project_id, captured_at);
+    CREATE TABLE IF NOT EXISTS cmp_aggregate_defs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        definition TEXT NOT NULL,
+        approved INTEGER NOT NULL DEFAULT 0,
+        approved_by TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cmp_executions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        result TEXT,
+        config TEXT NOT NULL DEFAULT '{}',
+        summary TEXT NOT NULL DEFAULT '{}',
+        detail TEXT,
+        created_by TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_exec_project ON cmp_executions(project_id, started_at);
+    CREATE TABLE IF NOT EXISTS cmp_discrepancies (
+        id TEXT NOT NULL,
+        execution_id TEXT NOT NULL REFERENCES cmp_executions(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        record_key TEXT,
+        source_field TEXT,
+        target_field TEXT,
+        data TEXT NOT NULL,
+        PRIMARY KEY (execution_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_disc_cat ON cmp_discrepancies(project_id, category);
+    CREATE TABLE IF NOT EXISTS cmp_defects (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        execution_id TEXT,
+        discrepancy_id TEXT,
+        status TEXT NOT NULL,
+        title TEXT NOT NULL,
+        severity INTEGER NOT NULL DEFAULT 3,
+        priority INTEGER NOT NULL DEFAULT 3,
+        data TEXT NOT NULL,
+        investigation TEXT,
+        tfs_id INTEGER,
+        tfs_sync TEXT,
+        comments TEXT NOT NULL DEFAULT '[]',
+        history TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_defects_project ON cmp_defects(project_id, status);
+    CREATE TABLE IF NOT EXISTS cmp_navigation (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        step TEXT NOT NULL,
+        details TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_nav_session ON cmp_navigation(session_id, id);
+    CREATE TABLE IF NOT EXISTS cmp_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        project_id TEXT,
+        actor TEXT,
+        action TEXT NOT NULL,
+        target TEXT,
+        details TEXT,
+        prev_hash TEXT,
+        hash TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_audit_project ON cmp_audit(project_id, id);
+    CREATE TRIGGER IF NOT EXISTS cmp_audit_no_update BEFORE UPDATE ON cmp_audit
+        BEGIN SELECT RAISE(ABORT, 'audit records cannot be changed'); END;
+    CREATE TRIGGER IF NOT EXISTS cmp_audit_no_delete BEFORE DELETE ON cmp_audit
+        BEGIN SELECT RAISE(ABORT, 'audit records cannot be deleted'); END;
+    """,
+    # 18 (final patch 23.4.0): the sign-in method of an application credential (form, windows/NTLM, basic, manual SSO)
+    """
+    ALTER TABLE app_credentials ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'form';
+    """,
 ]
 
 

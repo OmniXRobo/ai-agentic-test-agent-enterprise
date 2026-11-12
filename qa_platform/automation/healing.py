@@ -17,6 +17,9 @@ from typing import Any
 
 THRESHOLD = 0.62
 MIN_MARGIN = 0.08
+# Final patch (defect 7): a best candidate between REVIEW_FLOOR and THRESHOLD, or an ambiguous pair above it, is not
+# used silently: the run records it as "needs_confirmation" and a person picks the element (or rejects them all).
+REVIEW_FLOOR = 0.45
 
 WEIGHTS = {
     "test_id": 0.30,
@@ -30,7 +33,16 @@ WEIGHTS = {
     "input_type": 0.05,
     "href": 0.06,
     "classes": 0.04,
+    # where the element sits (recorded since the final patch; older fingerprints simply lack them)
+    "nearby_text": 0.07,
+    "parent": 0.04,
+    "form": 0.04,
+    "shadow_host": 0.04,
+    "ancestors": 0.04,
+    "siblings": 0.04,
 }
+
+LIST_FIELDS = {"classes", "ancestors", "siblings"}
 
 
 def _sim(a: str | None, b: str | None) -> float:
@@ -47,10 +59,10 @@ def score(target: Any, cand: dict[str, Any]) -> tuple[float, dict[str, float]]:
     total_weight = 0.0
     for field, weight in WEIGHTS.items():
         want = getattr(target, field, None)
-        if field == "classes":
+        if field in LIST_FIELDS:
             if not want:
                 continue
-            have = set(cand.get("classes") or [])
+            have = set(cand.get(field) or [])
             value = len(set(want) & have) / len(set(want)) if want else 0.0
         else:
             if want in (None, ""):
@@ -88,3 +100,12 @@ def choose(ranked: list[dict[str, Any]]) -> dict[str, Any] | None:
             and ranked[1]["confidence"] >= THRESHOLD:
         return None  # ambiguous: two elements look equally right
     return ranked[0]
+
+
+def review(ranked: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]] | None:
+    """The candidates a person should look at when ``choose`` declined but something came close.
+
+    Returns None when nothing reached REVIEW_FLOOR (a plain failure: the element is really gone)."""
+    if not ranked or ranked[0]["confidence"] < REVIEW_FLOOR:
+        return None
+    return [c for c in ranked[:limit] if c["confidence"] >= REVIEW_FLOOR]

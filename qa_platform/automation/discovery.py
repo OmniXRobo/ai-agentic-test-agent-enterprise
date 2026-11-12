@@ -31,7 +31,7 @@ from ..credentials import APP_CREDENTIAL_NAMESPACE
 from ..errors import QAError
 from ..events import names
 from ..storage.db import Database, dumps, loads
-from .browser import js, launch, start_playwright
+from .browser import context_options, js, launch, start_playwright
 
 STATIC = re.compile(r"\.(png|jpe?g|gif|svg|ico|css|js|woff2?|ttf|map|pdf|zip)(\?|$)", re.I)
 LOGOUT = re.compile(r"log[\s_-]?out|sign[\s_-]?out|log[\s_-]?off|sign[\s_-]?off", re.I)
@@ -227,6 +227,7 @@ class Discovery:
                         (did, run_id, base_url, result["created_at"], dumps(result), application, result["version"],
                          knowledge_source, "COMPLETED"))
         result["id"] = did
+        _teach_aura(application or base_url, result)
         return result
 
     # ---- memory -----------------------------------------------------------------------------
@@ -453,7 +454,11 @@ class _Explorer:
         b = context = None
         try:
             b = launch(pw, self.browser_kind, headless=self.headless)
-            context = b.new_context(viewport={"width": 1366, "height": 768}, ignore_https_errors=True)
+            opts = context_options(self.headless, ignore_https_errors=True)
+            row, password = self._credential()  # final patch: Windows (NTLM) / Basic sign-in
+            if row and password and (row.get("auth_method") or "form") in ("windows", "basic"):
+                opts["http_credentials"] = {"username": row["username"], "password": password}
+            context = b.new_context(**opts)
             context.add_init_script(js("fingerprint"))
             context.add_init_script(js("discovery"))
             if self.visual:
@@ -1061,3 +1066,36 @@ def _pause_events(act: Any, state: str, text: str) -> None:
         act.event(names.AGENT_PAUSED, f"Paused: {text or 'waiting for your input'}")
     elif state == "RESUMING":
         act.event(names.AGENT_RESUMED, text or "Input received; continuing")
+
+
+def _teach_aura(application: str, result: dict[str, Any]) -> None:
+    """Final patch: AURA learns the application's profile, page structures and components from a discovery.
+    Typed values are never part of a discovery; AURA scrubs secrets again before storing."""
+    from .. import aura
+
+    if aura.current() is None:
+        return
+    pages = [p for p in result.get("pages", []) if not p.get("error")]
+    aura.learn("application_profile", application, "profile", {
+        "base_url": result.get("base_url"), "pages": sorted(_path_key(p["url"]) for p in pages),
+        "authentication": {k: v for k, v in (result.get("authentication") or {}).items()
+                           if k in ("required", "type", "status", "login_url")},
+        "flows": [f.get("name") for f in result.get("flows", [])][:50]}, source="discovery", agent="app_discovery")
+    for p in pages[:200]:
+        elements = p.get("elements") or []
+        aura.learn("page_structure", application, _path_key(p["url"]), {
+            "title": p.get("title"), "name": p.get("name"),
+            "elements": sorted({f"{e.get('tag') or ''}|{e.get('role') or ''}|{e.get('name') or e.get('label') or ''}"
+                                for e in elements})[:400],
+            "forms": len(p.get("forms") or [])}, source="discovery", agent="app_discovery")
+        for e in elements[:300]:
+            label = (e.get("label") or e.get("name") or "").strip()
+            if not label or e.get("input_type") == "password":
+                continue
+            kind = ("dropdown" if e.get("tag") == "select" or e.get("role") in ("combobox", "listbox") else
+                    "date_time" if (e.get("input_type") or "") in ("date", "time", "datetime-local") else
+                    e.get("role") or e.get("tag") or "element")
+            aura.learn("component", application, f"label:{label.lower()[:120]}", {
+                "kind": kind, "page": _path_key(p["url"]), "tag": e.get("tag"), "role": e.get("role"),
+                "input_type": e.get("input_type"), "selector": e.get("selector"),
+                "alternates": (e.get("alternates") or [])[:4]}, source="discovery", agent="app_discovery")

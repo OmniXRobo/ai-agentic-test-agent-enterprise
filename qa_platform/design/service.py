@@ -275,6 +275,12 @@ class DesignService:
             result["test_data"] = data.model_dump()["datasets"]
         except Exception as exc:
             result["error"] = exc.message if isinstance(exc, QAError) else str(exc)
+            if isinstance(exc, QAError) and exc.error_code.startswith("AI_"):
+                # final patch: say why the On-Premise AI could not produce the design, next to the error
+                try:
+                    result["diagnostics"] = self.ai.quick_diagnostics(exc)
+                except Exception:
+                    pass
             self._save(run_id, sid, result)
             self.runs.finish(run_id, "FAILED", {"error": result["error"]})
             raise

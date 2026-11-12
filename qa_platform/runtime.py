@@ -70,8 +70,17 @@ class Runtime:
     scheduler: Any = None  # 23.3.21: Scheduled Runs
     perf_scheduler: Any = None  # 23.3.29: performance schedules
     ai_reports: Any = None  # 23.3.31: AI analysis reports with PDF and email
+    aura: Any = None  # final patch: AURA learning memory
+    comparison: Any = None  # final patch: Application Data Comparison Agent
 
     def close(self) -> None:
+        if self.comparison is not None:
+            try:
+                self.comparison.close()
+            except Exception:
+                pass
+        if self.aura is not None:
+            self.aura.close()
         if self.scheduler is not None:
             self.scheduler.close()
         if self.perf_scheduler is not None:
@@ -175,4 +184,27 @@ def build_runtime(
     # 23.3.22: performance runs left active by an earlier shutdown become INTERRUPTED; the run queue starts
     performance.start()
     rt.perf_scheduler.start()
+    _final_patch(rt, ai_transport)
     return rt
+
+
+def _final_patch(rt: Runtime, ai_transport: Any) -> None:
+    """Final patch (23.4.0): Browser Manager, local model start on demand, AURA, Data Comparison Agent."""
+    from . import aura as aura_module
+    from .automation import browser as browser_manager
+    from .aura.service import AuraService
+
+    browser_manager.configure(rt.settings)  # every module starts the browser chosen in Preferences
+    if ai_transport is None:
+        rt.ai.llm = rt.llm  # an AI request that finds the local model stopped starts it once and waits
+    try:
+        rt.aura = AuraService(rt.settings, rt.paths)
+        aura_module.install(rt.aura)
+    except Exception as exc:  # the application starts without AURA; Preferences > AURA says why
+        log.warning(f"AURA did not start: {exc}")
+    try:
+        from .comparison.service import ComparisonService
+
+        rt.comparison = ComparisonService(rt)
+    except Exception as exc:
+        log.warning(f"Data Comparison Agent did not start: {exc}")

@@ -594,3 +594,95 @@ pre.code.diff.jdiff span { display: block; }
 .user-new { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; align-items: end; }
 .user-new .row { margin: 0; }
 #netCard h3 { margin-top: 18px; }
+
+/* ---- Final patch: Application Data Comparison Agent ---- */
+.cmp-bar { gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.cmp-body .card { margin-bottom: 12px; }
+.cmp-body .grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.cmp-body .grid.cols-4 { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.cmp-body .kpi { font-size: 26px; font-weight: 600; margin-bottom: 8px; }
+.cmp-body .table-wrap { overflow-x: auto; }
+.cmp-bar-row { display: grid; grid-template-columns: minmax(90px, 40%) 1fr auto; gap: 8px; align-items: center; font-size: 12px; margin: 4px 0; }
+.cmp-bar-track { background: var(--surface-2); border-radius: 4px; height: 10px; overflow: hidden; }
+.cmp-bar-fill { background: var(--accent); height: 100%; }
+
+/* ---- Final patch: collapsible sidebar (icons + tooltips when collapsed) ---- */
+.menu-btn { display: inline-grid; }
+.nav-link { gap: 10px; justify-content: flex-start; }
+.nav-ico { flex: none; opacity: .85; }
+.nav-link.active .nav-ico { opacity: 1; }
+.nav-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar { transition: width .18s ease; }
+.shell.nav-collapsed .sidebar { width: 64px; padding-left: 8px; padding-right: 8px; overflow-x: hidden; }
+.shell.nav-collapsed .brand > div, .shell.nav-collapsed .side-foot, .shell.nav-collapsed .nav-text { display: none; }
+.shell.nav-collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; }
+.shell.nav-collapsed .nav-group { height: 1px; margin: 10px 4px; padding: 0; background: var(--border); }
+.shell.nav-collapsed .nav-link { justify-content: center; padding: 8px 0; }
+.shell.nav-collapsed .nav-link.hot::before { position: absolute; margin: 0 0 22px 22px; }
+@media (max-width: 760px) {
+  .shell.nav-collapsed .sidebar { width: 248px; }
+  .shell.nav-collapsed .brand > div, .shell.nav-collapsed .nav-text { display: initial; }
+}
+
+/* ---- Final patch: light theme for the tactical console pages (AI Voice Command Center, Voice & Command Agent).
+   The dark theme keeps the night console unchanged. In the light theme the same console is drawn with light
+   surface tokens and darker cyan/amber so every label, button and input keeps WCAG AA contrast. ---- */
+:root[data-theme="light"] .cockpit {
+  --hud: #0369a1;
+  --hud-dim: rgba(3, 105, 161, 0.55);
+  --hud-soft: rgba(3, 105, 161, 0.1);
+  --amber: #b45309;
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --surface-2: #eef3f9;
+  --border: #c9d6e6;
+  --text: #0f172a;
+  --muted: #475569;
+  --accent: #0369a1;
+  --accent-soft: rgba(3, 105, 161, 0.1);
+  --fail: #c62828;
+  --fail-soft: rgba(198, 40, 40, 0.1);
+  --ok-soft: rgba(3, 105, 161, 0.1);
+  --panel-grad: linear-gradient(180deg, #ffffff, #f3f7fc);
+  --glow: 0 0 0 1px rgba(3, 105, 161, .25);
+  color-scheme: light;
+  background:
+    repeating-linear-gradient(0deg, rgba(3, 105, 161, 0.025) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #f8fbff, #edf3fa);
+}
+:root[data-theme="light"] .cockpit .ck-head { background: var(--surface); }
+:root[data-theme="light"] .cockpit .ck-callsign { text-shadow: none; }
+:root[data-theme="light"] .cockpit .ck-meta span { border-color: rgba(180, 83, 9, .45); }
+:root[data-theme="light"] .cockpit .ck-panel,
+:root[data-theme="light"] .cockpit .card { background: var(--surface); border-color: var(--border); }
+:root[data-theme="light"] .cockpit .vlog { background: var(--surface-2); }
+:root[data-theme="light"] .cockpit input, :root[data-theme="light"] .cockpit select,
+:root[data-theme="light"] .cockpit textarea { background: #fff; color: var(--text); border-color: var(--border); }
+:root[data-theme="light"] .cockpit input::placeholder { color: #64748b; }
+:root[data-theme="light"] .cockpit .btn { background: #fff; color: var(--text); border-color: var(--border); }
+:root[data-theme="light"] .cockpit .btn.primary { background: var(--hud); border-color: var(--hud); color: #fff; }
+:root[data-theme="light"] .cockpit .btn.primary:hover { background: #075985; }
+:root[data-theme="light"] .cockpit .handoff .hop { background: var(--surface-2); }
+:root[data-theme="light"] .cockpit .ck-status strong { text-shadow: none; }
+:root[data-theme="light"] .cockpit .mic-btn { background: radial-gradient(circle at 50% 35%, #e0f2fe, #bae6fd); color: var(--hud);
+  box-shadow: 0 0 0 4px rgba(3, 105, 161, .12); }
+:root[data-theme="light"] .cockpit .mic-btn.on { background: radial-gradient(circle at 50% 35%, #fee2e2, #fecaca); color: var(--fail); }
+:root[data-theme="light"] .cockpit .pill.READY, :root[data-theme="light"] .cockpit .pill.PASS { color: var(--hud); }
+:root[data-theme="light"] .cockpit .pill.FAIL, :root[data-theme="light"] .cockpit .pill.FAILED { color: var(--fail); }
+:root[data-theme="light"] .cockpit .handoff .hop.bad { color: var(--fail); }
+:root[data-theme="light"] .cockpit .radar {
+  box-shadow: 0 0 0 1px rgba(3, 105, 161, .15), inset 0 0 30px rgba(3, 105, 161, .08);
+  background:
+    linear-gradient(var(--hud-soft), var(--hud-soft)) center / 1px 100% no-repeat,
+    linear-gradient(var(--hud-soft), var(--hud-soft)) center / 100% 1px no-repeat,
+    repeating-radial-gradient(circle, transparent 0 29px, rgba(3, 105, 161, .2) 29px 30px),
+    radial-gradient(circle, #f0f8ff 0%, #d6e8f7 75%);
+}
+:root[data-theme="light"] .cockpit .radar-sweep { background: conic-gradient(from 0deg, rgba(3, 105, 161, .3), rgba(3, 105, 161, 0) 70deg, transparent 360deg); }
+
+/* ---- Final patch: application sign-in fields (Generate Automation, Discovery, Hybrid) ---- */
+.login-box { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin: 4px 0; }
+.login-box legend { padding: 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.login-box label { display: grid; gap: 4px; font-size: 13px; }
+.login-box .login-actions { grid-column: 1 / -1; gap: 10px; align-items: center; }

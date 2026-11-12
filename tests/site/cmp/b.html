@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Portal B</title><script src="data.js"></script></head>
+<body><form id="login"><input id="user" type="email" name="email"><input id="pass" type="password">
+<button type="submit">Log in</button><span id="err"></span></form>
+<div id="app" hidden><h1>Billing</h1>
+<div class="kpi-card"><div>Total Invoices</div><div id="k1"></div></div>
+<div class="kpi-card"><div>Pending Invoices</div><div id="k2"></div></div>
+<div class="kpi-card"><div>Total Amount</div><div id="k3"></div></div>
+<svg data-chart aria-label="Invoices by status" width="200" height="60"><rect data-label="Paid" data-value="200" width="100" height="20"/><rect data-label="Pending" data-value="49" y="30" width="30" height="20"/></svg>
+<div role="grid" id="grid"><div role="row"><span role="columnheader">Client Code</span><span role="columnheader">Client</span><span role="columnheader">Value</span><span role="columnheader">State</span><span role="columnheader">Created On</span></div><div id="rows"></div></div>
+<div id="info"></div><button id="prev" aria-label="Previous page">‹</button><button id="next" aria-label="Next page">›</button></div>
+<script>
+// Deliberate defects: INV-0100 amount differs by 10, INV-0200 is missing.
+const rows = invoices().filter(r => r.id !== 'INV-0200').map(r => r.id === 'INV-0100' ? { ...r, amount: r.amount + 10 } : r);
+login(() => {
+  document.getElementById('k1').textContent = String(rows.length);
+  document.getElementById('k2').textContent = String(rows.filter(r => r.status === 'Pending').length);
+  document.getElementById('k3').textContent = 'AED ' + fmt(rows.reduce((a, r) => a + r.amount, 0));
+  pager(rows, 50, (slice) => {
+    document.getElementById('rows').innerHTML = slice.map(r => `<div role="row"><span role="gridcell">${r.id}</span><span role="gridcell">${r.customer}</span>` +
+      `<span role="gridcell">${r.amount.toFixed(2)}</span><span role="gridcell">${r.status === 'Paid' ? 'Active' : 'Open'}</span>` +
+      `<span role="gridcell">2026-${String(r.month).padStart(2, '0')}-${String(r.day).padStart(2, '0')}</span></div>`).join('');
+  });
+});
+</script></body></html>

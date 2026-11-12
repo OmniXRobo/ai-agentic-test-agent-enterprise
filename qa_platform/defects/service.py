@@ -19,6 +19,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from .. import branding
 from ..agents.base import BaseAgent
 from ..clock import now_iso
 from ..config import Settings
@@ -310,6 +311,34 @@ class DefectService:
         word = SEVERITY_WORDS[level]
         return next((v for v in allowed if word in v.lower()), None)
 
+    def _environment_values(self, type_name: str, draft: dict[str, Any]) -> dict[str, Any]:
+        """Final patch: the environment and system information of the failing run, written to the fields this
+        project has for them (Preferences > TFS Integration > field mappings, else the standard System Info field and
+        a field named Environment). Nothing is guessed: a value is only written to a field the type has."""
+        try:
+            fields = self.tfs.field_schema(type_name)
+        except QAError:
+            return {}
+        mapping = (self.tfs.settings.section("tfs").get("concept_fields") or {}).get(self.tfs.project_key()) or {}
+        facts = draft.get("facts") or {}
+        env_bits = [f"{k}: {facts[k]}" for k in ("application", "environment", "base_url", "browser", "build")
+                    if facts.get(k)]
+        out: dict[str, Any] = {}
+        sys_ref = mapping.get("system_info") or ("Microsoft.VSTS.TCM.SystemInfo"
+                                                 if "Microsoft.VSTS.TCM.SystemInfo" in fields else None)
+        if sys_ref and sys_ref in fields:
+            import platform
+
+            out[sys_ref] = html.escape(
+                f"Found by {branding.name()} automated run {draft['source_run_id']} on {platform.system()} {platform.release()}"
+                + ("; " + "; ".join(env_bits) if env_bits else ""))
+        env_ref = mapping.get("environment") or next(
+            (r for r, f in fields.items() if f.name.strip().lower() in ("environment", "test environment")), None)
+        env_value = facts.get("environment") or facts.get("base_url")
+        if env_ref and env_ref in fields and env_value:
+            out[env_ref] = env_value
+        return out
+
     def create(self, draft_id: int, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         if overrides:
             self.update(draft_id, overrides)
@@ -327,6 +356,7 @@ class DefectService:
                     "Microsoft.VSTS.Common.Severity": self._severity_value(type_name, draft["severity"]),
                     "System.Tags": "QA-Automation; " + ("Performance" if draft["source"] == "performance" else "Functional"),
                 }
+                values.update(self._environment_values(type_name, draft))  # final patch: Environment, System Info
                 patch, skipped = self.tfs.build_patch(type_name, values)
                 if values["Microsoft.VSTS.Common.Severity"] is None:
                     has_field = "Microsoft.VSTS.Common.Severity" in self.tfs.type_field_refs(type_name)
@@ -360,6 +390,12 @@ class DefectService:
             act.event(names.DEFECT_CREATED, f"{type_name} #{item['id']}: {draft['title'][:120]}",
                       link=f"#/defects?id={item['id']}", tfs_id=item["id"], attachments=attached, skipped_fields=skipped)
             act.complete(f"{type_name} #{item['id']} created in TFS")
+            from .. import aura  # final patch: AURA remembers known defects (title and signature, no evidence data)
+
+            aura.learn("known_defect", (draft.get("facts") or {}).get("application"), f"tfs:{item['id']}", {
+                "title": draft["title"], "category": draft.get("category"), "severity": draft.get("severity"),
+                "source": draft.get("source"), "signature": draft.get("signature"), "tfs_id": item["id"]},
+                source="defects", approved=True, agent="defect_intelligence")
         return {**self.get(draft_id), "type": type_name, "skipped_fields": skipped, "attachments": attached}
 
     def link_existing(self, draft_id: int, tfs_id: int) -> dict[str, Any]:

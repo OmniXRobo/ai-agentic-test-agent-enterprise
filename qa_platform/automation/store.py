@@ -164,6 +164,22 @@ class ScriptStore:
         folder.replace(archive / f"{script_id}-{now_iso().replace(':', '').replace('.', '')[:17]}")
 
 
+AUTH_METHODS = ("form", "windows", "basic", "manual", "none")
+
+
+def http_credentials(creds: "CredentialProfiles | None", application: str | None, role: str | None,
+                     environment: str | None = None) -> dict[str, str] | None:
+    """Playwright ``http_credentials`` for an application that signs in with Windows (NTLM/Negotiate) or Basic
+    authentication. None for a login form (filled on the page) or when nothing is saved."""
+    if creds is None or not application or not role:
+        return None
+    row = creds.find(application, role, environment)
+    if not row or (row.get("auth_method") or "form") not in ("windows", "basic"):
+        return None
+    password = creds.password_of(row["id"])
+    return {"username": row["username"], "password": password} if password else None
+
+
 class CredentialProfiles:
     """Role-based application credentials. Usernames in SQLite, passwords in the OS credential store.
 
@@ -188,9 +204,11 @@ class CredentialProfiles:
         return rows
 
     def save(self, application: str, role: str, username: str, password: str | None, login_url: str | None,
-             environment: str | None = None) -> dict[str, Any]:
+             environment: str | None = None, auth_method: str | None = None) -> dict[str, Any]:
         if not application.strip() or not role.strip() or not username.strip():
             raise QAError("CREDENTIAL_INVALID", "Application, role and username are required.")
+        if auth_method is not None and auth_method not in AUTH_METHODS:
+            raise QAError("CREDENTIAL_INVALID", f"Sign-in method must be one of {', '.join(AUTH_METHODS)}.")
         env = (environment or "").strip()
         cid = self.key(application, role, env)
         self.db.execute(
@@ -200,6 +218,8 @@ class CredentialProfiles:
             " updated_at = excluded.updated_at",
             (cid, application.strip(), role.strip(), env, username.strip(), login_url, now_iso()),
         )
+        if auth_method is not None:  # final patch: form, windows (NTLM), basic or manual (SSO/MFA)
+            self.db.execute("UPDATE app_credentials SET auth_method = ? WHERE id = ?", (auth_method, cid))
         if password:
             self.secrets.set(APP_CREDENTIAL_NAMESPACE, cid, password)
         return next(r for r in self.list() if r["id"] == cid)
@@ -240,4 +260,6 @@ class CredentialProfiles:
             return self.secrets.get(APP_CREDENTIAL_NAMESPACE, row["id"])
         if field == "login_url":
             return row["login_url"]
+        if field == "auth_method":
+            return row.get("auth_method") or "form"
         return None

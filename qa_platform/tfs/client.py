@@ -11,6 +11,8 @@ supported by Azure DevOps Online and TFS 2017 or later.
 from __future__ import annotations
 
 import base64
+import ssl
+from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
 
@@ -19,6 +21,61 @@ import httpx
 from ..errors import QAError
 
 WORK_ITEM_BATCH = 200
+
+
+def tls_context(verify_tls: bool = True, ca_bundle: str | None = None) -> ssl.SSLContext | bool:
+    """Final patch: the certificates TFS is checked against.
+
+    Earlier versions trusted only the certifi list shipped with Python. A TFS server inside a company usually has a
+    certificate from the company's own certificate authority, which Windows trusts (it is in the Windows certificate
+    store) but certifi does not, so every HTTPS call failed with CERTIFICATE_VERIFY_FAILED although Edge opened the
+    same server without a warning. The context now trusts the Windows certificate store as well as certifi, and an
+    optional CA bundle file (Preferences > TFS Integration). Certificate checking is never switched off here; only the
+    existing per-profile "verify TLS" choice for a local TFS server can do that.
+    """
+    if not verify_tls:
+        return False
+    ctx = ssl.create_default_context()
+    try:  # the Windows certificate store on Windows, the system store elsewhere
+        ctx.load_default_certs()
+    except (OSError, ssl.SSLError):
+        pass
+    try:
+        import certifi
+
+        ctx.load_verify_locations(cafile=certifi.where())
+    except (ImportError, OSError, ssl.SSLError):
+        pass
+    if ca_bundle:
+        path = Path(ca_bundle).expanduser()
+        if not path.is_file():
+            raise QAError("TFS_CA_BUNDLE_MISSING", f"The CA certificate file {path} does not exist.", status=409)
+        try:
+            ctx.load_verify_locations(cafile=str(path))
+        except (OSError, ssl.SSLError) as exc:
+            raise QAError("TFS_CA_BUNDLE_INVALID", f"The CA certificate file {path} could not be read as PEM "
+                          "certificates.", status=409, details=str(exc)) from exc
+    return ctx
+
+
+def connect_error(base_url: str, exc: Exception) -> QAError:
+    """A readable reason for a failed connection, so a certificate problem is not reported as 'cannot connect'."""
+    text = str(exc)
+    low = text.lower()
+    if "certificate_verify_failed" in low or "certificate verify failed" in low:
+        why = ("self-signed" if "self-signed" in low or "self signed" in low else
+               "issued by an authority this PC does not trust" if "unable to get local issuer" in low else
+               "expired" if "expired" in low else "not trusted")
+        return QAError("TFS_TLS_FAILED", f"HTTPS certificate check failed for {base_url}: the server's certificate is "
+                       f"{why}. Install the company's root certificate in Windows (or set its CA file under "
+                       "Preferences > TFS Integration). The connection was not made.", status=502, details=text)
+    if "hostname mismatch" in low or "doesn't match" in low:
+        return QAError("TFS_TLS_FAILED", f"The HTTPS certificate of {base_url} is for a different server name. Use "
+                       "the server name written in its certificate.", status=502, details=text)
+    if "wrong version number" in low or "unknown protocol" in low:
+        return QAError("TFS_TLS_FAILED", f"{base_url} does not answer HTTPS on this port. Check http:// versus "
+                       "https:// and the port in the server URL.", status=502, details=text)
+    return QAError("TFS_UNREACHABLE", f"Cannot connect to {base_url}.", status=502, details=text)
 
 
 def wiql_quote(value: str) -> str:
@@ -36,6 +93,7 @@ class AzureDevOpsClient:
         verify_tls: bool = True,
         timeout: float = 30.0,
         transport: httpx.BaseTransport | None = None,
+        ca_bundle: str | None = None,
     ) -> None:
         if not base_url:
             raise QAError("TFS_NOT_CONFIGURED", "No TFS / Azure DevOps server URL is configured.")
@@ -46,7 +104,7 @@ class AzureDevOpsClient:
         self._http = httpx.Client(
             headers={"Authorization": f"Basic {token}", "Accept": "application/json"},
             timeout=timeout,
-            verify=verify_tls,
+            verify=tls_context(verify_tls, ca_bundle) if transport is None else verify_tls,
             transport=transport,
             follow_redirects=False,
         )
@@ -78,8 +136,7 @@ class AzureDevOpsClient:
             resp = self._http.request(method, self._url(path, project_scoped), params=query, json=json,
                                       content=content, headers=headers)
         except httpx.ConnectError as exc:
-            raise QAError("TFS_UNREACHABLE", f"Cannot connect to {self.base_url}.", status=502,
-                          details=str(exc)) from exc
+            raise connect_error(self.base_url, exc) from exc
         except httpx.TimeoutException as exc:
             raise QAError("TFS_TIMEOUT", f"{self.base_url} did not respond in time.", status=504) from exc
         except httpx.HTTPError as exc:
@@ -91,6 +148,13 @@ class AzureDevOpsClient:
     def _parse(resp: httpx.Response) -> Any:
         ctype = resp.headers.get("content-type", "")
         # Azure DevOps answers an invalid PAT with 203 + an HTML sign-in page, or a 302 to sign-in.
+        if resp.status_code in (301, 307, 308) or (resp.status_code == 302 and
+                                                   resp.headers.get("location", "").lower().startswith("https://")
+                                                   and resp.request.url.scheme == "http"):
+            target = resp.headers.get("location", "")
+            raise QAError("TFS_REDIRECTED", f"The TFS server sends this address to {target or 'another address'}. "
+                          "Use that address (usually https://) as the server URL in TFS Connection.", status=409,
+                          details=target)
         if resp.status_code in (203, 302) or (resp.is_success and "json" not in ctype and resp.content):
             raise QAError("TFS_AUTH_FAILED", "Authentication failed: the server returned a sign-in page. "
                           "Check that the PAT is valid and not expired.", status=401)
@@ -105,6 +169,15 @@ class AzureDevOpsClient:
         if resp.status_code == 429:
             raise QAError("TFS_RATE_LIMITED", "The TFS server is throttling requests.", status=429,
                           details=resp.headers.get("retry-after"))
+        if resp.status_code == 400 and "TF401320" in (_server_message(resp) or ""):
+            from .fields import rule_error_fields
+
+            message = _server_message(resp) or ""
+            found = rule_error_fields(message)
+            raise QAError("TFS_FIELD_RULE", "TFS refused the work item: "
+                          + "; ".join(f"field '{f['name']}' ({f['codes'] or 'rule'})" for f in found)
+                          + ". " + "Choose a valid value for it.", status=422,
+                          details={"message": message, "fields": found})
         if not resp.is_success:
             raise QAError("TFS_REQUEST_FAILED", f"TFS request failed with HTTP {resp.status_code}.",
                           status=502 if resp.status_code >= 500 else 400, details=_server_message(resp))
@@ -171,9 +244,12 @@ class AzureDevOpsClient:
         return self.request("GET", f"_apis/wit/workitems/{int(item_id)}", project_scoped=False,
                             params={"$expand": "relations"})
 
-    def create_work_item(self, type_name: str, patch: list[dict[str, Any]]) -> dict[str, Any]:
+    def create_work_item(self, type_name: str, patch: list[dict[str, Any]], *,
+                         validate_only: bool = False) -> dict[str, Any]:
+        """validate_only: TFS checks the work item against every rule of the project without saving it."""
         return self.request("POST", f"_apis/wit/workitems/${quote(type_name, safe='')}", json=patch,
-                            content_type="application/json-patch+json")
+                            content_type="application/json-patch+json",
+                            params={"validateOnly": "true"} if validate_only else None)
 
     def update_work_item(self, item_id: int, patch: list[dict[str, Any]]) -> dict[str, Any]:
         return self.request("PATCH", f"_apis/wit/workitems/{int(item_id)}", project_scoped=False, json=patch,

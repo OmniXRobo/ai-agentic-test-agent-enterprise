@@ -178,3 +178,25 @@ a.pr-row:hover .pr-lab { color: var(--accent); }
 .wf-hero .wf-count b { color: #fff; }
 @media (max-width: 760px) { .wf-hero-title { font-size: 20px; } }
 @media (prefers-reduced-motion: reduce) { .wf-flight, .wf-blip, .wf-hero-sweep { animation: none !important; } }
+
+/* ---- Final patch: Agent Workflow header and aeroplane in the light theme (the dark theme is unchanged).
+   A daylight sky with dark text; the legend strip keeps readable counts; the jet and radar use the light accent. ---- */
+:root[data-theme="light"] .wf-hero {
+  border-color: #bcd3ea;
+  background: radial-gradient(700px 200px at 85% 50%, rgba(3, 105, 161, .12), transparent 70%),
+    linear-gradient(180deg, #eaf4fd, #d9e9f8);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, .06);
+}
+:root[data-theme="light"] .wf-hero-ring { stroke: rgba(3, 105, 161, .35); }
+:root[data-theme="light"] .wf-hero .wf-grid { stroke: rgba(3, 105, 161, .12); }
+:root[data-theme="light"] .wf-hero .wf-hud { stroke: rgba(3, 105, 161, .4); }
+:root[data-theme="light"] .wf-hero .wf-hudtxt { fill: rgba(3, 105, 161, .75); }
+:root[data-theme="light"] .wf-hero-jet { fill: #ffffff; stroke: #0369a1; filter: drop-shadow(0 1px 2px rgba(3, 105, 161, .45)); }
+:root[data-theme="light"] .wf-blip { fill: #b45309; }
+:root[data-theme="light"] .wf-hero-sweep { background: conic-gradient(from 0deg, rgba(3, 105, 161, 0) 0deg, rgba(3, 105, 161, .22) 45deg, rgba(3, 105, 161, 0) 75deg); }
+:root[data-theme="light"] .wf-hero-kicker { color: #b45309; }
+:root[data-theme="light"] .wf-hero-title { color: #0f172a; text-shadow: none; }
+:root[data-theme="light"] .wf-hero-sub { color: #334155; }
+:root[data-theme="light"] .wf-hero .wf-strip { background: rgba(255, 255, 255, .9); border-color: #bcd3ea; }
+:root[data-theme="light"] .wf-hero .wf-count { color: #475569; }
+:root[data-theme="light"] .wf-hero .wf-count b { color: #0f172a; }

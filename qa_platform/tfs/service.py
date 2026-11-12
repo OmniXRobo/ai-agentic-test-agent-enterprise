@@ -20,6 +20,7 @@ from ..events import names
 from ..events.bus import EventBus, QAEvent
 from ..logging_setup import get_logger
 from .client import AzureDevOpsClient, wiql_quote
+from .fields import FieldInfo, FieldRules, parse_fields
 
 log = get_logger("tfs")
 
@@ -177,6 +178,7 @@ class TfsService:
             "project": p.get("project", ""),
             "api_version": p.get("api_version") or ("7.1" if mode == "online" else "6.0"),
             "verify_tls": p.get("verify_tls", True),
+            "ca_bundle": p.get("ca_bundle") or "",  # final patch: a company CA certificate file (PEM)
             "has_pat": self.secrets.has(TFS_NAMESPACE, mode),
         }
 
@@ -189,7 +191,8 @@ class TfsService:
 
     def save_profile(self, mode: str, *, url: str | None = None, project: str | None = None,
                      api_version: str | None = None, verify_tls: bool | None = None,
-                     pat: str | None = None, make_active: bool = False) -> dict[str, Any]:
+                     pat: str | None = None, make_active: bool = False,
+                     ca_bundle: str | None = None) -> dict[str, Any]:
         if mode not in MODES:
             raise QAError("TFS_MODE_INVALID", f"Unknown TFS mode '{mode}'.")
         patch: dict[str, Any] = {}
@@ -204,6 +207,8 @@ class TfsService:
             patch["api_version"] = api_version.strip()
         if verify_tls is not None and mode == "offline":
             patch["verify_tls"] = bool(verify_tls)
+        if ca_bundle is not None:
+            patch["ca_bundle"] = ca_bundle.strip()
         tfs_patch: dict[str, Any] = {mode: patch} if patch else {}
         if make_active:
             tfs_patch["active_mode"] = mode
@@ -232,7 +237,7 @@ class TfsService:
         if not pat:
             raise QAError("TFS_NOT_CONFIGURED", f"No PAT is saved for {p['label']}.", status=409)
         return AzureDevOpsClient(p["url"], p["project"], pat, p["api_version"], verify_tls=p["verify_tls"],
-                                 transport=self.transport)
+                                 transport=self.transport, ca_bundle=p.get("ca_bundle") or None)
 
     def _with_client(self, fn: Callable[[AzureDevOpsClient], Any]) -> Any:
         client = self.client()
@@ -397,6 +402,85 @@ class TfsService:
             lambda c: {f["referenceName"]: [str(v) for v in f.get("allowedValues") or []]
                        for f in c.work_item_type_fields(type_name, allowed_values=True)}))
         return fields.get(ref, [])
+
+    # ---- final patch: field rules of this project (Preferences > TFS Integration) ------------------------------
+
+    def project_key(self) -> str:
+        p = self.profile()
+        return f"{p['mode']}:{p['project']}"
+
+    def field_schema(self, type_name: str) -> dict[str, FieldInfo]:
+        """Every field of a work item type in this project: required flag, allowed values, default (cached 10 min)."""
+        key = ("schema", self.active_mode(), self.profile()["project"], type_name)
+        return self.meta_cache.get_or_set(key, lambda: self._with_client(
+            lambda c: parse_fields(c.work_item_type_fields(type_name, allowed_values=True))))
+
+    def field_defaults(self, type_name: str | None = None) -> dict[str, Any]:
+        """Defaults saved in Preferences for this project: {type: {reference: value}} or one type's."""
+        saved = (self.settings.section("tfs").get("field_defaults") or {}).get(self.project_key()) or {}
+        return dict(saved.get(type_name) or {}) if type_name else saved
+
+    def save_field_defaults(self, type_name: str, values: dict[str, Any], replace: bool = False) -> dict[str, Any]:
+        if type_name not in self.meta()["work_item_types"]:
+            raise QAError("TFS_TYPE_INVALID", f"'{type_name}' is not a work item type in this project.")
+        fields = self.field_schema(type_name)
+        clean: dict[str, Any] = {} if replace else self.field_defaults(type_name)
+        for ref, value in (values or {}).items():
+            if ref not in fields:
+                raise QAError("TFS_FIELD_UNKNOWN", f"'{ref}' is not a field of {type_name} in this project.")
+            if value in (None, ""):
+                clean.pop(ref, None)
+                continue
+            info = fields[ref]
+            if info.allowed:
+                from .fields import match_allowed
+
+                fixed = match_allowed(value, info.allowed)
+                if fixed is None:
+                    raise QAError("TFS_VALUE_NOT_ALLOWED", f"'{value}' is not an allowed value of {info.name}. "
+                                  f"Allowed: {', '.join(info.allowed[:20])}.")
+                value = fixed
+            clean[ref] = value
+        everything = self.settings.section("tfs").get("field_defaults") or {}
+        project = dict(everything.get(self.project_key()) or {})
+        project[type_name] = clean
+        # settings.update merges dictionaries, so the whole project entry is written (a removed default disappears)
+        everything[self.project_key()] = project
+        self.settings.update({"tfs": {"field_defaults": None}})
+        self.settings.update({"tfs": {"field_defaults": everything}})
+        return clean
+
+    def field_rules(self) -> FieldRules:
+        return FieldRules(self.field_schema, self.field_defaults)
+
+    def _prepared(self, type_name: str, patch: list[dict[str, Any]], field_values: dict[str, Any] | None,
+                  extra_required: list[str] | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        try:
+            return self.field_rules().prepare(type_name, patch, field_values, extra_required)
+        except QAError as exc:
+            if exc.error_code in ("TFS_FIELDS_REQUIRED",):
+                raise
+            # An older server without the fields API: send the payload as it is (TFS still checks it).
+            log.info(f"Field rules unavailable for {type_name}: {exc.message}")
+            return patch, {"type": type_name, "filled": [], "corrected": [], "dropped": [], "unchecked": exc.message}
+
+    def create_checked(self, type_name: str, patch: list[dict[str, Any]], field_values: dict[str, Any] | None = None,
+                       *, validate_only: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Create (or only validate) a work item after completing its mandatory fields. A rule TFS applies only on
+        save names its field in the error; that field is completed the same way and the create is tried once more."""
+        prepared, report = self._prepared(type_name, patch, field_values)
+        try:
+            return self._with_client(lambda c: c.create_work_item(type_name, prepared, validate_only=validate_only)), report
+        except QAError as exc:
+            if exc.error_code != "TFS_FIELD_RULE":
+                raise
+            names_ = [f["name"] for f in (exc.details or {}).get("fields", [])]
+            if not names_:
+                raise
+            prepared, report = self._prepared(type_name, patch, field_values, extra_required=names_)
+            report["server_rules"] = names_
+            return self._with_client(lambda c: c.create_work_item(type_name, prepared,
+                                                                  validate_only=validate_only)), report
 
     def upload_attachment(self, file_name: str, data: bytes) -> dict[str, Any]:
         return self._with_client(lambda c: c.upload_attachment(file_name, data))
@@ -588,19 +672,22 @@ class TfsService:
             patch.append({"op": "add", "path": f"/fields/{ref}", "value": value})
         return patch, skipped
 
-    def create(self, type_name: str, values: dict[str, Any]) -> dict[str, Any]:
+    def create(self, type_name: str, values: dict[str, Any],
+               field_values: dict[str, Any] | None = None) -> dict[str, Any]:
         if not values.get("title"):
             raise QAError("TFS_TITLE_REQUIRED", "A title is required.")
         if type_name not in self.meta()["work_item_types"]:
             raise QAError("TFS_TYPE_INVALID", f"'{type_name}' is not a work item type in this project.")
         patch, skipped = self.build_patch(type_name, values)
-        created = self._with_client(lambda c: c.create_work_item(type_name, patch))
+        created, report = self.create_checked(type_name, patch, field_values)
         self.invalidate()
-        return {"item": simplify(created), "skipped_fields": skipped}
+        return {"item": simplify(created), "skipped_fields": skipped, "fields_report": report}
 
-    def create_raw(self, type_name: str, patch: list[dict[str, Any]]) -> dict[str, Any]:
-        """Create from a prepared JSON patch (fields already checked with build_patch)."""
-        created = self._with_client(lambda c: c.create_work_item(type_name, patch))
+    def create_raw(self, type_name: str, patch: list[dict[str, Any]],
+                   field_values: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Create from a prepared JSON patch. Final patch: mandatory fields of this project are completed first
+        (TFS_FIELDS_REQUIRED when one needs the user)."""
+        created, _report = self.create_checked(type_name, patch, field_values)
         self.invalidate()
         return simplify(created)
 
