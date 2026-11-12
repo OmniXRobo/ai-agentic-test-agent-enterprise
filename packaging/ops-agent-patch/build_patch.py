@@ -24,7 +24,7 @@ DOCS = REPO / "docs" / "ops-agent"
 TOOLS = ["APPLY_PATCH.cmd", "APPLY_PATCH.ps1", "ROLLBACK_PATCH.cmd", "VERIFY_PATCH.cmd", "install_patch.py"]
 TESTS = ["tests/transport_site.py", "tests/ops_agent_fixtures.py", "tests/test_ops_agent_api.py",
          "tests/test_ops_agent_e2e.py", "tests/test_ops_agent_core.py", "tests/test_regression_pages.py",
-         "tests/test_ops_patch_install.py"]
+         "tests/test_ops_patch_install.py", "tests/test_ops_windows.py"]
 
 
 def git(*args: str) -> list[str]:

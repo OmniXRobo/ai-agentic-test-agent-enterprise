@@ -26,7 +26,7 @@ NAME = "SkyGuard_Adaptive_AI_Browser_Extension_Final"
 LOCK = json.loads((REPO / "packaging" / "offline-lock.json").read_text(encoding="utf-8"))
 FW_REQ = REPO / "packaging" / "requirements-faster-whisper-win.txt"
 TESTS = ["tests/test_companion_security.py", "tests/test_extension_static.py", "tests/test_extension_e2e.py",
-         "tests/transport_site.py", "tests/ops_agent_fixtures.py", "tests/test_ops_agent_core.py"]
+         "tests/transport_site.py", "tests/ops_agent_fixtures.py", "tests/test_ops_agent_core.py", "tests/test_ops_windows.py"]
 
 
 def sha(path: Path) -> str:
