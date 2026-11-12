@@ -52,6 +52,9 @@ def main() -> None:
     (stage / "PATCH_MANIFEST.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     for t in TOOLS:
         shutil.copy2(HERE / t, stage / t)
+        if t.endswith((".cmd", ".ps1")):  # Windows line endings for cmd.exe and PowerShell 5.1
+            text = (stage / t).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+            (stage / t).write_bytes(text)
     for d in DOCS:
         shutil.copy2(REPO / "docs" / "final-patch" / d, stage / d)
     evidence = REPO / "docs" / "final-patch" / "evidence"
