@@ -205,7 +205,9 @@ def test_restart_ends_only_the_jmeter_process_of_an_interrupted_run(client, site
                              "-Jjmeter.save.saveservice.output_format=csv"], cwd=folder,
                             env=tools.jmeter_env(tools.find_java(rt.settings)), stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
-    bystander = subprocess.Popen(["sleep", "60"])
+    # Lives longer than the slowest JMeter start on a CI runner (it once took over 60 s to write samples, so a
+    # 60-second sleep had already ended on its own); the finally block below ends it.
+    bystander = subprocess.Popen(["sleep", "900"])
     try:
         rt.db.execute("INSERT INTO perf_runs (run_id, plan_id, kind, name, status, state, started_at, folder, pid)"
                       " VALUES (?,?,?,?,?,?,?,?,?)", (run_id, "PERF-X", "load", "Crash", "RUNNING", "RUNNING",
