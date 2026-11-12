@@ -592,8 +592,15 @@ class KnowledgeBase:
 
     def backup(self, folder: Path | str, by: str | None = None) -> dict[str, Any]:
         folder = Path(folder)
-        name = f"knowledge-{now_iso().replace(':', '').replace('+', 'p')[:22]}.sqlite3"
-        dest = folder / name
+        folder.mkdir(parents=True, exist_ok=True)
+        stamp = now_iso().replace(':', '').replace('+', 'p')[:17]
+        n = 0
+        while True:  # never reuse a name: a restore takes a safety backup within the same second
+            name = f"knowledge-{stamp}-{n:03d}.sqlite3"
+            dest = folder / name
+            if not dest.exists():
+                break
+            n += 1
         self.store.backup_to(dest)
         (folder / (name + ".json")).write_text(json.dumps({"created": now_iso(), "schema": self.store.schema_version,
                                                            "by": by}), encoding="utf-8")
