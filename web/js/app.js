@@ -33,6 +33,8 @@ import { initVoiceAgent } from "./voice-agent.js";
 import { productName, loadBrand, onBrand } from "./brand.js";
 import * as usersPage from "./pages/users.js";
 import { ensureSignedIn, initUserMenu, isAdmin, canEdit } from "./auth.js";
+import { cmpPages } from "./pages/comparison.js";
+import { tfsIntegration, browserManager, auraMemory } from "./pages/preferences-final.js";
 
 // route -> { title, page }
 const NAV = [
@@ -73,6 +75,7 @@ const NAV = [
     ["perf-results", "Performance Results", perfResults],
     ["perf-defects", "Performance Defects", perfDefects],
   ]],
+  ["Application Data Comparison Agent", cmpPages],
   ["Quality", [
     ["defects", "Defects", workItemPage({ category: "bug", createLabel: "New defect" })],
     ["defect-review", "Defect Review", defectReview],
@@ -83,6 +86,9 @@ const NAV = [
     ["setup", "First-Run Setup", setupPage],
     ["settings", "Preferences", settings],
     ["tfs-settings", "TFS Connection", tfsSettings],
+    ["tfs-integration", "TFS Integration (fields)", tfsIntegration],
+    ["browser-manager", "Browser Manager", browserManager],
+    ["aura", "AURA Learning Memory", auraMemory],
     ["ai-settings", "AI Runtime", aiSettings],
     ["app-credentials", "Application Credentials", appCredentials],
     ["email-settings", "Outlook Email", emailSettings],
@@ -108,13 +114,75 @@ function allowed(route) {
   return visibleNav().some(([, items]) => items.some(([r]) => r === route)) || route === "ai-automation-classic";
 }
 
+// Final patch: collapsible sidebar. Every entry has an icon; when the sidebar is collapsed only icons show and the
+// name appears as a tooltip. The choice is kept in this browser and in Preferences (ui.sidebar_collapsed).
+const I = {
+  mic: "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11Z",
+  grid: "M3 3h8v8H3Zm10 0h8v8h-8ZM3 13h8v8H3Zm10 0h8v8h-8Z",
+  flow: "M5 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm0 6v6h6v-2H7V9Zm12-6a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-1 6v6h-3v2h5V9ZM12 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z",
+  bell: "M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-14 0v5l-2 2v1h18v-1Z",
+  clock: "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm1 11h-5v-2h3V6h2Z",
+  doc: "M6 2h9l5 5v15H6Zm8 1.5V8h4.5ZM8 12h8v2H8Zm0 4h8v2H8Z",
+  check: "M4 4h16v16H4Zm2 2v12h12V6Zm3.5 7.5 2 2 4-5 1.5 1.2-5.4 6.6-3.5-3.4Z",
+  bot: "M11 2h2v3h5a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5Zm-2 8a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm6 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z",
+  play: "M8 5v14l11-7Z",
+  gauge: "M12 4a10 10 0 0 0-10 10h2a8 8 0 0 1 16 0h2A10 10 0 0 0 12 4Zm4.2 4.4-5.6 4.4a2 2 0 1 0 2.8 2.8Z",
+  bug: "M8 6a4 4 0 0 1 8 0h-8Zm-3 3h14v2h-3v2h3v2h-3a4 4 0 0 1-8 0H5v-2h3v-2H5Z",
+  chart: "M4 20h16v2H2V2h2Zm3-3V10h3v7Zm5 0V6h3v11Zm5 0v-5h3v5Z",
+  compare: "M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5v2h2V1h-2Zm0 15H5l5-6Zm9-15h-5v2h5v13l-5-6v9h5a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Z",
+  gear: "M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.6a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.4-2.6a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5ZM13 15.5a3.5 3.5 0 1 1 3.5-3.5 3.5 3.5 0 0 1-3.5 3.5Z",
+  key: "M7 14a3 3 0 1 1 3-3 3 3 0 0 1-3 3Zm5.6-5A6 6 0 1 0 12.6 13H15v3h3v-3h3V9Z",
+  user: "M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5Z",
+  data: "M12 2C7 2 4 3.8 4 6v12c0 2.2 3 4 8 4s8-1.8 8-4V6c0-2.2-3-4-8-4Zm0 2c3.9 0 6 1.2 6 2s-2.1 2-6 2-6-1.2-6-2 2.1-2 6-2Z",
+  search: "M10 2a8 8 0 1 0 4.9 14.3l5.4 5.4 1.4-1.4-5.4-5.4A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6Z",
+};
+const ICON_BY_ROUTE = [
+  [/command-center|voice/, "mic"], [/^dashboard|cmp-dashboard|analytics/, "grid"], [/workflow/, "flow"], [/notif/, "bell"],
+  [/history|schedul|perf-schedules/, "clock"], [/test-data|perf-data|cmp-import|cmp-extract/, "data"],
+  [/discovery|cmp-discovery|explorer|investigation/, "search"], [/test-|stories|acceptance|plans|suites/, "check"],
+  [/automation/, "bot"], [/perf-live|perf-load|perf-stress|perf-spike|perf-soak/, "gauge"], [/perf-/, "play"],
+  [/defect/, "bug"], [/report|results|aggregate/, "chart"], [/^cmp-/, "compare"], [/credential/, "key"], [/users/, "user"],
+  [/aura/, "data"], [/browser-manager/, "grid"], [/tfs-integration/, "check"], [/setup|settings|email/, "gear"],
+];
+function iconFor(route) {
+  const hit = ICON_BY_ROUTE.find(([re]) => re.test(route));
+  return `<svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="${I[hit ? hit[1] : "doc"]}"/></svg>`;
+}
+
+function collapsed() { return document.querySelector(".shell")?.classList.contains("nav-collapsed"); }
+
+function applyCollapsed(on, persist = false) {
+  document.querySelector(".shell").classList.toggle("nav-collapsed", on);
+  const btn = document.getElementById("menuBtn");
+  btn.setAttribute("aria-expanded", String(!on));
+  btn.title = on ? "Expand the menu" : "Collapse the menu";
+  document.querySelectorAll(".nav-link").forEach((a) => { if (on) a.title = a.dataset.title; else a.removeAttribute("title"); });
+  if (!persist) return;
+  try { localStorage.setItem("qa.nav.collapsed", on ? "1" : "0"); } catch { /* storage blocked */ }
+  if (canEdit()) api("/api/settings", { method: "PATCH", body: { ui: { sidebar_collapsed: on } } }).catch(() => {});
+}
+
+async function initSidebar() {
+  document.getElementById("menuBtn").addEventListener("click", () => {
+    if (window.matchMedia("(max-width: 760px)").matches) document.getElementById("sidebar").classList.toggle("open");
+    else applyCollapsed(!collapsed(), true);
+  });
+  let saved = null;
+  try { saved = localStorage.getItem("qa.nav.collapsed"); } catch { /* ignore */ }
+  if (saved === null) {
+    try { const { settings } = await api("/api/settings"); saved = settings.ui?.sidebar_collapsed ? "1" : "0"; } catch { saved = "0"; }
+  }
+  applyCollapsed(saved === "1");
+}
+
 function renderNav() {
   const nav = document.getElementById("nav");
   nav.innerHTML = visibleNav().map(([group, items]) => `
-    <div class="nav-group">${esc(group)}</div>
+    <div class="nav-group" title="${esc(group)}"><span class="nav-text">${esc(group)}</span></div>
     ${items.map(([route, title]) => `
-      <a class="nav-link" href="#/${route}" data-route="${route}"><span>${esc(title)}</span></a>`).join("")}
+      <a class="nav-link" href="#/${route}" data-route="${route}" data-title="${esc(title)}" aria-label="${esc(title)}">${iconFor(route)}<span class="nav-text">${esc(title)}</span></a>`).join("")}
   `).join("");
+  if (collapsed()) applyCollapsed(true);
 }
 
 let current = null;
@@ -300,8 +368,8 @@ async function firstRun() {
 async function boot() {
   loadBrand();
   await ensureSignedIn();
-  document.getElementById("menuBtn").addEventListener("click", () => document.getElementById("sidebar").classList.toggle("open"));
   renderNav();
+  await initSidebar();
   onBrand(() => { if (current) document.title = `${current.title} · ${productName()}`; });
   initUserMenu(document.getElementById("userMenu"));
   initTheme();

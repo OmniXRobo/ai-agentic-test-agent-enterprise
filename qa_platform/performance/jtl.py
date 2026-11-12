@@ -101,6 +101,58 @@ def read_rows(path: Path, start: int = 0) -> tuple[list[str], int]:
     return chunk.splitlines(), start + cut + 1
 
 
+# Final patch (defect 10): every failed sample gets a category from its response code and message. Deterministic, so
+# the AI analysis explains these counts instead of guessing them.
+ERROR_CATEGORIES = {
+    "authentication": "Sign-in or session (401/403, login page returned)",
+    "correlation": "A value from an earlier response was not found (extractor or correlation)",
+    "assertion": "The response did not contain what the test checks for",
+    "rate_limited": "The server throttled requests (429)",
+    "not_found": "Page or API not found (404/410)",
+    "client_error": "Request rejected (other 4xx)",
+    "server_error": "Server error (5xx)",
+    "timeout": "Timed out waiting for the server",
+    "connection": "Connection refused, reset or DNS failure",
+    "tls": "TLS / certificate problem",
+    "other": "Other failure",
+}
+
+
+def classify_error(code: str, message: str) -> str:
+    c, m = (code or "").strip(), (message or "").lower()
+    if any(k in m for k in ("sslhandshake", "certificate", "pkix", "ssl ")):
+        return "tls"
+    if any(k in m for k in ("timed out", "timeout", "sockettimeout")):
+        return "timeout"
+    if any(k in m for k in ("connection refused", "connection reset", "unknownhost", "noroutetohost",
+                            "connectexception", "broken pipe", "non http response")):
+        return "connection"
+    if any(k in m for k in ("_notfound", "not_found}", "extractor", "regex", "jsonpath", "boundary")) or "${" in m:
+        return "correlation"
+    if c in ("401", "403") or any(k in m for k in ("unauthorized", "forbidden", "login page", "session expired")):
+        return "authentication"
+    if c == "429":
+        return "rate_limited"
+    if c in ("404", "410"):
+        return "not_found"
+    if c.startswith("5"):
+        return "server_error"
+    if c.startswith("4"):
+        return "client_error"
+    if any(k in m for k in ("assert", "test failed", "expected", "response was expected")):
+        return "assertion"
+    return "other"
+
+
+def error_categories(top_errors: list[dict[str, Any]], codes_msgs: dict[str, int]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for key, n in codes_msgs.items():
+        code, _, msg = key.partition(" ")
+        cat = classify_error(code, msg)
+        counts[cat] = counts.get(cat, 0) + n
+    return [{"category": k, "label": ERROR_CATEGORIES[k], "count": v} for k, v in sorted(counts.items(), key=lambda x: -x[1])]
+
+
 def compute(rows: Iterable[dict[str, str]], timeline_points: int = 300) -> dict[str, Any]:
     labels: dict[str, _Bucket] = {}
     total = _Bucket()
@@ -137,6 +189,7 @@ def compute(rows: Iterable[dict[str, str]], timeline_points: int = 300) -> dict[
                 "threads": max((s[3] for s in secs), default=0),
             })
     overall = total.summary(TOTAL)
+    overall["error_categories"] = error_categories(overall["top_errors"], total.messages)
     return {
         "overall": overall,
         "requests": [labels[k].summary(k) for k in sorted(labels)],

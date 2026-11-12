@@ -1205,14 +1205,18 @@ def bind_field(root: ET.Element, op: dict[str, Any]) -> None:
     """Replace one request value with ${variable}: op {node, kind, key, var, raw}. raw (numbers, true/false) puts the
     variable without quotes into a JSON body. Form and query values are URL-encoded when the request is sent."""
     import json
+    expr = str(op.get("expr") or "").strip()
     var = str(op.get("var") or "").strip()
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,59}", var):
+    if expr:  # final patch (defect 10): a dynamic value from a JMeter function, e.g. a date relative to today
+        if not DYNAMIC_EXPR.fullmatch(expr):
+            raise _err("Only a JMeter date function (${__timeShift(...)}) can be used as a dynamic value.")
+    elif not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,59}", var):
         raise _err("Choose the data column to use.")
     el, ht, _ = locate(root, op["node"])
     if el.tag not in SAMPLER_TAGS:
         raise _err("Only values of HTTP requests can be bound.")
     kind, key = op.get("kind"), str(op.get("key") or "")
-    ref = "${" + var + "}"
+    ref = expr or "${" + var + "}"
     enc = "${__urlencode(" + ref + ")}"
     if kind in ("form", "query"):
         if kind == "form":
@@ -1246,7 +1250,10 @@ def bind_field(root: ET.Element, op: dict[str, Any]) -> None:
         data = _json_set(data, key, marker)
         # A text value is written by JMeter's built-in Groovy JSON encoder, so quotes, backslashes and line breaks
         # in the data stay valid JSON; numbers and true/false (raw) go in as they are
-        value = ref if op.get("raw") else "${__groovy(groovy.json.JsonOutput.toJson(vars.get('" + var + "')))}"
+        if expr:
+            value = f'"{expr}"'  # a formatted date needs no JSON escaping
+        else:
+            value = ref if op.get("raw") else "${__groovy(groovy.json.JsonOutput.toJson(vars.get('" + var + "')))}"
         q.text = _json_template_dump(data, exprs).replace(f'"{marker}"', value)
         return
     if kind == "param":
@@ -1274,3 +1281,77 @@ def bind_field(root: ET.Element, op: dict[str, Any]) -> None:
                         return
         raise _err(f"The request has no header named {key}.")
     raise _err(f"Unknown field kind {kind}.")
+
+
+# ---- final patch (defect 10): parameter scanner ---------------------------------------------------------------------
+
+DYNAMIC_EXPR = re.compile(r"\$\{__timeShift\((?:yyyy-MM-dd|dd/MM/yyyy|MM/dd/yyyy|yyyy-MM-dd'T'HH:mm:ss|dd-MM-yyyy),,"
+                          r"P-?\d{1,5}D,,\)\}")
+_DATE_FORMS = [
+    (re.compile(r"^(\d{4})-(\d{2})-(\d{2})$"), "yyyy-MM-dd", lambda m: (int(m[1]), int(m[2]), int(m[3]))),
+    (re.compile(r"^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}$"), "yyyy-MM-dd'T'HH:mm:ss",
+     lambda m: (int(m[1]), int(m[2]), int(m[3]))),
+    (re.compile(r"^(\d{2})/(\d{2})/(\d{4})$"), "dd/MM/yyyy", lambda m: (int(m[3]), int(m[2]), int(m[1]))),
+    (re.compile(r"^(\d{2})-(\d{2})-(\d{4})$"), "dd-MM-yyyy", lambda m: (int(m[3]), int(m[2]), int(m[1]))),
+]
+_SECRET_KEY = re.compile(r"pass(word)?|pwd|secret|api[_-]?key|pin$", re.I)
+_TOKEN_KEY = re.compile(r"token|csrf|xsrf|viewstate|eventvalidation|session|nonce|state$", re.I)
+_USER_KEY = re.compile(r"user(name)?|login|email|account", re.I)
+_ID_KEY = re.compile(r"(^|_|[a-z])id$|number|code|ref", re.I)
+
+
+def _date_of(value: str) -> tuple[str, Any] | None:
+    from datetime import date
+    for rx, fmt, parts in _DATE_FORMS:
+        m = rx.match(value.strip())
+        if m:
+            try:
+                return fmt, date(*parts(m))
+            except ValueError:
+                return None
+    return None
+
+
+def scan_parameters(text: str, today: Any = None) -> list[dict[str, Any]]:
+    """Hard-coded request values that should be parameterized, with what to do for each.
+
+    * dates become ``${__timeShift(...)}`` relative to the day the test runs, keeping the recorded distance (a booking
+      recorded 7 days ahead stays 7 days ahead), so a script recorded today still works next month;
+    * user names, e-mails and ids become data set columns (one row per virtual user);
+    * passwords become a secret column (the value is never shown here);
+    * tokens and session values are flagged for correlation (recording does this automatically).
+    Nothing is changed: the editor applies a suggestion with the ``bind`` edit."""
+    from datetime import date
+    today = today or date.today()
+    out: list[dict[str, Any]] = []
+    for f in fields(text):
+        if f["bound"]:
+            continue
+        value, key = str(f["value"] or ""), f["key"].rsplit(".", 1)[-1].strip("[]\"")
+        base = {k: f[k] for k in ("node", "sampler", "kind", "key", "label")}
+        if _SECRET_KEY.search(key):
+            out.append({**base, "type": "secret", "value": "***", "column": re.sub(r"\W", "_", key)[:40] or "password",
+                        "suggestion": "Use a secret data column (kept in the Windows Credential Manager)."})
+            continue
+        d = _date_of(value)
+        if d:
+            fmt, when = d
+            offset = (when - today).days
+            expr = "${__timeShift(" + fmt + ",,P" + str(offset) + "D,,)}"
+            out.append({**base, "type": "date", "value": value, "format": fmt, "offset_days": offset, "expr": expr,
+                        "suggestion": f"Use the date {abs(offset)} day(s) {'after' if offset >= 0 else 'before'} "
+                                      "the day the test runs."})
+            continue
+        if _TOKEN_KEY.search(key) and len(value) >= 8:
+            out.append({**base, "type": "correlation", "value": value[:4] + "…",
+                        "suggestion": "This looks like a server-issued value: extract it from the earlier response "
+                                      "(record the flow again, or add an extractor)."})
+            continue
+        if _USER_KEY.search(key) and value:
+            out.append({**base, "type": "data", "value": value, "column": re.sub(r"\W", "_", key)[:40],
+                        "suggestion": "Use a data column so each virtual user signs in as a different user."})
+            continue
+        if _ID_KEY.search(key) and re.fullmatch(r"[A-Za-z]{0,4}-?\d{3,}", value):
+            out.append({**base, "type": "data", "value": value, "column": re.sub(r"\W", "_", key)[:40],
+                        "suggestion": "Use a data column so virtual users do not all work on the same record."})
+    return out

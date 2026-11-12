@@ -133,6 +133,53 @@
       input_type: el.tagName.toLowerCase() === "input" ? el.type : null,
       classes: [...el.classList].filter((c) => !looksGenerated(c)).slice(0, 6),
       href: el.getAttribute("href"),
+      ...context(el),
+    };
+  }
+
+  // Final patch (defect 7): where the element sits. Used only as extra healing signals; never user-entered values.
+  function shortDesc(n) {
+    if (!n || n.nodeType !== 1) return null;
+    const t = n.tagName.toLowerCase();
+    const id = n.id && !looksGenerated(n.id) ? `#${n.id}` : "";
+    const cls = [...n.classList].filter((c) => !looksGenerated(c)).slice(0, 2).map((c) => `.${c}`).join("");
+    return `${t}${id}${cls}`;
+  }
+  function hostOf(el) {
+    const root = el.getRootNode && el.getRootNode();
+    return root && root.host ? root.host : null;
+  }
+  function context(el) {
+    const parent = el.parentElement || hostOf(el);
+    const ancestors = [];
+    for (let n = parent ? (parent.parentElement || hostOf(parent)) : null; n && ancestors.length < 4; n = n.parentElement || hostOf(n)) {
+      if (n.tagName === "BODY" || n.tagName === "HTML") break;
+      ancestors.push(shortDesc(n));
+    }
+    const sib = (n) => {
+      if (!n || n.nodeType !== 1) return null;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(n.tagName)) return shortDesc(n);
+      return clean(n.innerText || n.textContent, 40) || shortDesc(n);
+    };
+    const siblings = [sib(el.previousElementSibling), sib(el.nextElementSibling)].filter(Boolean);
+    // the closest heading or text before the element, inside its section: a stable "near" anchor
+    let nearby = null;
+    for (let n = el, i = 0; n && i < 4 && !nearby; n = n.parentElement, i += 1) {
+      for (let s = n.previousElementSibling; s && !nearby; s = s.previousElementSibling) {
+        if (["INPUT", "TEXTAREA", "SELECT", "SCRIPT", "STYLE"].includes(s.tagName)) continue;
+        const t = clean(s.innerText || s.textContent, 60);
+        if (t) nearby = t;
+      }
+    }
+    const form = el.closest && el.closest("form");
+    const host = hostOf(el);
+    return {
+      parent: shortDesc(parent),
+      ancestors,
+      siblings,
+      nearby_text: nearby,
+      form: form ? (form.getAttribute("name") || form.id || form.getAttribute("aria-label") || form.getAttribute("action") || "form") : null,
+      shadow_host: host ? (host.id ? `#${host.id}` : host.tagName.toLowerCase()) : null,
     };
   }
 
@@ -144,14 +191,26 @@
 
   const INTERACTIVE = "a,button,input,select,textarea,label,summary,[role],[onclick],[tabindex],[contenteditable=true],[data-testid],[data-test],[data-qa]";
 
+  // Open shadow roots are searched too (closed ones cannot be reached by any script).
+  function allInteractive(root, acc = [], depth = 0) {
+    for (const el of root.querySelectorAll(INTERACTIVE)) acc.push(el);
+    if (depth < 5) {
+      for (const el of root.querySelectorAll("*")) if (el.shadowRoot) allInteractive(el.shadowRoot, acc, depth + 1);
+    }
+    return acc;
+  }
+
   function candidates(limit = 600) {
     const out = [];
-    for (const el of document.querySelectorAll(INTERACTIVE)) {
+    for (const el of allInteractive(document)) {
       if (el.closest("#__qa_overlay_host, #__qa_rec_host")) continue;
       // A label tied to a control duplicates that control; the control itself is the candidate.
       if (el.tagName === "LABEL" && (el.control || el.htmlFor)) continue;
       if (!visible(el)) continue;
-      out.push(fingerprint(el));
+      const fp = fingerprint(el);
+      // inside a shadow root Playwright's css engine pierces open shadow DOM, so the css path from the host works
+      if (fp.shadow_host && !unique(fp.selector)) fp.selector = `${fp.shadow_host} ${cssPath(el)}`;
+      out.push(fp);
       if (out.length >= limit) break;
     }
     return out;

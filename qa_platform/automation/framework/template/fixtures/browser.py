@@ -47,6 +47,7 @@ def browser(playwright_runtime: Any) -> Iterator[Any]:
         options["channel"] = name
     if kind == "chromium":
         options["args"] = ["--autoplay-policy=no-user-gesture-required"]  # the cursor's quiet click sound
+        options["args"] += [a for a in config.WINDOW_ARGS if a not in options["args"]]
     instance = getattr(playwright_runtime, kind).launch(**options)
     yield instance
     instance.close()
@@ -54,7 +55,8 @@ def browser(playwright_runtime: Any) -> Iterator[Any]:
 
 @pytest.fixture()
 def browser_context(browser: Any, request: pytest.FixtureRequest) -> Iterator[Any]:
-    options: dict[str, Any] = {"viewport": {"width": 1366, "height": 768}, "ignore_https_errors": True}
+    options: dict[str, Any] = ({"no_viewport": True} if config.MAXIMIZED else {"viewport": {"width": 1366, "height": 768}})
+    options["ignore_https_errors"] = True
     if config.VIDEO:
         options["record_video_dir"] = str(config.evidence_dir())
     context = browser.new_context(**options)

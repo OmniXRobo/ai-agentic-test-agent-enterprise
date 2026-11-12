@@ -322,7 +322,10 @@ READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 OPEN_PATHS = {("GET", "/api/auth/me"), ("POST", "/api/auth/login"), ("POST", "/api/auth/logout"),
               ("POST", "/api/auth/password"), ("GET", "/api/branding"), ("GET", "/api/branding/logo")}
 
-ADMIN_ONLY = [re.compile(p) for p in (r"^/api/auth/users(/.*)?$", r"^/api/auth/network(/.*)?$", r"^/api/app/exit$")]
+ADMIN_ONLY = [re.compile(p) for p in (r"^/api/auth/users(/.*)?$", r"^/api/auth/network(/.*)?$", r"^/api/app/exit$",
+                                       # final patch: AURA memory location, restore, reset and import change what
+                                       # every agent knows; only an admin may do them (reads stay open)
+                                       r"^/api/aura/(settings|migrate|restore|reset|import)$")]
 
 # What a view-only account may still send besides reads: play existing tests and schedules, stop them, export
 # report PDFs, mark its notifications read, and talk to the voice agent (which checks each command itself).

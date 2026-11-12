@@ -65,6 +65,9 @@ VIDEO = _flag("QA_VIDEO", False)
 EVENTS_FILE = os.environ.get("QA_EVENTS_FILE") or None
 COMBINATION = os.environ.get("QA_COMBINATION") or None
 RUN_ID = os.environ.get("QA_RUN_ID") or None
+# final patch: a visible browser opens maximized on the monitor chosen in SkyGuard QA Preferences
+WINDOW_ARGS = [a for a in (os.environ.get("QA_WINDOW_ARGS") or "").split("|") if a.startswith("--")]
+MAXIMIZED = _flag("QA_MAXIMIZED", False) and not HEADLESS
 
 _evidence: Path | None = None
 

@@ -173,12 +173,12 @@ class PerfRecording:
     # ---- browser thread ----------------------------------------------------------------------------------------
 
     def _main(self) -> None:
-        from ..automation.browser import launch, start_playwright
+        from ..automation.browser import context_options, launch, start_playwright
         pw = None
         try:
             pw = start_playwright()
             browser = launch(pw, self.browser, headless=self.headless)
-            context = browser.new_context(viewport={"width": 1366, "height": 768}, ignore_https_errors=False)
+            context = browser.new_context(**context_options(self.headless, ignore_https_errors=False))
             context.expose_binding("__qaPerfSecret", self._on_secret)
             context.add_init_script(PASSWORD_JS)
             context.on("request", self._on_request)

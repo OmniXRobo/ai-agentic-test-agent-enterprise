@@ -367,6 +367,8 @@ async function runDetail(view, runId) {
       <table class="data"><thead><tr><th>Request</th><th>Samples</th><th>Errors</th><th>Avg</th><th>90th</th><th>95th</th><th>99th</th><th>Max</th><th>Req/s</th><th>Codes</th></tr></thead><tbody>
       ${[...m.requests, o].map((r) => `<tr${r === o ? ' style="font-weight:600"' : ""}><td>${esc(r.label)}</td><td>${r.samples}</td><td>${r.error_pct}%</td><td>${ms(r.avg_ms)}</td><td>${ms(r.p90_ms)}</td><td>${ms(r.p95_ms)}</td><td>${ms(r.p99_ms)}</td><td>${ms(r.max_ms)}</td><td>${r.throughput}</td>
         <td>${Object.entries(r.response_codes).map(([k, v]) => `${esc(k)}: ${v}`).join(", ")}</td></tr>`).join("")}</tbody></table></div>
+      ${(o.error_categories || []).length ? `<h3>Errors by cause</h3><table class="data"><thead><tr><th>Cause</th><th>Failed samples</th></tr></thead><tbody>${o.error_categories.map((e) => `<tr><td>${esc(e.label)}</td><td>${e.count}</td></tr>`).join("")}</tbody></table>
+        <p class="muted">Classified from response codes and messages (no AI). The AI analysis below explains them.</p>` : ""}
       ${o.top_errors.length ? `<h3>Most frequent errors</h3><table class="data"><tbody>${o.top_errors.map((e) => `<tr><td>${esc(e.error)}</td><td>${e.count}</td></tr>`).join("")}</tbody></table>` : ""}
       <details><summary class="muted">Timeline table</summary><table class="data"><thead><tr><th>Time</th><th>Req/s</th><th>Avg</th><th>Errors</th><th>Users</th></tr></thead><tbody>
         ${m.timeline.map((t) => `<tr><td>${fmtDuration(t.t)}</td><td>${t.throughput}</td><td>${ms(t.avg_ms)}</td><td>${t.errors}</td><td>${t.threads}</td></tr>`).join("")}</tbody></table></details>

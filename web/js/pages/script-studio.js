@@ -1,6 +1,7 @@
 // AI-Driven Automation Script Studio: generate Python Playwright automation (Page Object Model, business
 // flows, test data) from TFS User Stories and Test Cases, then view, edit, play and review each script's evidence.
 
+import { loginBlock, bindLogin } from "../login-fields.js";
 import { api } from "../api.js";
 import { subscribe } from "../store.js";
 import { esc, toast, dateTimeOf, elapsed } from "../util.js";
@@ -339,6 +340,7 @@ async function generatePane(pane) {
       <label>Application <input name="application" list="apps" placeholder="as saved in Application Credentials" value="${esc(last.application || "")}"></label>
       <label>Environment <input name="environment" list="envs" placeholder="optional, e.g. UAT" value="${esc(last.environment || "")}"></label>
       <label>Credential role <input name="credential_role" list="roles" placeholder="e.g. admin" value="${esc(last.credential_role || "")}"></label>
+      ${loginBlock()}
       <datalist id="apps">${uniq("application").map((v) => `<option value="${esc(v)}">`).join("")}</datalist>
       <datalist id="envs">${uniq("environment").map((v) => `<option value="${esc(v)}">`).join("")}</datalist>
       <datalist id="roles">${uniq("role").map((v) => `<option value="${esc(v)}">`).join("")}</datalist>
@@ -350,6 +352,7 @@ async function generatePane(pane) {
       <button class="btn primary" type="submit" id="genBtn" disabled>Generate Automation</button>
     </form></div>`;
   const $ = (id) => pane.querySelector(`#${id}`);
+  bindLogin($("settings"));  // final patch: Login URL, user ID, password and sign-in method (defect 4)
   const stories = new Map(); // id -> { story, checked, cases: null | [{id,title,existing}], picked: Set }
 
   const summary = () => {

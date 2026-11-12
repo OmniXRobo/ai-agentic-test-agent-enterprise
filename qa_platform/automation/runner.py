@@ -18,7 +18,7 @@ from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
 from . import healing
 from . import visual as visual_fx
-from .browser import default_headless, js, launch, start_playwright
+from .browser import context_options, default_headless, js, launch, start_playwright
 from . import files as filekit
 from .dsl import describe, FILE_CHECKS, NEEDS_TARGET, Script, Step, ValueResolver
 from .store import CredentialProfiles, ScriptStore
@@ -165,10 +165,17 @@ class Runner:
         browser = context = page = None
         try:
             browser = launch(pw, script.browser, headless=headless)
-            ctx_opts: dict[str, Any] = {"viewport": {"width": 1366, "height": 768}, "ignore_https_errors": True,
-                                        "accept_downloads": True}
+            # final patch: a visible run opens maximized on the monitor chosen in Preferences (Browser Manager)
+            ctx_opts: dict[str, Any] = context_options(headless, ignore_https_errors=True, accept_downloads=True)
             if video:
                 ctx_opts["record_video_dir"] = str(evidence_dir)
+            # final patch: an application that signs in with Windows (NTLM) or Basic authentication
+            if script.credential_role and resolver.credentials and \
+                    resolver.credentials(script.credential_role, "auth_method") in ("windows", "basic"):
+                user = resolver.credentials(script.credential_role, "username")
+                pwd = resolver.credentials(script.credential_role, "password")
+                if user and pwd:
+                    ctx_opts["http_credentials"] = {"username": user, "password": pwd}
             context = browser.new_context(**ctx_opts)
             context.add_init_script(js("fingerprint"))
             context.add_init_script(js("calendar"))
@@ -505,11 +512,29 @@ class Runner:
             if loc is not None:
                 act.log(f"Primary locator failed; recorded alternate worked: {_short(alt)}", step=index)
                 return loc
+        # final patch: a locator correction a person approved earlier (AURA memory) is tried before self-healing.
+        # It is only a candidate: the element must still be there and visible, and the step must still pass.
+        from .. import aura
+
+        try:
+            known = aura.current().approved_locator(script.application, target.selector) if aura.current() else None
+        except Exception:  # noqa: BLE001 - memory lookups never break a run
+            known = None
+        if known and known not in target.alternates:
+            loc = self._try(scope, known, 2000, state)
+            if loc is not None:
+                act.log(f"Primary locator failed; AURA's approved correction worked: {_short(known)}", step=index)
+                return loc
         if target.frames:  # self-healing reads the page's own elements; inside an iframe only alternates are tried
             raise StepFailed(index, f"Element not found in the frame: {target.description or target.selector} "
                                     f"(selector {_short(target.selector)}).")
         healed = self._heal(page, step, index, script, act, record, evidence_dir, visual)
         if healed is None:
+            pending = [n for n in record.get("needs_confirmation", []) if n["step"] == index]
+            if pending:
+                raise StepFailed(index, f"Element not found: {target.description or target.selector} "
+                                        f"(selector {_short(target.selector)}); self-healing found only low-confidence "
+                                        f"candidates. Confirm one under Self-healing (#{pending[-1]['healing_id']}).")
             raise StepFailed(index, f"Element not found: {target.description or target.selector} "
                                     f"(selector {_short(target.selector)}); self-healing found no confident match.")
         return healed
@@ -555,7 +580,9 @@ class Runner:
                     shot = str(path)
                 except Exception:
                     shot = None
-                result = "healed" if verified is not None else "failed"
+                # Final patch (defect 7): close but not confident (or two look equally right) -> a person decides.
+                review = healing.review(ranked) if verified is None else None
+                result = "healed" if verified is not None else ("needs_confirmation" if review else "failed")
                 event = {
                     "timestamp": now_iso(), "run_id": run_id, "script_id": script.id, "test_case_id": script.test_case_id,
                     "step_index": index, "page_url": page.url, "original_selector": target.selector,
@@ -573,9 +600,22 @@ class Runner:
                     record["evidence"]["screenshots"].append(shot)
                 if verified is None:
                     best = f" Best candidate {ranked[0]['selector']} scored {ranked[0]['confidence']:.2f}." if ranked else ""
+                    if review:
+                        h.event(names.SELFHEALING_FAILED, f"Step {index + 1}: low-confidence candidates need your "
+                                f"confirmation (healing #{event_id})", healing_id=event_id, needs_confirmation=True)
+                        record.setdefault("needs_confirmation", []).append({"healing_id": event_id, "step": index,
+                                                                          "original": target.selector})
+                        raise RuntimeError(f"Low-confidence locator: confirm a candidate in Self-Healing "
+                                           f"(healing #{event_id}).{best}")
                     raise RuntimeError(f"No confident alternative locator (threshold {healing.THRESHOLD:.2f}).{best}")
                 info = {"healing_id": event_id, "step": index, "original": target.selector,
                         "healed": chosen["selector"], "confidence": chosen["confidence"]}
+                from .. import aura  # final patch: AURA keeps the self-healing history (not approved until applied)
+
+                aura.learn("healing", script.application, f"locator:{target.selector}", {
+                    "original": target.selector, "healed": chosen["selector"], "confidence": chosen["confidence"],
+                    "page_url": event["page_url"], "script_id": script.id, "step": index,
+                    "signals": chosen.get("signals")}, source="self_healing", agent="self_healing")
                 record["healed"].append(info)
                 record["steps"][-1]["healed"] = info
                 h.event(names.SELFHEALING_COMPLETED,
@@ -616,6 +656,37 @@ class Runner:
             r["candidates"] = loads(r["candidates"]) if r["candidates"] else []
         return rows
 
+    def confirm_healing(self, healing_id: int, selector: str | None) -> dict[str, Any]:
+        """A person reviewed a low-confidence healing: pick one of its candidates (the script is updated and AURA
+        stores the choice as an approved correction), or pass no selector to reject them all."""
+        row = self.db.query_one("SELECT * FROM healing_events WHERE id = ?", (healing_id,))
+        if row is None:
+            raise QAError("HEALING_NOT_FOUND", f"Healing event {healing_id} does not exist.", status=404)
+        if row["result"] != "needs_confirmation":
+            raise QAError("HEALING_NOT_PENDING", "This healing event is not waiting for confirmation.", status=409)
+        if not selector:
+            self.db.execute("UPDATE healing_events SET result = 'rejected' WHERE id = ?", (healing_id,))
+            return {"healing_id": healing_id, "result": "rejected"}
+        offered = [c.get("selector") for c in (loads(row["candidates"]) if row["candidates"] else [])]
+        if selector not in offered:
+            raise QAError("HEALING_CANDIDATE_UNKNOWN", "Pick one of the candidates recorded for this step.", status=422)
+        script = self.scripts.get(row["script_id"])
+        step = script.steps[row["step_index"]] if row["step_index"] < len(script.steps) else None
+        if step is None or step.target is None or step.target.selector != row["original_selector"]:
+            raise QAError("HEALING_STALE", "The script changed since this healing; review the step manually.", status=409)
+        step.target.alternates = [row["original_selector"]] + [a for a in step.target.alternates if a != selector]
+        step.target.selector = selector
+        self.scripts.save(script, reason=f"self-healing #{healing_id} confirmed by a reviewer")
+        self.db.execute("UPDATE healing_events SET result = 'confirmed', healed_selector = ?, applied = 1 WHERE id = ?",
+                        (selector, healing_id))
+        from .. import aura
+
+        aura.learn("approved_correction", script.application, f"locator:{row['original_selector']}", {
+            "original": row["original_selector"], "healed": selector, "confidence": row["confidence"],
+            "healing_id": healing_id, "script_id": script.id, "confirmed": True}, source="self_healing.confirm",
+            approved=True, agent="self_healing")
+        return {"healing_id": healing_id, "result": "confirmed", "selector": selector, "script_id": script.id}
+
     def apply_healing(self, healing_id: int) -> Script:
         row = self.db.query_one("SELECT * FROM healing_events WHERE id = ?", (healing_id,))
         if row is None:
@@ -634,4 +705,10 @@ class Runner:
         step.target.selector = row["healed_selector"]
         saved = self.scripts.save(script, reason=f"self-healing #{healing_id} applied (confidence {row['confidence']:.2f})")
         self.db.execute("UPDATE healing_events SET applied = 1 WHERE id = ?", (healing_id,))
+        from .. import aura  # final patch: a person applied it, so AURA stores it as an approved correction
+
+        aura.learn("approved_correction", script.application, f"locator:{row['original_selector']}", {
+            "original": row["original_selector"], "healed": row["healed_selector"], "confidence": row["confidence"],
+            "healing_id": healing_id, "script_id": script.id}, source="self_healing.apply", approved=True,
+            agent="self_healing")
         return saved

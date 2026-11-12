@@ -252,3 +252,113 @@ def suite_test_cases(plan_id: int, suite_id: int, rt: Runtime = Depends(runtime)
 def clear_cache(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     rt.tfs.invalidate()
     return {"ok": True}
+
+
+# ---- final patch: Preferences > TFS Integration (field rules of the configured project) ------------------------
+
+PREF_CATEGORIES = ("testcase", "bug", "requirement", "testplan", "testsuite")
+CONCEPTS = ("environment", "system_info", "severity", "priority", "assigned_to", "area_path", "iteration_path",
+            "found_in_build", "test_result")
+
+
+class FieldDefaultsIn(BaseModel):
+    type: str = Field(min_length=1, max_length=128)
+    values: dict[str, Any] = Field(default_factory=dict)
+    replace: bool = False
+
+
+class ConceptsIn(BaseModel):
+    mapping: dict[str, str | None] = Field(default_factory=dict)
+
+
+class ProfileExtraIn(BaseModel):
+    ca_bundle: str | None = Field(default=None, max_length=1024)
+
+
+class TestCreateIn(BaseModel):
+    type: str = Field(min_length=1, max_length=128)
+
+
+def _schema_rows(rt: Runtime, type_name: str) -> list[dict[str, Any]]:
+    fields = rt.tfs.field_schema(type_name)
+    saved = rt.tfs.field_defaults(type_name)
+    return [{**f.to_dict(), "saved_default": saved.get(ref)} for ref, f in
+            sorted(fields.items(), key=lambda kv: (not kv[1].required, kv[1].name.lower()))]
+
+
+@router.get("/preferences")
+def preferences(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    profile = rt.tfs.profile()
+    concepts = (rt.settings.section("tfs").get("concept_fields") or {}).get(f"{profile['mode']}:{profile['project']}") or {}
+    return {"ok": True, "profile": profile, "project_key": f"{profile['mode']}:{profile['project']}",
+            "field_defaults": rt.tfs.field_defaults() if profile["project"] else {}, "concept_fields": concepts,
+            "concepts": list(CONCEPTS)}
+
+
+@router.post("/preferences/discover")
+def discover_metadata(refresh: bool = False, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Discover Project Metadata / Refresh Metadata: types per category with each type's fields, mandatory flags
+    and allowed values, read from the project (never assumed)."""
+    if refresh:
+        rt.tfs.invalidate()
+    meta = rt.tfs.meta()
+    out: dict[str, Any] = {}
+    for cat in PREF_CATEGORIES:
+        info = meta["categories"].get(cat)
+        if not info:
+            continue
+        types = []
+        for type_name in info["types"]:
+            try:
+                types.append({"type": type_name, "fields": _schema_rows(rt, type_name)})
+            except QAError as exc:
+                types.append({"type": type_name, "fields": [], "error": exc.message})
+        out[cat] = {"default": info.get("default"), "types": types}
+    return {"ok": True, "project": meta["project"], "categories": out, "states": meta.get("states", {}),
+            "areas": meta.get("areas", []), "iterations": meta.get("iterations", [])}
+
+
+@router.get("/preferences/validate")
+def validate_mandatory(type: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **rt.tfs.field_rules().validate(type)}
+
+
+@router.put("/preferences/defaults")
+def save_defaults(body: FieldDefaultsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "type": body.type, "defaults": rt.tfs.save_field_defaults(body.type, body.values, body.replace)}
+
+
+@router.put("/preferences/concepts")
+def save_concepts(body: ConceptsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    bad = [k for k in body.mapping if k not in CONCEPTS]
+    if bad:
+        raise QAError("CONCEPT_UNKNOWN", f"Unknown mapping: {', '.join(bad)}.")
+    key = rt.tfs.project_key()
+    everything = rt.settings.section("tfs").get("concept_fields") or {}
+    everything[key] = {k: v for k, v in body.mapping.items() if v}
+    rt.settings.update({"tfs": {"concept_fields": None}})
+    rt.settings.update({"tfs": {"concept_fields": everything}})
+    return {"ok": True, "concept_fields": everything[key]}
+
+
+@router.put("/preferences/ca-bundle/{mode}")
+def save_ca_bundle(mode: Literal["online", "offline"], body: ProfileExtraIn,
+                   rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    from pathlib import Path
+
+    value = (body.ca_bundle or "").strip()
+    if value and not Path(value).expanduser().is_file():
+        raise QAError("TFS_CA_BUNDLE_MISSING", f"The file {value} does not exist.", status=422)
+    return {"ok": True, **rt.tfs.save_profile(mode, ca_bundle=value)}
+
+
+@router.post("/preferences/test-create")
+def test_work_item_creation(body: TestCreateIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Test Work Item Creation: TFS checks a work item of this type against every rule of the project with
+    validateOnly=true. Nothing is saved in TFS."""
+    if body.type not in rt.tfs.meta()["work_item_types"]:
+        raise QAError("TFS_TYPE_INVALID", f"'{body.type}' is not a work item type in this project.")
+    patch, _skipped = rt.tfs.build_patch(body.type, {"title": "SkyGuard QA validation check (not saved)"})
+    item, report = rt.tfs.create_checked(body.type, patch, validate_only=True)
+    return {"ok": True, "type": body.type, "saved": False, "report": report,
+            "message": f"TFS accepted a {body.type} with the current defaults (validation only, nothing was saved)."}

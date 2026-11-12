@@ -25,7 +25,7 @@ from ...config import Paths, Settings
 from ...events import names
 from ...runs import RunStore
 from ...storage.db import Database, dumps
-from ..browser import default_headless, ensure_browsers_path
+from ..browser import default_headless, ensure_browsers_path, launch_args
 from ..runner import SelfHealingAgent, TestExecutionAgent
 from . import diagnosis
 
@@ -113,6 +113,9 @@ class FrameworkRunner:
             "QA_CLICK_VOLUME": str(float(playback.get("click_volume", 0.35))),
             "QA_TRACE": "1" if playback.get("trace") else "0", "QA_VIDEO": "1" if playback.get("video") else "0",
             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8",
+            # final patch: maximized on the chosen monitor (Browser Manager); headless keeps 1366 x 768
+            "QA_WINDOW_ARGS": "|".join(launch_args(headless, playback)),
+            "QA_MAXIMIZED": "1" if (not headless and playback.get("window_mode", "maximized") != "default") else "0",
         })
         if playback.get("browser") or chosen:
             env["BROWSER"] = browser

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, PlainTextResponse, Response
@@ -384,6 +384,16 @@ def apply_healing(healing_id: int, rt: Runtime = Depends(runtime)) -> dict[str, 
     return {"ok": True, "script": rt.automation.runner.apply_healing(healing_id).model_dump()}
 
 
+class ConfirmHealingIn(BaseModel):
+    selector: str | None = Field(default=None, max_length=2000)  # None = reject every candidate
+
+
+@router.post("/healing/{healing_id}/confirm")
+def confirm_healing(healing_id: int, body: ConfirmHealingIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Final patch (defect 7): a person picks the element for a low-confidence healing, or rejects them all."""
+    return {"ok": True, **rt.automation.runner.confirm_healing(healing_id, body.selector)}
+
+
 # ---- recording ------------------------------------------------------------------------------
 
 
@@ -567,6 +577,7 @@ class CredentialIn(BaseModel):
     password: str | None = None
     login_url: str | None = None
     environment: str | None = Field(default=None, max_length=60)
+    auth_method: Literal["form", "windows", "basic", "manual", "none"] | None = None
 
 
 @router.get("/credentials")
@@ -578,8 +589,10 @@ def credentials(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 def save_credential(body: CredentialIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     if body.password and not rt.secrets.available:
         raise QAError("CREDENTIAL_STORE_UNAVAILABLE", "The Windows Credential Manager is not available.", status=503)
+    if body.login_url and not body.login_url.lower().startswith(("http://", "https://")):
+        raise QAError("CREDENTIAL_INVALID", "The login URL must start with http:// or https://.")
     item = rt.automation.creds.save(body.application, body.role, body.username, body.password, body.login_url,
-                                    body.environment)
+                                    body.environment, body.auth_method)
     return {"ok": True, "item": item}
 
 
@@ -587,3 +600,14 @@ def save_credential(body: CredentialIn, rt: Runtime = Depends(runtime)) -> dict[
 def delete_credential(cid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     rt.automation.creds.delete(cid)
     return {"ok": True}
+
+
+# ---- final patch: Browser Manager (Preferences > Browser) ---------------------------------------------------------
+
+@router.get("/browsers/check")
+def check_browsers(launch_test: bool = True, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Which browsers are installed and start on this PC, the monitors found and where windows open."""
+    from ..automation import browser as browser_manager
+
+    browser_manager.configure(rt.settings)
+    return {"ok": True, **browser_manager.diagnose(try_launch=launch_test)}

@@ -2,6 +2,7 @@
 // The Application Discovery Agent can pause for input (credentials, OTP, manual verification); the tester answers
 // in a window here and the agent continues in the same browser session.
 
+import { loginBlock, bindLogin } from "../login-fields.js";
 import { api } from "../api.js";
 import { esc, toast, dateTimeOf } from "../util.js";
 import { scopeSelector } from "./tfs-scope.js";
@@ -295,6 +296,7 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
         <datalist id="appNames">${appNames.map((a) => `<option value="${esc(a)}">`).join("")}</datalist></label>
       <label>Credential role <select name="credential_role"><option value="">Any saved role for this application</option></select></label>
       <label>Environment <input name="environment" placeholder="Optional, e.g. UAT"></label>
+      ${loginBlock("Application sign-in (used when discovery reaches the login page)")}
       <label class="row" style="display:flex;align-self:end"><input type="checkbox" name="explore" checked> Click through menus, buttons and script links</label>
       <div class="row" id="genBox" style="grid-column:1/-1;flex-wrap:wrap;gap:12px">
         <label class="row"><input type="checkbox" name="generate_scripts" checked> Then generate the Playwright scripts for the Test Cases in scope (AI-Driven Automation)</label>
@@ -314,6 +316,7 @@ export async function discoveryPanel(view, { onCleanup, liveFeed, renderScriptLi
     <div class="card" id="discs" style="margin-top:12px"><p class="muted">Loading…</p></div>
     <div class="card" id="list" style="margin-top:12px"><p class="muted">Loading…</p></div>`;
   const form = view.querySelector("#disc");
+  bindLogin(form);  // final patch: sign-in fields next to Start Intelligent Discovery (defect 8)
   const source = () => view.querySelector("[name=source]:checked").value;
   let scope = null;
   const applySource = async () => {

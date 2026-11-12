@@ -1016,6 +1016,17 @@ class PerformanceService:
                 "samples": overall.get("samples"), "error_pct": overall.get("error_pct"),
                 "p95_ms": overall.get("p95_ms"), "throughput": overall.get("throughput"),
             })
+            if record["state"] == "COMPLETED" and overall:
+                from .. import aura  # final patch: AURA keeps a performance baseline per plan and workload kind
+
+                aura.learn("performance_baseline", getattr(plan, "name", None) or plan.id,
+                           f"plan:{plan.id}:{getattr(plan, 'kind', None) or 'load'}", {
+                               "run_id": run_id, "verdict": record["verdict"],
+                               "samples": overall.get("samples"), "error_pct": overall.get("error_pct"),
+                               "avg_ms": overall.get("avg_ms"), "p90_ms": overall.get("p90_ms"),
+                               "p95_ms": overall.get("p95_ms"), "p99_ms": overall.get("p99_ms"),
+                               "throughput": overall.get("throughput")},
+                           source="performance", agent="performance_engineering")
             for hook in self.finished_hooks:
                 try:
                     hook(run_id, record["verdict"])
