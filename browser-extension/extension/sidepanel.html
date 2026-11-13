@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkyGuard Agent</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<header>
+  <img src="icons/icon32.png" alt="">
+  <h1>SkyGuard Adaptive AI Agent</h1>
+  <span id="conn" class="pill">checking</span>
+</header>
+<nav id="tabs">
+  <button data-tab="chat" class="active">Chat</button>
+  <button data-tab="run">Execution</button>
+  <button data-tab="apps">Applications</button>
+  <button data-tab="learn">Learn</button>
+  <button data-tab="knowledge">Knowledge</button>
+  <button data-tab="audit">Audit</button>
+</nav>
+<main id="main"></main>
+<div id="status" class="status" role="status" aria-live="polite"></div>
+<script type="module" src="sidepanel.js"></script>
+</body>
+</html>

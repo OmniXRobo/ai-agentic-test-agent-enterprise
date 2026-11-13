@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkyGuard Agent Options</title>
+<link rel="stylesheet" href="panel.css">
+<style>main { max-width: 640px; margin: 0 auto; }</style>
+</head>
+<body>
+<header><img src="icons/icon32.png" alt=""><h1>SkyGuard Adaptive AI Agent: Options</h1><span id="conn" class="pill">checking</span></header>
+<main>
+  <div class="card" id="companionCard"><h2>Local companion</h2>
+    <p class="muted">The extension talks only to the SkyGuard companion on this PC (127.0.0.1). It does not use any cloud service.</p>
+    <label>Companion port<input id="port" type="number" min="1024" max="65535"></label>
+    <div class="row"><button class="btn" id="savePort">Save</button><button class="btn" id="test">Test connection</button></div>
+    <p class="err" id="connErr"></p></div>
+  <div class="card" id="pairCard"><h2>Pair with the companion</h2>
+    <p class="muted">Open the Start menu entry <em>SkyGuard Agent - Pairing code</em> (or run <code>SkyGuardAgent.cmd pair</code>) and type the 8-digit code. It is valid for 10 minutes and works once.</p>
+    <label>Pairing code<input id="code" inputmode="numeric" autocomplete="off" placeholder="1234-5678"></label>
+    <div class="row"><button class="btn primary" id="pairBtn">Pair</button><button class="btn danger" id="unpairBtn">Unpair this browser</button></div>
+    <p class="err" id="pairErr"></p></div>
+  <div class="card" id="setupCard"><h2>Create the first companion user (admin)</h2>
+    <label>User name<input id="suUser" autocomplete="username"></label>
+    <label>Password (at least 10 characters)<input id="suPass" type="password" autocomplete="new-password"></label>
+    <button class="btn primary" id="setupBtn">Create admin</button><p class="err" id="setupErr"></p></div>
+  <div class="card" id="loginCard"><h2>Sign in</h2>
+    <label>User name<input id="liUser" autocomplete="username"></label>
+    <label>Password<input id="liPass" type="password" autocomplete="current-password"></label>
+    <div class="row"><button class="btn primary" id="loginBtn">Sign in</button><button class="btn" id="logoutBtn">Sign out</button></div>
+    <p class="err" id="loginErr"></p></div>
+  <div class="card"><h2>Typing</h2>
+    <label class="row" style="display:flex"><input type="checkbox" id="trusted" style="width:auto"> Use Chrome's trusted input when a field refuses ordinary typing</label>
+    <p class="muted">Needs the optional "debugger" permission; the browser shows a notice while it is used. Without it the agent pauses and you type the value yourself. Values are never assigned to fields directly.</p></div>
+  <div class="card"><h2>Microphone</h2><p class="muted">Voice is optional. Recording happens only between Speak and Stop, and audio goes only to the local speech recognizer.</p>
+    <button class="btn" id="micBtn">Allow the microphone</button></div>
+  <div class="card hidden" id="adminCard"><h2>Companion users (admin)</h2><div id="users" class="list"></div>
+    <label>User name<input id="nuUser"></label><label>Password<input id="nuPass" type="password" autocomplete="new-password"></label>
+    <label>Role<select id="nuRole"><option value="operator">operator (learn, run)</option><option value="viewer">viewer (read only)</option><option value="admin">admin</option></select></label>
+    <button class="btn" id="addUser">Add user</button><p class="err" id="userErr"></p>
+    <h2 style="margin-top:12px">AI model and speech</h2>
+    <label>AI model<select id="llmMode"><option value="auto">Automatic (running local server, else bundled)</option><option value="connect">Connect to a local server</option><option value="launch">Start the bundled server</option><option value="off">Off (no AI)</option></select></label>
+    <label>Local AI server URL<input id="llmUrl" placeholder="http://127.0.0.1:8080/v1"></label>
+    <label>Speech<select id="fwMode"><option value="auto">Automatic</option><option value="connect">Connect to a local server</option><option value="launch">Start the bundled recognizer</option><option value="off">Off</option></select></label>
+    <label>Local speech server URL<input id="fwUrl" placeholder="http://127.0.0.1:8766"></label>
+    <button class="btn" id="saveCfg">Save</button><p class="muted" id="modelState"></p><p class="err" id="cfgErr"></p></div>
+</main>
+<script type="module" src="options.js"></script>
+</body>
+</html>

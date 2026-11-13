@@ -1,0 +1,122 @@
+# packaging/offline_install_check.sh output, 2026-11-12T20:37Z, commit 9295bfd plus test reports
+
+== Network check inside the namespace
+no internet (as intended)
+
+== Zip checksums
+SkyGuard_Adaptive_AI_Application_Learning_Operations_Agent_Final_Patch.zip: OK
+SkyGuard_Adaptive_AI_Browser_Extension_Final.zip: OK
+
+== Extract and check every file against SHA256_CHECKSUM.txt
+SkyGuard_Adaptive_AI_Application_Learning_Operations_Agent_Final_Patch: 54 files OK
+SkyGuard_Adaptive_AI_Browser_Extension_Final: 102 files OK
+
+== Patch: a SkyGuard QA 23.4.0 installation (git archive of the baseline commit) with a database
+__version__ = "23.4.0"
+schema 18
+
+== Patch: apply (offline)
+
+== SkyGuard QA 23.5.0: Adaptive AI Application Learning & Operations Agent
+Application folder : <work>/inst/app
+Data folder        : <work>/inst/data  (kept)
+Installed version  : 23.4.0 -> 23.5.0
+
+== Checking the patch files (SHA-256)
+32 files verified.
+
+== Checking disk space, permissions and that the application is stopped
+Free space: 28977 MB, needed: 301 MB
+
+== Backing up
+Backup: <work>/inst/app/patch-backups/23.4.0-to-23.5.0-20261112-203651  (6 files replaced, 26 new, database copied)
+
+== Copying the new files
+32 files copied.
+
+== Migrating the database
+Main database schema version 18 (unchanged in 23.5.0).
+Operations Agent knowledge database schema version 1 (<work>/inst/data/opsagent/knowledge.sqlite3).
+
+== Verifying
+  Version file                       PASS  23.5.0
+  Application loads                  PASS  23.5.0
+  Operations Agent loads             PASS  agent core 1.0.0
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  No data lost                       PASS  every table kept its rows
+  Patch files present                PASS  all
+
+== Result
+Patched 23.4.0 -> 23.5.0. Backup for rollback: <work>/inst/app/patch-backups/23.4.0-to-23.5.0-20261112-203651
+
+== Patch: verify (offline)
+
+== Verifying <work>/inst/app
+  Version file                       PASS  23.5.0
+  Application loads                  PASS  23.5.0
+  Operations Agent loads             PASS  agent core 1.0.0
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  Patch files present                PASS  all
+
+== Patch: start the patched SkyGuard (offline) and call it
+GET /api/health -> {"ok":true,"version":"23.5.0","time":"2026-11-12T20:36:57.737+00:00","data_root":"<work>/inst/data"}
+GET /api/ops/info from a browser without sign-in -> HTTP 401
+GET /api/ops/info from a local program (no browser headers; trusted since 23.3.34, as every SkyGuard API) -> HTTP 200
+GET / (dashboard) -> HTTP 200
+
+== Patch: rollback, then apply again (offline)
+
+== Rolling back 23.5.0 -> 23.4.0 from <work>/inst/app/patch-backups/23.4.0-to-23.5.0-20261112-203651
+Databases kept as they are (23.4.0 does not use the agent's knowledge database; nothing is lost).
+Version now 23.4.0.
+__version__ = "23.4.0"
+== Result
+Patched 23.4.0 -> 23.5.0. Backup for rollback: <work>/inst/app/patch-backups/23.4.0-to-23.5.0-20261112-203658
+
+== Extension package: offline runtimes
+   105696  2026-10-21 15:04   tools/python.exe
+   104160  2026-10-21 15:04   tools/pythonw.exe
+     9216  2026-08-21 06:08   llama-server.exe
+wheels: 23
+
+== Extension package: Faster-Whisper wheels resolve offline with --require-hashes for win_amd64 / Python 3.13
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+Successfully installed anyio-4.15.1 av-19.0.2 click-8.5.0 colorama-0.4.6 ctranslate2-4.8.4 faster-whisper-1.2.1 filelock-4.2.5 flatbuffers-25.12.19 fsspec-2026.9.0 h11-0.16.0 httpcore2-2.16.0 httpx2-2.16.0 huggingface-hub-2.4.0 idna-3.20 numpy-2.5.4 onnxruntime-1.31.1 packaging-26.3 protobuf-7.36.2 pyyaml-6.0.3 tokenizers-0.23.3 tqdm-4.70.1 truststore-0.10.5 typing-extensions-4.16.0
+av ctranslate2 faster_whisper numpy onnxruntime tokenizers 
+
+== Extension package: companion from the extracted package (offline, the installer's layout)
+SkyGuard Adaptive AI Companion 1.0.0
+pairing code shown: 1
+  absent (optional) Windows 11 (build 22000 or later) - Linux 6.18.44-fc-v378 build #1 SMP PREEMPT_DYNAMIC @0
+  OK   Python 3.11 or later (bundled 3.13) - 3.13.18
+  OK   SQLite with WAL support - 3.53.1
+  OK   Chrome or Edge installed - not checked: this check looks in the Windows installation folders
+  OK   Port 18790 on 127.0.0.1 - free
+  absent (optional) llama-server (bundled) - missing: runtime\llama
+  absent (optional) Qwen model (.gguf) - not installed: run Install-Models.ps1, or point llm.url at a running server
+  absent (optional) Faster-Whisper packages (bundled) - <work>/agent-home/runtime/faster-whisper/lib
+  absent (optional) Faster-Whisper small.en model - not installed: run Install-Models.ps1 (voice is optional)
+  absent (optional) Credential vault (Windows DPAPI) - not Windows: credentials need the OS keyring
+  OK   Data folder writable (no administrator rights needed) - <work>/agent-home/data
+GET /health -> {"ok": true, "name": "SkyGuard Adaptive AI Companion", "version": "1.0.0"}
+GET /v1/hello from a web page origin -> HTTP 403
+GET /v1/hello with a foreign Host (DNS rebinding) -> HTTP 403
+GET /v1/hello from the extension origin -> {"ok": true, "name": "SkyGuard Adaptive AI Companion", "version": "1.0.0", "agent": "1.0.0"}
+GET /v1/applications without pairing -> HTTP 401
+{
+ "running": true,
+ "port": 18790,
+ "ok": true,
+ "name": "SkyGuard Adaptive AI Companion",
+ "version": "1.0.0"
+}
+
+== DONE

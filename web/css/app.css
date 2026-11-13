@@ -686,3 +686,18 @@ pre.code.diff.jdiff span { display: block; }
 .login-box legend { padding: 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
 .login-box label { display: grid; gap: 4px; font-size: 13px; }
 .login-box .login-actions { grid-column: 1 / -1; gap: 10px; align-items: center; }
+
+/* 23.5.0: AI Application Learning & Operations Agent */
+.ops-chat { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 10px;
+  min-height: 220px; max-height: 420px; overflow-y: auto; display: grid; gap: 8px; align-content: start; }
+.ops-msg { max-width: 82%; padding: 8px 11px; border-radius: 10px; white-space: pre-wrap; line-height: 1.4; font-size: 14px; }
+.ops-msg.me { justify-self: end; background: var(--accent-soft); border: 1px solid var(--accent); }
+.ops-msg.agent { justify-self: start; background: var(--surface); border: 1px solid var(--border); }
+.ops-msg.withheld { border-color: var(--warn); background: var(--warn-soft); }
+.ops-events { max-height: 300px; overflow-y: auto; font-size: 13px; border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px; background: var(--surface-2); }
+.ops-events div { padding: 3px 0; border-bottom: 1px dashed var(--border); }
+.ops-attention { border: 2px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; }
+.ops-blink { animation: ops-blink 1s ease-in-out infinite; }
+@keyframes ops-blink { 0%, 100% { box-shadow: 0 0 0 0 var(--warn); } 50% { box-shadow: 0 0 0 6px var(--warn-soft); } }
+@media (prefers-reduced-motion: reduce) { .ops-blink { animation: none; outline: 3px solid var(--warn); } }

@@ -225,3 +225,6 @@ __marimo__/
 /dist_offline/
 *.gguf
 *.jtl
+
+# 23.5.0: the browser extension ships its own lib folder
+!browser-extension/extension/lib/
