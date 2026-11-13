@@ -6,7 +6,7 @@ import base64
 import queue
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -239,6 +239,12 @@ class RecordingSession:
         if step["action"] == "picked":
             self._on_picked(step)
             return
+        if step["action"] == "pick_date_cell":  # 23.6.0
+            self._on_date_cell(step)
+            return
+        if step["action"] == "choose_option":  # 23.6.0
+            self._on_option(step)
+            return
         target = step.get("target")
         if isinstance(target, dict) and target.get("input_type") == "password":
             target["text"] = None  # never keep a typed password in the fingerprint
@@ -248,7 +254,15 @@ class RecordingSession:
             step["description"] = f"Enter the {role} password (from saved credentials)"
         with self._lock:
             before = len(self.steps)
-            merge_step(self.steps, step)
+            last = self.steps[-1] if self.steps else None
+            if step["action"] == "fill" and last and last.get("action") == "choose_option" and \
+                    (last.get("target") or {}).get("selector") == (step.get("target") or {}).get("selector"):
+                # 23.6.0: an autocomplete reports the typed text when the field loses focus, after the suggestion
+                # click: the typing goes first, then the choice (so playback types, then chooses)
+                if step.get("value") and step.get("value") != last.get("value"):
+                    self.steps.insert(len(self.steps) - 1, step)
+            else:
+                merge_step(self.steps, step)
             added = len(self.steps) > before
         if added:
             t = step.get("target") or {}
@@ -404,6 +418,52 @@ class RecordingSession:
         self.agent.emit(names.AGENT_LOG, f"Recorded {new['description']} (from the picker, {removed} click(s) merged)",
                         run_id=self.run_id, details={"steps": len(self.steps)})
 
+    def _on_date_cell(self, step: dict[str, Any]) -> None:
+        """23.6.0: a click on a calendar day, in a calendar without an input field (hotel check-in / check-out,
+        flight departure / return). It becomes pick_date with a date rule (Current date + N days, from the moment
+        it was recorded), the date field that opened the calendar as its target, and its meaning (start / end)."""
+        iso = str(step.get("date") or "")
+        at = step.get("_at")
+        try:
+            recorded = datetime.fromisoformat(at).date() if at else now().date()
+            days = (date.fromisoformat(iso) - recorded).days
+        except ValueError:
+            return
+        rule = "{{TODAY" + (f"+{days}d" if days > 0 else f"{days}d" if days < 0 else "") + ":%Y-%m-%d}}"
+        field = step.get("field") if isinstance(step.get("field"), dict) else None
+        role = step.get("role") or None
+        label = (step.get("field_label") or (field or {}).get("name") or (field or {}).get("label") or "").strip()
+        with self._lock:
+            # the click that opened the calendar is part of this choice
+            if field and self.steps and self.steps[-1].get("action") == "click" and \
+                    (self.steps[-1].get("target") or {}).get("selector") == field.get("selector"):
+                self.steps.pop()
+            what = f"the {role} date" if role else "the date"
+            new = {"action": "pick_date", "target": field or step.get("target"), "value": rule, "original_value": iso,
+                   "_at": at, "_t": step.get("_t"), "_picked": True,
+                   "semantic": {"intent": "pick_date", "component": "calendar", "role": role, "field": label[:80],
+                                "recorded_value": iso},
+                   "description": f"Choose {what} {date_rules.label(rule).split(' (')[0]}"
+                                  + (f" in {label[:60]}" if label else "")}
+            self.steps.append(new)
+        self.agent.emit(names.AGENT_LOG, f"Recorded {new['description']}", run_id=self.run_id,
+                        details={"steps": len(self.steps)})
+
+    def _on_option(self, step: dict[str, Any]) -> None:
+        """23.6.0: a suggestion or a custom-list option was clicked: "choose <text> in <field>"."""
+        value = str(step.get("value") or "")[:200]
+        target = step.get("target") or {}
+        name = target.get("name") or target.get("label") or target.get("placeholder") or "the list"
+        with self._lock:
+            new = {"action": "choose_option", "target": target, "value": value, "_at": step.get("_at"),
+                   "_t": step.get("_t"),
+                   "semantic": {"intent": "choose_option", "option": value, "field": str(name)[:80],
+                                "with_field": bool(step.get("has_field"))},
+                   "description": f"Choose '{value[:60]}' in {str(name)[:60]}"}
+            merge_step(self.steps, new)
+        self.agent.emit(names.AGENT_LOG, f"Recorded {new['description']}", run_id=self.run_id,
+                        details={"steps": len(self.steps)})
+
     def _on_download(self, download: Any) -> None:
         """23.3.17: the last click started a download: it becomes a download step plus a file type check."""
         if not self.recording:
@@ -443,6 +503,7 @@ class RecordingSession:
                     context.add_init_script(js("fingerprint"))
                     context.add_init_script(js("recorder"))
                     context.add_init_script(js("calendar"))
+                    context.add_init_script(js("components"))  # 23.6.0: semantic steps (dates, options)
                     # The playback cursor shows what voice commands do in the recorded browser.
                     context.add_init_script(visual.overlay_config(self.playback))
                     context.add_init_script(js("overlay"))
@@ -705,7 +766,7 @@ class RecordingSession:
                 if rule_label and rule_label not in desc:
                     desc = f"{desc} ({rule_label})"
             out.append(Step(action=s["action"], target=target, value=s.get("value"), description=desc,
-                            original_value=s.get("original_value"), tab=s.get("tab")))
+                            original_value=s.get("original_value"), tab=s.get("tab"), semantic=s.get("semantic")))
         return out
 
     @property

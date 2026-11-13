@@ -722,12 +722,35 @@ class ScriptStudio:
     def script(self, script_id: str) -> dict[str, Any]:
         rec = self._record(script_id)
         ws = self.workspace()
-        exists = ws.exists(rec["file"])
-        source = ws.read(rec["file"]) if exists else None
-        data = self._data(rec)
+        # 23.6.0: opening a script only reads. A missing, wrong-type or unreadable file is reported with its path and
+        # the reason; nothing is created or overwritten.
+        problem: dict[str, Any] | None = None
+        source = None
+        status = rec["status"]
+        try:
+            full = str(ws.path(rec["file"]))
+        except QAError:
+            full = str(rec["file"])
+        if not str(rec["file"] or "").lower().endswith(".py"):
+            problem, status = {"path": full, "reason": "The script file is not a Python (.py) file."}, "FILE INVALID"
+        elif not ws.exists(rec["file"]):
+            problem, status = {"path": full, "reason": "The script file is missing. It may have been moved, renamed "
+                               "or deleted outside SkyGuard. Generate the script again or restore it from a version."
+                               }, "FILE MISSING"
+        else:
+            try:
+                source = ws.read(rec["file"])
+            except QAError as exc:
+                problem, status = {"path": full, "reason": exc.message}, "FILE UNREADABLE"
+        exists = source is not None
+        try:
+            data = self._data(rec)
+        except QAError:
+            data = None
         role = (data.get("credentials") or {}).get("role") if data else rec["credential_role"]
         return {
-            "script": {**rec, "file_verified": exists, "status": rec["status"] if exists else "FILE MISSING",
+            "file_problem": problem,
+            "script": {**rec, "file_verified": exists, "status": status,
                        "method_name": METHOD_NAMES.get(rec["method"], rec["method"]), "file_name": Path(rec["file"]).name},
             "source": source, "data": data,
             "flow_logic": self.flow_logic(rec, source) if source else [],

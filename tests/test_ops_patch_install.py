@@ -18,6 +18,11 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+# 23.6.0: the 23.5.0 package is built from the working tree, which is 23.6.0 now; its installer would refuse a tree
+# that does not say 23.5.0. The cumulative patch (23.4.0 + 23.5.0 + 23.6.0) is tested in test_cumulative_patch_23600.
+_TREE = (ROOT / "qa_platform" / "__init__.py").read_text(encoding="utf-8")
+pytestmark = pytest.mark.skipif('__version__ = "23.5.0"' not in _TREE,
+                                reason="superseded by the 23.6.0 cumulative patch (tests/test_cumulative_patch_23600.py)")
 BASELINE = "53e80093fe99272f27dc424392d1fd3d746b3c7c"
 NAME = "SkyGuard_Adaptive_AI_Application_Learning_Operations_Agent_Final_Patch"
 

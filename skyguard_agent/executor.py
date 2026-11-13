@@ -260,13 +260,21 @@ class Engine:
         return self.view(run_id)
 
     def resume(self, run_id: str, by: str | None = None, manual_events: list[dict[str, Any]] | None = None,
-               note: str | None = None) -> dict[str, Any]:
+               note: str | None = None, choice: int | None = None) -> dict[str, Any]:
         with self._lock(run_id):
             run = self.run(run_id)
             if run["status"] != "paused":
                 raise AgentError("NOT_PAUSED", "This execution is not paused.", 409)
             cp = run["checkpoint"]
             pause = cp.get("pause") or {}
+            if choice is not None:
+                options = pause.get("choices") or []
+                if not 0 <= choice < len(options):
+                    raise AgentError("CHOICE_INVALID", "That choice is not one of the controls I listed.", 400)
+                # used once, for this step only; not remembered as the control's location for other records
+                cp["choice"] = {"target": pause.get("target"), "fingerprint": options[choice]["fingerprint"],
+                                "label": options[choice]["label"]}
+                manual_events = []
             cp["resumed"] = {**pause, "manual_events": [_safe_event(e) for e in (manual_events or [])[:50]],
                              "note": (note or "")[:500], "by": by}
             cp["pause"] = None
@@ -877,7 +885,12 @@ class Engine:
                 return {"action": {"type": "click", "handle": res["h"], "target": step.get("control"),
                                    "commit": commit}}
             screen = step.get("screen") or "*"
-            res = self._resolve(app["id"], screen, step.get("target") or "", snap, act or "click")
+            chosen = cp.pop("choice", None)
+            if chosen and chosen.get("target") == (step.get("target") or "the control"):
+                res = locator.pick(chosen["fingerprint"], snap, action=act or "click")
+                self._event(run["id"], "manual", f"Using the control you chose: {chosen.get('label')}.")
+            else:
+                res = self._resolve(app["id"], screen, step.get("target") or "", snap, act or "click")
             if res.status != "found":
                 return self._locate_problem(run, cp, res, step.get("target") or "the control",
                                             commit=bool(step.get("commit")))
@@ -943,6 +956,14 @@ class Engine:
             return {"action": {"type": "snapshot", "wait_ms": 1000 * (waits + 1)}}
         cp["heal_waits"] = 0
         code = {"ambiguous": "ambiguous", "blocked": "control_disabled"}.get(res.status, "control_not_found")
+        if code == "ambiguous" and res.candidates:
+            # 23.6.0: ask in chat which one, naming each by its row / card, instead of "select manually"
+            choices = [{"index": i, "label": f"{what} ({locator.context_of(c['element']) or 'option ' + str(i + 1)})",
+                        "fingerprint": locator.fingerprint_of(c["element"])} for i, c in enumerate(res.candidates[:5])]
+            listing = "; ".join(f"{i + 1}) {c['label']}" for i, c in enumerate(choices))
+            return self._pause(run, code, f"I found {len(res.candidates)} controls that match '{what}': {listing}. "
+                               "Tell me which one to use, or click it yourself in the browser and press Resume.",
+                               target=what, candidates=res.to_dict()["candidates"], choices=choices)
         msg = {"ambiguous": f"Multiple matching controls found for '{what}'. Please select the correct one "
                             "manually. I will verify your action and continue.",
                "control_disabled": f"'{what}' is disabled on the page ({res.reason}). Please resolve it in the "
@@ -1078,7 +1099,7 @@ class Engine:
 
     def _pause(self, run: dict[str, Any], code: str, message: str, *, kind: str = "manual",
                target: str | None = None, candidates: list[dict[str, Any]] | None = None,
-               next_item: bool = False) -> dict[str, Any]:
+               next_item: bool = False, choices: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         cp = run["checkpoint"]
         if next_item:
             cp.update(item=cp["item"] + 1, step=0, sub="session")
@@ -1086,7 +1107,7 @@ class Engine:
                        "candidates": candidates or [], "at": now_iso(), "resume_status": run["status"]
                        if run["status"] in ("running", "inspecting") else "running",
                        "sub": cp.get("sub"), "step": cp.get("step"), "acknowledged": False,
-                       "page": cp.get("page")}
+                       "page": cp.get("page"), "choices": choices or []}
         self._save(run, status="paused", checkpoint=cp, summary=run.get("summary") or {})
         self._event(run["id"], "pause", message, code=code)
         self.audit.record("run.paused", target=run["id"], details={"code": code})

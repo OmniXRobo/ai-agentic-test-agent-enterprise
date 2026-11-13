@@ -298,8 +298,46 @@ def run_script(script_id: str, body: RunIn | None = None, rt: Runtime = Depends(
         table = rt.automation.scripts.get(script_id).data_table
         if table and table.rows:
             dataset = dict(table.rows[0])
-    run_id = rt.automation.run_script(script_id, dataset=dataset, headless=body.headless)
+    # 23.6.0: Play from the page is attended: a step that cannot be done confidently pauses for the tester
+    run_id = rt.automation.run_script(script_id, dataset=dataset, headless=body.headless, interactive=True)
     return {"ok": True, "run_id": run_id}
+
+
+class InterventionIn(BaseModel):
+    action: Literal["continue", "retry", "skip", "stop", "allow", "choose"]
+    choice: str | None = Field(default=None, max_length=300)
+
+
+@router.get("/runs/{run_id}/intervention")
+def get_intervention(run_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.6.0: what a paused run is waiting for (None when it is not paused)."""
+    return {"ok": True, "intervention": rt.automation.runner.intervention(run_id)}
+
+
+@router.post("/runs/{run_id}/intervention")
+def answer_intervention(run_id: str, body: InterventionIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    from ..auth import current_user
+
+    user = current_user()
+    if body.action == "allow" and user is not None and user.view_only:
+        raise QAError("VIEW_ONLY", "Only a tester or admin can allow a payment or booking commitment.", status=403)
+    return {"ok": True, **rt.automation.runner.answer_intervention(run_id, body.action, body.choice)}
+
+
+@router.post("/scripts/{script_id}/semantic-upgrade")
+def semantic_upgrade(script_id: str, apply: bool = False, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.6.0: show (apply=false) or save as a new version (apply=true) the meaning of an older recording's steps:
+    calendar clicks become date choices, page-background clicks become "close the pop-up", hovers optional."""
+    from ..automation import semantic
+    from ..clock import now
+
+    script = rt.automation.scripts.get(script_id)
+    upgraded, changes = semantic.upgrade(script, today=now().date())
+    saved = None
+    if apply and changes:
+        saved = rt.automation.scripts.save(upgraded, reason=f"semantic upgrade: {len(changes)} step(s)")
+    return {"ok": True, "changes": changes, "version": saved.version if saved else script.version,
+            "applied": bool(saved)}
 
 
 @router.post("/run-many", status_code=202)

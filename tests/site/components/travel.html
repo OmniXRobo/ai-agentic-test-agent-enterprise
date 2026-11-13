@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Test Travel</title>
+<style>body{font-family:sans-serif} .box{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid #999;padding:10px}
+.fld{border:1px solid #666;padding:6px 10px;cursor:pointer;min-width:120px} .spinner{width:20px;height:20px;border:3px solid #999;border-top-color:#000;border-radius:50%}
+.pop{position:absolute;background:#fff;border:1px solid #333;padding:8px;z-index:30} .step{display:inline-block;width:22px;text-align:center;border:1px solid #aaa;cursor:pointer}
+</style></head><body>
+<header><a href="#" aria-label="Test Travel" onclick="location.hash='';return false">Test Travel</a></header>
+<main id="main">
+  <ul role="tablist" id="tabs"><li role="tab" aria-selected="true" data-tab="hotels" style="display:inline-block;cursor:pointer">Hotels</li>
+    <li role="tab" aria-selected="false" data-tab="flights" style="display:inline-block;cursor:pointer;margin-left:12px">Flights</li></ul>
+  <!-- the hotel search form: no ids on the controls; the same id twice on purpose -->
+  <section id="searchBoxCon" class="box" data-form="hotels">
+    <label>Where to?<input placeholder="Where to?" class="dest"></label>
+    <div class="fld" data-k="in" tabindex="0"><div class="lbl">Check-in</div><div class="val">Add date</div></div>
+    <div class="fld" data-k="out" tabindex="0"><div class="lbl">Check-out</div><div class="val">Add date</div></div>
+    <div role="button" class="fld guests" tabindex="0" aria-label="1 room, 2 adults, 0 children">1 room, 2 adults, 0 children</div>
+    <button type="button" class="go" id="dup">Search</button>
+  </section>
+  <section class="box" data-form="flights" hidden>
+    <div role="radiogroup"><label><input type="radio" name="trip" value="round" checked> Round-trip</label>
+      <label><input type="radio" name="trip" value="one"> One-way</label></div>
+    <input aria-label="Departure airport or city" class="from">
+    <input aria-label="Arrival airport or city" class="to">
+    <div class="fld" data-k="dep" tabindex="0"><div class="lbl">Depart</div><div class="val">Add date</div></div>
+    <div class="fld" data-k="ret" tabindex="0"><div class="lbl">Return</div><div class="val">Add date</div></div>
+    <div role="button" class="fld pax" tabindex="0" aria-label="1 adult, Economy">1 adult, Economy</div>
+    <button type="button" class="go" id="dup">Search</button>
+  </section>
+  <div id="out"></div>
+</main>
+<script src="kit.js"></script>
+<script>
+const K = window.__kit;
+const $ = (s, r = document) => r.querySelector(s);
+const state = { dest: "", in: "", out: "", rooms: 1, adults: 2, children: 0, from: "", to: "", dep: "", ret: "", trip: "round", pax: 1, cabin: "Economy" };
+const fmt = (iso) => { const [y, m, d] = iso.split("-").map(Number); return `${d} ${K.MONTHS[m - 1].slice(0, 3)} ${y}`; };
+// dynamic ids: different on every load
+document.querySelectorAll("input,section,.fld").forEach((e) => { if (!e.id) e.id = "c" + K.rnd(); });
+document.querySelectorAll("[role=tab]").forEach((t) => t.addEventListener("click", () => {
+  document.querySelectorAll("[role=tab]").forEach((x) => x.setAttribute("aria-selected", x === t));
+  document.querySelectorAll("[data-form]").forEach((f) => { f.hidden = f.dataset.form !== t.dataset.tab; });
+}));
+// hotels ---------------------------------------------------------------------------------------------------------
+const hotelForm = $("[data-form=hotels]");
+let range = null;
+const fields = { in: $("[data-k=in]", hotelForm), out: $("[data-k=out]", hotelForm) };
+const cal = K.calendar(null, { panels: 2, label: () => (!range || range === "in" ? ", Select the start date you want" : ", Select the end date you want"),
+  onPick: (d) => {
+    if (range === "in") { state.in = d; fields.in.querySelector(".val").textContent = fmt(d); range = "out"; cal.redraw(); }
+    else { state.out = d; fields.out.querySelector(".val").textContent = fmt(d); range = null; cal.close(); }
+  } });
+fields.in.addEventListener("click", () => { range = "in"; cal.open(fields.in); });
+fields.out.addEventListener("click", () => { range = state.in ? "out" : "in"; cal.open(fields.out); });
+K.autocomplete($(".dest"), [
+  { title: "Paris", sub: "France" }, { title: "Paris, Texas", sub: "United States" }, { title: "Parisian Grand Hotel", sub: "Hotel in Paris" },
+  { title: "India", sub: "Country" }, { title: "India Gate", sub: "Delhi, India" }, { title: "Dubai", sub: "United Arab Emirates" }],
+  { onPick: (it) => { state.dest = it.title; range = "in"; cal.open(fields.in); } });
+// guests popover with +/- spans (no roles, like many real sites)
+$(".guests").addEventListener("click", (e) => {
+  if ($(".pop.g")) return;
+  const pop = K.el("div", { class: "pop g" });
+  const row = (k, t) => { const r = K.el("div", {}); r.append(K.el("span", {}, t + " "), Object.assign(K.el("span", { class: "step minus" }, "−"), { onclick: () => { state[k] = Math.max(k === "children" ? 0 : 1, state[k] - 1); upd(); } }), K.el("span", { class: `n-${k}` }, String(state[k])), Object.assign(K.el("span", { class: "step plus", "aria-label": `Add ${t}` }, "+"), { onclick: () => { state[k] += 1; upd(); } })); return r; };
+  const upd = () => { ["rooms", "adults", "children"].forEach((k) => { pop.querySelector(`.n-${k}`).textContent = state[k]; }); const t = `${state.rooms} room${state.rooms > 1 ? "s" : ""}, ${state.adults} adults, ${state.children} children`; $(".guests").textContent = t; $(".guests").setAttribute("aria-label", t); };
+  pop.append(row("rooms", "Rooms"), row("adults", "Adults"), row("children", "Children"), Object.assign(K.el("button", { type: "button" }, "Done"), { onclick: () => pop.remove() }));
+  const r = $(".guests").getBoundingClientRect(); pop.style.left = r.left + "px"; pop.style.top = (r.bottom + scrollY) + "px";
+  document.body.appendChild(pop);
+});
+// flights --------------------------------------------------------------------------------------------------------
+const flightForm = $("[data-form=flights]");
+flightForm.querySelectorAll("input[name=trip]").forEach((r) => r.addEventListener("change", () => { state.trip = r.value; $("[data-k=ret]", flightForm).hidden = r.value === "one"; }));
+const airports = [{ title: "Dubai", sub: "All airports", value: "Dubai" }, { title: "Dubai International Airport (DXB)", sub: "Dubai" }, { title: "Abu Dhabi", sub: "All airports", value: "Abu Dhabi" },
+  { title: "New Delhi", sub: "All airports", value: "New Delhi" }, { title: "Indira Gandhi International Airport (DEL)", sub: "New Delhi, India" }, { title: "Istanbul", sub: "Turkey" }];
+K.autocomplete($(".from", flightForm), airports, { onPick: (it) => { state.from = it.value || it.title; } });
+let leg = null;
+const fcal = K.calendar(null, { panels: 1, style: "short", onPick: (d) => {
+  if (leg === "dep") { state.dep = d; $("[data-k=dep] .val", flightForm).textContent = fmt(d); if (state.trip === "round") { leg = "ret"; fcal.redraw(); return; } }
+  else { state.ret = d; $("[data-k=ret] .val", flightForm).textContent = fmt(d); }
+  fcal.close(); leg = null; } });
+K.autocomplete($(".to", flightForm), airports, { onPick: (it) => { state.to = it.value || it.title; leg = "dep"; fcal.open($("[data-k=dep]", flightForm)); } });
+$("[data-k=dep]", flightForm).addEventListener("click", () => { leg = "dep"; fcal.open($("[data-k=dep]", flightForm)); });
+$("[data-k=ret]", flightForm).addEventListener("click", () => { leg = "ret"; fcal.open($("[data-k=ret]", flightForm)); });
+$(".pax", flightForm).addEventListener("click", () => {
+  if ($(".pop.p")) return;
+  const pop = K.el("div", { class: "pop p" });
+  const cabin = K.el("div", { role: "button", class: "cabin", tabindex: "0", "aria-label": "Cabin class" }); cabin.append(K.el("span", { class: "value" }, state.cabin));
+  K.dropdown(cabin, ["Economy", "Premium Economy", "Business", "First"], { asyncMs: 300, onPick: (o) => { state.cabin = o; } });
+  const plus = Object.assign(K.el("span", { class: "step plus", "aria-label": "Add adult" }, "+"), { onclick: () => { state.pax += 1; pop.querySelector(".n").textContent = state.pax; } });
+  pop.append(K.el("span", {}, "Adults "), K.el("span", { class: "n" }, String(state.pax)), plus, cabin,
+    Object.assign(K.el("button", { type: "button" }, "Done"), { onclick: () => { const t = `${state.pax} adult${state.pax > 1 ? "s" : ""}, ${state.cabin}`; $(".pax", flightForm).textContent = t; $(".pax", flightForm).setAttribute("aria-label", t); pop.remove(); } }));
+  const r = $(".pax", flightForm).getBoundingClientRect(); pop.style.left = r.left + "px"; pop.style.top = (r.bottom + scrollY) + "px";
+  document.body.appendChild(pop);
+});
+// search: an SPA route with a loading spinner, then results -------------------------------------------------------
+document.querySelectorAll(".go").forEach((b) => b.addEventListener("click", async () => {
+  const hotels = !hotelForm.hidden;
+  $("#out").innerHTML = '<div class="spinner" aria-busy="true"></div>';
+  await K.later(700);
+  location.hash = hotels ? "#hotel-results" : "#flight-results";
+  if (hotels) {
+    $("#out").innerHTML = `<h2 class="results">Hotels in ${state.dest} · ${state.in} to ${state.out} · ${state.adults} adults · ${state.rooms} room${state.rooms > 1 ? "s" : ""}</h2>
+      <div role="group" aria-label="Photo gallery for Hotel One">Hotel One</div>`;
+  } else {
+    $("#out").innerHTML = `<h2 class="results">Flights ${state.from} to ${state.to} · ${state.dep}${state.trip === "round" ? " to " + state.ret : " one-way"} · ${state.pax} adult${state.pax > 1 ? "s" : ""}, ${state.cabin}</h2>
+      <button type="button" class="fare">Select this fare</button>`;
+    $(".fare").onclick = () => { $("#out").innerHTML = '<h2>Your trip</h2><button type="button" class="book">Book now</button><p class="paid"></p>'; $(".book").onclick = () => { $(".paid").textContent = "BOOKED"; }; };
+  }
+}));
+</script></body></html>

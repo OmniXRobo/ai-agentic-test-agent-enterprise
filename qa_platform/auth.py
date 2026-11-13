@@ -336,6 +336,7 @@ VIEW_WRITES = [re.compile(p) for p in (
     r"^/api/automation/scripts/[^/]+/run$",
     r"^/api/automation/run-many$",
     r"^/api/automation/runs/[^/]+/stop$",
+    r"^/api/automation/runs/[^/]+/intervention$",  # 23.6.0: answer a paused run (a commitment needs a tester)
     r"^/api/automation/scripts/[^/]+/data-runs$",
     r"^/api/automation/data-runs/[^/]+/stop$",
     r"^/api/automation/studio/scripts/[^/]+/run$",

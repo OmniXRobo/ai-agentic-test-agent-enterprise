@@ -16,7 +16,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 windows = pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
 SCRIPTS = sorted([*(ROOT / "browser-extension" / "scripts").glob("*.ps1"),
-                  *(ROOT / "packaging" / "ops-agent-patch").glob("*.ps1")])
+                  *(ROOT / "packaging" / "ops-agent-patch").glob("*.ps1"),
+                  *(ROOT / "packaging" / "cumulative-patch").glob("*.ps1")])
 
 
 @windows

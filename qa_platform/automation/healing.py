@@ -12,6 +12,7 @@ Objects heal with exactly the same scoring as the Enterprise QA Runtime.
 
 from __future__ import annotations
 
+import re
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -45,12 +46,32 @@ WEIGHTS = {
 LIST_FIELDS = {"classes", "ancestors", "siblings"}
 
 
-def _sim(a: str | None, b: str | None) -> float:
+# 23.6.0: parts of a label that change between visits (prices, "3 left") are ignored when names are compared, so a
+# calendar day "Friday, November 20, 2026, The price is AED 1.65k" still matches "Friday, November 20, 2026".
+_DYNAMIC = [
+    re.compile(r",?\s*the price is [^,]*", re.I),
+    re.compile(r"\b(?:aed|usd|eur|gbp|inr|sar|qar|\$|€|£|₹)\s?[\d.,]+\s*[km]?\b", re.I),
+    re.compile(r"\b\d+\s*(?:left|seats? left|rooms? left)\b", re.I),
+]
+_TEXT_FIELDS = {"name", "text", "label", "nearby_text"}
+
+
+def _stable(text: str) -> str:
+    for rx in _DYNAMIC:
+        text = rx.sub(" ", text)
+    return re.sub(r"\s+,", ",", " ".join(text.split())).strip(" ,")
+
+
+def _sim(a: str | None, b: str | None, *, stable: bool = False) -> float:
     if not a or not b:
         return 0.0
     a, b = a.strip().lower(), b.strip().lower()
     if a == b:
         return 1.0
+    if stable:
+        a, b = _stable(a), _stable(b)
+        if a and a == b:
+            return 1.0
     return SequenceMatcher(None, a, b).ratio()
 
 
@@ -67,7 +88,7 @@ def score(target: Any, cand: dict[str, Any]) -> tuple[float, dict[str, float]]:
         else:
             if want in (None, ""):
                 continue
-            value = _sim(str(want), cand.get(field))
+            value = _sim(str(want), cand.get(field), stable=field in _TEXT_FIELDS)
         parts[field] = round(value, 3)
         total_weight += weight
     if total_weight == 0:

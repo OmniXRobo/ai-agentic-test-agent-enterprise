@@ -132,10 +132,10 @@ class OpsAgentService:
         self._start(kind, run_id, lambda job: job.driver.run(engine, run_id, stop=job.stop))
         return engine.view(run_id)
 
-    def resume(self, run_id: str, by: str | None, note: str | None = None) -> dict[str, Any]:
+    def resume(self, run_id: str, by: str | None, note: str | None = None, choice: int | None = None) -> dict[str, Any]:
         job = self.jobs.get(run_id)
         events = list(job.driver.manual_events) if job and job.driver else []
-        view = self.agent.engine.resume(run_id, by=by, manual_events=events, note=note)
+        view = self.agent.engine.resume(run_id, by=by, manual_events=events, note=note, choice=choice)
         if not job:  # e.g. after a restart: open a browser again and continue from the checkpoint
             self.start_run(run_id)
         return view

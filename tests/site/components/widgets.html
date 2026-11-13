@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Widgets</title>
+<style>body{font-family:sans-serif} section{border:1px solid #bbb;margin:6px;padding:6px} .modal{position:fixed;inset:20% 30%;background:#fff;border:2px solid #000;padding:10px;z-index:80}
+.dropdown-menu{display:none;position:absolute;background:#fff;border:1px solid #333;list-style:none;padding:4px} .dropdown-menu.show{display:block}
+.ant-select-dropdown{position:absolute;background:#fff;border:1px solid #333} .ant-select-dropdown-hidden{display:none} .sub{display:none} li.has-sub:hover .sub{display:block}</style></head>
+<body><h1>Widgets</h1><div id="log"></div>
+<section><h3>Native</h3>
+  <label>Country <select name="country"><option value="">--</option><option value="ae">United Arab Emirates</option><option value="in">India</option><option value="fr">France</option></select></label>
+  <label>Travel date <input type="date" name="travel"></label></section>
+
+<section><h3>React Select style</h3>
+  <div class="css-1s2u09g-container"><div class="css-13cymwt-control" tabindex="0"><div class="css-1dimb5e-singleValue">Select...</div>
+  <input class="css-mohuvp-input" aria-autocomplete="list" aria-label="City"></div></div></section>
+
+<section><h3>Material UI style</h3>
+  <div role="button" class="MuiSelect-select" tabindex="0" aria-label="Room type"><span class="value">Standard</span></div></section>
+
+<section><h3>Ant Design style</h3>
+  <div class="ant-select"><div class="ant-select-selector" tabindex="0"><span class="ant-select-selection-item">Pick a size</span></div></div>
+  <div class="ant-select-dropdown ant-select-dropdown-hidden"><div class="ant-select-item ant-select-item-option">Small</div><div class="ant-select-item ant-select-item-option">Medium</div><div class="ant-select-item ant-select-item-option">Large</div></div></section>
+
+<section><h3>Bootstrap dropdown</h3>
+  <div class="dropdown"><button class="btn dropdown-toggle" type="button">Sort by</button>
+  <ul class="dropdown-menu"><li><a class="dropdown-item" href="#">Price</a></li><li><a class="dropdown-item" href="#">Rating</a></li><li><a class="dropdown-item" href="#">Distance</a></li></ul></div></section>
+
+<section><h3>Multi-select, async options</h3>
+  <div role="button" class="multi" tabindex="0" aria-label="Amenities"><span class="value">None</span></div></section>
+
+<section><h3>Duplicate ids</h3>
+  <div id="dup"><button type="button" id="same" onclick="log('first')">Continue</button></div>
+  <div id="dup" role="dialog" aria-label="Second"><button type="button" id="same" onclick="log('second')">Continue</button></div></section>
+
+<section><h3>Custom calendar (numbers only)</h3>
+  <div class="fld dob" tabindex="0" style="cursor:pointer;border:1px solid #666;display:inline-block;padding:4px">Start date <span class="val">Add date</span></div></section>
+
+<section><h3>Modal with a dropdown</h3><button type="button" class="open-modal">Open filters</button></section>
+
+<section><h3>Iframe</h3><iframe title="Inner" srcdoc="<label>Meal <select name=meal><option>None</option><option>Breakfast</option><option>Half board</option></select></label>" style="height:60px"></iframe></section>
+
+<section><h3>Shadow DOM</h3><div id="shadow-host"></div></section>
+<script src="kit.js"></script>
+<script>
+const K = window.__kit;
+const log = (x) => { document.getElementById("log").textContent += x + " "; };
+// React Select: typing filters, options in a menu with generated classes
+(() => {
+  const input = document.querySelector(".css-mohuvp-input"); const ctl = input.closest("[class*=control]");
+  const opts = ["Paris", "Lisbon", "London", "Los Angeles"]; let menu = null;
+  const open = () => { if (menu) menu.remove(); menu = K.el("div", { class: "css-26l3qy-menu" }); const lst = K.el("div", { class: "css-4ljt47-MenuList" });
+    for (const o of opts.filter((x) => x.toLowerCase().includes(input.value.toLowerCase()))) { const d = K.el("div", { class: "css-yt9ioa-option" }, o); d.style.cursor = "pointer";
+      d.onmousedown = (e) => e.preventDefault(); d.onclick = () => { ctl.querySelector("[class*=singleValue]").textContent = o; input.value = ""; menu.remove(); menu = null; }; lst.appendChild(d); }
+    menu.appendChild(lst); ctl.parentElement.appendChild(menu); };
+  ctl.addEventListener("click", () => { input.focus(); open(); }); input.addEventListener("input", open);
+})();
+K.dropdown(document.querySelector(".MuiSelect-select"), ["Standard", "Deluxe", "Suite"]);
+(() => {
+  const sel = document.querySelector(".ant-select-selector"), dd = document.querySelector(".ant-select-dropdown");
+  sel.addEventListener("click", () => { const r = sel.getBoundingClientRect(); dd.style.left = r.left + "px"; dd.style.top = (r.bottom + scrollY) + "px"; dd.classList.toggle("ant-select-dropdown-hidden"); });
+  dd.querySelectorAll(".ant-select-item").forEach((i) => { i.style.cursor = "pointer"; i.onclick = () => { sel.querySelector(".ant-select-selection-item").textContent = i.textContent; dd.classList.add("ant-select-dropdown-hidden"); }; });
+})();
+(() => {
+  const b = document.querySelector(".dropdown-toggle"), m = document.querySelector(".dropdown-menu");
+  b.onclick = () => m.classList.toggle("show");
+  m.querySelectorAll(".dropdown-item").forEach((a) => a.onclick = (e) => { e.preventDefault(); b.textContent = "Sort by " + a.textContent; m.classList.remove("show"); });
+})();
+K.dropdown(document.querySelector(".multi"), ["Pool", "Gym", "Parking", "Spa"], { asyncMs: 600, multi: true });
+(() => {
+  const f = document.querySelector(".dob");
+  const cal = K.calendar(null, { panels: 1, numbersOnly: true, onPick: (d) => { f.querySelector(".val").textContent = d; cal.close(); } });
+  f.addEventListener("click", () => cal.open(f));
+})();
+document.querySelector(".open-modal").onclick = () => {
+  const m = K.el("div", { class: "modal", role: "dialog", "aria-label": "Filters" });
+  const dd = K.el("div", { role: "button", tabindex: "0", "aria-label": "Stars" }); dd.append(K.el("span", { class: "value" }, "Any"));
+  m.append(K.el("h2", {}, "Filters"), dd, Object.assign(K.el("button", { type: "button" }, "Apply"), { onclick: () => { log("stars:" + dd.textContent); m.remove(); } }));
+  document.body.appendChild(m); K.dropdown(dd, ["Any", "3 stars", "4 stars", "5 stars"]);
+};
+(() => {
+  const root = document.getElementById("shadow-host").attachShadow({ mode: "open" });
+  root.innerHTML = '<label>Currency <select name="currency"><option>AED</option><option>USD</option><option>EUR</option></select></label>';
+})();
+</script></body></html>

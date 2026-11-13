@@ -74,14 +74,57 @@
     if (pickField) { flushPick(); pickField = null; }
   }, true);
 
+  // 23.6.0: semantic recording. A click on a calendar day is "choose this date" (with the date field that opened the
+  // calendar), a click on a suggestion or custom-list option is "choose this option in that field", and a click is
+  // never recorded on a whole form or container when the person clicked one small control inside it.
+  const comp = () => window.__sgComp;
+  let lastDateField = null, lastListField = null;
+  document.addEventListener("focusin", (e) => {
+    const c = comp(); if (!c || isOverlay(e.target)) return;
+    const k = c.classify(e.target).kind;
+    if (["autocomplete", "combobox", "textbox"].includes(k)) lastListField = e.target;
+  }, true);
+  function smallClickable(t, broad) {
+    // the deepest element the person actually pressed that is a control on its own (pointer cursor, short text)
+    for (let n = t; n && n !== broad; n = n.parentElement) {
+      if (n.matches("button,a,[role],[onclick],li,svg,img,i") || getComputedStyle(n).cursor === "pointer") {
+        const r = n.getBoundingClientRect();
+        if (r.width < 400 && r.height < 200) return n.closest("button,a,[role=button],[role=option],li") || n;
+      }
+    }
+    return t.nodeType === 1 ? t : broad;
+  }
   document.addEventListener("click", (e) => {
-    const el = e.target.closest("a,button,input,select,textarea,label,summary,[role],[onclick]") || e.target;
+    let el = e.target.closest("a,button,input,select,textarea,label,summary,[role],[onclick]") || e.target;
     if (isOverlay(el) || editable(el) || el.tagName === "SELECT" || el.tagName === "OPTION") return;
     if (inPicker(e.target) && pickField) return; // recorded above
     if (window.__qaSkipClick || window.__qaPick) return; // 23.3.21: the end of a drag, or a click that picks a check
     if (fieldFor(e.target.closest("input") || e.target)) return; // recorded above
     if (el.tagName === "INPUT" && (el.type === "checkbox" || el.type === "radio" || el.type === "file")) return; // recorded on change
     if (el.tagName === "LABEL" && el.control) return; // the labelled control records its own change
+    const c = comp();
+    if (c) {
+      const day = c.cellDate(e.target);
+      if (day) {
+        const label = `${el.getAttribute("aria-label") || ""} ${e.target.getAttribute && e.target.getAttribute("aria-label") || ""}`;
+        send({ action: "pick_date_cell", target: target(el), date: day, role: c.dateRole(label) || "",
+          field: lastDateField && lastDateField.isConnected ? target(lastDateField) : null,
+          field_label: lastDateField ? (c.classify(lastDateField).label || "") : "" });
+        return;
+      }
+      const opt = c.optionOf(e.target);
+      if (opt && opt.first) {
+        const field = lastListField && lastListField.isConnected ? lastListField : null;
+        send({ action: "choose_option", target: field ? target(field) : target(el.closest("[role=option],li") || el),
+          value: opt.first, option: target(e.target.closest("[role=option],[role=menuitem],li") || el), has_field: !!field });
+        return;
+      }
+      const kind = c.classify(el).kind;
+      if (kind === "container") el = smallClickable(e.target, el);
+      const k2 = c.classify(el).kind;
+      if (k2 === "date_field") lastDateField = el;
+      if (["dropdown", "combobox", "autocomplete"].includes(k2)) lastListField = el;
+    }
     send({ action: "click", target: target(el) });
   }, true);
 

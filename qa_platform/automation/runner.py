@@ -16,7 +16,9 @@ from ..errors import QAError
 from ..events import names
 from ..runs import RunStore
 from ..storage.db import Database, dumps, loads
+from . import components
 from . import healing
+from . import semantic
 from . import visual as visual_fx
 from .browser import context_options, default_headless, js, launch, start_playwright
 from . import files as filekit
@@ -43,6 +45,16 @@ class StepFailed(Exception):
         self.message = message
 
 
+class CommitBlocked(StepFailed):
+    """23.6.0: the step would pay, purchase or finalise a booking without the person's explicit permission."""
+
+
+# 23.6.0: controls that commit money or a booking. "Checkout" and "Search" are not commitments.
+COMMIT_RE = re.compile(r"\b(pay now|pay\b|purchase|buy now|place (?:your )?order|complete (?:booking|purchase|payment|"
+                       r"order)|confirm (?:booking|and pay|payment|purchase|reservation)|book now|reserve now|"
+                       r"finali[sz]e (?:booking|payment))", re.I)
+
+
 VISUAL_KIND = {"fill": "type", "type": "type", "select": "type", "press": "type"}
 
 
@@ -64,13 +76,73 @@ class Runner:
         self.playback = playback
         self.healer = healer
         self.stop_events: dict[str, threading.Event] = {}
+        # 23.6.0: a visible run started by a person pauses (browser kept open) instead of failing when a control
+        # cannot be recognised confidently; the person acts in the browser and answers here.
+        self.interventions: dict[str, dict[str, Any]] = {}
 
     def stop(self, run_id: str) -> bool:
         ev = self.stop_events.get(run_id)
         if ev:
             ev.set()
+            pending = self.interventions.get(run_id)
+            if pending:
+                pending["answer"] = "stop"
+                pending["_event"].set()
             return True
         return False
+
+    # ---- 23.6.0: human intervention -------------------------------------------------------------
+
+    def intervention(self, run_id: str) -> dict[str, Any] | None:
+        info = self.interventions.get(run_id)
+        return {k: v for k, v in info.items() if not k.startswith("_")} if info else None
+
+    def answer_intervention(self, run_id: str, action: str, choice: str | None = None) -> dict[str, Any]:
+        info = self.interventions.get(run_id)
+        if info is None:
+            raise QAError("RUN_NOT_PAUSED", f"Run {run_id} is not waiting for you.", status=409, run_id=run_id)
+        if action not in info["options"]:
+            raise QAError("INTERVENTION_ACTION_INVALID", f"Choose one of: {', '.join(info['options'])}.", status=422)
+        if action == "choose" and choice not in (info.get("choices") or []):
+            raise QAError("INTERVENTION_CHOICE_INVALID", "Pick one of the options listed for this step.", status=422)
+        info["answer"], info["choice"] = action, choice
+        info["_event"].set()
+        return {"run_id": run_id, "answer": action}
+
+    def _intervene(self, page: Any, act: Any, run_id: str, index: int, desc: str, reason: str, *,
+                   options: list[str], choices: list[str] | None = None, kind: str = "component",
+                   stop: threading.Event | None = None, minutes: float = 15.0) -> tuple[str, str | None]:
+        """Pause the run with the browser open until the person answers (or the time limit / Stop)."""
+        ev = threading.Event()
+        info = {"run_id": run_id, "step": index, "description": desc, "reason": reason, "options": options,
+                "choices": choices or [], "kind": kind, "since": now_iso(), "answer": None, "choice": None,
+                "_event": ev}
+        self.interventions[run_id] = info
+        act.event(names.AGENT_PAUSED, f"Paused at step {index + 1}: {reason}", step=index,
+                  intervention={k: v for k, v in info.items() if not k.startswith("_")})
+        deadline = time.monotonic() + minutes * 60
+        try:
+            while not ev.is_set():
+                if stop is not None and stop.is_set():
+                    info["answer"] = "stop"
+                    break
+                if time.monotonic() > deadline:
+                    info["answer"] = "timeout"
+                    break
+                try:  # keep Playwright serving the page while the person works in it
+                    page.wait_for_timeout(250)
+                except Exception:
+                    time.sleep(0.25)
+        finally:
+            self.interventions.pop(run_id, None)
+        answer = info["answer"] or "stop"
+        act.event(names.AGENT_RESUMED, {"continue": "Continuing: the person completed the step in the browser",
+                                        "retry": "Trying the step again", "skip": "Step skipped by the person",
+                                        "allow": "The person allowed this commitment once",
+                                        "choose": f"The person chose '{info.get('choice')}'",
+                                        "timeout": "No answer in time; the run stops",
+                                        "stop": "Stopped by the person"}.get(answer, answer), step=index)
+        return answer, info.get("choice")
 
     def running(self) -> list[str]:
         return list(self.stop_events)
@@ -78,7 +150,8 @@ class Runner:
     # ---- main entry ----------------------------------------------------------------
 
     def run(self, script_id: str, run_id: str, *, dataset: dict[str, Any] | None = None,
-            headless: bool | None = None, data_label: str | None = None, browser: str | None = None) -> dict[str, Any]:
+            headless: bool | None = None, data_label: str | None = None, browser: str | None = None,
+            interactive: bool = False) -> dict[str, Any]:
         script = self.scripts.get(script_id)
         playback = self.settings.section("playback")
         # 23.3.21: a schedule or voice command can ask for another browser for this run. 23.3.35: otherwise Play uses
@@ -115,6 +188,8 @@ class Runner:
             with agent.activity(f"Running {label}", run_id=run_id, test_case_id=tc, user_story_id=us,
                                 script_id=script.id) as act:
                 act.event(names.EXECUTION_STARTED, f"Started {label} in {script.browser}")
+                playback = {**playback, "_interactive": bool(interactive and not headless
+                                                             and playback.get("pause_for_help", True))}
                 self._execute(script, act, resolver, record, evidence_dir, visual, playback, headless, stop)
                 act.event(names.EXECUTION_COMPLETED, f"{label} PASSED"
                           + (f" after self-healing {len(record['healed'])} locator(s)" if record["healed"] else ""),
@@ -179,6 +254,7 @@ class Runner:
             context = browser.new_context(**ctx_opts)
             context.add_init_script(js("fingerprint"))
             context.add_init_script(js("calendar"))
+            context.add_init_script(js("components"))  # 23.6.0: universal component recognition
             if visual:
                 context.add_init_script(visual_fx.overlay_config(playback))
                 context.add_init_script(js("overlay"))
@@ -199,8 +275,9 @@ class Runner:
                 record["steps"].append(entry)
                 try:
                     page = self._tab(pages, step, page)
-                    self._step(page, script, step, index, act, resolver, record, evidence_dir, visual, delay)
-                    entry["status"] = "PASSED"
+                    outcome = self._step_with_help(page, script, step, index, act, resolver, record, evidence_dir,
+                                                   visual, delay, desc, stop, playback)
+                    entry["status"] = outcome or "PASSED"
                     if step_shots:  # 23.3.31: the page after each step, shown next to the step in Recent Runs
                         shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}")
                         if shot:
@@ -275,10 +352,84 @@ class Runner:
         except Exception:
             return None
 
+    def _step_with_help(self, page: Any, script: Script, step: Step, index: int, act: Any, resolver: ValueResolver,
+                        record: dict[str, Any], evidence_dir: Path, visual: bool, delay: int, desc: str,
+                        stop: threading.Event, playback: dict[str, Any]) -> str | None:
+        """23.6.0: run one step; in a visible run started by a person, a step that cannot be done confidently pauses
+        with the browser open (continue after doing it yourself, retry, skip, pick one of the offered choices, allow
+        a payment / booking commitment once, or stop) instead of closing everything."""
+        interactive = bool(playback.get("_interactive"))
+        allow_commit = False
+        while True:
+            try:
+                return self._step(page, script, step, index, act, resolver, record, evidence_dir, visual, delay,
+                                  playback=playback, allow_commit=allow_commit)
+            except Exception as exc:  # noqa: BLE001 - every failure gets the same treatment below
+                if not interactive or stop.is_set() or step.action == "goto":
+                    raise
+                commit = isinstance(exc, CommitBlocked)
+                reason = getattr(exc, "message", None) or str(exc).splitlines()[0][:300]
+                choices = list(getattr(exc, "choices", []) or [])[:15]
+                options = (["allow", "skip", "stop"] if commit else
+                           (["choose"] if choices else []) + ["continue", "retry", "skip", "stop"])
+                shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}-paused")
+                if shot:
+                    record["evidence"]["screenshots"].append(shot)
+                    record["steps"][-1]["screenshot"] = shot
+                answer, choice = self._intervene(
+                    page, act, act.run_id, index, desc, resolver.mask(reason) or reason, options=options,
+                    choices=choices, kind="commit" if commit else "component", stop=stop,
+                    minutes=float(playback.get("pause_minutes", 15)))
+                record["steps"][-1].setdefault("interventions", []).append(
+                    {"reason": resolver.mask(reason), "answer": answer, "choice": choice, "at": now_iso()})
+                if answer == "retry":
+                    continue
+                if answer == "allow":
+                    allow_commit = True
+                    continue
+                if answer == "continue":
+                    record["steps"][-1]["note"] = "done by the person in the browser"
+                    return "MANUAL"
+                if answer == "skip":
+                    return "SKIPPED"
+                if answer == "choose" and choice:
+                    components.ensure(page)
+                    res = page.evaluate("t => window.__sgComp.findOption(t, null)", choice) or {}
+                    if res.get("status") == "found":
+                        page.locator(components.TARGET).first.click(timeout=step.timeout_ms)
+                        components.settle(page)
+                        record["steps"][-1]["note"] = f"'{choice}' chosen by the person"
+                        return "PASSED"
+                    continue  # the list closed meanwhile: try the step again
+                raise StepFailed(index, f"{desc}: {resolver.mask(reason)}"
+                                 + (" (no answer within the time limit)" if answer == "timeout" else "")) from exc
+
     def _step(self, page: Any, script: Script, step: Step, index: int, act: Any, resolver: ValueResolver,
-              record: dict[str, Any], evidence_dir: Path, visual: bool, delay: int) -> None:
+              record: dict[str, Any], evidence_dir: Path, visual: bool, delay: int, *,
+              playback: dict[str, Any] | None = None, allow_commit: bool = False) -> str | None:
+        playback = playback or {}
         value = resolver.resolve(step.value)
         timeout = step.timeout_ms
+        meaning = semantic.infer(step)
+        if step.action == "dismiss" or meaning.get("intent") == "dismiss":  # 23.6.0: never a click mid-page
+            how = components.dismiss(page)
+            act.event(names.EXECUTION_STEP, f"Closed the open pop-up ({how})", step=index)
+            return None
+        if step.action == "click" and meaning.get("intent") == "pick_date":
+            # 23.6.0: a recorded click on a calendar day plays as "choose this date", whatever the calendar's HTML
+            return self._choose_date(page, step, index, act, record, meaning["date"], meaning, None, visual, delay)
+        if step.action == "hover":  # 23.6.0: a hover only prepares the next step; it never fails the run
+            loc = self._quick(page, step.target, 3000) if step.target else None
+            if loc is None:
+                act.event(names.EXECUTION_STEP, f"Step {index + 1}: the hover target is not on the page; a hover only "
+                                                "prepares the next step, so the run continues", step=index)
+                return "SKIPPED"
+            try:
+                loc.hover(timeout=3000)
+            except Exception:
+                act.event(names.EXECUTION_STEP, f"Step {index + 1}: hover not possible; continuing", step=index)
+                return "SKIPPED"
+            return None
         if step.action == "goto":
             url = value or script.base_url
             if not url:
@@ -321,7 +472,33 @@ class Runner:
         if step.target is None:
             raise StepFailed(index, f"Step {index + 1} ({step.action}) has no target.")
 
+        if step.action in ("pick_date", "choose_option"):
+            # the field moved, or the calendar / list is already open: the component handler finds what it needs
+            located = self._quick(page, step.target, min(timeout, 4000))
+            if step.action == "pick_date":
+                iso = visual_fx.parse_date(value or "").isoformat()
+                if located is not None and components.classify(located).get("kind") in (
+                        "textbox", "date_input", "autocomplete", "combobox") and \
+                        located.evaluate("el => ['INPUT', 'TEXTAREA'].includes(el.tagName)"):
+                    how = visual_fx.pick_date(page, located, value or "", timeout, visual, delay)
+                    act.event(names.EXECUTION_STEP, f"Date {value} chosen ({how})", step=index)
+                    return None
+                field = located if located is not None and components.classify(located).get("kind") != \
+                    "calendar_day" else None
+                return self._choose_date(page, step, index, act, record, iso, meaning, field, visual, delay)
+            return self._choose(page, step, index, act, record, value or "", located, visual, delay)
+
         locator = self._locate(page, step, index, script, act, record, evidence_dir, visual)
+        if step.action == "click":
+            kind_info = components.classify(locator)
+            if kind_info.get("kind") == "container" and self._form_container(locator):
+                # 23.6.0: older recordings stored a click on a whole search form (the clicked suggestion had no role
+                # of its own); clicking the middle of a form would hit an arbitrary control, so the step is skipped
+                act.event(names.EXECUTION_STEP, f"Step {index + 1} pointed at a whole form, not one control; "
+                                                "skipped (the value is chosen by the field's own step)", step=index)
+                record["steps"][-1]["note"] = "form container click skipped"
+                return "SKIPPED"
+            self._commit_guard(step, kind_info, index, playback, allow_commit)
         kind = "assert" if step.action.startswith("expect") else VISUAL_KIND.get(step.action, "click")
         box = None
         if visual and step.action != "expect_hidden":
@@ -356,22 +533,39 @@ class Runner:
                 visual_fx.click(page, box)
             locator.dblclick(timeout=timeout)
         elif a in ("fill", "type"):
+            field_kind = components.classify(locator).get("kind")
+            popups_before = self._popups(page)
             locator.fill(value or "", timeout=timeout)
+            if value and field_kind in ("autocomplete", "combobox", "textbox") and not self._next_chooses(script, index):
+                # 23.6.0: typing into an autocomplete only offers suggestions; the value counts once one is chosen
+                appeared = field_kind in ("autocomplete", "combobox")
+                if not appeared:
+                    page.wait_for_timeout(200)
+                    appeared = self._popups(page) > popups_before
+                if appeared:
+                    chosen = components.commit_autocomplete(page, locator, value, pointer=self._pointer(page, visual, delay))
+                    if chosen:
+                        act.event(names.EXECUTION_STEP, f"Suggestion '{chosen['chosen'][:80]}' chosen for '{value}'",
+                                  step=index)
+                        record["steps"][-1]["chosen"] = chosen["chosen"][:200]
         elif a == "select":
             if box:
                 visual_fx.choose(page, locator, box, value or "")
-            try:
-                locator.select_option(value=value, timeout=timeout)
-            except Exception:
-                locator.select_option(label=value, timeout=timeout)
+            if components.classify(locator).get("kind") in ("native_select", "native_multiselect", "unknown"):
+                try:
+                    locator.select_option(value=value, timeout=timeout)
+                except Exception:
+                    locator.select_option(label=value, timeout=timeout)
+            else:  # 23.6.0: a custom dropdown recorded as a select: open it and click the option
+                res = components.choose_option(page, locator, value or "", timeout=timeout)
+                if not res.get("verified"):
+                    raise components.ComponentError("NOT_VERIFIED", f"'{value}' was clicked but the list does not show it.")
         elif a == "check":
             if box:
                 visual_fx.click(page, box)
             locator.check(timeout=timeout)
         elif a == "uncheck":
             locator.uncheck(timeout=timeout)
-        elif a == "hover":
-            locator.hover(timeout=timeout)
         elif a == "press":
             locator.press(value or "Enter", timeout=timeout)
         elif a == "expect_visible":
@@ -397,6 +591,116 @@ class Runner:
                 page.evaluate("window.__qaOverlay && window.__qaOverlay.clear()")
             except Exception:
                 pass  # the page may have navigated
+        if a in ("click", "dblclick", "fill", "type", "select", "check", "uncheck", "press", "right_click"):
+            components.settle(page, 200, int(playback.get("settle_max_ms", 3000)))  # 23.6.0: state-aware wait
+        return None
+
+    # ---- 23.6.0: component handlers ---------------------------------------------------------------------
+
+    @staticmethod
+    def _pointer(page: Any, visual: bool, delay: int) -> Any:
+        if not visual:
+            return None
+
+        def point(loc: Any, label: str) -> None:
+            box = loc.bounding_box(timeout=3000)
+            if box:
+                visual_fx.point(page, box, "click", label)
+                page.wait_for_timeout(min(delay, 250))
+                visual_fx.click(page, box)
+        return point
+
+    @staticmethod
+    def _popups(page: Any) -> int:
+        try:
+            components.ensure(page)
+            return int(page.evaluate("() => window.__sgComp.popups().length"))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _form_container(locator: Any) -> bool:
+        try:
+            return bool(locator.evaluate(
+                "el => el.querySelectorAll('input:not([type=hidden]),select,textarea,[role=combobox]').length >= 1"))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _next_chooses(script: Script, index: int) -> bool:
+        """The recording itself chooses the suggestion in the next step (a choose_option, or a click on an option)."""
+        if index + 1 >= len(script.steps):
+            return False
+        nxt = script.steps[index + 1]
+        if nxt.action == "choose_option":
+            return True
+        if nxt.action == "click" and nxt.target is not None:
+            role = (nxt.target.role or "") + " " + nxt.target.selector + " " + " ".join(nxt.target.alternates)
+            return "option" in role or "autowhatever" in role or "suggest" in role.lower()
+        return False
+
+    @staticmethod
+    def _quick(page: Any, target: Any, timeout: int) -> Any | None:
+        scope = Runner._scope(page, target)
+        for sel in [target.selector, *target.alternates]:
+            try:
+                loc = scope.locator(sel)
+                loc.first.wait_for(state="visible", timeout=timeout if sel == target.selector else 800)
+                return loc.first
+            except Exception:
+                continue
+        return None
+
+    def _commit_guard(self, step: Step, info: dict[str, Any], index: int, playback: dict[str, Any],
+                      allow: bool) -> None:
+        """A payment or booking-finalisation click needs its own explicit permission (never part of a normal run)."""
+        if allow or step.commit_ok:
+            return
+        unattended = not playback.get("_interactive")
+        if unattended and not playback.get("guard_commits_unattended", False):
+            return
+        words = " ".join(str(x or "") for x in (info.get("text"), info.get("label"),
+                                                step.target.name if step.target else "", step.description))
+        if COMMIT_RE.search(words):
+            raise CommitBlocked(index, f"This step would {COMMIT_RE.search(words).group(0).lower()} (a payment or "
+                                       "booking commitment). SkyGuard does not do that without your explicit "
+                                       "permission for this step.")
+
+    def _choose_date(self, page: Any, step: Step, index: int, act: Any, record: dict[str, Any], iso: str,
+                     meaning: dict[str, Any], field: Any, visual: bool, delay: int) -> str | None:
+        from ..clock import now as clock_now
+
+        role = meaning.get("role") or (step.semantic or {}).get("role")
+        res = components.pick_date(page, iso, field=field, role=role, timeout=step.timeout_ms,
+                                   pointer=self._pointer(page, visual, delay), today=clock_now().date())
+        if not res.get("verified"):
+            raise components.ComponentError("NOT_VERIFIED", f"{iso} was clicked in the calendar but neither the "
+                                                            "calendar nor a date field shows it as chosen.")
+        act.event(names.EXECUTION_STEP, f"Date {iso} chosen" + (f" as the {role} date" if role else "")
+                  + f" ({res['how']}, verified)", step=index)
+        record["steps"][-1]["semantic"] = {"intent": "pick_date", "date": iso, "role": role, "verified": True}
+        return None
+
+    def _choose(self, page: Any, step: Step, index: int, act: Any, record: dict[str, Any], text: str,
+                field: Any, visual: bool, delay: int) -> str | None:
+        if field is None:
+            components.ensure(page)
+            res = page.evaluate("t => window.__sgComp.findOption(t, null)", text) or {}
+            if res.get("status") != "found":
+                raise components.ComponentError(
+                    "OPTION_NOT_FOUND" if res.get("status") != "ambiguous" else "OPTION_AMBIGUOUS",
+                    f"Neither the list field nor an open list with '{text}' was found.", choices=res.get("options"))
+            page.locator(components.TARGET).first.click(timeout=step.timeout_ms)
+            components.settle(page)
+            act.event(names.EXECUTION_STEP, f"'{res.get('text') or text}' chosen in the open list", step=index)
+            return None
+        res = components.choose_option(page, field, text, timeout=step.timeout_ms,
+                                       pointer=self._pointer(page, visual, delay))
+        if not res.get("verified"):
+            raise components.ComponentError("NOT_VERIFIED", f"'{text}' was clicked but the field does not show it.")
+        act.event(names.EXECUTION_STEP, f"'{res['chosen'][:80]}' chosen ({res['how']}, verified)", step=index)
+        record["steps"][-1]["chosen"] = res["chosen"][:200]
+        return None
 
     # ---- 23.3.17: upload and download -----------------------------------------------------
 

@@ -136,6 +136,41 @@ def _exact_match(target: dict[str, Any], el: dict[str, Any]) -> bool:
                 and target["role"] == el.get("role"))
 
 
+def _id_exact(target: dict[str, Any], el: dict[str, Any]) -> bool:
+    return any(target.get(k) and norm(target.get(k)) == norm(el.get(k)) for k in ("test_id", "id", "name_attr"))
+
+
+def context_of(el: dict[str, Any]) -> str:
+    """Words that tell look-alike controls apart for a person: the row, card or section they belong to."""
+    for key in ("row", "nearby", "section", "dialog", "table"):
+        v = el.get(key)
+        if isinstance(v, dict):
+            v = v.get("row") or ""
+        if isinstance(v, list):
+            v = " ".join(str(x) for x in v if x)
+        if v and norm(str(v)) not in (norm(el.get("name")), norm(el.get("label"))):
+            return str(v)[:80]
+    return str(el.get("test_id") or el.get("id") or el.get("text") or "")[:80]
+
+
+def pick(fingerprint: dict[str, Any], snapshot: dict[str, Any], *, action: str = "click") -> Resolution:
+    """The control the person chose in chat among look-alikes: the single best match of its full fingerprint
+    (row / nearby text included), or ambiguous again when two still tie."""
+    elements = [e for e in snapshot.get("elements", []) if e.get("visible", True)]
+    ranked = sorted(({"element": e, "confidence": round(score(fingerprint, e)[0], 3), "tier": score(fingerprint, e)[2]}
+                     for e in elements), key=lambda c: c["confidence"], reverse=True)
+    if not ranked or ranked[0]["confidence"] < HEAL_REVIEW_FLOOR:
+        return Resolution("not_found", reason="The control you chose is no longer on the page.", candidates=ranked[:5])
+    exact = [c for c in ranked if _id_exact(fingerprint, c["element"])]
+    top = exact[0] if len(exact) == 1 else ranked[0]
+    if len(exact) != 1 and len(ranked) > 1 and ranked[1]["confidence"] >= top["confidence"]:
+        return Resolution("ambiguous", reason="The controls still look the same.", candidates=ranked[:5],
+                          confidence=top["confidence"])
+    if top["element"].get("disabled"):
+        return Resolution("blocked", element=top["element"], reason="The control is disabled.")
+    return Resolution("found", element=top["element"], confidence=top["confidence"], tier=top["tier"])
+
+
 def resolve(target: dict[str, Any], snapshot: dict[str, Any], *, action: str = "click",
             alternatives: list[dict[str, Any]] | None = None, section: str | None = None) -> Resolution:
     """Find the element a fingerprint describes on the current page."""
@@ -166,8 +201,15 @@ def resolve(target: dict[str, Any], snapshot: dict[str, Any], *, action: str = "
         return Resolution("not_found", reason="No control on this page matches what was learned.",
                           candidates=ranked[:5])
     top = ranked[0]
-    close = [c for c in ranked[1:] if top["confidence"] - c["confidence"] < MIN_MARGIN
-             and c["confidence"] >= THRESHOLD]
+    # 23.6.0: a unique id that matches exactly (data-test / id / name) decides between look-alike controls, e.g. six
+    # "Add to cart" buttons that differ only in data-test="add-to-cart-<product>". Similar ids are not enough.
+    by_id = [c for c in ranked if c["confidence"] >= HEAL_REVIEW_FLOOR and _id_exact(target, c["element"])]
+    if len(by_id) == 1:
+        top = by_id[0]
+        close: list[dict[str, Any]] = []
+    else:
+        close = [c for c in ranked[1:] if top["confidence"] - c["confidence"] < MIN_MARGIN
+                 and c["confidence"] >= THRESHOLD]
     if close:
         return Resolution("ambiguous", reason=f"{len(close) + 1} controls match equally well.",
                           candidates=[top, *close][:5], confidence=top["confidence"], tier=top["tier"])
