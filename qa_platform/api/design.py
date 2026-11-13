@@ -125,7 +125,7 @@ def ai_diagnostics(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 
 
 class DesignIn(BaseModel):
-    user_story_id: int
+    user_story_id: int = Field(gt=0, lt=2**31, description="TFS work item id of the user story")
     max_cases: int = Field(default=12, ge=1, le=40)
 
 

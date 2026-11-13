@@ -142,10 +142,28 @@ class FrameworkWorkspace:
         return self.path(rel).is_file()
 
     def read(self, rel: str) -> str:
+        """23.6.0: never fails with a bare 500. A missing, unreadable or undecodable file is a QAError that names the
+        file, its full path and the reason; a UTF-8 BOM and Windows-1252 files (edited in Notepad) are accepted."""
         path = self.path(rel)
         if not path.is_file():
-            raise QAError("FRAMEWORK_FILE_NOT_FOUND", f"{rel} does not exist in the automation workspace.", status=404)
-        return path.read_text(encoding="utf-8")
+            raise QAError("FRAMEWORK_FILE_NOT_FOUND", f"{rel} does not exist in the automation workspace.", status=404,
+                          details={"path": str(path), "reason": "missing" if not path.exists() else "not a file"})
+        try:
+            raw = path.read_bytes()
+        except PermissionError as exc:
+            raise QAError("FRAMEWORK_FILE_UNREADABLE", f"{rel} cannot be opened: permission denied. Check that the "
+                          "file is not locked by another program and that your Windows account can read it.",
+                          status=403, details={"path": str(path), "reason": "permission denied"}) from exc
+        except OSError as exc:
+            raise QAError("FRAMEWORK_FILE_UNREADABLE", f"{rel} cannot be opened: {exc.strerror or exc}.", status=500,
+                          details={"path": str(path), "reason": str(exc.strerror or exc)}) from exc
+        for encoding in ("utf-8-sig", "cp1252"):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        raise QAError("FRAMEWORK_FILE_ENCODING", f"{rel} is not a text file SkyGuard can read (unknown encoding).",
+                      status=422, details={"path": str(path), "reason": "not UTF-8 or Windows-1252 text"})
 
     def files(self, folder: str, pattern: str = "*.py") -> list[str]:
         base = self.root / folder

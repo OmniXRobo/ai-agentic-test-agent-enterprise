@@ -27,8 +27,14 @@ class ScriptStore:
         root.mkdir(parents=True, exist_ok=True)
 
     def _dir(self, script_id: str) -> Path:
-        if not _SAFE_ID.match(script_id):
-            raise QAError("SCRIPT_ID_INVALID", f"Invalid script id '{script_id}'.", status=400)
+        if not _SAFE_ID.match(script_id or ""):
+            if re.match(r"^FWS-[A-Z0-9]{10}$", script_id or ""):
+                # 23.6.0: an AI-Driven framework script was opened from a page for recorded scripts
+                raise QAError("SCRIPT_ID_WRONG_PAGE", f"{script_id} is an AI-Driven framework script. Open it from "
+                              "AI-Driven Automation > Script Inventory.", status=400,
+                              details={"script_id": script_id, "open": f"#/ai-automation?script={script_id}"})
+            raise QAError("SCRIPT_ID_INVALID", f"Invalid script id '{script_id}'. Recorded scripts have ids like "
+                          "SCR-XXXXXXXXXX and AI-Driven framework scripts FWS-XXXXXXXXXX.", status=400)
         return self.root / script_id
 
     def list(self) -> list[dict[str, Any]]:

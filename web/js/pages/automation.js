@@ -533,11 +533,12 @@ async function renderEditor(view, scriptId) {
       </form>
       ${script.notes ? `<p class="pill WARN" style="white-space:pre-wrap">${esc(script.notes)}</p>` : ""}
     </div>
-    <div class="card" id="runBox" style="margin-top:12px" hidden><h3>Live run</h3><div class="feed" id="feed"></div></div>
+    <div class="card" id="runBox" style="margin-top:12px" hidden><h3>Live run</h3><div id="helpBox" class="card ops-attention" hidden></div><div class="feed" id="feed"></div></div>
     <div class="card" style="margin-top:12px">
       <div class="row"><h3 style="margin:0">Steps</h3><span class="spacer"></span>
         <button class="btn" id="addStep">Add step</button>
         <a class="btn" href="#/hybrid-automation?append=${esc(script.id)}">Record more steps</a>
+        <button class="btn" id="semUpgrade" title="Turn calendar-cell, option and page-background clicks of an older recording into date, option and close-pop-up steps (saved as a new version)">Semantic upgrade</button>
         <button class="btn primary" id="save">Save</button></div>
       ${converted.length ? `<p class="pill PASS" style="white-space:normal">Made dynamic while recording: ${converted.map((c) => `step ${c.index + 1} ${esc(c.original)} → ${esc(c.label)}`).join("; ")}. Change any of them with Rule.</p>` : ""}
       <p class="muted">Use <strong>Rule</strong> for a date or time that must follow the calendar: current system date, plus or minus days, current system time, plus or minus hours and minutes. It is worked out from the Windows system clock when the test runs.
@@ -660,8 +661,41 @@ async function renderEditor(view, scriptId) {
     } catch (err) { toast(err.message, "error"); }
   });
   stopBtn.addEventListener("click", () => runId && api(`/api/automation/runs/${encodeURIComponent(runId)}/stop`, { method: "POST", body: {} }).catch((err) => toast(err.message, "error")));
+  // 23.6.0: a run that cannot decide on its own waits here with the browser open
+  const helpBox = view.querySelector("#helpBox");
+  const showHelp = async () => {
+    if (!runId) return;
+    let info = null;
+    try { info = (await api(`/api/automation/runs/${encodeURIComponent(runId)}/intervention`)).intervention; } catch { /* run gone */ }
+    if (!info || info.answer) { helpBox.hidden = true; helpBox.innerHTML = ""; return; }
+    const labels = { continue: "I did it, continue", retry: "Retry", skip: "Skip this step", stop: "Stop", allow: "Allow this once" };
+    helpBox.hidden = false;
+    helpBox.innerHTML = `<b>Paused at step ${Number(info.step) + 1}</b><p class="reason"></p>
+      ${(info.choices || []).length ? `<div class="row" style="flex-wrap:wrap;gap:6px">${info.choices.map((c, i) => `<button class="btn" data-hchoice="${i}"></button>`).join("")}</div>` : ""}
+      <div class="row" style="gap:6px;margin-top:6px">${info.options.filter((o) => o !== "choose").map((o) => `<button class="btn ${o === "stop" ? "danger" : ""}" data-hact="${esc(o)}">${esc(labels[o] || o)}</button>`).join("")}</div>`;
+    helpBox.querySelector(".reason").textContent = `${info.description || ""}: ${info.reason}`;
+    helpBox.querySelectorAll("[data-hchoice]").forEach((b) => { b.textContent = info.choices[Number(b.dataset.hchoice)]; });
+    const answer = async (action, choice = null) => {
+      try { await api(`/api/automation/runs/${encodeURIComponent(runId)}/intervention`, { method: "POST", body: { action, choice } }); helpBox.hidden = true; }
+      catch (err) { toast(err.message, "error"); }
+    };
+    helpBox.querySelectorAll("[data-hact]").forEach((b) => b.addEventListener("click", () => answer(b.dataset.hact)));
+    helpBox.querySelectorAll("[data-hchoice]").forEach((b) => b.addEventListener("click", () => answer("choose", info.choices[Number(b.dataset.hchoice)])));
+  };
+  view.querySelector("#semUpgrade").addEventListener("click", async () => {
+    try {
+      const preview = await api(`/api/automation/scripts/${encodeURIComponent(script.id)}/semantic-upgrade`, { method: "POST", body: {} });
+      if (!preview.changes.length) { toast("Nothing to upgrade: the steps already describe what they do.", "success"); return; }
+      const text = preview.changes.map((c) => `Step ${c.step}: ${c.change}${c.date ? " (" + c.date + ")" : ""}`).join("\n");
+      if (!confirm(`Save these changes as a new version?\n\n${text}`)) return;
+      await api(`/api/automation/scripts/${encodeURIComponent(script.id)}/semantic-upgrade?apply=true`, { method: "POST", body: {} });
+      toast("Saved as a new version", "success"); renderEditor(view, scriptId);
+    } catch (err) { toast(err.message, "error"); }
+  });
   liveFeed(view.querySelector("#feed"), () => runId, (ev) => {
+    if (ev.name === "agent.paused" || ev.name === "agent.resumed") showHelp();
     if (ev.name === "execution.completed" || ev.name === "execution.failed") {
+      helpBox.hidden = true;
       runBtn.disabled = false; stopBtn.hidden = true;
       setTimeout(async () => {
         const [{ items }, { items: heal }] = await Promise.all([
@@ -990,7 +1024,13 @@ function page(panel) {
   return {
     async mount(view) {
       const scriptId = params().get("script");
-      if (scriptId) await renderEditor(view, scriptId); else await panel(view);
+      // 23.6.0: an AI-Driven framework script id opened on a recorded-script page goes to its own page
+      if (scriptId && scriptId.startsWith("FWS-")) { location.hash = `#/ai-automation?script=${encodeURIComponent(scriptId)}`; return; }
+      if (!scriptId) { await panel(view); return; }
+      try { await renderEditor(view, scriptId); } catch (err) {
+        view.innerHTML = `<p><a href="#/${routeName()}">← Back</a></p><div class="card"><h2 style="margin:0">The script could not be opened</h2>
+          <p class="pill FAIL">${esc(err.message)}</p><p class="muted">Script id: <code>${esc(scriptId)}</code>. Nothing was created or changed.</p></div>`;
+      }
     },
     unmount() {
       cleanups.forEach((fn) => fn());

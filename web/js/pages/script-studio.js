@@ -11,7 +11,7 @@ import { openRuleBuilder, previewRule } from "../date-rules.js";
 const BASE = "/api/automation/studio";
 const FINAL_JOB = new Set(["COMPLETED", "FAILED", "STOPPED", "INTERRUPTED"]);
 const PILL = { GENERATED: "PASSED", UPDATED: "PASSED", UNCHANGED: "PASSED", COMPLETED: "PASSED", SKIPPED: "WAITING",
-  SAVED: "WAITING", RESOLVING: "RUNNING", "FILE MISSING": "FAILED", ERROR: "FAILED", STOPPED: "WARN", CANCELLED: "WARN",
+  SAVED: "WAITING", RESOLVING: "RUNNING", "FILE MISSING": "FAILED", "FILE INVALID": "FAILED", "FILE UNREADABLE": "FAILED", ERROR: "FAILED", STOPPED: "WARN", CANCELLED: "WARN",
   INTERRUPTED: "WARN" };
 const TABS = [["view", "View Script"], ["edit", "Edit Script"], ["flow", "Flow Logic"], ["data", "Test Data"],
   ["credentials", "Credentials"], ["components", "Components"], ["history", "History"], ["results", "Result"],
@@ -551,7 +551,12 @@ async function jobView(view, jobId) {
 // ---- one script -------------------------------------------------------------------------------
 
 async function scriptView(view, scriptId, tab, runId) {
-  let data = await api(`${BASE}/scripts/${sid(scriptId)}`);
+  let data;
+  try { data = await api(`${BASE}/scripts/${sid(scriptId)}`); } catch (err) {
+    view.innerHTML = `<p><a href="${link("tab=scripts")}">← Script Inventory</a></p><div class="card"><h2 style="margin:0">The script could not be opened</h2>
+      <p class="pill FAIL">${esc(err.message)}</p><p class="muted">Script id: <code>${esc(scriptId)}</code>. Nothing was created or changed.</p></div>`;
+    return;
+  }
   const s = data.script;
   const ac = (s.acceptance_criteria || []).map((a) => `${a.id} ${a.title}`).join(" · ");
   view.innerHTML = `<p><a href="${link("tab=scripts")}">← Script Inventory</a></p>
@@ -562,7 +567,8 @@ async function scriptView(view, scriptId, tab, runId) {
         <button class="btn" id="stop" hidden>Stop</button>
         <button class="btn" id="regen">Regenerate / Update</button><button class="btn danger" id="archive">Delete</button></div>
       <dl class="meta">
-        <dt>Script</dt><dd><code>${esc(s.file)}</code> ${s.file_verified ? '<span class="muted">(file verified)</span>' : '<span class="pill FAIL">FILE MISSING</span>'}</dd>
+        <dt>Script</dt><dd><code>${esc(s.file)}</code> ${s.file_verified ? '<span class="muted">(file verified)</span>' : `<span class="pill FAIL">${esc(s.status)}</span>`}
+          ${data.file_problem ? `<div class="pill FAIL" style="margin-top:6px;white-space:normal">${esc(data.file_problem.reason)}<br><span class="muted">Path: <code>${esc(data.file_problem.path)}</code></span></div>` : ""}</dd>
         <dt>User Story</dt><dd>${s.user_story_id ? `US${esc(s.user_story_id)} ${esc(s.user_story_title || "")}` : "-"}</dd>
         <dt>Acceptance Criteria</dt><dd>${esc(ac || "-")}</dd>
         <dt>Sprint</dt><dd>${esc(s.sprint || "-")}</dd>

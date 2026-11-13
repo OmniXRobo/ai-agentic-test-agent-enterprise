@@ -36,16 +36,17 @@ from ..clock import now
 ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
            "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
            "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
-           "right_click", "drag_to", "dialog")  # 23.3.21
+           "right_click", "drag_to", "dialog",  # 23.3.21
+           "choose_option", "dismiss")  # 23.6.0: semantic dropdown / autocomplete choice; close a pop-up safely
 
 Action = Literal["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
                  "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
                  "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
-                 "right_click", "drag_to", "dialog"]
+                 "right_click", "drag_to", "dialog", "choose_option", "dismiss"]
 
 NEEDS_TARGET = {"click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "hover",
                 "expect_visible", "expect_hidden", "expect_text", "expect_value", "upload_file", "download_file",
-                "right_click", "drag_to"}
+                "right_click", "drag_to", "choose_option"}
 
 # 23.3.17: checks on the file the last download_file step saved (no element needed).
 FILE_CHECKS = {"expect_file_name", "expect_file_text", "expect_excel_cell"}
@@ -90,6 +91,12 @@ class Step(BaseModel):
     original_value: str | None = None
     # 23.3.21: the browser tab the step happens in (0 = the first tab; 1 = the first tab a click opened, ...)
     tab: int | None = Field(default=None, ge=0, le=50)
+    # 23.6.0: what the step means, besides where it clicks: {"intent": "pick_date", "component": "date_range",
+    # "role": "start" | "end", "field": "Check-in", "recorded_value": "2026-11-15", "option": "Paris", ...}.
+    # Playback uses it to recover when the page's HTML changed; it never holds a secret value.
+    semantic: dict[str, Any] | None = None
+    # 23.6.0: a click on a payment / booking-finalisation control plays only when a person allowed it for this step
+    commit_ok: bool = False
 
 
 class DataTable(BaseModel):
@@ -141,6 +148,7 @@ def describe(step: Step) -> str:
         "expect_excel_cell": f"Verify the downloaded Excel has {v}",
         "right_click": f"Right-click {what}", "drag_to": f"Drag {what} to {v}",
         "dialog": "Cancel the next pop-up" if v == "dismiss" else "OK on the next pop-up",
+        "choose_option": f"Choose '{v}' in {what}", "dismiss": "Close the open pop-up",
     }.get(step.action, step.action)
 
 
@@ -303,6 +311,11 @@ def to_playwright_python(script: Script) -> str:
             lines.append(f"    expect(page).to_have_url(re.compile({_py(re.escape(step.value or ''))}))")
         elif a == "screenshot":
             lines.append(f"    page.screenshot(path={_py((step.value or 'step') + '.png')})")
+        elif a == "choose_option":
+            lines.append(f"    {loc}.click()")
+            lines.append(f"    page.get_by_role(\"option\", name={_py(step.value)}).first.click()")
+        elif a == "dismiss":
+            lines.append("    page.keyboard.press(\"Escape\")")
     if not script.steps:
         lines.append("    pass")
     lines += [

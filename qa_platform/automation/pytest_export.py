@@ -280,6 +280,45 @@ def files_folder(script: Script) -> str:
     return script.id.lower().replace("-", "_")
 
 
+# 23.6.0: calendars and custom dropdowns in the exported test (plain Playwright; SkyGuard's own playback uses the full
+# component engine in js/components.js).
+_COMPONENT_HELPERS = '''
+
+_MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+                "November", "December"]
+
+
+def pick_date(page, locator, iso, timeout):
+    """A date field takes the date as text; a calendar gets the day whose full date matches clicked."""
+    if locator.evaluate("el => el.tagName === 'INPUT' && el.type === 'date'"):
+        locator.fill(iso, timeout=timeout)
+        return
+    year, month, day = (int(x) for x in iso.split("-"))
+    long_name = f"{_MONTH_NAMES[month - 1]} {day}, {year}"
+    short_name = f"{_MONTH_NAMES[month - 1][:3]} {day:02d} {year}"
+    cells = [f'[data-date="{iso}"]', f'[aria-label*="{long_name}"]', f'[aria-label*="{short_name}"]']
+    for _ in range(2):
+        for css in cells:
+            cell = page.locator(css).first
+            if cell.count() and cell.is_visible():
+                cell.click(timeout=timeout)
+                return
+        locator.click(timeout=timeout)  # open the calendar
+        page.wait_for_timeout(500)
+    raise AssertionError(f"No calendar day for {iso} was found.")
+
+
+def choose(page, locator, text, timeout):
+    """Native <select> or a custom / autocomplete list: open it and click the option with this text."""
+    if locator.evaluate("el => el.tagName === 'SELECT'"):
+        locator.select_option(label=text, timeout=timeout)
+        return
+    locator.click(timeout=timeout)
+    option = page.get_by_role("option", name=text, exact=True).or_(page.locator("li", has_text=text)).first
+    option.click(timeout=timeout)
+'''
+
+
 def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> str:
     """One pytest file for the script; ``datasets`` are [{name, values}] (one test per data set)."""
     datasets = [d for d in (datasets or []) if isinstance(d.get("values"), dict)]
@@ -319,6 +358,8 @@ def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> s
     body = _RUNTIME.format(base_url=script.base_url or "", browser=script.browser, files_folder=files_folder(script))
     if uses_files(script):
         body += _FILE_HELPERS.format()
+    if any(st.action in ("pick_date", "choose_option") for st in script.steps):
+        body += _COMPONENT_HELPERS
     steps = [
         "",
         "",
@@ -394,6 +435,8 @@ def _step_lines(step: Any) -> list[str]:
         lines = [f"expect(page).to_have_url(re.compile(re.escape({v} or \"\")), timeout={timeout})"]
     elif a in ("expect_file_name", "expect_file_text", "expect_excel_cell"):
         lines = [f"{a}({step.value!r}, data)"]
+    elif a == "dismiss":  # 23.6.0: close an open pop-up (never a click in the middle of the page)
+        lines = ["page.keyboard.press(\"Escape\")"]
     elif a == "dialog":  # 23.3.21: answer the next pop-up (alert / confirm / prompt)
         how = "dismiss" if step.value == "dismiss" else "accept"
         lines = [f"page.once(\"dialog\", lambda d: d.{how}())"]
@@ -409,8 +452,10 @@ def _step_lines(step: Any) -> list[str]:
         lines = [f"{loc}.fill({v} or \"\", timeout={timeout})"]
     elif a == "select":
         lines = [f"{loc}.select_option({v}, timeout={timeout})"]
-    elif a == "pick_date":  # typed in ISO form here; the runtime and the framework use the calendar itself
-        lines = [f"{loc}.fill({v} or \"\", timeout={timeout})"]
+    elif a == "pick_date":  # 23.6.0: a date field is filled; a calendar (any kind) gets its day clicked by full date
+        lines = [f"pick_date(page, {loc}, {v}, {timeout})"]
+    elif a == "choose_option":  # 23.6.0: custom / portal dropdowns and autocompletes, not only <select>
+        lines = [f"choose(page, {loc}, {v}, {timeout})"]
     elif a == "press":
         lines = [f"{loc}.press({v} or \"Enter\", timeout={timeout})"]
     elif a == "expect_visible":

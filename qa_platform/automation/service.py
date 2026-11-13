@@ -129,14 +129,14 @@ class AutomationService:
 
     def run_script(self, script_id: str, *, dataset: dict[str, Any] | None = None, headless: bool | None = None,
                    background: bool = True, browser: str | None = None, data_label: str | None = None,
-                   run_id: str | None = None) -> str | dict[str, Any]:
+                   run_id: str | None = None, interactive: bool = False) -> str | dict[str, Any]:
         self.scripts.get(script_id)  # validate before starting
         run_id = run_id or new_run_id("RUN")
 
         def work() -> dict[str, Any]:
             with self._exec_lock:  # one browser run at a time unless parallel runs are allowed (23.3.21)
                 return self.runner.run(script_id, run_id, dataset=dataset, headless=headless, browser=browser,
-                                       data_label=data_label)
+                                       data_label=data_label, interactive=interactive)
 
         if not background:
             return work()

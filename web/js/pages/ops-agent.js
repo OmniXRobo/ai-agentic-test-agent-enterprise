@@ -71,43 +71,41 @@ async function refreshRun() {
 }
 
 function renderStatus() {
+  // 23.6.0: a short status line: application, state, progress and the pause / resume / stop controls. Details stay
+  // on the Executions tab.
   const el = state.view?.querySelector("#opsStatus");
   if (!el) return;
   const d = state.runData;
-  if (!d) { el.innerHTML = `<div class="row"><b>AI Operations Agent</b><span class="spacer"></span><span class="muted">No execution selected. Every operation shows a preview and runs only after you confirm it.</span></div>`; return; }
+  if (!d) { el.innerHTML = ""; el.hidden = true; return; }
+  el.hidden = false;
   const s = d.status, c = s.counts || {};
   const manual = s.manual && !s.pause?.acknowledged;
+  const active = !["completed", "partial", "failed", "stopped", "cancelled"].includes(s.state);
+  const choices = (s.pause?.choices || []);
   el.innerHTML = `
-    <div class="row" style="flex-wrap:wrap;gap:12px">
-      <b>${esc(s.application)}</b>
-      <span>Account: <b>${esc(s.account || "not signed in")}</b>${s.identity_verified ? " ✔" : ""}</span>
-      <span>Verified role: <b>${esc(s.verified_role || "not verified")}</b></span>
-      <span>Page: ${esc(s.page?.heading || s.page?.title || s.page?.url || "-")}</span>
-      <span>Stage: ${esc(s.stage)}</span><span>Record: ${esc(s.record)}</span><span>Phase: ${esc(s.phase || "")}</span>
-      <span class="spacer"></span>${pill(s.state === "paused" ? "WARN" : ["completed"].includes(s.state) ? "PASS" : ["failed", "stopped"].includes(s.state) ? "FAIL" : "INFO", s.state)}
-    </div>
-    <div class="row" style="gap:12px;margin-top:6px;flex-wrap:wrap">
-      <progress max="100" value="${s.progress}" style="width:160px"></progress> ${s.progress}%
-      <span>✔ ${c.success || 0}</span><span>✖ ${c.failed || 0}</span><span>⏳ ${c.pending || 0}</span><span>⤼ ${c.skipped || 0}</span><span>? ${c.unknown || 0}</span>
-      <span>Healing: ${s.heals || 0} healed / ${s.heal_attempts || 0} attempts</span>
-      <span>${s.manual ? '<b class="ops-blink">Manual intervention</b>' : ""}</span>
-    </div>
-    ${s.pause ? `<div class="card ${manual ? "ops-attention" : ""}" style="margin-top:8px"><b>${esc(s.pause.message)}</b>
-      <div class="row" style="margin-top:6px"><button class="btn primary" data-run-act="resume">Resume</button>
-      ${manual ? '<button class="btn" data-run-act="acknowledge">Acknowledge</button>' : ""}</div></div>` : ""}
-    <div class="row" style="margin-top:6px;gap:6px">
+    <div class="row" style="flex-wrap:wrap;gap:10px;align-items:center">
+      <b>${esc(s.application)}</b>${pill(s.state === "paused" ? "WARN" : ["completed"].includes(s.state) ? "PASS" : ["failed", "stopped"].includes(s.state) ? "FAIL" : "INFO", s.state)}
+      <progress max="100" value="${s.progress}" style="width:140px" aria-label="Progress"></progress><span>${s.progress}%</span>
+      <span class="muted">Record ${esc(s.record)} · ✔ ${c.success || 0} ✖ ${c.failed || 0}</span>
+      <span class="spacer"></span>
       ${["running", "inspecting"].includes(s.state) ? '<button class="btn" data-run-act="pause">Pause</button>' : ""}
-      ${!["completed", "partial", "failed", "stopped", "cancelled"].includes(s.state) ? '<button class="btn danger" data-run-act="stop">Stop</button><button class="btn" data-run-act="cancel-remaining">Cancel remaining</button>' : ""}
-      <button class="btn" data-open-run>Details & evidence</button>
-    </div>`;
+      ${s.state === "paused" ? '<button class="btn primary" data-run-act="resume">Resume</button>' : ""}
+      ${active ? '<button class="btn danger" data-run-act="stop">Stop</button>' : ""}
+      <button class="link-btn" data-open-run>Details</button>
+    </div>
+    ${s.pause ? `<div class="card ${manual ? "ops-attention" : ""}" style="margin-top:8px"><b id="pauseMsg"></b>
+      ${choices.length ? `<div class="row" style="margin-top:6px;flex-wrap:wrap;gap:6px">${choices.map((ch) => `<button class="btn" data-choice="${Number(ch.index)}">${esc(ch.label)}</button>`).join("")}</div>` : ""}</div>` : ""}`;
+  const msg = el.querySelector("#pauseMsg");
+  if (msg) msg.textContent = s.pause.message; // text only
   el.querySelectorAll("[data-run-act]").forEach((b) => b.addEventListener("click", () => runAction(b.dataset.runAct)));
+  el.querySelectorAll("[data-choice]").forEach((b) => b.addEventListener("click", () => runAction("resume", { choice: Number(b.dataset.choice) })));
   el.querySelector("[data-open-run]")?.addEventListener("click", () => show("runs"));
 }
 
-async function runAction(act) {
+async function runAction(act, body = {}) {
   try {
     if (act === "stop" && !confirm("Stop this execution? No further actions are taken; finished records stay as they are.")) return;
-    await api(`/api/ops/runs/${encodeURIComponent(state.run)}/${act}`, { method: "POST", body: {} });
+    await api(`/api/ops/runs/${encodeURIComponent(state.run)}/${act}`, { method: "POST", body });
     await refreshRun();
   } catch (err) { toast(err.message, "error"); }
 }
@@ -115,14 +113,14 @@ async function runAction(act) {
 // ---- chat & voice -------------------------------------------------------------------------------------------------
 async function chatTab(body) {
   body.innerHTML = `
-    <div class="card"><div class="row">${appPicker()}<span class="spacer"></span><span class="muted">Local Qwen model + learned knowledge. Never type passwords or codes here.</span></div>
+    <div class="card"><div class="row">${appPicker()}</div>
       <div id="chatLog" class="ops-chat" aria-live="polite"></div>
       <form id="chatForm" class="row" style="gap:6px;margin-top:8px" autocomplete="off">
-        <textarea id="chatText" rows="2" style="flex:1" placeholder="e.g. create 5 trips on 2026-12-01 from 06:00 every 30 minutes, routes: Dubai to Abu Dhabi, buses: BUS-101, drivers: available, trip numbers starting at DXB200"></textarea>
-        <button class="btn" type="button" id="micBtn" aria-pressed="false" title="Push to talk: press to start, press again to stop">🎙 Speak</button>
+        <textarea id="chatText" rows="2" style="flex:1" aria-label="Message"></textarea>
+        <button class="btn" type="button" id="micBtn" aria-pressed="false" title="Speak (press again to stop)">🎙</button>
         <button class="btn primary" type="submit">Send</button>
       </form>
-      <p class="muted" id="micState">The microphone records only between Speak and Stop. The transcript appears here for you to edit before sending.</p>
+      <p class="muted" id="micState" aria-live="polite"></p>
     </div>`;
   bindPicker(body);
   const log = body.querySelector("#chatLog");
@@ -149,13 +147,13 @@ async function chatTab(body) {
   const mic = body.querySelector("#micBtn"), micState = body.querySelector("#micState");
   mic.addEventListener("click", async () => {
     if (rec) {
-      mic.textContent = "🎙 Speak"; mic.setAttribute("aria-pressed", "false");
+      mic.textContent = "🎙"; mic.setAttribute("aria-pressed", "false");
       micState.textContent = "Transcribing locally…";
       const wav = await rec.stop(); rec = null;
       try {
         const { text: heard } = await api("/api/ops/voice/transcribe", { method: "POST", rawBody: wav, contentType: "audio/wav" });
         text.value = heard; form.dataset.voice = "1"; text.focus();
-        micState.textContent = "Edit the transcript if needed, then Send. Voice never confirms an operation.";
+        micState.textContent = "";
       } catch (err) { micState.textContent = err.message; }
       return;
     }
@@ -421,7 +419,8 @@ async function renderRunDetail(el, data) {
   const evts = (await api(`/api/ops/runs/${encodeURIComponent(r.id)}/events`)).events;
   const canStart = ["inspecting", "running", "paused"].includes(r.status) && !data.browser?.open;
   el.innerHTML = `
-    <div class="row"><h3 style="margin:0">${esc(r.id)}</h3><span class="spacer"></span>${canStart ? '<button class="btn" id="openBrowser">Open browser and continue</button>' : ""}</div>
+    <div class="row"><h3 style="margin:0">${esc(r.id)}</h3><span class="spacer"></span>${canStart ? '<button class="btn" id="openBrowser">Open browser and continue</button>' : ""}
+      ${["running", "inspecting", "paused"].includes(r.status) ? '<button class="btn" id="cancelRest">Cancel remaining</button>' : ""}</div>
     ${r.status === "awaiting_confirmation" ? `<div class="card ops-attention" style="margin-top:8px"><h3>Preview: confirm to execute</h3>
       <p><b>${esc(p.application)}</b> ${esc(p.environment || "")} · mode ${esc(p.mode || "")}</p>
       ${table(["Stage", "Account", "Verified role", "Page", "Expected status"], (p.stages || []).map((s) => `<tr><td>${esc(s.title)} (v${s.workflow_version})</td><td>${esc(s.account)} (${esc(s.login_id)})</td><td>${esc(s.role_verified || "verified at sign-in")}</td><td>${esc(s.page || "")}</td><td>${esc(s.expected_status || "")}</td></tr>`))}
@@ -437,6 +436,7 @@ async function renderRunDetail(el, data) {
     try { await api(`/api/ops/runs/${encodeURIComponent(r.id)}/confirm`, { method: "POST", body: { preview_hash: r.preview_hash } }); refreshRun(); } catch (err) { toast(err.message, "error"); refreshRun(); }
   });
   el.querySelector("#rejectBtn")?.addEventListener("click", async () => { try { await api(`/api/ops/runs/${encodeURIComponent(r.id)}/stop`, { method: "POST" }); refreshRun(); } catch (err) { toast(err.message, "error"); } });
+  el.querySelector("#cancelRest")?.addEventListener("click", () => runAction("cancel-remaining"));
   el.querySelector("#openBrowser")?.addEventListener("click", async () => { try { await api(`/api/ops/runs/${encodeURIComponent(r.id)}/start`, { method: "POST" }); refreshRun(); } catch (err) { toast(err.message, "error"); } });
 }
 

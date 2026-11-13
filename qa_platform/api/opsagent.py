@@ -399,6 +399,7 @@ class ConfirmIn(BaseModel):
 
 class ResumeIn(BaseModel):
     note: str | None = Field(default=None, max_length=500)
+    choice: int | None = Field(default=None, ge=0, le=4, description="23.6.0: which listed look-alike control to use")
 
 
 @router.get("/runs")
@@ -446,7 +447,7 @@ def pause(run_id: str, request: Request, svc: Any = Depends(ops)) -> dict[str, A
 
 @router.post("/runs/{run_id}/resume")
 def resume(run_id: str, body: ResumeIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
-    return {"ok": True, **svc.resume(run_id, actor(request), body.note)}
+    return {"ok": True, **svc.resume(run_id, actor(request), body.note, body.choice)}
 
 
 @router.post("/runs/{run_id}/stop")

@@ -168,6 +168,9 @@ Acceptance criteria:
 {criteria}"""
 
 
+DATA_CASES_PER_CALL = 4  # 23.6.0: test data is generated for a few test cases per AI call
+
+
 class RequirementsAgent(BaseAgent):
     agent_id = "requirements"
 
@@ -217,24 +220,53 @@ class DesignService:
                 description=story["description"],
                 criteria="\n".join(f"- {c}" for c in story["criteria"]) or "(none)")
 
+            if not story["criteria"] and story["description"] == "(none)":
+                raise QAError("STORY_EMPTY", f"User Story #{sid} has no description and no acceptance criteria, so "
+                              "there is nothing to design tests from. Add acceptance criteria in TFS and try again.",
+                              status=422, details={"user_story_id": sid})
+            groups = self._criteria_groups(story["criteria"])
+            header = STORY_CONTEXT.split("\n\nAcceptance criteria:")[0].format(
+                id=story["id"], title=story["title"], state=story["state"], iteration=story["iteration"],
+                description=story["description"])
+
             with self.requirements.activity(f"Analyzing requirements of User Story #{sid}", run_id=run_id,
                                             user_story_id=sid) as act:
-                analysis = self.ai.complete_json(
-                    "You are a senior QA requirements analyst. Extract atomic, testable requirements from the user "
-                    "story. Use only what the story says; list unclear points as ambiguities instead of guessing.",
-                    context, models.RequirementsAnalysis)
+                analysis = models.RequirementsAnalysis(summary="", requirements=[], ambiguities=[])
+                for gi, group in enumerate(groups, 1):
+                    part = self._stage(
+                        "requirements analysis", gi, len(groups), lambda g=group: self.ai.complete_json(
+                            "You are a senior QA requirements analyst. Extract atomic, testable requirements from the "
+                            "user story. Use only what the story says; list unclear points as ambiguities instead of "
+                            "guessing.", self._group_context(header, group, gi, len(groups)),
+                            models.RequirementsAnalysis, timeout=self._timeout(), enforce_schema=True))
+                    analysis.summary = analysis.summary or part.summary
+                    for r in part.requirements:
+                        r.id = f"R{len(analysis.requirements) + 1}" if len(groups) > 1 else r.id
+                        analysis.requirements.append(r)
+                    analysis.ambiguities += [a for a in part.ambiguities if a not in analysis.ambiguities]
+                    if len(groups) > 1:
+                        act.progress(int(gi * 100 / len(groups)), f"Analyzed criteria part {gi} of {len(groups)}")
+                if not analysis.requirements:
+                    raise QAError("AI_OUTPUT_INVALID", f"The {self.ai.label()} returned no testable requirements for "
+                                  f"User Story #{sid}.", status=502)
                 act.complete(f"Requirements extracted: {len(analysis.requirements)}",
                              requirements=len(analysis.requirements))
                 act.event(names.REQUIREMENTS_COMPLETED, f"Requirements extracted: {len(analysis.requirements)}")
             result["requirements"] = analysis.model_dump()
+            context = STORY_CONTEXT.format(
+                id=story["id"], title=story["title"], state=story["state"], iteration=story["iteration"],
+                description=story["description"],
+                criteria="\n".join(f"- {c}" for c in story["criteria"]) or "(none)")
+            req_lines = "\n".join(f"{r.id}: {r.text}" for r in analysis.requirements)
 
             with self.planning.activity(f"Building test strategy for User Story #{sid}", run_id=run_id,
                                         user_story_id=sid) as act:
                 act.event(names.TESTPLAN_STARTED, "Test planning started")
-                plan = self.ai.complete_json(
+                plan = self._stage("test strategy", 1, 1, lambda: self.ai.complete_json(
                     "You are a QA test manager. Write a concise, risk-based test strategy for this user story. "
                     "Include performance SLAs only if the story states or clearly implies them.",
-                    context + "\n\nRequirements:\n" + analysis.model_dump_json(), models.TestPlan)
+                    header + "\n\nRequirements:\n" + req_lines, models.TestPlan, timeout=self._timeout(),
+                    enforce_schema=True))
                 act.event(names.TESTPLAN_COMPLETED, f"Test strategy ready; suggested suite '{plan.suite_name}'")
                 act.complete(f"Test strategy ready ({len(plan.test_types)} test types)")
             result["plan"] = plan.model_dump()
@@ -242,34 +274,56 @@ class DesignService:
             with self.case_design.activity(f"Generating test cases for User Story #{sid}", run_id=run_id,
                                            user_story_id=sid) as act:
                 act.event(names.TESTCASE_STARTED, "Test case generation started")
-                cases = self.ai.complete_json(
-                    f"You are a senior QA engineer. Design at most {max_cases} test cases covering every requirement. "
-                    "Set each category to the type of testing: functional (at least one per acceptance criterion), "
-                    "positive, negative (invalid input, missing data, errors), boundary or edge (limits), end_to_end "
-                    "(one complete user journey) and smoke (one quick check of the critical path). Each step has one "
-                    "concrete action and one observable expected result. Reference requirement ids.",
-                    context + "\n\nRequirements:\n" + analysis.model_dump_json()
-                    + "\n\nStrategy:\n" + plan.model_dump_json(), models.TestCaseSet, max_tokens=6000)
-                cases.test_cases = cases.test_cases[:max_cases]
+                req_groups = self._requirement_groups(analysis.requirements, len(groups))
+                all_cases: list[models.TestCase] = []
+                for gi, reqs in enumerate(req_groups, 1):
+                    budget = max(1, (max_cases - len(all_cases)) // (len(req_groups) - gi + 1))
+                    if len(all_cases) >= max_cases:
+                        break
+                    part = self._stage("test case generation", gi, len(req_groups), lambda r=reqs, b=budget: self.ai.complete_json(
+                        f"You are a senior QA engineer. Design at most {b} test cases covering every requirement "
+                        "listed. Set each category to the type of testing: functional (at least one per acceptance "
+                        "criterion), positive, negative (invalid input, missing data, errors), boundary or edge "
+                        "(limits), end_to_end (one complete user journey) and smoke (one quick check of the critical "
+                        "path). Each step has one concrete action and one observable expected result. Reference "
+                        "requirement ids exactly as given.",
+                        header + "\n\nRequirements:\n" + "\n".join(f"{q.id}: {q.text}" for q in r)
+                        + f"\n\nStrategy: {plan.approach}; test types: {', '.join(plan.test_types)}",
+                        models.TestCaseSet, max_tokens=6000, timeout=self._timeout(), enforce_schema=True))
+                    known = {q.id for q in reqs}
+                    for tc in part.test_cases[:budget]:
+                        if len(req_groups) > 1:
+                            tc.ref = f"TC{len(all_cases) + 1}"
+                            tc.requirement_ids = [r for r in tc.requirement_ids if r in known] or [q.id for q in reqs][:1]
+                        all_cases.append(tc)
+                cases = models.TestCaseSet.model_construct(test_cases=all_cases[:max_cases])
+                if not cases.test_cases:
+                    raise QAError("AI_OUTPUT_INVALID", f"The {self.ai.label()} returned no test cases.", status=502)
                 covered = {r for tc in cases.test_cases for r in tc.requirement_ids}
                 missing = [r.id for r in analysis.requirements if r.id not in covered]
                 act.event(names.TESTCASE_COMPLETED, f"Test cases generated: {len(cases.test_cases)}",
                           uncovered_requirements=missing)
                 act.complete(f"Test cases generated: {len(cases.test_cases)}"
                              + (f"; uncovered requirements: {', '.join(missing)}" if missing else ""))
-            result["test_cases"] = cases.model_dump()["test_cases"]
+            result["test_cases"] = [tc.model_dump() for tc in cases.test_cases]
             result["uncovered_requirements"] = missing
 
             with self.data.activity(f"Building test data for {len(cases.test_cases)} test cases", run_id=run_id,
                                     user_story_id=sid) as act:
                 act.event(names.TESTDATA_STARTED, "Test data generation started")
-                data = self.ai.complete_json(
-                    "You are a test data engineer. For each test case produce the datasets it needs (valid, invalid, "
-                    "boundary). Use realistic but clearly synthetic values; never real personal data or real "
-                    "credentials. Use placeholders like {{PASSWORD}} for secrets.",
-                    cases.model_dump_json(), models.TestDataSet, max_tokens=6000)
                 refs = {tc.ref for tc in cases.test_cases}
-                data.datasets = [d for d in data.datasets if d.test_case_ref in refs]
+                chunks = [cases.test_cases[i:i + DATA_CASES_PER_CALL]
+                          for i in range(0, len(cases.test_cases), DATA_CASES_PER_CALL)]
+                datasets: list[models.DataSet] = []
+                for ci, chunk in enumerate(chunks, 1):
+                    part = self._stage("test data generation", ci, len(chunks), lambda ch=chunk: self.ai.complete_json(
+                        "You are a test data engineer. For each test case produce the datasets it needs (valid, "
+                        "invalid, boundary). Use realistic but clearly synthetic values; never real personal data or "
+                        "real credentials. Use placeholders like {{PASSWORD}} for secrets.",
+                        models.TestCaseSet.model_construct(test_cases=ch).model_dump_json(), models.TestDataSet,
+                        max_tokens=6000, timeout=self._timeout(), enforce_schema=True))
+                    datasets += [d for d in part.datasets if d.test_case_ref in refs]
+                data = models.TestDataSet(datasets=datasets)
                 act.event(names.TESTDATA_COMPLETED, f"Datasets built: {len(data.datasets)}")
                 act.complete(f"Datasets built: {len(data.datasets)}")
             result["test_data"] = data.model_dump()["datasets"]
@@ -288,6 +342,60 @@ class DesignService:
         self.runs.finish(run_id, "PASSED", {"test_cases": len(result["test_cases"]),
                                             "datasets": len(result["test_data"])})
         return result
+
+    # ---- 23.6.0: long-running local AI generation in parts ------------------------------------------------
+
+    def _timeout(self) -> float:
+        """Generation can take minutes on a CPU-only local model: use the generation timeout (default 600 s), not the
+        120 s request timeout that made DESIGN runs fail after exactly two minutes."""
+        return self.ai.long_timeout()
+
+    def _criteria_per_call(self) -> int:
+        try:
+            fixed = int((self.ai.settings.section("design") or {}).get("criteria_per_call") or 0)
+        except (TypeError, ValueError, AttributeError):
+            fixed = 0
+        if fixed > 0:
+            return fixed
+        try:
+            n_ctx = self.ai.context_window()
+        except Exception:
+            n_ctx = 0
+        return 2 if n_ctx and n_ctx <= 4096 else 3
+
+    def _criteria_groups(self, criteria: list[str]) -> list[list[str]]:
+        n = self._criteria_per_call()
+        if len(criteria) <= n:
+            return [criteria]
+        return [criteria[i:i + n] for i in range(0, len(criteria), n)]
+
+    @staticmethod
+    def _group_context(header: str, group: list[str], index: int, total: int) -> str:
+        part = f" (part {index} of {total}; analyze only these)" if total > 1 else ""
+        return header + f"\n\nAcceptance criteria{part}:\n" + ("\n".join(f"- {c}" for c in group) or "(none)")
+
+    @staticmethod
+    def _requirement_groups(reqs: list[models.Requirement], parts: int) -> list[list[models.Requirement]]:
+        if parts <= 1 or len(reqs) <= 4:
+            return [reqs]
+        size = max(3, -(-len(reqs) // parts))
+        return [reqs[i:i + size] for i in range(0, len(reqs), size)]
+
+    def _stage(self, stage: str, index: int, total: int, call: Any) -> Any:
+        """Run one AI call and say which stage failed and what to do, instead of a bare 'did not answer in time'."""
+        try:
+            return call()
+        except QAError as exc:
+            where = f"{stage}" + (f" (part {index} of {total})" if total > 1 else "")
+            if exc.error_code == "AI_TIMEOUT":
+                raise QAError("AI_TIMEOUT", f"The {self.ai.label()} did not answer in time: the {where} did not finish "
+                              f"within {int(self._timeout())} s. The model is too slow for this story on this machine: "
+                              "raise 'Generation timeout' in Settings > AI Runtime, lower 'criteria per call', or use "
+                              "a smaller model.", status=504, details={"stage": where}) from exc
+            if exc.error_code in ("AI_OUTPUT_INVALID", "AI_OUTPUT_TRUNCATED"):
+                raise QAError(exc.error_code, f"{exc.message} Stage: {where}. Nothing was saved as a result; "
+                              "try again or lower 'criteria per call'.", status=exc.status, details={"stage": where, "cause": exc.details}) from exc
+            raise
 
     def _read_story(self, user_story_id: int, run_id: str) -> dict[str, Any]:
         sid = str(user_story_id)
