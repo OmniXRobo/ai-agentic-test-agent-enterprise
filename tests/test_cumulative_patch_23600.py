@@ -23,6 +23,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+# 23.7.1: the 23.6.1 package is built from the working tree, which is 23.7.1 now; its installer would refuse it.
+# The cumulative patch (23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1) is tested in
+# tests/test_autolearn_patch_23700.py.
+_TREE = (ROOT / "qa_platform" / "__init__.py").read_text(encoding="utf-8")
+pytestmark = pytest.mark.skipif('__version__ = "23.6.1"' not in _TREE,
+                                reason="superseded by the 23.7.1 cumulative patch (tests/test_autolearn_patch_23700.py)")
 NAME = "SkyGuard_Guided_Playback_Components_Fix_Patch_23.6.1"
 PATCH = "23.6.1"
 RELEASES = {"23.3.35": "6d448fa", "23.4.0": "53e80093fe99272f27dc424392d1fd3d746b3c7c", "23.5.0": "900e4e0",

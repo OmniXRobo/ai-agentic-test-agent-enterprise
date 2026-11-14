@@ -169,6 +169,12 @@
       if (el.getAttribute("aria-invalid") === "true") d.invalid = true;
     }
     if (t === "input" && ["checkbox", "radio"].includes(el.type)) d.checked = el.checked;
+    if (["input", "textarea"].includes(t)) {
+      // 23.7.0: the field's own declared constraints (learned as business rules)
+      const c = {};
+      for (const k of ["pattern", "min", "max", "minlength", "maxlength", "step", "inputmode", "autocomplete"]) { const v = el.getAttribute(k); if (v) c[k] = v.slice(0, 120); }
+      if (Object.keys(c).length) d.constraints = c;
+    }
     if (t === "select") d.options = [...el.options].slice(0, 200).map((o) => ({ value: o.value, text: clean(o.text, 80), selected: o.selected, disabled: o.disabled }));
     if (t === "input" && el.getAttribute("list")) {
       const dl = document.getElementById(el.getAttribute("list"));
@@ -207,7 +213,10 @@
       const rows = [...t.querySelectorAll("tbody tr, tr")].filter((r) => r !== headRow).slice(0, 100)
         .map((r) => [...r.children].map((c) => clean(c.innerText, 80)));
       const caption = clean((t.caption && t.caption.innerText) || t.getAttribute("aria-label") || "", 60);
-      return { index: i, caption, headers, rows };
+      // 23.7.0: a table used only to lay out a form (label cell + input cell) is not a list of records
+      const inputs = t.querySelectorAll("input:not([type=checkbox]):not([type=radio]):not([type=hidden]),select,textarea").length;
+      const layout = inputs > 0 && !t.querySelector("th") && headers.length <= 3;
+      return { index: i, caption, headers, rows, layout };
     });
   }
 
@@ -356,12 +365,13 @@
       const path = e.composedPath ? e.composedPath() : [e.target];
       return path.find((n) => n.nodeType === 1 && n.matches && n.matches(INTERACTIVE)) || e.target;
     };
-    const send = (kind, el, extra = {}) => {
+    const send = (kind, el, extra = {}, ev = null) => {
+      if (ev && ev.isTrusted === false) return; // 23.7.0: a scripted click is not the person's (widget value changes still count)
       if (!el || el.nodeType !== 1 || el.id === "__sg_banner" || el.closest("#__sg_banner")) return;
       const d = describe(el);
       callback({ kind, at: Date.now(), url: location.href, title: clean(document.title, 120), heading: clean((document.querySelector("h1,h2") || {}).innerText, 120), element: d, ...extra });
     };
-    const onClick = (e) => { const el = target(e); if (["input", "select", "textarea"].includes(el.tagName.toLowerCase()) && !["checkbox", "radio", "submit", "button", "image"].includes(el.type)) return; send("click", el); };
+    const onClick = (e) => { const el = target(e); if (["input", "select", "textarea"].includes(el.tagName.toLowerCase()) && !["checkbox", "radio", "submit", "button", "image"].includes(el.type)) return; send("click", el, {}, e); };
     const onChange = (e) => { const el = target(e); const t = el.tagName.toLowerCase(); if (!["input", "select", "textarea"].includes(t)) return;
       const secret = isSecretField(el);
       const value = secret ? "[secret]" : t === "select" ? clean(el.selectedOptions[0]?.text, 120) : ["checkbox", "radio"].includes(el.type) ? String(el.checked) : clean(el.value, 200);
@@ -375,5 +385,5 @@
   }
   function stopObserving() { if (observer) observer(); observer = null; return true; }
 
-  window.__sgAgent = { snapshot, act, element, highlight, banner, observe, stopObserving, describe, version: "1.0.0" };
+  window.__sgAgent = { snapshot, act, element, highlight, banner, observe, stopObserving, describe, version: "1.1.0" };
 })();

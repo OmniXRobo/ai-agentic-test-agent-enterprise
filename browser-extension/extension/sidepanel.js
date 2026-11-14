@@ -58,7 +58,7 @@ async function show(tab) {
   if (!(await connect())) return;
   try {
     await loadApps();
-    await ({ chat, run, apps, learn, knowledge, audit }[tab])();
+    await ({ chat, run, apps, learn, understand, knowledge, audit }[tab])();
   } catch (e) {
     main.innerHTML = `<div class="card"><p class="err">${esc(e.message)}</p></div>`;
   }
@@ -81,7 +81,7 @@ async function chat() {
 function renderChat() {
   const log = $("#chatLog");
   if (!log) return;
-  log.innerHTML = (S.messages.length ? S.messages : [{ who: "agent", text: "Hello. I operate your registered applications through their normal screens. Every operation shows a preview first and runs only after you confirm. Say 'help' for examples." }])
+  log.innerHTML = (S.messages.length ? S.messages : [{ who: "agent", text: "Hello. With automatic learning on (Options), I learn your registered applications while you use them. Ask me 'what have you learned?', 'how do I create a trip?', 'who approves trips?'. Every operation shows a preview first and runs only after you confirm. Say 'help' for examples." }])
     .map((m) => `<div class="msg ${m.who}${m.warn ? " warn" : ""}">${esc(m.text)}${m.actions || ""}</div>`).join("");
   log.scrollTop = log.scrollHeight;
   log.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => chatAction(b.dataset.act, b.dataset));
@@ -107,7 +107,8 @@ async function sendChat() {
     const r = out.reply;
     let actions = "";
     if (r.type === "secret_intercepted") actions = `<div class="row" style="margin-top:6px"><button class="btn" data-act="apps">Open Applications &amp; Accounts</button></div>`;
-    if (r.type === "suggest_discovery") actions = `<div class="row" style="margin-top:6px"><button class="btn" data-act="learn">Open Learn</button></div>`;
+    if (r.type === "suggest_discovery" || r.type === "suggest_watch") actions = `<div class="row" style="margin-top:6px"><button class="btn" data-act="learn">Open Learn</button></div>`;
+    if (r.type === "needs_approval") { S.pendingApproval = { id: r.entry_id, text }; actions = `<div class="row" style="margin-top:6px"><button class="btn primary" data-act="approve-run">Approve and run</button><button class="btn" data-act="knowledge">Review it first</button></div>`; }
     S.messages.push({ who: "agent", text: r.text, warn: r.type === "secret_intercepted" || r.type === "error", actions });
     if (r.type === "run" && r.run_id) { S.runId = r.run_id; await send({ type: "drive", runId: r.run_id }); setTimeout(() => show("run"), 600); }
   } catch (e) {
@@ -116,7 +117,36 @@ async function sendChat() {
   renderChat();
 }
 
-function chatAction(act) { show(act); }
+async function chatAction(act) {
+  if (act !== "approve-run") return show(act);
+  const p = S.pendingApproval;
+  if (!p) return;
+  S.pendingApproval = null;
+  try {
+    await api.post(`/v1/knowledge/${p.id}/approve`, { note: "approved from chat" });
+    $("#say").value = p.text;
+    await sendChat();
+  } catch (e) { S.messages.push({ who: "agent", warn: true, text: e.message }); renderChat(); }
+}
+
+// ---- understanding (23.7.0) ----------------------------------------------------------------------------------------
+async function understand() {
+  if (!S.appId) { main.innerHTML = `<div class="card"><p class="muted">Register an application first.</p></div>`; return; }
+  const v = await api.get(`/v1/understanding?app_id=${encodeURIComponent(S.appId)}`);
+  const { auto_learn } = await api.settings();
+  const m = v.model, j = v.journal || {};
+  const list = (items) => items.length ? `<div class="list">${items.join("")}</div>` : "<p class='muted'>Nothing yet.</p>";
+  main.innerHTML = `<div class="card"><label>Application ${appSelect()}</label>
+    <p class="muted">${auto_learn ? "Learning automatically while you browse." : "Automatic learning is off: turn it on in Options."} ${j.pages || 0} pages and ${j.events || 0} actions observed${v.pending ? `, ${v.pending} not analysed yet` : ""}.</p>
+    <div class="row"><button class="btn" id="uNow">Analyse now</button></div><p class="err" id="uErr"></p></div>
+    ${m ? `<div class="card"><h2>Tasks</h2>${list((m.flows || []).map((f) => `<div><strong>${esc(f.title)}</strong> <span class="muted">${esc(f.screen_name || "")} · ${f.successes}✔${f.failures ? ` ${f.failures}✖` : ""}${(f.roles || []).length ? " · " + esc(f.roles.join(", ")) : ""}</span><br><span class="muted">${esc((f.parameters || []).map((p) => p.field).join(", "))}</span></div>`))}</div>
+    <div class="card"><h2>Statuses</h2>${list((m.lifecycles || []).map((lc) => `<div><strong>${esc(lc.entity)}</strong>: ${lc.statuses.map(esc).join(" → ")}<br><span class="muted">${lc.transitions.map((t) => `${esc(t.from)}→${esc(t.to)}: ${esc(t.action || "?")}${t.roles.length ? " (" + esc(t.roles.join(", ")) + ")" : ""}`).join("; ")}</span></div>`))}</div>
+    <div class="card"><h2>Rules</h2>${list((m.rules || []).map((r) => `<div>${esc(r.text)} <span class="muted">${esc(r.flow)} · ${esc(r.source)}</span></div>`))}</div>
+    <div class="card"><h2>Roles</h2>${list((m.roles || []).map((r) => `<div><strong>${esc(r.name)}</strong> <span class="muted">${esc(r.performed.map((p) => p.flow).join(", ") || "viewing")}${r.refused.length ? " · refused: " + esc(r.refused.join("; ")) : ""}</span></div>`))}</div>
+    <div class="card"><h2>Screens</h2>${list((m.screens || []).map((s) => `<div>${esc(s.name)} <span class="muted">${esc(s.path)} · ${esc(s.type)}</span></div>`))}</div>` : ""}`;
+  $("#appSel").onchange = (e) => { S.appId = e.target.value; understand(); };
+  $("#uNow").onclick = async () => { try { await api.post(`/v1/understanding/${encodeURIComponent(S.appId)}/digest`, {}); understand(); } catch (e) { toast($("#uErr"), e.message); } };
+}
 
 let rec = null;
 async function voice() {
@@ -237,7 +267,10 @@ async function learn() {
   const { sessions } = S.appId ? await api.get(`/v1/learning?app_id=${encodeURIComponent(S.appId)}`) : { sessions: [] };
   const active = sessions.find((s) => s.status === "recording");
   const accSel = `<select id="lAcc"><option value="">(signed in already / none)</option>${accs.map((a) => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join("")}</select>`;
-  main.innerHTML = `<div class="card"><h2>Guided learning</h2><label>Application ${appSelect()}</label>
+  const { auto_learn } = await api.settings();
+  main.innerHTML = `<div class="card"><h2>Learn while I browse</h2><p>${auto_learn ? "On: just use the application in its tabs; I work out screens, tasks, statuses, rules and roles myself." : "Off. Turn on <em>Learn automatically while I browse</em> in Options, then use the application as usual."}</p>
+    <div class="row"><button class="btn" id="openOpts">Options</button><button class="btn" data-goto="understand">What I understood</button></div></div>
+    <div class="card"><h2>Guided learning</h2><label>Application ${appSelect()}</label>
     ${active ? `<p>Recording <strong>${esc(active.title)}</strong> (${esc(active.events)} actions so far). Perform the task normally in the application tab.</p>
       <div class="row"><button class="btn primary" id="finish">Finish and review</button><button class="btn" id="cancelL">Cancel</button></div>`
     : `<label>Account ${accSel}</label><label>What are you teaching?<input id="lTitle" placeholder="Create trip"></label><button class="btn primary" id="startL">Start recording</button>`}
@@ -246,6 +279,8 @@ async function learn() {
     <button class="btn" id="discBtn">Start discovery</button><p class="muted">Opens screens and reads them; it never submits anything.</p></div>
     <div class="card"><h2>Recent sessions</h2><div class="list">${sessions.slice(0, 10).map((s) => `<div>${esc(s.title)} - ${esc(s.status)}</div>`).join("") || "<p class='muted'>None.</p>"}</div></div>`;
   $("#appSel").onchange = (e) => { S.appId = e.target.value; learn(); };
+  $("#openOpts").onclick = () => chrome.runtime.openOptionsPage();
+  main.querySelector("[data-goto]").onclick = () => show("understand");
   const err = (e) => toast($("#lErr"), e.message);
   if ($("#startL")) $("#startL").onclick = async () => { try { const { session } = await api.post("/v1/learning", { application_id: S.appId, account_id: $("#lAcc").value || undefined, title: $("#lTitle").value.trim() || "Workflow" }); await send({ type: "learn-start", appId: S.appId, sessionId: session.id }); learn(); } catch (e) { err(e); } };
   if ($("#finish")) $("#finish").onclick = async () => { try { await send({ type: "learn-stop", sessionId: active.id }); const out = await api.post(`/v1/learning/${active.id}/finish`); main.insertAdjacentHTML("afterbegin", `<div class="card"><h2>Learned (awaiting your approval)</h2><p>Workflow "${esc(out.workflow.key)}" with ${esc((out.workflow.data.steps || []).length)} step(s) and ${esc((out.rules || []).length)} suggested rule(s) were added to Knowledge for your review.${out.profile_learned ? " The sign-in screen was learned too." : ""}</p></div>`); setTimeout(() => show("knowledge"), 1500); } catch (e) { err(e); } };

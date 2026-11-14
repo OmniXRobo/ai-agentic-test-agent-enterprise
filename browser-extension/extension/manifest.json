@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SkyGuard Adaptive AI Agent",
   "short_name": "SkyGuard Agent",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Learns your web applications with your approval and operates them through their normal screens, with preview, confirmation and verification. Runs with a local companion: nothing leaves this PC.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApOLA1djKPgmh0VQedi4lW2iMObPWokjp26AihYtxhWmQEgfM3pTEuLhYWGkCWNN8nqpyLuOU3fjnDGyeykZrFKK0OiK6BI0a1cx3n2w4SbHIQKlHzYOwWMATRGSqp46vcGurGymOI+9mgUDDwryJ7daOgx+7rZRQoHsQdeP/JDdZRH4P4LI+/U/9ky5EzLlCGQOMNoQBmEuShhNR0yJp237Z3UfaSySlN2Re2qeZwJs258iDlb5X31aSj4jDEe/gklQywkUvXhflk4mYzRi5xWTYejZEkpE0dz+X/weUwZrNHLRMdIM223lD4H+k96Ccuz58/a0N/06iLwzRdThsWQIDAQAB",
   "minimum_chrome_version": "116",
