@@ -7,6 +7,7 @@
 | Area | Check | Result |
 |---|---|---|
 | Dependencies | `pip-audit -r requirements.txt` | No known vulnerabilities found |
+| Dependencies | CI `pip-audit --strict` on `packaging/requirements-offline-win.txt` | CVE-2026-126360 in `opentelemetry-api 1.45.1` (a FastAPI dependency) was published during the review; the pin was raised to 1.45.2 (same dependencies, hashes from PyPI). Both offline requirement files: no known vulnerabilities found. |
 | Dependencies | New packages | None (offline wheel set unchanged) |
 | Static analysis | bandit, high | 0 |
 | Static analysis | bandit, medium | 3, all present before 23.6.1 and unchanged: two `f"SELECT ... {where}"` in `runner.py` where `where` is one of two fixed strings and values are bound parameters, and one in the installer that formats a table name read from `sqlite_master` (row counts). Not exploitable. |
