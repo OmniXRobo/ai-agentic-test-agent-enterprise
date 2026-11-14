@@ -274,7 +274,9 @@ def pick_date(page: Any, iso: str, *, field: Any = None, role: str | None = None
         res: dict[str, Any] = {}
         for wait in range(10):  # a calendar can take a moment to render after the field is clicked
             res = page.evaluate("d => window.__sgComp.findDay(d)", iso) or {}
-            if res.get("status") != "none":
+            # 23.7.1: "missing" before anything was opened can be a page that only shows dates, not an open calendar
+            if res.get("status") != "none" and not (res.get("status") == "missing" and not opened
+                                                    and len(res.get("seen") or []) < 7):
                 break
             if not opened:
                 opened = True

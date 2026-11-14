@@ -131,3 +131,24 @@ without the fix with your message) and `test_calendar_day_missing_everywhere_nam
 
 **Diagnostic:** finishing early now still captures the page, and the report records each answer.
 
+## Your run of 14 Nov, 18:38 to 18:45 (start date: "days read: 16, 18")
+
+**Reported:** the start date still failed, now with "The calendar shows the month of 23 November 2026 but not that day
+(days read: 16, 18)". Step 8 had also paused with "Several suggestions match 'dubai'".
+
+**Root cause (start date):** the calendar was closed when the step began. The only elements on the page that named a
+full date were the Depart and Return boxes of the search form, which show the current dates (16 and 18 November). The
+calendar reader took them for two calendar days, decided a November calendar was open, and so never clicked the
+Depart box to open the real calendar. The previous fix (re-read, then find the day by its label) could not help,
+because the days were not on the page.
+
+**Fix:** an element counts as a calendar day only when it shows its day number ("23", "23 1.36k"), or is an empty grid
+cell; a box that reads "Mon, Nov 16" is not a day. And when the step starts with fewer than 7 days of a month read,
+the date field is opened first, as when no calendar is open. Test:
+`test_closed_calendar_date_boxes_are_not_read_as_days` (fails without the fix).
+
+**Root cause (step 8):** the script types "dubai" into Departure at step 8 and again at step 11, and chooses DXB at step
+12. After step 8, playback tried to choose a suggestion for "dubai" itself, found several, and paused. **Fix:** when a
+later step (within six) types into or chooses in the same field again, the earlier typing is left to those steps.
+Test: `test_typing_repeated_later_in_the_recording_does_not_pause` (fails without the fix).
+
