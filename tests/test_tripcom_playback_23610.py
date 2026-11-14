@@ -433,3 +433,31 @@ def test_exported_python_sets_counters_and_chooses_typed_suggestion(site, tmp_pa
     env = {**os.environ, "HEADLESS": "1", "BROWSER": "chromium", "BASE_URL": site}
     out = subprocess.run([sys.executable, str(path)], capture_output=True, text=True, env=env, timeout=180)
     assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_tester_recording_of_14_november_plays_in_a_visible_browser(rt, site, display):
+    """The same script, Headless off with the visual cursor and highlight, as the tester runs it."""
+    a = rt.automation
+    t = date.today()
+    a.scripts.save(user_trip_recording_20261114(site, t + timedelta(days=8), t + timedelta(days=14)))
+    rt.settings.update({"playback": {"visual_cursor": True, "highlight": True, "visual_delay_ms": 150}})
+    rec = _play(a, "SCR-9D41509DEA", headless=False)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+    by = {s["index"]: s for s in rec["steps"]}
+    assert by[2]["chosen"].startswith("DXB Dubai International Airport")
+    assert by[9]["semantic"] == {"intent": "set_count", "label": "Adults", "count": 2, "verified": True}
+
+
+def test_step_editor_keeps_semantic_actions_on_save():
+    """The step editor's Action list holds every action a recording or Semantic upgrade writes (a step whose action
+    was missing from it was saved as "goto")."""
+    from qa_platform.automation.dsl import Action
+    import typing
+
+    rel = Path("web") / "js" / "pages" / "automation.js"
+    js_src = (APP / rel if (APP / rel).is_file() else Path(__file__).resolve().parents[1] / rel).read_text(encoding="utf-8")
+    listed = js_src.split("const ACTIONS = [", 1)[1].split("];", 1)[0]
+    for action in ("choose_option", "set_count", "dismiss", "pick_date"):
+        assert f'"{action}"' in listed, action
+    assert "set_count" in typing.get_args(Action)
+    assert "ACTIONS.includes(s.action) ? ACTIONS : [...ACTIONS, s.action]" in js_src

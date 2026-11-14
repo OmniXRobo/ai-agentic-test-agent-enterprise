@@ -9,13 +9,14 @@ and the verified result. Real Chrome / Edge builds and Windows were not availabl
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import threading
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "browser-extension" / "companion"))
@@ -97,9 +98,10 @@ def options_sign_in(w):
     p.goto(w["base"] + "/options.html")
     # The page's first refresh (against the default port, refused slowly on Windows) must finish before the port is
     # changed, or its late "companion offline" result, and its write of the default into #port, race the new port.
-    p.wait_for_function("!['', 'checking'].includes(document.querySelector('#conn').textContent.trim())", timeout=15000)
+    # (locator assertions, not wait_for_function: the extension page's CSP forbids evaluating strings)
+    expect(p.locator("#conn")).not_to_have_text(re.compile(r"^\s*(checking)?\s*$"), timeout=15000)
     p.fill("#port", str(w["port"]))
-    p.wait_for_function("(v) => document.querySelector('#port').value === v", arg=str(w["port"]), timeout=5000)
+    expect(p.locator("#port")).to_have_value(str(w["port"]), timeout=5000)
     p.click("#savePort")
     try:
         p.wait_for_selector("#pairCard:not(.hidden)", timeout=10000)
