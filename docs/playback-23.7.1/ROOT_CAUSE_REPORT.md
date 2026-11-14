@@ -106,3 +106,28 @@ request behind the Learning tab ended in a server error as soon as one such sess
 both forms and one damaged row no longer hides the others; guided-only actions on a watch session answer with a clear
 409 message. Test: `test_learning_tab_lists_learn_while_i_browse_sessions` (fails without the fix).
 
+## Your runs RUN-20261114-164528 and RUN-20261114-164836 (from the site diagnostic)
+
+Both runs of SCR-ADE216A761 **passed on trip.com**: the departure (Dubai, all airports), the arrival (New Delhi, typed
+"india"), the end date, Adults set to 2 and Search all played by themselves. One step needed you each time: the
+**start date** stopped with "The calendar shows the month of 23 November 2026 but not that day". (One banner click was
+also done by hand once; that banner is a promotion that is not always shown.)
+
+**Root cause:** the calendar's month was read, but the 23rd was not among the days read at that moment. The step then
+stopped at once, without reading the calendar again and without using what the recording knows about the day: its
+label "Monday, November 23, 2026, Select the start date you want". The end date's step worked because by then the
+calendar was fully drawn. The diagnostic held no page captures (the steps were finished at the first question), so the
+exact reason the day was not read could not be seen; the fix does not depend on it.
+
+**Fix:** when the month is shown but the day is not, the calendar is read again for up to 2.4 s (it may still be
+drawing; prices arrive after the days). Then the day is looked up by its label, rebuilt from the recorded wording for
+the date to choose ("Wednesday, November 25, 2026" when the rule gives the 25th), with Playwright's own locators, which
+also see days drawn inside shadow DOM. Exactly one visible, enabled day must match; it is clicked and checked (the
+calendar or a date field shows it, or the day now says it is chosen). If the day is still not found, the message lists
+the days that were read ("days read: 1-22, 24-30"). The test copy of trip.com now uses the live calendar markup from
+your recording (`div.c-calendar-month > table > tbody.c-calendar-month__days > tr > td.is-allow-hover >
+div.tipWrapper[role=checkbox]`). Tests: `test_calendar_day_the_reading_misses_is_found_by_its_recorded_label` (fails
+without the fix with your message) and `test_calendar_day_missing_everywhere_names_the_days_it_read`.
+
+**Diagnostic:** finishing early now still captures the page, and the report records each answer.
+

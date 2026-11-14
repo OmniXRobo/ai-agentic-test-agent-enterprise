@@ -31,6 +31,11 @@ On 14 Nov 2026 your PC had 23.7.0. 23.7.0 was built on 23.6.0, so it did not hav
   of the box around it, as its label) and by its placeholder, the input inside a recorded box is used, and
   self-healing is tried, before an already open list is looked for. The list is then opened by clicking the field,
   and if the city is not in it, the city is typed and chosen from the results.
+- **Start date: "The calendar shows the month of 23 November 2026 but not that day"** (your runs RUN-20261114-164528
+  and -164836, where everything else played on trip.com): the calendar is read again while it is still drawing, and the
+  day is then found by its label, rebuilt from the recorded wording for the date to choose ("Monday, November 23,
+  2026, ..."). One visible, enabled day must match; the choice is checked. If it is still missing, the message lists
+  the days that were read.
 - **Recorded test id, id, label and placeholder** are tried right after the recorded locators, before self-healing:
   the departure field is found at once by `[data-testid="search_city_from0"]` instead of self-healing it on every run.
 - **Rows laid out in parts** ("DXB | Dubai International Airport | Dubai, United Arab Emirates"): the typed words are

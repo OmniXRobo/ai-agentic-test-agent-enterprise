@@ -200,7 +200,7 @@
     const t = y * 12 + (m - 1);
     const min = Math.min(...ms.map((x) => x.year * 12 + x.month - 1));
     const max = Math.max(...ms.map((x) => x.year * 12 + x.month - 1));
-    if (t >= min && t <= max) return { status: "missing", panels: ms };
+    if (t >= min && t <= max) return { status: "missing", panels: ms, seen: cells.filter((c) => c.iso.slice(0, 7) === want.slice(0, 7)).map((c) => Number(c.iso.slice(8))) };
     const dir = t > max ? 1 : -1;
     const nav = navControl(dir, cells);
     if (!nav) return { status: "no_nav", direction: dir > 0 ? "next" : "prev", panels: ms };
