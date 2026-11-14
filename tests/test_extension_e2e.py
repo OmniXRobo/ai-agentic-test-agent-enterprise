@@ -95,6 +95,12 @@ def options_sign_in(w):
     errors = []
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.goto(w["base"] + "/options.html")
+    # let the page finish its own first check (old port; ~2 s to fail on Windows) before changing the port, as a
+    # person would; options.js also keeps a typed port and ignores a stale check (the CI race seen on Windows)
+    for _ in range(100):
+        if p.inner_text("#conn").strip().lower() != "checking":
+            break
+        p.wait_for_timeout(100)
     p.fill("#port", str(w["port"]))
     p.click("#savePort")
     try:
