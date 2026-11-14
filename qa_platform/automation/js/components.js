@@ -77,6 +77,14 @@
     return "";
   }
 
+  function dayLike(el, day) {
+    const text = String(el.innerText || el.textContent || "").trim();
+    if (!text) return /^(gridcell|option|checkbox|button)$/.test(el.getAttribute("role") || "") || el.tagName === "TD";
+    if (dayNumber(el) === day) return true;
+    // the number can sit in an inner element after an icon or a hidden label
+    return [...el.querySelectorAll("*")].slice(0, 8).some((k) => !k.children.length && String(k.textContent || "").trim() === String(day));
+  }
+
   function dayNumber(el) {
     const first = String(el.innerText || el.textContent || "").trim().split(/\n/)[0].trim();
     return /^\d{1,2}$/.test(first) && Number(first) >= 1 && Number(first) <= 31 ? Number(first) : 0;
@@ -114,6 +122,9 @@
       if (!d || !visible(el)) continue;
       const r = el.getBoundingClientRect();
       if (r.width > 220 || r.height > 160) continue; // a whole field or banner, not a day cell
+      // 23.7.1: a day cell shows its day number first ("23", "23 1.36k"); a date field or summary that names a full
+      // date in its label ("Mon, Nov 16", Trip.com's closed Depart / Return boxes) is not a calendar day
+      if (!dayLike(el, Number(d.slice(8)))) continue;
       // keep the outermost dated element (cell), not its inner span with the same date
       let top = el;
       for (let p = el.parentElement, i = 0; p && i < 3; p = p.parentElement, i++) if (attrDate(p) === d && visible(p)) top = p;

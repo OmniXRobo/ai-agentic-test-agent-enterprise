@@ -573,7 +573,8 @@ class Runner:
             field_kind = components.classify(locator).get("kind")
             popups_before = self._popups(page)
             locator.fill(value or "", timeout=timeout)
-            if value and field_kind in ("autocomplete", "combobox", "textbox") and not self._next_chooses(script, index):
+            if value and field_kind in ("autocomplete", "combobox", "textbox") and not self._next_chooses(script, index) \
+                    and not self._later_sets_field(script, index):
                 # 23.6.0: typing into an autocomplete only offers suggestions; the value counts once one is chosen
                 appeared = field_kind in ("autocomplete", "combobox")
                 if not appeared:
@@ -662,6 +663,26 @@ class Runner:
                 "el => el.querySelectorAll('input:not([type=hidden]),select,textarea,[role=combobox]').length >= 1"))
         except Exception:
             return False
+
+    @staticmethod
+    def _later_sets_field(script: Script, index: int, ahead: int = 6) -> bool:
+        """23.7.1: a later step of the recording types into or chooses in this same field again (the tester's script:
+        step 8 types 'dubai', step 11 types it again and step 12 chooses DXB). Choosing for the earlier typing then
+        only guesses ("Several suggestions match 'dubai'") and pauses the run; the later steps do it as recorded."""
+        here = script.steps[index].target
+        if here is None:
+            return False
+
+        def same(t: Any) -> bool:
+            return t is not None and (t.selector == here.selector or (bool(here.test_id) and t.test_id == here.test_id)
+                                      or (bool(here.name) and t.name == here.name and t.tag == here.tag))
+
+        for st in script.steps[index + 1:index + 1 + ahead]:
+            if st.action in ("choose_option", "fill", "type") and same(st.target):
+                return True
+            if st.action in ("goto", "pick_date", "set_count"):  # the form has moved on
+                return False
+        return False
 
     @staticmethod
     def _next_chooses(script: Script, index: int) -> bool:

@@ -36,6 +36,11 @@ On 14 Nov 2026 your PC had 23.7.0. 23.7.0 was built on 23.6.0, so it did not hav
   day is then found by its label, rebuilt from the recorded wording for the date to choose ("Monday, November 23,
   2026, ..."). One visible, enabled day must match; the choice is checked. If it is still missing, the message lists
   the days that were read.
+- **Start date: "... but not that day (days read: 16, 18)"**: with the calendar closed, the Depart and Return boxes
+  (which show the current dates in full) were read as calendar days, so the calendar was never opened. Only elements
+  that show their day number count as days now, and the date field is opened first when no real month is shown.
+- **"Several suggestions match 'dubai'" on a typing that the script repeats later**: when a later step types into or
+  chooses in the same field again, the earlier typing no longer tries to choose a suggestion itself.
 - **Recorded test id, id, label and placeholder** are tried right after the recorded locators, before self-healing:
   the departure field is found at once by `[data-testid="search_city_from0"]` instead of self-healing it on every run.
 - **Rows laid out in parts** ("DXB | Dubai International Airport | Dubai, United Arab Emirates"): the typed words are

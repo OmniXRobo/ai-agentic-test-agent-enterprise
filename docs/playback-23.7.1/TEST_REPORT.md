@@ -75,9 +75,16 @@ Both runs passed on trip.com; only the start date was done by hand. New tests:
 The trip.com test copy now draws its calendar with the live markup from your recording; all 24 tests of
 `test_tripcom_playback_23610.py` passed with it.
 
+## After your run of 14 Nov, 18:38 ("days read: 16, 18")
+
+| Test | What it proves |
+|---|---|
+| `test_closed_calendar_date_boxes_are_not_read_as_days` | With the calendar closed, the Depart / Return boxes that show full dates are not taken for days; the calendar is opened and the 23rd chosen. **Fails without the fix.** |
+| `test_typing_repeated_later_in_the_recording_does_not_pause` | Typing "dubai" that the script repeats and then chooses later no longer pauses. **Fails without the fix.** |
+
 ## Full regression suite
 
-`pytest tests/` after the start-date fix: **770 passed, 0 failed, 53 skipped** (after the Manila and Learning tab
+`pytest tests/` after the closed-calendar fix: **772 passed, 0 failed, 53 skipped** (after the label fix: 770) (after the Manila and Learning tab
 fixes: 768 passed) (earlier 23.7.1 build:
 759 passed). The skipped tests are Windows-only
 tests, optional tools not installed here, and the 18 tests of the 23.6.1 and 23.7.0 packages, which this package

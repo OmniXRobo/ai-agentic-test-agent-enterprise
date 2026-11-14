@@ -600,3 +600,68 @@ def test_calendar_day_missing_everywhere_names_the_days_it_read(browser_page):
     with pytest.raises(components.ComponentError) as err:
         components.pick_date(page, "2026-11-23", timeout=3000)
     assert "days read: 1-22, 24-30" in err.value.message
+
+
+_CLOSED_CALENDAR_PAGE = """<!doctype html><html><body>
+<div class="fl-box">
+  <div role="button" tabindex="0" id="dep" aria-label="Departure date, Monday, November 16, 2026" style="cursor:pointer;width:180px">
+    <div>Depart</div><div aria-label="Monday, November 16, 2026">Mon, Nov 16</div></div>
+  <div role="button" tabindex="0" id="ret" aria-label="Return date, Wednesday, November 18, 2026" style="cursor:pointer;width:180px">
+    <div>Return</div><div aria-label="Wednesday, November 18, 2026">Wed, Nov 18</div></div>
+</div>
+<div id="cal"></div>
+<script>
+const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+document.getElementById("dep").addEventListener("click", () => {
+  const cal = document.getElementById("cal"); if (cal.children.length) return;
+  const m = document.createElement("div"); m.className = "c-calendar-month"; m.innerHTML = "<h3>November 2026</h3>";
+  const t = document.createElement("table"); const b = document.createElement("tbody"); t.appendChild(b); m.appendChild(t); cal.appendChild(m);
+  let tr;
+  for (let d = 1; d <= 30; d++) {
+    const dt = new Date(2026, 10, d);
+    if (d === 1 || dt.getDay() === 0) { tr = document.createElement("tr"); b.appendChild(tr); }
+    const td = document.createElement("td"); td.className = "is-allow-hover"; tr.appendChild(td);
+    const c = document.createElement("div"); c.className = "tipWrapper"; c.setAttribute("role", "checkbox");
+    c.setAttribute("aria-label", `${DAYS[dt.getDay()]}, November ${d}, 2026, Select the start date you want`);
+    c.innerHTML = `${d}<div class="price">1.${d}k</div>`; c.style.cssText = "width:40px;height:40px;cursor:pointer";
+    c.addEventListener("click", () => { document.querySelector("#dep [aria-label^=Monday], #dep > div:nth-child(2)").textContent = "Picked Nov " + d; c.setAttribute("aria-checked", "true"); cal.innerHTML = ""; });
+    td.appendChild(c);
+  }
+});
+</script></body></html>"""
+
+
+def test_closed_calendar_date_boxes_are_not_read_as_days(browser_page):
+    """The tester's run of 14 Nov, 18:45: "The calendar shows the month of 23 November 2026 but not that day (days
+    read: 16, 18)". The calendar was closed; the only dated elements were the Depart and Return boxes, which name
+    their dates in full (16 and 18 November). They were read as calendar days, so the calendar was never opened."""
+    from qa_platform.automation import components
+
+    page = browser_page
+    page.set_content(_CLOSED_CALENDAR_PAGE)
+    assert page.evaluate("window.__sgComp.findDay('2026-11-23')")["status"] == "none"
+    res = components.pick_date(page, "2026-11-23", role="start", timeout=4000)
+    assert res["verified"], res
+    assert "Picked Nov 23" in page.inner_text("#dep")
+
+
+def test_typing_repeated_later_in_the_recording_does_not_pause(rt, site):
+    """The tester's run of 14 Nov, 18:38: step 8 typed 'dubai' into Departure and paused with "Several suggestions
+    match 'dubai'", although step 11 types it again and step 12 chooses DXB. The earlier typing is left to the later
+    steps."""
+    T = Target
+    dep = T(selector='role=combobox[name="Departure airport or city"]', tag="input", role="combobox",
+            name="Departure airport or city", test_id="search_city_from0", placeholder="Leaving from")
+    option = "DXB Dubai International Airport Dubai, United Arab Emirates"
+    steps = [Step(action="goto", value=f"{site}/tripcom/flights.html"),
+             Step(action="fill", target=dep, value="dubai"),
+             Step(action="expect_visible", target=T(selector='[data-testid="search_city_from0"]')),
+             Step(action="fill", target=dep, value="dubai"),
+             Step(action="choose_option", target=dep, value=option,
+                  semantic={"intent": "choose_option", "option": option, "typed": "dubai", "list": "suggestion"}),
+             Step(action="expect_value", target=T(selector='[data-testid="search_city_from0"]'), value="Dubai")]
+    a = rt.automation
+    a.scripts.save(Script(id="SCR-TRIPDUB001", name="dubai twice", mode="guided", steps=steps, browser="chromium",
+                          base_url=site))
+    rec = _play(a, "SCR-TRIPDUB001", headless=True)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
