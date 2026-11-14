@@ -50,9 +50,23 @@ The same script also **passed in a visible browser** with the visual cursor and 
 Re-run after this fix of the playback, component, healing, recorder, visual-playback, voice-guided and installer test
 files (10 files): **92 passed, 0 failed**.
 
+## After your second 23.7.1 run on trip.com ("Neither the list field nor an open list with 'Manila' was found")
+
+| Test | What it proves |
+|---|---|
+| `test_choice_when_only_the_group_around_the_field_was_recorded` | Your failing step: "Choose 'Manila'" right after "Click Flights", with a field locator that matches nothing until the field has focus. **Fails without the fix with exactly your message, passes with it** (the field is found by its name, opened, Manila chosen, the input shows "Manila"). |
+| `test_choice_from_the_popular_list_when_the_field_was_never_focused` | The same with the focus-only `role=combobox[name=...]` locator and no test id. |
+| `test_record_and_play_a_city_clicked_in_the_popular_list` | Clicking the departure field and Manila in the list that opens on focus records and plays back. |
+| `test_learning_tab_lists_learn_while_i_browse_sessions` | The Learning tab request answers 200 with "Learn while I browse" and extension sessions present; finishing one as a workflow answers 409 with a clear message. **Fails without the fix.** |
+| `test_diagnostic_captures_each_stage_into_one_zip` | The site diagnostic saves screenshot, accessibility tree, HTML without scripts and the engine's view for each step, finds "Manila" in the typed list, and adds the newest scripts and runs, in one ZIP. |
+
+All 22 tests in `test_tripcom_playback_23610.py` passed after this change; the 23.7.1 package tests (11) passed with the
+new files (`DIAGNOSE_SITE.cmd` / `.ps1`) and installer checks.
+
 ## Full regression suite
 
-`pytest tests/` on the merged 23.7.1 code: **759 passed, 0 failed, 52 skipped**. The skipped tests are Windows-only
+`pytest tests/` after the Manila and Learning tab fixes: **768 passed, 0 failed, 53 skipped** (earlier 23.7.1 build:
+759 passed). The skipped tests are Windows-only
 tests, optional tools not installed here, and the 18 tests of the 23.6.1 and 23.7.0 packages, which this package
 replaces (they build from the working tree, which is now 23.7.1). The tests added after that run (visible browser,
 step editor) and the browser-extension test change passed on their own run: `test_tripcom_playback_23610.py` and
