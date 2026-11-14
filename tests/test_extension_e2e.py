@@ -95,7 +95,11 @@ def options_sign_in(w):
     errors = []
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.goto(w["base"] + "/options.html")
+    # The page's first refresh (against the default port, refused slowly on Windows) must finish before the port is
+    # changed, or its late "companion offline" result, and its write of the default into #port, race the new port.
+    p.wait_for_function("!['', 'checking'].includes(document.querySelector('#conn').textContent.trim())", timeout=15000)
     p.fill("#port", str(w["port"]))
+    p.wait_for_function("(v) => document.querySelector('#port').value === v", arg=str(w["port"]), timeout=5000)
     p.click("#savePort")
     try:
         p.wait_for_selector("#pairCard:not(.hidden)", timeout=10000)
