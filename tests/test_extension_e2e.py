@@ -96,9 +96,9 @@ def options_sign_in(w):
     errors = []
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.goto(w["base"] + "/options.html")
-    # The page's first refresh (against the default port, refused slowly on Windows) must finish before the port is
-    # changed, or its late "companion offline" result, and its write of the default into #port, race the new port.
-    # (locator assertions, not wait_for_function: the extension page's CSP forbids evaluating strings)
+    # Let the page finish its own first check (old port; ~2 s to fail on Windows) before changing the port, as a
+    # person would; options.js also keeps a typed port and ignores a stale check (the CI race seen on Windows).
+    # Locator assertions, not wait_for_function: the extension page's CSP forbids evaluating strings.
     expect(p.locator("#conn")).not_to_have_text(re.compile(r"^\s*(checking)?\s*$"), timeout=15000)
     p.fill("#port", str(w["port"]))
     expect(p.locator("#port")).to_have_value(str(w["port"]), timeout=5000)
