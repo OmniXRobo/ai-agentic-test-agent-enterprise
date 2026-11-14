@@ -308,13 +308,20 @@ def pick_date(page, locator, iso, timeout):
     raise AssertionError(f"No calendar day for {iso} was found.")
 
 
-def choose(page, locator, text, timeout):
-    """Native <select> or a custom / autocomplete list: open it and click the option with this text."""
+def choose(page, locator, text, timeout, typed=None):
+    """Native <select> or a custom / autocomplete list: open it and click the option with this text. ``typed`` is
+    typed key by key first (suggestion lists such as Trip.com's city list are filled from typed text)."""
     if locator.evaluate("el => el.tagName === 'SELECT'"):
         locator.select_option(label=text, timeout=timeout)
         return
     locator.click(timeout=timeout)
-    option = page.get_by_role("option", name=text, exact=True).or_(page.locator("li", has_text=text)).first
+    if typed:
+        locator.fill("", timeout=timeout)
+        locator.press_sequentially(typed, delay=45, timeout=timeout)
+    head = re.split(r"\\s+[-|]\\s+|,|\\(", text)[0].strip() or text
+    option = page.get_by_role("option", name=text, exact=True).or_(page.locator("li", has_text=text)).or_(
+        page.locator("li,[role=option],[data-testid],[class*=item],[class*=title],[class*=result]", has_text=head).filter(
+            has_not=page.locator("input"))).first
     option.click(timeout=timeout)
 '''
 
@@ -455,7 +462,8 @@ def _step_lines(step: Any) -> list[str]:
     elif a == "pick_date":  # 23.6.0: a date field is filled; a calendar (any kind) gets its day clicked by full date
         lines = [f"pick_date(page, {loc}, {v}, {timeout})"]
     elif a == "choose_option":  # 23.6.0: custom / portal dropdowns and autocompletes, not only <select>
-        lines = [f"choose(page, {loc}, {v}, {timeout})"]
+        typed = (step.semantic or {}).get("typed")
+        lines = [f"choose(page, {loc}, {v}, {timeout}" + (f", typed={typed!r})" if typed else ")")]
     elif a == "press":
         lines = [f"{loc}.press({v} or \"Enter\", timeout={timeout})"]
     elif a == "expect_visible":

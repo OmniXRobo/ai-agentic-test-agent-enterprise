@@ -80,6 +80,7 @@ def upgrade(script: Script, today: date | None = None) -> tuple[Script, list[dic
     changed: the tester decides the new date); a page-background click becomes ``dismiss``; hovers become optional."""
     copy = script.model_copy(deep=True)
     changes: list[dict[str, Any]] = []
+    copy = _upgrade_suggestions(copy, changes)
     for i, step in enumerate(copy.steps):
         sem = infer(step)
         if not sem or step.semantic:
@@ -113,3 +114,110 @@ def upgrade(script: Script, today: date | None = None) -> tuple[Script, list[dic
             step.semantic = {k: v for k, v in sem.items() if k != "inferred"}
             changes.append({"step": i + 1, "change": "option click recognised", "option": sem.get("option")})
     return copy, changes
+
+
+# ---- 23.6.1: suggestion clicks in recordings made before 23.6.1 ----------------------------------------------------
+
+_WORD = re.compile(r"[^\W_]+", re.U)
+_INDEX_TESTID = re.compile(r'^\[data-testid="\d+(?:-\d+)?"\]$')
+
+
+def _words(text: str | None) -> list[str]:
+    return [w.lower() for w in _WORD.findall(str(text or ""))]
+
+
+def _text_field(step: Step) -> bool:
+    t = step.target
+    if t is None or t.input_type == "password" or "{{CRED:" in str(step.value or ""):
+        return False
+    sel = (t.selector or "").lower()
+    return bool(t.input_type in (None, "", "text", "search") and (
+        sel.startswith("input") or "input" in sel or "combobox" in sel or "textbox" in sel or t.placeholder
+        or t.role in ("combobox", "textbox", "searchbox") or t.tag in ("input", "textarea")))
+
+
+def option_text(step: Step) -> str:
+    t = step.target
+    if t is None:
+        return ""
+    for v in (t.text, t.name, t.description, t.label):
+        v = " ".join(str(v or "").split())
+        if v and len(v) <= 160:
+            return stable_text(v)
+    return ""
+
+
+def suggestion_context(script: Script, index: int) -> dict[str, Any] | None:
+    """A plain click that chose a suggestion of a text field, in a recording made before 23.6.1.
+
+    Sites such as Trip.com report the typed text only when the field loses focus, so the recording can hold the
+    suggestion click *before* the typing ("click New Delhi - All airports India", then "fill New Delhi"); playing it
+    in that order clicks a list that is not open yet. A click counts as a suggestion when a neighbouring step (only
+    hovers in between) fills a text field and the clicked text starts with what was typed. Returns the field, what
+    was typed and the option, or None."""
+    steps = script.steps
+    step = steps[index]
+    if step.action != "click" or step.semantic or step.target is None:
+        return None
+    text = option_text(step)
+    tw = _words(text)
+    if not tw:
+        return None
+    for j in (index + 1, index - 1, index + 2, index - 2):
+        if j < 0 or j >= len(steps):
+            continue
+        between = steps[min(j, index) + 1:max(j, index)]
+        if any(s.action != "hover" for s in between):
+            continue
+        fill = steps[j]
+        if fill.action not in ("fill", "type") or not fill.value or not _text_field(fill):
+            continue
+        fw = _words(fill.value)
+        if not fw or "{{" in str(fill.value):
+            continue
+        # what was typed starts the option ("New Delhi" -> "New Delhi - All airports India"), or the field was
+        # given the option's leading words ("New Delhi (DEL)")
+        if tw.count(fw[0]) > 1:
+            continue  # the text of several rows at once ("Paris France Paris, Texas ..."): a click on the whole list
+        starts = tw[:len(fw)] == fw or fw[0] == tw[0] and len(set(fw) & set(tw)) >= max(1, min(len(fw), 2))
+        looks = bool(_INDEX_TESTID.match(step.target.selector or "")) or (step.target.role or "") in (
+            "option", "listitem", "menuitem") or "li" in (step.target.selector or "").lower()
+        if starts or (looks and set(fw) & set(tw)):
+            return {"field": fill.target, "typed": str(fill.value), "option": text, "fill_index": j,
+                    "after": j > index}
+    return None
+
+
+def _upgrade_suggestions(script: Script, changes: list[dict[str, Any]]) -> Script:
+    """23.6.1: a suggestion click becomes "choose <option> in <field> (typed ...)", and typing recorded after it moves
+    in front of it, so the script reads (and plays) in the order the person did it."""
+    found = [(i, ctx) for i in range(len(script.steps)) if (ctx := suggestion_context(script, i))]
+    moves: list[tuple[int, int]] = []
+    for i, ctx in found:
+        step = script.steps[i]
+        old_selector = step.target.selector if step.target else ""
+        step.action = "choose_option"
+        step.target = ctx["field"].model_copy(deep=True)
+        step.value = ctx["option"]
+        step.semantic = {"intent": "choose_option", "option": ctx["option"], "typed": ctx["typed"],
+                         "list": "suggestion", "option_selector": old_selector}
+        name = step.target.name or step.target.label or step.target.placeholder or "the field"
+        step.description = f"Choose '{ctx['option'][:60]}' in {str(name)[:60]} (typed '{ctx['typed'][:40]}')"
+        changes.append({"step": i + 1, "change": "suggestion click -> choose_option", "option": ctx["option"],
+                        "typed": ctx["typed"]})
+        if ctx["after"]:
+            moves.append((ctx["fill_index"], i))
+    for src, dst in sorted(moves, reverse=True):
+        fill = script.steps.pop(src)
+        script.steps.insert(dst, fill)
+        changes.append({"step": dst + 1, "change": "typing moved before the suggestion it produced"})
+    return script
+
+
+def same_text(shown: str | None, recorded: str | None) -> bool:
+    """The element's text is the recorded one (prices and spacing aside): the same words, or one is the start of the
+    other."""
+    a, b = _words(stable_text(shown)), _words(stable_text(recorded))
+    if not a or not b:
+        return not b
+    return a == b or a[:len(b)] == b or b[:len(a)] == a

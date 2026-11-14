@@ -22,7 +22,7 @@ from . import semantic
 from . import visual as visual_fx
 from .browser import context_options, default_headless, js, launch, start_playwright
 from . import files as filekit
-from .dsl import describe, FILE_CHECKS, NEEDS_TARGET, Script, Step, ValueResolver
+from .dsl import describe, FILE_CHECKS, NEEDS_TARGET, Script, Step, Target, ValueResolver
 from .store import CredentialProfiles, ScriptStore
 
 
@@ -415,6 +415,28 @@ class Runner:
             how = components.dismiss(page)
             act.event(names.EXECUTION_STEP, f"Closed the open pop-up ({how})", step=index)
             return None
+        if meaning.get("intent") == "set_count":  # 23.6.1: the + / - of a counter, played as "set it to N"
+            return self._set_count(page, step, index, act, record, meaning, visual, delay)
+        if index in record.get("_done_by_choice", {}) and step.action in ("fill", "type"):
+            # 23.6.1: the suggestion chosen in an earlier step already entered this field's value
+            by = record["_done_by_choice"][index]
+            act.event(names.EXECUTION_STEP, f"Step {index + 1}: the value was entered by the suggestion chosen in "
+                                            f"step {by + 1}", step=index)
+            record["steps"][-1]["note"] = f"entered by the suggestion chosen in step {by + 1}"
+            return None
+        if step.action == "click" and not step.semantic and step.target is not None:
+            sug = semantic.suggestion_context(script, index)
+            if sug is not None:
+                here = self._quick(page, step.target, 800)
+                if here is not None and components.classify(here).get("kind") == "container" and \
+                        self._form_container(here):
+                    sug = None  # a click on a whole form: handled (skipped) below
+            if sug is None:
+                sug = self._suggestion_after_field_click(page, script, step, index)
+            if sug is not None:
+                done = self._choose_suggestion(page, script, step, index, act, record, sug, visual, delay)
+                if done:
+                    return None
         if step.action == "click" and meaning.get("intent") == "pick_date":
             # 23.6.0: a recorded click on a calendar day plays as "choose this date", whatever the calendar's HTML
             return self._choose_date(page, step, index, act, record, meaning["date"], meaning, None, visual, delay)
@@ -474,7 +496,10 @@ class Runner:
 
         if step.action in ("pick_date", "choose_option"):
             # the field moved, or the calendar / list is already open: the component handler finds what it needs
-            located = self._quick(page, step.target, min(timeout, 4000))
+            # 23.6.1: a recorded calendar cell (its label names the date and a price that changes) is looked for
+            # briefly; the calendar handler finds the day by its date anyway
+            cell = step.action == "pick_date" and bool(components.date_in_text(step.target.selector))
+            located = self._quick(page, step.target, 800 if cell else min(timeout, 4000))
             if step.action == "pick_date":
                 iso = visual_fx.parse_date(value or "").isoformat()
                 if located is not None and components.classify(located).get("kind") in (
@@ -483,10 +508,10 @@ class Runner:
                     how = visual_fx.pick_date(page, located, value or "", timeout, visual, delay)
                     act.event(names.EXECUTION_STEP, f"Date {value} chosen ({how})", step=index)
                     return None
-                field = located if located is not None and components.classify(located).get("kind") != \
-                    "calendar_day" else None
+                field = located if located is not None and components.classify(located).get("kind") in (
+                    "date_field", "date_input", "textbox", "autocomplete", "combobox") else None  # 23.6.1: never a day
                 return self._choose_date(page, step, index, act, record, iso, meaning, field, visual, delay)
-            return self._choose(page, step, index, act, record, value or "", located, visual, delay)
+            return self._choose(page, step, index, act, record, value or "", located, visual, delay, script=script)
 
         locator = self._locate(page, step, index, script, act, record, evidence_dir, visual)
         if step.action == "click":
@@ -636,7 +661,9 @@ class Runner:
             return True
         if nxt.action == "click" and nxt.target is not None:
             role = (nxt.target.role or "") + " " + nxt.target.selector + " " + " ".join(nxt.target.alternates)
-            return "option" in role or "autowhatever" in role or "suggest" in role.lower()
+            if "option" in role or "autowhatever" in role or "suggest" in role.lower():
+                return True
+            return semantic.suggestion_context(script, index + 1) is not None  # 23.6.1
         return False
 
     @staticmethod
@@ -682,10 +709,28 @@ class Runner:
         return None
 
     def _choose(self, page: Any, step: Step, index: int, act: Any, record: dict[str, Any], text: str,
-                field: Any, visual: bool, delay: int) -> str | None:
+                field: Any, visual: bool, delay: int, script: Script | None = None) -> str | None:
+        sem = step.semantic or {}
+        typed = sem.get("typed")
+        if not typed and script is not None and index > 0 and step.target is not None:
+            # the step before typed into this field: that is the text that brings the suggestions back
+            prev = script.steps[index - 1]
+            if prev.action in ("fill", "type") and prev.target is not None and \
+                    prev.target.selector == step.target.selector and prev.value and "{{" not in prev.value:
+                typed = prev.value
         if field is None:
             components.ensure(page)
             res = page.evaluate("t => window.__sgComp.findOption(t, null)", text) or {}
+            if res.get("status") != "found" and sem.get("option_selector"):  # 23.6.1: the recorded row, if it is open
+                try:
+                    loc = page.locator(sem["option_selector"])
+                    if loc.count() == 1 and loc.first.is_visible():
+                        loc.first.click(timeout=step.timeout_ms)
+                        components.settle(page)
+                        act.event(names.EXECUTION_STEP, f"'{text}' chosen in the open list (recorded row)", step=index)
+                        return None
+                except Exception:
+                    pass
             if res.get("status") != "found":
                 raise components.ComponentError(
                     "OPTION_NOT_FOUND" if res.get("status") != "ambiguous" else "OPTION_AMBIGUOUS",
@@ -695,11 +740,90 @@ class Runner:
             act.event(names.EXECUTION_STEP, f"'{res.get('text') or text}' chosen in the open list", step=index)
             return None
         res = components.choose_option(page, field, text, timeout=step.timeout_ms,
-                                       pointer=self._pointer(page, visual, delay))
+                                       pointer=self._pointer(page, visual, delay), typed=typed,
+                                       list_kind=sem.get("list"), option_selector=sem.get("option_selector"))
         if not res.get("verified"):
             raise components.ComponentError("NOT_VERIFIED", f"'{text}' was clicked but the field does not show it.")
         act.event(names.EXECUTION_STEP, f"'{res['chosen'][:80]}' chosen ({res['how']}, verified)", step=index)
         record["steps"][-1]["chosen"] = res["chosen"][:200]
+        return None
+
+    def _choose_suggestion(self, page: Any, script: Script, step: Step, index: int, act: Any,
+                           record: dict[str, Any], sug: dict[str, Any], visual: bool, delay: int) -> bool:
+        """23.6.1: a recorded click on a suggestion row (recordings made before 23.6.1): type into the field the
+        suggestion belongs to and choose the row by its text. False when the field is not there either (the click
+        then runs as recorded, with self-healing)."""
+        field = self._quick(page, sug["field"], min(step.timeout_ms, 4000))
+        if field is None:
+            return False
+        typed = sug["typed"]
+        try:
+            res = components.choose_option(page, field, sug["option"], timeout=step.timeout_ms,
+                                           pointer=self._pointer(page, visual, delay), typed=typed,
+                                           option_selector=step.target.selector if step.target else None)
+        except components.ComponentError as exc:
+            act.log(f"Step {index + 1}: the suggestion '{sug['option'][:60]}' was not found after typing "
+                    f"'{typed[:40]}' ({exc.message}); trying the recorded click", step=index)
+            return False
+        if not res.get("verified"):
+            raise components.ComponentError("NOT_VERIFIED", f"'{sug['option']}' was clicked but the field does not "
+                                                            "show it.")
+        if sug.get("after"):
+            record.setdefault("_done_by_choice", {})[sug["fill_index"]] = index
+        act.event(names.EXECUTION_STEP, f"Suggestion '{res['chosen'][:80]}' chosen after typing '{typed[:40]}' "
+                                        f"({res['how']}, verified)", step=index)
+        record["steps"][-1]["chosen"] = res["chosen"][:200]
+        record["steps"][-1]["semantic"] = {"intent": "choose_option", "option": sug["option"], "typed": typed,
+                                           "verified": True}
+        return True
+
+    def _suggestion_after_field_click(self, page: Any, script: Script, step: Step, index: int) -> dict[str, Any] | None:
+        """23.6.1: a recording whose typing was never captured: "click the arrival field", then "click New Delhi - All
+        airports India". When the clicked row is not on the page and the step before clicked a text field (or a box
+        holding exactly one), the row is treated as that field's suggestion and its leading words are typed."""
+        text = semantic.option_text(step)
+        if not text or len(text) > 120 or step.target is None:
+            return None
+        prev = index - 1
+        while prev >= 0 and script.steps[prev].action == "hover":
+            prev -= 1
+        if prev < 0 or script.steps[prev].action != "click" or script.steps[prev].target is None:
+            return None
+        row = self._quick(page, step.target, 1500)
+        if row is not None:
+            try:  # the row is there and is the recorded one (an index test id such as "0" can be another list's row)
+                shown = str(row.evaluate("el => window.__sgComp ? window.__sgComp.rowText(el) : el.innerText", timeout=2000))
+            except Exception:
+                shown = ""
+            if semantic.same_text(shown, text):
+                return None
+        box = self._quick(page, script.steps[prev].target, 1500)
+        if box is None:
+            return None
+        try:
+            sel = box.evaluate("""el => {
+                const ok = (i) => i.tagName === 'TEXTAREA' || (i.tagName === 'INPUT' && !['button','submit','reset','image',
+                    'checkbox','radio','file','hidden','password'].includes(i.type));
+                const f = ok(el) ? el : (() => { const all = [...el.querySelectorAll('input,textarea')].filter(ok);
+                    return all.length === 1 ? all[0] : null; })();
+                return f && window.__qaFp ? window.__qaFp.fingerprint(f).selector : null; }""")
+        except Exception:
+            sel = None
+        if not sel:
+            return None
+        return {"field": Target(selector=sel), "typed": "", "option": text, "fill_index": -1, "after": False}
+
+    def _set_count(self, page: Any, step: Step, index: int, act: Any, record: dict[str, Any],
+                   meaning: dict[str, Any], visual: bool, delay: int) -> str | None:
+        """23.6.1: "Set Children to 1": press the counter's + / - until it shows the recorded number."""
+        label, count = str(meaning.get("label") or ""), int(meaning.get("count") or 0)
+        res = components.set_count(page, label, count, timeout=step.timeout_ms,
+                                   pointer=self._pointer(page, visual, delay))
+        act.event(names.EXECUTION_STEP, f"{res['label']} set to {count} (from {res['from']}, "
+                                        f"{res['presses']} press{'es' if res['presses'] != 1 else ''}, verified)",
+                  step=index)
+        record["steps"][-1]["semantic"] = {"intent": "set_count", "label": res["label"], "count": count,
+                                           "verified": True}
         return None
 
     # ---- 23.3.17: upload and download -----------------------------------------------------

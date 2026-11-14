@@ -1,5 +1,5 @@
-"""Builds SkyGuard_Adaptive_Browser_Learning_BugFix_Final_Patch.zip, the cumulative 23.6.0 patch (23.4.0 + 23.5.0 +
-23.6.0): every application file changed or added since the 23.3.35 baseline commit (the merge of PR #39), the installer
+"""Builds SkyGuard_Guided_Playback_Components_Fix_Patch_23.6.1.zip, the cumulative 23.6.1 patch (23.4.0 + 23.5.0 + 23.6.0
++ 23.6.1): every application file changed or added since the 23.3.35 baseline commit (the merge of PR #39), the installer
 and its Windows wrappers, the release documents, the regression tests, and SHA256_CHECKSUM.txt.
 
     python packaging/cumulative-patch/build_patch.py --out <folder> [--baseline 6d448fa]
@@ -17,15 +17,17 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-NAME = "SkyGuard_Adaptive_Browser_Learning_BugFix_Final_Patch"
+NAME = "SkyGuard_Guided_Playback_Components_Fix_Patch_23.6.1"
 BASELINE_COMMIT = "6d448fa"  # SkyGuard QA 23.3.35 (merge of PR #39)
 PREFIXES = ("qa_platform/", "web/", "skyguard_agent/")
-DOCS = REPO / "docs" / "adaptive-23.6.0"
+DOCS = REPO / "docs" / "adaptive-23.6.1"
+PREVIOUS_DOCS = REPO / "docs" / "adaptive-23.6.0"  # shipped under previous-23.6.0/
 TOOLS = ["APPLY_PATCH.cmd", "APPLY_PATCH.ps1", "ROLLBACK_PATCH.cmd", "VERIFY_PATCH.cmd", "install_patch.py"]
 TESTS = ["tests/test_adaptive_components_23600.py", "tests/test_design_generate_23600.py",
          "tests/test_open_script_23600.py", "tests/test_ops_agent_choices_23600.py", "tests/test_healing_stable_23600.py",
          "tests/test_cumulative_patch_23600.py", "tests/site/components/kit.js", "tests/site/components/travel.html",
-         "tests/site/components/widgets.html"]
+         "tests/site/components/widgets.html", "tests/test_tripcom_playback_23610.py", "tests/site/tripcom/index.html",
+         "tests/site/tripcom/trip.js", "tests/site/tripcom/trip.css"]
 
 
 def git(*args: str) -> list[str]:
@@ -57,7 +59,7 @@ def main() -> None:
         dst = stage / "app" / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / rel, dst)
-    manifest = {"version": "23.6.0", "baseline": ["23.3.35", "23.4.0", "23.5.0"], "baseline_commit": args.baseline,
+    manifest = {"version": "23.6.1", "baseline": ["23.3.35", "23.4.0", "23.5.0", "23.6.0"], "baseline_commit": args.baseline,
                 "files": {rel: sha(stage / "app" / rel) for rel in files}}
     (stage / "PATCH_MANIFEST.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     for t in TOOLS:
@@ -68,6 +70,9 @@ def main() -> None:
         shutil.copy2(d, stage / d.name)
     if (DOCS / "evidence").is_dir():
         shutil.copytree(DOCS / "evidence", stage / "evidence")
+    for d in sorted(PREVIOUS_DOCS.glob("*.md")):
+        (stage / "previous-23.6.0").mkdir(exist_ok=True)
+        shutil.copy2(d, stage / "previous-23.6.0" / d.name)
     for rel in TESTS:
         if (REPO / rel).is_file():
             (stage / rel).parent.mkdir(parents=True, exist_ok=True)

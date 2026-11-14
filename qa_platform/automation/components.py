@@ -153,7 +153,7 @@ def _click_marked(page: Any, timeout: int, pointer: Callable[[Any, str], None] |
 
 def _field_shows(page: Any, field: Any, iso: str) -> bool:
     try:
-        text = field.evaluate("el => window.__sgComp.shownNear(el)")
+        text = field.evaluate("el => window.__sgComp.shownNear(el)", timeout=2000)
         return bool(page.evaluate("([t, d]) => window.__sgComp.showsDate(t, d)", [text, iso]))
     except Exception:
         return False
@@ -247,8 +247,15 @@ def _verify_day(page: Any, iso: str, field: Any) -> bool:
 # ---- dropdowns and autocompletes ----------------------------------------------------------------------------------
 
 def choose_option(page: Any, field: Any, text: str, *, timeout: int = 10000,
-                  pointer: Callable[[Any, str], None] | None = None) -> dict[str, Any]:
-    """Choose ``text`` in a native or custom dropdown; verify the field then shows it."""
+                  pointer: Callable[[Any, str], None] | None = None, typed: str | None = None,
+                  list_kind: str | None = None, option_selector: str | None = None) -> dict[str, Any]:
+    """Choose ``text`` in a native or custom dropdown; verify the field then shows it.
+
+    23.6.1: ``typed`` is the text that was typed to get the suggestions (Trip.com's city list is only filled from
+    typed text). When no list with ``text`` is open, the field is cleared and the text is typed again key by key, as a
+    person does, and the list is read from what is drawn next to the field, so lists with no role and only generated
+    class names work. ``list_kind`` "list" means a list some other control opened (its choice is not written into a
+    field, so it is checked by the list closing). ``option_selector`` is the recorded row, tried last."""
     ensure(page)
     info = classify(field)
     kind = info.get("kind")
@@ -267,37 +274,149 @@ def choose_option(page: Any, field: Any, text: str, *, timeout: int = 10000,
                 field.select_option(label=hits[0], timeout=timeout)
         shown = field.evaluate("el => window.__sgComp.fieldText(el)")
         return {"how": "native", "chosen": shown, "verified": text.lower() in str(shown).lower()}
-    # custom dropdown: open it (unless already open), type to filter when it is searchable, click the option
-    res = page.evaluate("([t, f]) => window.__sgComp.findOption(t, f)", [text, None])
+    editable = kind in ("autocomplete", "combobox", "textbox") or _is_text_field(field)
+    before = _field_value(field)
+    # an open list next to the field that already has it (the recording's previous step typed the text)
+    res = field.evaluate("(el, t) => window.__sgComp.findOption(t, el)", text) or {}
+    how = "custom"
     if res.get("status") != "found":
-        if pointer:
-            pointer(field, "Open the list")
-        field.click(timeout=timeout)
-        settle(page, 250, 3000)
-        res = _find_option(page, field, text)
-        if res.get("status") == "none" and kind in ("autocomplete", "combobox", "textbox"):
-            field.fill(text, timeout=timeout)
-            settle(page, 300, 4000)
+        if not editable:
+            if pointer:
+                pointer(field, "Open the list")
+            field.click(timeout=timeout)
+            settle(page, 250, 3000)
             res = _find_option(page, field, text)
+        else:
+            res = _find_option(page, field, text, rounds=6) if before.strip() else {}  # the list may still be loading
+            for attempt in ([] if res.get("status") in ("found", "ambiguous") else _typing_candidates(typed, text, before)):
+                res = _retype(page, field, attempt, text, timeout, pointer)
+                if res.get("status") in ("found", "ambiguous"):
+                    how = f"typed '{attempt}'" if attempt else "list"
+                    break
+    if res.get("status") != "found" and option_selector:
+        try:  # the recorded row itself, if it is on the page now (one match only)
+            loc = page.locator(option_selector)
+            if loc.count() == 1 and loc.first.is_visible():
+                loc.first.evaluate("el => { window.__sgComp.clear(); el.setAttribute('data-sg-target', '1'); }")
+                res = {"status": "found", "text": loc.first.evaluate("el => window.__sgComp.rowText(el)") or text}
+                how = "recorded row"
+        except Exception:
+            pass
     if res.get("status") == "ambiguous":
         raise ComponentError("OPTION_AMBIGUOUS", f"Several options match '{text}'.", choices=res.get("options") or [])
     if res.get("status") != "found":
         raise ComponentError("OPTION_NOT_FOUND", f"'{text}' is not in the list"
-                             + (f" (options: {', '.join(res.get('options')[:6])})" if res.get("options") else "") + ".",
+                             + (f" (options: {', '.join(res.get('options')[:6])})" if res.get("options") else "")
+                             + (f"; typed '{typed}'" if typed else "") + ".",
                              choices=res.get("options") or [])
     chosen = res.get("text") or text
-    _click_marked(page, timeout, pointer, chosen[:40])
+    # 23.6.1: a list can still be replaced (popular places shown on focus, then the results for the typed text):
+    # wait until it is quiet, find the row again, and find it once more if it vanished just before the click
+    if how != "recorded row":
+        settle(page, 250, 2500)
+        again = field.evaluate("(el, t) => window.__sgComp.findOption(t, el)", text) or {}
+        if again.get("status") == "found":
+            chosen = again.get("text") or chosen
+    for attempt in range(3):
+        try:
+            _click_marked(page, min(timeout, 4000) if attempt < 2 else timeout, pointer, chosen[:40])
+            break
+        except Exception:
+            if attempt == 2:
+                raise
+            settle(page, 250, 2500)
+            again = _find_option(page, field, text, rounds=8)
+            if again.get("status") != "found":
+                raise ComponentError("OPTION_NOT_FOUND", f"The list changed while '{text}' was being chosen and no "
+                                                         "longer has it.", choices=again.get("options") or [])
+            chosen = again.get("text") or chosen
     settle(page, 250, 3000)
-    return {"how": "custom", "chosen": chosen, "verified": _shows_choice(field, text, chosen)}
+    if list_kind == "list":
+        verified = _shows_choice(field, text, chosen) or not _option_visible(page, field, text)
+    else:
+        verified = _shows_choice(field, text, chosen) or _value_follows(before, _field_value(field), chosen, typed)
+    return {"how": how, "chosen": chosen, "verified": verified}
 
 
-def _find_option(page: Any, field: Any, text: str) -> dict[str, Any]:
+def _is_text_field(field: Any) -> bool:
+    try:
+        return bool(field.evaluate("el => el.tagName === 'TEXTAREA' || el.isContentEditable || (el.tagName === 'INPUT' "
+                                   "&& !['button','submit','reset','image','checkbox','radio','file','hidden'].includes(el.type))"))
+    except Exception:
+        return False
+
+
+def _field_value(field: Any) -> str:
+    try:
+        return str(field.evaluate("el => window.__sgComp.fieldText(el)", timeout=3000) or "")
+    except Exception:
+        return ""
+
+
+def _words(s: str) -> list[str]:
+    return [w for w in re.split(r"[^\w]+", s.lower()) if w]
+
+
+def _typing_candidates(typed: str | None, text: str, current: str) -> list[str]:
+    """What to type to bring the suggestion back: the recorded typing, then the start of the option's text
+    ("New Delhi" for "New Delhi - All airports India"), then the whole text. "" first when nothing is typed yet and
+    the list opens on focus (popular cities)."""
+    out: list[str] = []
+    if typed:
+        out.append(typed)
+    head = re.split(r"\s+[-–|]\s+|,|\(|\n", text)[0].strip()
+    if head and head not in out:
+        out.append(head)
+    words = head.split()
+    if len(words) > 2 and " ".join(words[:2]) not in out:
+        out.append(" ".join(words[:2]))
+    if not typed and not current.strip():
+        out.insert(0, "")
+    return out[:4]
+
+
+def _retype(page: Any, field: Any, value: str, text: str, timeout: int,
+            pointer: Callable[[Any, str], None] | None) -> dict[str, Any]:
+    """Clear the field and type ``value`` key by key, then wait for a list that has ``text``."""
+    try:
+        if pointer:
+            pointer(field, "Type to search")
+        field.click(timeout=timeout)
+        if value:
+            field.fill("", timeout=timeout)
+            field.press_sequentially(value, delay=45, timeout=max(timeout, 5000))
+    except Exception:
+        return {}
+    settle(page, 300, 3000)
+    return _find_option(page, field, text, rounds=28)
+
+
+def _option_visible(page: Any, field: Any, text: str) -> bool:
+    try:
+        res = field.evaluate("(el, t) => window.__sgComp.findOption(t, el)", text) or {}
+        page.evaluate("() => window.__sgComp.clear()")
+        return res.get("status") == "found"
+    except Exception:
+        return False
+
+
+def _value_follows(before: str, after: str, chosen: str, typed: str | None) -> bool:
+    """The field now holds the choice: its new value is made of the chosen row's words (Trip.com writes "New Delhi"
+    after "New Delhi - All airports India" is chosen)."""
+    a = _words(after)
+    if not a:
+        return False
+    c = set(_words(chosen)) | set(_words(typed or ""))
+    return sum(1 for w in a if w in c) >= max(1, (len(a) + 1) // 2)
+
+
+def _find_option(page: Any, field: Any, text: str, rounds: int = 16) -> dict[str, Any]:
     res: dict[str, Any] = {}
-    for attempt in range(16):  # options can load asynchronously
+    for attempt in range(rounds):  # options can load asynchronously
         res = field.evaluate("(el, t) => window.__sgComp.findOption(t, el)", text) or {}
         if res.get("status") in ("found", "ambiguous"):
             return res
-        if res.get("status") == "none" and res.get("count") and attempt >= 4 and \
+        if res.get("status") == "none" and res.get("count") and attempt >= 8 and \
                 not page.evaluate("() => window.__sgComp.busy()"):
             return res  # the list is there, has finished loading, and does not have it
         page.wait_for_timeout(250)
@@ -306,11 +425,59 @@ def _find_option(page: Any, field: Any, text: str) -> dict[str, Any]:
 
 def _shows_choice(field: Any, wanted: str, chosen: str) -> bool:
     try:
-        near = str(field.evaluate("el => window.__sgComp.shownNear(el)")).lower()
+        near = str(field.evaluate("el => window.__sgComp.shownNear(el)", timeout=3000)).lower()
     except Exception:
         return False
     first = chosen.split("\n")[0].strip().lower()
     return bool(wanted.lower() in near or (first and first in near))
+
+
+# ---- 23.6.1: counters (rooms, adults, children, passengers) --------------------------------------------------------
+
+MAX_COUNT_PRESSES = 30
+
+
+def set_count(page: Any, label: str, count: int, *, timeout: int = 10000,
+              pointer: Callable[[Any, str], None] | None = None) -> dict[str, Any]:
+    """Press the counter's + or - until the counter named ``label`` shows ``count``; verify after every press.
+
+    The counter is found by the text of its row ("Children", "Adults"), never by position, so the + of Children is
+    never confused with the + of Adults even when both have the same generated class and no label."""
+    ensure(page)
+    res: dict[str, Any] = {}
+    for _ in range(16):  # the pop-up with the counters can take a moment to open
+        res = page.evaluate("l => window.__sgComp.counter(l, 0)", label) or {}
+        if res.get("status") == "found":
+            break
+        page.wait_for_timeout(250)
+    if res.get("status") != "found":
+        raise ComponentError("COUNTER_NOT_FOUND", f"No counter named '{label}' is shown"
+                             + (f" (counters: {', '.join(res.get('labels')[:6])})" if res.get("labels") else
+                                "; open the pop-up that holds it first") + ".", choices=res.get("labels") or [])
+    start = res.get("value")
+    presses = 0
+    while res.get("value") != count:
+        if res.get("value") is None:
+            raise ComponentError("COUNTER_UNREADABLE", f"The '{label}' counter does not show a number.")
+        up = count > int(res["value"])
+        if (up and res.get("plusDisabled")) or (not up and res.get("minusDisabled")):
+            raise ComponentError("COUNT_LIMIT", f"'{label}' cannot be set to {count}: the application stops at "
+                                                f"{res['value']} (its {'+' if up else '-'} is disabled).")
+        if presses >= MAX_COUNT_PRESSES:
+            raise ComponentError("COUNT_LIMIT", f"'{label}' did not reach {count} after {presses} presses.")
+        page.evaluate("([l, d]) => window.__sgComp.counter(l, d)", [label, 1 if up else -1])
+        _click_marked(page, timeout, pointer, f"{label} {'+' if up else '-'}")
+        presses += 1
+        settle(page, 120, 1500)
+        new = page.evaluate("l => window.__sgComp.counter(l, 0)", label) or {}
+        if new.get("value") == res.get("value"):
+            page.wait_for_timeout(300)
+            new = page.evaluate("l => window.__sgComp.counter(l, 0)", label) or {}
+            if new.get("value") == res.get("value"):
+                raise ComponentError("COUNT_NOT_CHANGED", f"Pressing {'+' if up else '-'} did not change '{label}' "
+                                                          f"(still {res.get('value')}).")
+        res = new
+    return {"label": res.get("label") or label, "from": start, "count": count, "presses": presses, "verified": True}
 
 
 def commit_autocomplete(page: Any, field: Any, value: str, *, timeout: int = 4000,

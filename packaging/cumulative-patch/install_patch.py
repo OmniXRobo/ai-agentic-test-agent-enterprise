@@ -1,4 +1,5 @@
-"""SkyGuard QA 23.6.0 cumulative patch (Adaptive Browser Learning & bug fixes; includes 23.4.0 and 23.5.0): offline
+"""SkyGuard QA 23.6.1 cumulative patch (guided playback of Trip.com-style components; includes 23.4.0, 23.5.0 and
+23.6.0): offline
 installer, verifier and rollback. No administrator rights are needed: everything is written inside the installation
 folder of the user who installed SkyGuard QA.
 
@@ -10,15 +11,15 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35, 23.4.0 or 23.5.0; 23.6.0 to apply again),
+  1. detects the installation and its version (23.3.35, 23.4.0, 23.5.0 or 23.6.0; 23.6.1 to apply again),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256),
   3. checks free disk space and that the application and data folders can be written,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
      backup) and settings.json,
   6. copies the new files (each written to a temporary name, then renamed),
-  7. migrates: the main database is brought to 18 migrations (from 23.3.35 this applies the 23.4.0 migrations; 23.5.0
-     and 23.6.0 add none); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
+  7. migrates: the main database is brought to 18 migrations (from 23.3.35 this applies the 23.4.0 migrations; 23.5.0,
+     23.6.0 and 23.6.1 add none); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
      separate file) is created or migrated,
   8. verifies: the new version loads, the agent core and its API load, every migration is recorded, PRAGMA
      integrity_check is ok for both databases and no table has fewer rows than before,
@@ -26,7 +27,7 @@ apply:
      kept next to it, renamed, never deleted).
 
 rollback (after a successful apply): restores the previous application files and removes the files the patch added.
-The databases are kept as they are by default: 23.5.0 and 23.6.0 do not change the main database, and older versions
+The databases are kept as they are by default: 23.5.0, 23.6.0 and 23.6.1 do not change the main database, and older versions
 do not use the separate knowledge database, so nothing created after the upgrade is lost. Rolling back to 23.3.35: the
 23.4.0 migrations stay in the database (23.3.35 ignores the added tables and columns); use --restore-database for the
 exact pre-upgrade copy. --restore-database puts back the copy taken before the upgrade instead (the
@@ -47,9 +48,10 @@ import sys
 import time
 from pathlib import Path
 
-PATCH_VERSION = "23.6.0"
-BASELINE = "23.3.35, 23.4.0 or 23.5.0"
-BASELINES = ("23.3.35", "23.4.0", "23.5.0", PATCH_VERSION)
+PATCH_VERSION = "23.6.1"
+BASELINE = "23.3.35, 23.4.0, 23.5.0 or 23.6.0"
+BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", PATCH_VERSION)
+FILES_LIST = f"PATCH_FILES_{PATCH_VERSION}.json"  # the files this patch put in place (23.6.0 kept its own list)
 AGENT_SCHEMA = 1
 MIGRATION_COUNT = 18
 MARGIN_MB = 300
@@ -225,9 +227,9 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("Operations Agent loads", False, str(exc))
     try:
         comp = run_py(python, app, data, COMPONENTS_LOAD).splitlines()[-1]
-        check("Component engine (23.6.0)", comp == "ok", comp)
+        check(f"Component engine ({PATCH_VERSION})", comp == "ok", comp)
     except PatchError as exc:
-        check("Component engine (23.6.0)", False, str(exc))
+        check(f"Component engine ({PATCH_VERSION})", False, str(exc))
     kdb = data / "opsagent" / "knowledge.sqlite3"
     if kdb.exists():
         conn = sqlite3.connect(f"file:{kdb}?mode=ro", uri=True)
@@ -264,8 +266,8 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
                   "; ".join(f"{t}: {a} -> {b}" for t, (a, b) in lost.items()))
     else:
         check("Database", True, "no database yet (created at first start)")
-    missing = [rel for rel in json.loads((app / "PATCH_FILES_23.6.0.json").read_text(encoding="utf-8"))["files"]
-               if not (app / rel).exists()] if (app / "PATCH_FILES_23.6.0.json").exists() else ["PATCH_FILES_23.6.0.json"]
+    missing = [rel for rel in json.loads((app / FILES_LIST).read_text(encoding="utf-8"))["files"]
+               if not (app / rel).exists()] if (app / FILES_LIST).exists() else [FILES_LIST]
     check("Patch files present", not missing, "all" if not missing else ", ".join(missing[:5]))
     report["ok"] = all(c["status"] == "PASS" for c in report["checks"])
     return report
@@ -296,7 +298,8 @@ def restore_files(app: Path, backup: Path, added: list[str]) -> None:
 def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
-    step(f"SkyGuard QA {PATCH_VERSION}: Adaptive Browser Learning & bug fixes (cumulative: 23.4.0 + 23.5.0 + 23.6.0)")
+    step(f"SkyGuard QA {PATCH_VERSION}: guided playback of suggestion lists, calendars and counters "
+         "(cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     say(f"Application folder : {app}\nData folder        : {data}  (kept)\nInstalled version  : {before} -> {PATCH_VERSION}")
@@ -361,7 +364,7 @@ def apply(args: argparse.Namespace) -> int:
             tmp = dst.with_name(dst.name + ".patch-tmp")
             shutil.copy2(src, tmp)
             os.replace(tmp, dst)
-        (app / "PATCH_FILES_23.6.0.json").write_text(json.dumps({"version": PATCH_VERSION, "files": files}, indent=1),
+        (app / FILES_LIST).write_text(json.dumps({"version": PATCH_VERSION, "files": files}, indent=1),
                                                      encoding="utf-8")
         say(f"{len(files)} files copied.")
         if args.fail_after_copy:  # test hook: proves the automatic rollback
@@ -380,7 +383,7 @@ def apply(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 - every failure rolls back
         step("Restoring the previous version")
         restore_files(app, backup, added)
-        (app / "PATCH_FILES_23.6.0.json").unlink(missing_ok=True)
+        (app / FILES_LIST).unlink(missing_ok=True)
         if db.exists() and (backup / "qa_platform.sqlite3").exists():
             kept = db.with_name(f"qa_platform.failed-upgrade-{stamp}.sqlite3")
             for suffix in ("-wal", "-shm"):
@@ -423,7 +426,7 @@ def rollback(args: argparse.Namespace) -> int:
         raise PatchError(f"SkyGuard QA is still running (port {port} answers). Close it first.")
     step(f"Rolling back {PATCH_VERSION} -> {info['from']} from {backup}")
     restore_files(app, backup, info["added"])
-    (app / "PATCH_FILES_23.6.0.json").unlink(missing_ok=True)
+    (app / FILES_LIST).unlink(missing_ok=True)
     db = data / "qa_platform.sqlite3"
     if args.restore_database and (backup / "qa_platform.sqlite3").exists():
         kept = db.with_name(f"qa_platform.before-rollback-{time.strftime('%Y%m%d-%H%M%S')}.sqlite3")

@@ -83,14 +83,15 @@
   }
 
   const OUTSIDE = /(outside|other-?month|othermonth|adjacent|prev-?month|next-?month|--outside|is-other|not-?current|\bold\b|\bnew\b)/i;
-  const DISABLED = /(disabled|unavailable|blocked|is-past|--past|\bpast\b|invalid|unselectable|not-?allowed|sold-?out|soldout)/i;
+  const DISABLED = /(disabled|is-disable\b|\bdisable\b|[-_]dis\b|unavailable|blocked|is-past|--past|\bpast\b|invalid|unselectable|not-?allowed|sold-?out|soldout)/i;
   const SELECTED = /(selected|range-?start|range-?end|start-?date|end-?date|is-start|is-end|checked|--start|--end|\bactive\b|is-active)/i;
   const around = (el, n = 2) => { const out = [el]; let p = el; for (let i = 0; i < n && p.parentElement; i++) { p = p.parentElement; out.push(p); } return out; };
   const outside = (el) => around(el, 1).some((n) => OUTSIDE.test(cls(n))) || el.getAttribute("aria-hidden") === "true";
   function disabled(el) {
     const nodes = [el, ...el.querySelectorAll("button,[role=button],[aria-disabled]")].slice(0, 4);
     return nodes.some((n) => n.disabled || n.getAttribute("aria-disabled") === "true" || DISABLED.test(cls(n)))
-      || (el.parentElement && (el.parentElement.getAttribute("aria-disabled") === "true" || DISABLED.test(cls(el.parentElement))))
+      // 23.6.1: the state can sit on the cell around the clicked text (Trip.com: li.is-disable > div > span.day)
+      || around(el, 3).slice(1).some((p) => p.getAttribute("aria-disabled") === "true" || (DISABLED.test(cls(p)) && p.getBoundingClientRect().height < 120))
       || getComputedStyle(el).pointerEvents === "none";
   }
   function selected(el) {
@@ -138,6 +139,10 @@
         const day = dayNumber(c);
         if (!day || seen.has(c) || !visible(c)) continue;
         if ([...c.children].some((k) => dayNumber(k) === day && k.matches(CELL_SEL))) continue; // the inner element is the cell
+        // 23.6.1: a week row or the month's day grid starts with "1" too (Trip.com: ul > li > div > span.day); a cell
+        // holds one day only
+        const cr = c.getBoundingClientRect();
+        if (cr.height > 120 || cr.width > 160 || [...c.querySelectorAll(CELL_SEL)].some((k) => dayNumber(k) && dayNumber(k) !== day)) continue;
         if (outside(c)) continue;
         const d = iso(my.year, my.month, day);
         if (!d) continue;
@@ -321,6 +326,87 @@
 
   function optionText(o) { return clean(o.innerText || o.textContent, 200); }
 
+  // ---- 23.6.1: lists without roles or known class names (Trip.com, CSS-module sites) -----------------------------
+  // The visible text of an element, its text pieces joined by spaces ("New Delhi - All airports" + "India"), because
+  // innerText runs flex items together ("airportsIndia").
+  function rowText(el) {
+    if (!el) return "";
+    const parts = [];
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let t = w.nextNode(); t && parts.length < 40; t = w.nextNode()) {
+      const v = t.textContent.replace(/\s+/g, " ").trim();
+      if (v && t.parentElement && visible(t.parentElement)) parts.push(v);
+    }
+    return clean(parts.join(" "), 200);
+  }
+  const pointer = (n) => n && n.nodeType === 1 && getComputedStyle(n).cursor === "pointer";
+  /** The element a click on ``el`` really pressed: where the pointer cursor starts (the row, not its inner span). */
+  function pointerRoot(el) {
+    let n = el && (el.nodeType === 1 ? el : el.parentElement);
+    if (!n) return null;
+    const semantic = n.closest("button,a[href],[role=option],[role=menuitem],[role=button],[role=link],[role=tab],[role=checkbox]");
+    if (!pointer(n)) return semantic || (n.matches("li,[role=listitem],[onclick]") ? n : null); // not clickable: no row
+    for (let i = 0; i < 8 && n.parentElement && n.parentElement !== document.body && pointer(n.parentElement); i++) {
+      if (repeated(n) && rowText(n)) break; // one row of a list (the cursor is inherited from the list around it)
+      const r = n.parentElement.getBoundingClientRect();
+      if (r.width > 900 || r.height > 220) break; // a whole pop-up or panel with a pointer cursor
+      n = n.parentElement;
+    }
+    return semantic && n.contains(semantic) ? semantic : n;
+  }
+  const STATE_CLS = /(^|\s)(is-|has-)?(active|selected|hover|hovered|focus|focused|current|checked|highlight\w*|on)(\s|$)/gi;
+  const signature = (n) => `${n.tagName}.${cls(n).replace(STATE_CLS, " ").trim().split(/\s+/).sort().join(".")}`;
+  /** ``row`` is one of several look-alike siblings (a list), not a lone control. */
+  function repeated(row) {
+    if (!row || !row.parentElement) return false;
+    const sig = signature(row);
+    return [...row.parentElement.children].filter((k) => k !== row && visible(k) && signature(k) === sig).length >= 1;
+  }
+  /** A clicked element that can be a row of a list: small, with text, not a field, form, tab or a commit button. */
+  function rowOf(el) {
+    const r0 = pointerRoot(el);
+    if (!r0 || r0 === document.body || r0 === document.documentElement) return null;
+    if (r0.matches("input,select,textarea,[contenteditable=true],[role=tab],[role=checkbox],[role=radio],[role=switch],label")) return null;
+    if (r0.querySelector("input:not([type=hidden]),select,textarea")) return null;
+    const r = r0.getBoundingClientRect();
+    if (r.height > 160 || r.width > 900 || !rowText(r0)) return null;
+    return r0;
+  }
+  /** Rows a person can click near a field: what is drawn on screen below (or above) it, found by sampling points. */
+  function nearRows(field) {
+    if (!field || !visible(field)) return [];
+    const fr = field.getBoundingClientRect();
+    const out = new Set();
+    const vw = innerWidth, vh = innerHeight;
+    const xs = [];
+    for (let x = Math.max(2, fr.left + 8); x < Math.min(vw - 2, fr.left + Math.max(fr.width, 380)); x += 40) xs.push(x);
+    const probe = (x, y) => {
+      if (y < 1 || y > vh - 1) return;
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || hit === field || hit.contains(field)) return; // (a custom dropdown can hold its own list)
+      const row = rowOf(hit);
+      if (row && !row.contains(field) && layered(row)) out.add(row);
+    };
+    for (let y = fr.bottom + 6; y < Math.min(vh, fr.bottom + 640); y += 14) xs.forEach((x) => probe(x, y));
+    if (!out.size) for (let y = fr.top - 6; y > Math.max(0, fr.top - 420); y -= 14) xs.forEach((x) => probe(x, y));
+    return [...out];
+  }
+  /** Drawn on a layer above the page (a pop-up: absolute / fixed position), not page content that happens to be below. */
+  function layered(el) {
+    for (let n = el, i = 0; n && n !== document.body && i < 12; n = n.parentElement, i++) {
+      const p = getComputedStyle(n).position;
+      if (p === "absolute" || p === "fixed") return true;
+    }
+    return false;
+  }
+  const tokens = (s) => new Set(norm(s).split(" ").filter(Boolean));
+  function similar(a, b) {
+    const A = tokens(a), B = tokens(b);
+    if (!A.size || !B.size) return 0;
+    let n = 0; A.forEach((t) => { if (B.has(t)) n += 1; });
+    return n / (A.size + B.size - n);
+  }
+
   /** Mark the option of the open list that is ``want``: exact text, then first line, then unique prefix, then unique word match. */
   function findOption(want, field) {
     clear();
@@ -330,27 +416,111 @@
     const pools = root ? [root] : popups();
     let opts = [];
     for (const p of pools) opts = opts.concat(optionsOf(p));
+    // 23.6.1: lists with no role and no known class (generated CSS-module names): the rows drawn next to the field
+    if (field) for (const r of nearRows(field)) if (!opts.includes(r)) opts.push(r);
     opts = opts.filter((o) => !disabled(o));
-    const texts = opts.map((o) => optionText(o));
+    const texts = opts.map((o) => rowText(o) || optionText(o));
     if (!opts.length) return { status: "none", options: [] };
     const firstLine = (o) => norm(String(o.innerText || "").split("\n")[0]);
+    const full = (o) => [norm(optionText(o)), norm(rowText(o))];
     const tiers = [
-      (o) => norm(optionText(o)) === w,
+      (o) => full(o).includes(w),
       (o) => firstLine(o) === w,
       (o) => norm(o.getAttribute("aria-label")) === w || norm(o.getAttribute("data-value")) === w || norm(o.getAttribute("title")) === w,
       (o) => firstLine(o).startsWith(w + " ") || firstLine(o).startsWith(w),
       (o) => ` ${firstLine(o)} `.includes(` ${w} `),  // w is normalised: letters, digits and spaces only
+      (o) => similar(rowText(o) || optionText(o), want) >= 0.75,  // 23.6.1: same words, other punctuation / order
     ];
     for (let i = 0; i < tiers.length; i++) {
-      const hits = opts.filter(tiers[i]);
+      let hits = opts.filter(tiers[i]);
+      // the same row found twice (a list item and the clickable row inside it): keep the innermost
+      hits = hits.filter((h) => !hits.some((x) => x !== h && h.contains(x)));
       if (hits.length === 1 || (hits.length > 1 && i < 2)) {
         // exact text twice (e.g. a category heading and its item): the first selectable one
-        mark(hits[0].matches("[role=option],[role=menuitem],li") ? hits[0] : (hits[0].closest("[role=option],[role=menuitem],li") || hits[0]));
-        return { status: "found", text: optionText(hits[0]), tier: i + 1, count: opts.length };
+        const h = hits[0];
+        mark(h.matches("[role=option],[role=menuitem],li") ? h : (h.closest("[role=option],[role=menuitem]") || pointerRoot(h) || h));
+        return { status: "found", text: rowText(h) || optionText(h), tier: i + 1, count: opts.length };
       }
-      if (hits.length > 1) return { status: "ambiguous", options: hits.map(optionText).slice(0, 15), count: opts.length };
+      if (hits.length > 1) return { status: "ambiguous", options: hits.map((h) => rowText(h) || optionText(h)).slice(0, 15), count: opts.length };
     }
     return { status: "none", options: texts.slice(0, 15), count: opts.length };
+  }
+
+  // ---- 23.6.1: counters ("Children  [-] 1 [+]"): rooms, guests, passengers, quantities --------------------------
+  const MINUS = /(minus|reduce|decrease|decrement|subtract|\bsub\b|less|remove|fewer)/i;
+  const PLUS = /(plus|\badd\b|add_|add-|increase|increment|more)/i;
+  function stepControl(c) {
+    if (!visible(c)) return false;
+    const r = c.getBoundingClientRect();
+    if (r.width > 64 || r.height > 64 || r.width < 6 || r.height < 6) return false;
+    const t = (c.innerText || c.textContent || "").trim();
+    if (t.length > 1 && !/^(\+|-|−|–|＋|－)$/.test(t)) return false;
+    return c.matches("button,[role=button]") || pointer(c) || MINUS.test(cls(c)) || PLUS.test(cls(c));
+  }
+  const numberOf = (n) => { const t = n.tagName === "INPUT" ? n.value : (n.textContent || ""); return /^\s*\d{1,3}\s*$/.test(t) ? Number(t) : null; };
+  function counters() {
+    const out = [];
+    const nums = [...document.querySelectorAll("span,div,b,strong,p,em,label,input,output")]
+      .filter((n) => (n.tagName === "INPUT" || !n.children.length) && numberOf(n) !== null && visible(n));
+    for (const n of nums.slice(0, 200)) {
+      if (n.closest("[role=grid],[role=checkbox],td,[class*=calendar i]")) continue; // calendar days are not counters
+      let box = n.parentElement;
+      for (let i = 0; box && i < 3; i++, box = box.parentElement) {
+        const roots = [...new Set([...box.querySelectorAll("button,[role=button],span,i,a,div,svg")].filter((c) => c !== n && !c.contains(n) && stepControl(c)).map((c) => {
+          let p = c; while (p.parentElement && p.parentElement !== box && stepControl(p.parentElement)) p = p.parentElement; return p;
+        }))];
+        const before = roots.filter((r) => r.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING);
+        const after = roots.filter((r) => n.compareDocumentPosition(r) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (before.length && after.length) {
+          out.push({ num: n, box, minus: before[before.length - 1], plus: after[0] });
+          break;
+        }
+        if (roots.length > 2) break;
+      }
+    }
+    // each counter's label: the text of its row (the nearest ancestor that holds no other counter)
+    for (const c of out) {
+      let row = c.box, label = "", sub = "";
+      for (let i = 0; row && i < 4; i++, row = row.parentElement) {
+        if (out.some((o) => o !== c && row.contains(o.num))) break;
+        const bits = [];
+        const w = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+        for (let t = w.nextNode(); t; t = w.nextNode()) {
+          const v = t.textContent.replace(/\s+/g, " ").trim();
+          if (v && !c.box.contains(t.parentElement) && !/^[\d\s+\-−–]+$/.test(v) && visible(t.parentElement)) bits.push(v);
+        }
+        if (bits.length) { label = bits[0]; sub = bits[1] || ""; }
+        if (label && i >= 1) break;
+      }
+      if (!label) { const al = `${c.minus.getAttribute("aria-label") || ""} ${c.plus.getAttribute("aria-label") || ""}`; label = clean(al.replace(/\b(add|remove|increase|decrease|plus|minus|one|number of)\b/gi, ""), 60); }
+      c.label = clean(label, 60); c.sub = clean(sub, 60);
+    }
+    return out;
+  }
+  function findCounter(label) {
+    const all = counters();
+    const w = norm(label);
+    const hit = all.filter((c) => norm(c.label) === w) .concat(all.filter((c) => norm(c.label) !== w && (norm(c.label).startsWith(w) || w.startsWith(norm(c.label)) && norm(c.label))));
+    return { hit: hit[0] || null, labels: all.map((c) => c.label + (c.sub ? ` (${c.sub})` : "")) };
+  }
+  /** Read (dir 0) or mark the - (dir -1) / + (dir 1) control of the counter named ``label``. */
+  function counter(label, dir) {
+    clear();
+    const { hit, labels } = findCounter(label);
+    if (!hit) return { status: "none", labels };
+    const res = { status: "found", label: hit.label, value: numberOf(hit.num), minusDisabled: disabled(hit.minus) || !!hit.minus.disabled,
+      plusDisabled: disabled(hit.plus) || !!hit.plus.disabled };
+    if (dir > 0) mark(hit.plus); else if (dir < 0) mark(hit.minus);
+    return res;
+  }
+  /** For the recorder: the click on ``el`` pressed the + or - of a counter: which one, its label and value. */
+  function stepperOf(el) {
+    const all = counters();
+    for (const c of all) {
+      if (c.plus === el || c.plus.contains(el)) return { label: c.label, sub: c.sub, dir: 1, before: numberOf(c.num), num: c.num, control: c.plus };
+      if (c.minus === el || c.minus.contains(el)) return { label: c.label, sub: c.sub, dir: -1, before: numberOf(c.num), num: c.num, control: c.minus };
+    }
+    return null;
   }
 
   // ---- classification -------------------------------------------------------------------------------------------
@@ -442,9 +612,12 @@
   }
 
   window.__sgComp = {
-    version: "23.6.0", parseDate, monthYear, classify, isContainer, findDay, daySelected, showsDate, dateFields, markDateField,
+    version: "23.6.1", parseDate, monthYear, classify, isContainer, findDay, daySelected, showsDate, dateFields, markDateField,
     findOption, popups: () => popups().map((p) => ({ options: optionsOf(p).slice(0, 30).map(optionText) })), overlays, busy,
     fieldText, shownNear, settle, clear,
+    // 23.6.1: lists without roles, counters (+ / -)
+    rowText, rowOf, pointerRoot, repeated, nearRows, counter, counters: () => counters().map((c) => ({ label: c.label, sub: c.sub, value: numberOf(c.num) })),
+    stepperOf, numberOf,
     // for the recorder: the date of a clicked calendar cell (with its panel), the option a click chose
     cellDate(el) {
       if (!el) return "";
@@ -453,7 +626,8 @@
         if (d) { const r = n.getBoundingClientRect(); if (r.width < 220 && r.height < 160) return d; }
       }
       const cells = dayCells();
-      const hit = cells.find((c) => c.el === el || c.el.contains(el));
+      const hit = cells.find((c) => c.el === el || c.el.contains(el))
+        || (el.getBoundingClientRect().height < 120 && cells.find((c) => el.contains(c.el))); // 23.6.1: the li around span.day
       return hit ? hit.iso : "";
     },
     optionOf(el) {

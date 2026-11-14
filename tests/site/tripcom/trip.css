@@ -1,0 +1,69 @@
+body{font-family:Arial,sans-serif;margin:0;background:#fff}
+.mc-srh-box{padding:16px;max-width:1180px}
+.mc-srh-box__tabs{list-style:none;margin:0 0 8px;padding:0;display:flex;gap:16px}
+.mc-srh-box__tab-item{cursor:pointer;padding:6px 10px}
+.mc-srh-box__tab-item.is-active{border-bottom:3px solid #3264ff}
+.DVsbb9IYpr8wqkJiqZ08,.nh_sp-row{display:flex;gap:10px;align-items:stretch;border:2px solid #ffc300;border-radius:8px;padding:8px;position:relative}
+.WTchTLTa3EVyF3wCp_RK{width:300px}
+.Lv9sExYNgio1sOQtYF40,.fuzzy-input input,.input-wrapper input{border:0;font-size:15px;width:100%;outline:none}
+.xYMCg_QqPorbG5WNg6Ms{display:flex;gap:8px;position:relative}
+.ziv0jEjaxcgWq6iiTrEQ{width:140px;cursor:pointer}
+.ziv0jEjaxcgWq6iiTrEQ input{cursor:pointer;border:0;width:100%}
+.hBD91TxW6Uv2IEd2ZK_X{cursor:pointer;width:220px;position:relative}
+.tripui-online-btn{background:#3264ff;color:#fff;border:0;border-radius:6px;padding:10px 22px;cursor:pointer}
+.nh_sp-radio{margin-right:14px;cursor:pointer}.nh_sp-radio.is-active{font-weight:bold}
+.fuzzy-input{width:190px;position:relative}.fuzzy-input__label{font-size:12px;color:#666}
+.nh_sp-switch{width:20px;height:20px;cursor:pointer;display:inline-block;background:#ddd;border-radius:50%;align-self:center}
+.nh_sp-date{display:flex;gap:8px}.input-wrapper{width:130px;cursor:pointer}.input-wrapper input{cursor:pointer}
+.nh_sp-pax{width:200px;cursor:pointer}
+.nh_sp-btn2{background:#3264ff;color:#fff;padding:12px 20px;border-radius:6px;cursor:pointer;align-self:center}
+/* hotel calendar (Trip.com c-calendar) */
+.xS7S6cfkov8iToE5epqQ{position:absolute;left:0;top:100%;z-index:40}
+.c-calendar{background:#fff;border:1px solid #ccc;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:12px;width:660px}
+.c-calendar.is-hide{display:none}
+.c-calendar__body{display:flex;gap:24px;position:relative}
+.c-calendar-month{width:300px}
+.c-calendar-month__title{text-align:center;font-weight:bold;margin-bottom:6px}
+.c-calendar-month__week-head,.c-calendar-month__week{list-style:none;margin:0;padding:0;display:flex}
+.c-calendar-month__week-head li,.c-calendar-month__week li{width:40px;height:34px;text-align:center;line-height:34px}
+.c-calendar-month__week li[role=button]{cursor:pointer}
+.c-calendar-month__week li.is-disable{color:#bbb;cursor:default}
+.c-calendar-month__week li.is-selected{background:#3264ff;color:#fff;border-radius:4px}
+.c-calendar-icon-prev,.c-calendar-icon-next{position:absolute;top:0;width:20px;height:20px;cursor:pointer;background:#e8e8e8;border-radius:50%}
+.c-calendar-icon-prev{left:0}.c-calendar-icon-next{right:0}
+.c-calendar-icon-prev.is-disable,.c-calendar-icon-next.is-disable{opacity:.3;cursor:default}
+/* flight calendar */
+.k3FvMp9dQx{position:absolute;background:#fff;border:1px solid #ccc;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:12px;z-index:45;display:flex;gap:20px}
+.Wm2s9Lr{width:290px}.Wm2s9Lr-h{text-align:center;font-weight:bold;margin-bottom:6px}
+.Gq81zZp{display:grid;grid-template-columns:repeat(7,40px);gap:2px}
+.Gq81zZp>div{height:44px;text-align:center;cursor:pointer;font-size:14px}
+.Gq81zZp>div.dDis{color:#bbb;cursor:default}
+.Gq81zZp>div .pr{font-size:10px;color:#0a8}
+.nvBtn{width:28px;height:28px;cursor:pointer;background:#eee;border-radius:50%;display:inline-block}
+/* city suggestions (generated class names, like Trip.com's CSS modules) */
+.m-flight-poi-search-B{position:absolute;background:#fff;border:1px solid #ccc;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:50;width:380px;max-height:420px;overflow:auto}
+.Qp7cX2h{position:absolute;background:#fff;border:1px solid #ccc;z-index:50;width:380px;padding:8px}
+.Qp7cX2h .h3x{font-size:12px;color:#888;margin:4px 0}.Qp7cX2h .rw9{padding:4px;cursor:pointer;display:inline-block;width:45%}
+#m-flight-poi-list{list-style:none;margin:0;padding:0}
+.poi-result__title{padding:8px 10px;cursor:pointer;display:flex;justify-content:space-between}
+.poi-result__title:hover,.poi-result__airport:hover{background:#eef3ff}
+.poi-result__country{color:#888;font-size:12px}
+.poi-result__airport{list-style:none;padding:6px 10px 6px 28px;cursor:pointer;font-size:13px}
+.poi-result__airport .code{float:right;color:#888}
+.Dx7hN{position:absolute;background:#fff;border:1px solid #ccc;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:50;width:380px}
+.Dx7hN .r0w{padding:8px 10px;cursor:pointer}.Dx7hN .r0w .s{color:#888;font-size:12px}
+/* rooms & guests / passengers */
+.Pz1oQw{position:absolute;background:#fff;border:1px solid #ccc;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:60;width:330px;padding:12px}
+.LmN0rT{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
+.LmN0rT .t1{font-size:14px}.LmN0rT .t2{font-size:12px;color:#888}
+.Vb7kQe{display:flex;align-items:center;gap:10px}
+.Hs5Ty{width:28px;height:28px;border:1px solid #3264ff;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.Hs5Ty.Hs5Ty--dis{border-color:#ccc;cursor:not-allowed;opacity:.4}
+.Hs5Ty i{width:12px;height:12px;display:inline-block;background:#3264ff}
+.Nq3Ws{min-width:16px;text-align:center}
+.Ag9Ks{border:1px solid #aaa;padding:6px;cursor:pointer;margin:6px 0;position:relative}
+.Ag9Ks-l{position:absolute;left:0;top:100%;background:#fff;border:1px solid #aaa;max-height:200px;overflow:auto;width:100%;z-index:70}
+.Ag9Ks-l div{padding:4px 8px;cursor:pointer}
+.Bt4Dn{margin-top:10px;background:#3264ff;color:#fff;border:0;padding:8px 16px;border-radius:4px;cursor:pointer}
+.fbtn{width:30px;height:30px;border:0;background:#f2f4f8;border-radius:50%;cursor:pointer}
+.fbtn[disabled]{opacity:.35;cursor:not-allowed}

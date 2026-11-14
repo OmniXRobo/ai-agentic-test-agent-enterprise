@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Offline installation check of the 23.6.0 cumulative patch, run with networking disabled (a new network namespace
+# Offline installation check of the 23.6.1 cumulative patch, run with networking disabled (a new network namespace
 # with only loopback) and as an ordinary user (no root, no administrator). Linux stand-in for a Windows 11 PC: the
 # PowerShell wrappers are not run here, the Python installer they call is.
 # Usage: packaging/cumulative-patch/test_offline_install.sh <folder with the zip> <work folder>
 set -euo pipefail
 ZIPS=$(cd "$1" && pwd); WORK=$2; REPO=$(cd "$(dirname "$0")/../.." && pwd)
-P=SkyGuard_Adaptive_Browser_Learning_BugFix_Final_Patch
+P=SkyGuard_Guided_Playback_Components_Fix_Patch_23.6.1
 rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
 LO_UP="import fcntl, socket, struct; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); fcntl.ioctl(s.fileno(), 0x8914, struct.pack('16sH14x', b'lo', 0x49))"
 offline() { unshare -rn bash -c "python3 -c \"$LO_UP\" && $*"; }
@@ -21,11 +21,11 @@ say "Extract and check every file against SHA256_CHECKSUM.txt"
 unzip -q "$ZIPS/$P.zip"
 (cd "$P" && sha256sum -c --quiet SHA256_CHECKSUM.txt && echo "$P: $(wc -l < SHA256_CHECKSUM.txt) files OK")
 
-for V in 23.3.35:6d448fa 23.4.0:53e80093fe99272f27dc424392d1fd3d746b3c7c 23.5.0:900e4e0; do
+for V in 23.3.35:6d448fa 23.4.0:53e80093fe99272f27dc424392d1fd3d746b3c7c 23.5.0:900e4e0 23.6.0:c229f6b; do
   VER=${V%%:*}; COMMIT=${V#*:}; I="$WORK/inst-$VER"
   say "SkyGuard QA $VER installation (git archive of the release commit) with a database"
   mkdir -p "$I/app" "$I/data"
-  git -C "$REPO" archive "$COMMIT" qa_platform web $( [ "$VER" = "23.5.0" ] && echo skyguard_agent ) | tar -x -C "$I/app"
+  git -C "$REPO" archive "$COMMIT" qa_platform web $( [ "$VER" = "23.5.0" ] || [ "$VER" = "23.6.0" ] && echo skyguard_agent ) | tar -x -C "$I/app"
   grep __version__ "$I/app/qa_platform/__init__.py"
   (cd "$I/app" && QA_HOME="$I/data" python3 -c "import sys; sys.path.insert(0, '.'); from qa_platform.config import Paths; from qa_platform.storage.db import Database; d = Database(Paths().ensure().db_file); print('schema', d.query_one('SELECT MAX(version) AS v FROM schema_version')['v']); d.close()")
   say "$VER: apply (offline)"
