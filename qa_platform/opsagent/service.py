@@ -188,6 +188,47 @@ class OpsAgentService:
             job.stop.set()
         return self.agent.learning.cancel_guided(sid, by=by)
 
+    # ---- 23.7.0: learn while the person browses (passive learning in a SkyGuard browser) ---------------------------
+
+    def start_watch(self, app_id: str, by: str | None) -> dict[str, Any]:
+        """Open the application in a SkyGuard browser and learn from whatever the person does there, until they
+        close the window or press Stop. The agent never clicks or types in this browser."""
+        app = self.agent.kb.application(app_id)
+        session = self.agent.journal.new_session(app["id"], interface="skyguard", by=by)
+        sid = session["id"]
+
+        def body(job: _BrowserJob) -> None:
+            drv = job.driver
+            drv.perform({"type": "navigate", "url": app["base_url"]})
+
+            def record(events: list[dict[str, Any]], snap: dict[str, Any] | None) -> None:
+                self.agent.observe(app["id"], sid, events, snap, by=by, interface="skyguard", use_ai=False)
+
+            try:
+                job.result = drv.watch(record, stop=job.stop)
+            finally:
+                self.agent.observe(app["id"], sid, [], None, by=by, interface="skyguard", final=True,
+                                   use_ai=bool(self.config().get("use_ai")))
+
+        self._start("watch", sid, body)
+        return session
+
+    def stop_watch(self, sid: str, by: str | None) -> dict[str, Any]:
+        job = self.jobs.get(sid)
+        if job:
+            job.stop.set()
+            if job.thread:
+                job.thread.join(timeout=30)
+        else:
+            self.agent.journal.end_session(sid, by=by)
+        row = self.agent.store.query_one("SELECT application_id FROM learning_sessions WHERE id = ?", (sid,))
+        if not row:
+            raise AgentError("LEARNING_NOT_FOUND", "That learning session does not exist.", 404)
+        return self.agent.understanding_view(row["application_id"])
+
+    def watching(self) -> list[str]:
+        return [ref for ref, job in self.jobs.items() if job.kind == "watch"]
+
     def close(self) -> None:
         for job in list(self.jobs.values()):
             job.stop.set()

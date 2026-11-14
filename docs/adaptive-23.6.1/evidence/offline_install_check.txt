@@ -1,0 +1,262 @@
+# Offline installation check of the 23.6.1 cumulative patch (packaging/cumulative-patch/test_offline_install.sh).
+# Run on 2026-11-14T04:47Z on the zip built just before this file was added to the package (zip sha256 3852ecdac89145443faed0b395c90933dc336491a7724882c3e2752c91cb8f7a);
+# the shipped zip differs only by this evidence file.
+
+
+== Network check inside the namespace
+no internet (as intended)
+
+== Zip checksum
+SkyGuard_Guided_Playback_Components_Fix_Patch_23.6.1.zip: OK
+
+== Extract and check every file against SHA256_CHECKSUM.txt
+SkyGuard_Guided_Playback_Components_Fix_Patch_23.6.1: 126 files OK
+
+== SkyGuard QA 23.3.35 installation (git archive of the release commit) with a database
+__version__ = "23.3.35"
+schema 16
+
+== 23.3.35: apply (offline)
+
+== SkyGuard QA 23.6.1: guided playback of suggestion lists, calendars and counters (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1)
+Application folder : <work>/inst-23.3.35/app
+Data folder        : <work>/inst-23.3.35/data  (kept)
+Installed version  : 23.3.35 -> 23.6.1
+
+== Checking the patch files (SHA-256)
+97 files verified.
+
+== Checking disk space, permissions and that the application is stopped
+Free space: 30252 MB, needed: 304 MB
+
+== Backing up
+Backup: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.6.1-20261114-044625  (48 files replaced, 49 new, database copied)
+
+== Copying the new files
+97 files copied.
+
+== Migrating the database
+Main database schema version 18 (expected 18).
+Operations Agent knowledge database schema version 1 (<work>/inst-23.3.35/data/opsagent/knowledge.sqlite3).
+
+== Verifying
+  Version file                       PASS  23.6.1
+  Application loads                  PASS  23.6.1
+  Operations Agent loads             PASS  agent core 1.0.0
+  Component engine (23.6.1)          PASS  ok
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  No data lost                       PASS  every table kept its rows
+  Patch files present                PASS  all
+
+== Result
+Patched 23.3.35 -> 23.6.1. Backup for rollback: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.6.1-20261114-044625
+
+== 23.3.35: verify (offline)
+
+== Verifying <work>/inst-23.3.35/app
+  Version file                       PASS  23.6.1
+  Application loads                  PASS  23.6.1
+  Operations Agent loads             PASS  agent core 1.0.0
+  Component engine (23.6.1)          PASS  ok
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  Patch files present                PASS  all
+
+== SkyGuard QA 23.4.0 installation (git archive of the release commit) with a database
+__version__ = "23.4.0"
+schema 18
+
+== 23.4.0: apply (offline)
+
+== SkyGuard QA 23.6.1: guided playback of suggestion lists, calendars and counters (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1)
+Application folder : <work>/inst-23.4.0/app
+Data folder        : <work>/inst-23.4.0/data  (kept)
+Installed version  : 23.4.0 -> 23.6.1
+
+== Checking the patch files (SHA-256)
+97 files verified.
+
+== Checking disk space, permissions and that the application is stopped
+Free space: 30239 MB, needed: 304 MB
+
+== Backing up
+Backup: <work>/inst-23.4.0/app/patch-backups/23.4.0-to-23.6.1-20261114-044631  (68 files replaced, 29 new, database copied)
+
+== Copying the new files
+97 files copied.
+
+== Migrating the database
+Main database schema version 18 (expected 18).
+Operations Agent knowledge database schema version 1 (<work>/inst-23.4.0/data/opsagent/knowledge.sqlite3).
+
+== Verifying
+  Version file                       PASS  23.6.1
+  Application loads                  PASS  23.6.1
+  Operations Agent loads             PASS  agent core 1.0.0
+  Component engine (23.6.1)          PASS  ok
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  No data lost                       PASS  every table kept its rows
+  Patch files present                PASS  all
+
+== Result
+Patched 23.4.0 -> 23.6.1. Backup for rollback: <work>/inst-23.4.0/app/patch-backups/23.4.0-to-23.6.1-20261114-044631
+
+== 23.4.0: verify (offline)
+
+== Verifying <work>/inst-23.4.0/app
+  Version file                       PASS  23.6.1
+  Application loads                  PASS  23.6.1
+  Operations Agent loads             PASS  agent core 1.0.0
+  Component engine (23.6.1)          PASS  ok
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  Patch files present                PASS  all
+
+== SkyGuard QA 23.5.0 installation (git archive of the release commit) with a database
+__version__ = "23.5.0"
+schema 18
+
+== 23.5.0: apply (offline)
+
+== SkyGuard QA 23.6.1: guided playback of suggestion lists, calendars and counters (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1)
+Application folder : <work>/inst-23.5.0/app
+Data folder        : <work>/inst-23.5.0/data  (kept)
+Installed version  : 23.5.0 -> 23.6.1
+
+== Checking the patch files (SHA-256)
+97 files verified.
+
+== Checking disk space, permissions and that the application is stopped
+Free space: 30225 MB, needed: 305 MB
+
+== Backing up
+Backup: <work>/inst-23.5.0/app/patch-backups/23.5.0-to-23.6.1-20261114-044636  (94 files replaced, 3 new, database copied)
+
+== Copying the new files
+97 files copied.
+
+== Migrating the database
+Main database schema version 18 (expected 18).
+Operations Agent knowledge database schema version 1 (<work>/inst-23.5.0/data/opsagent/knowledge.sqlite3).
+
+== Verifying
+  Version file                       PASS  23.6.1
+  Application loads                  PASS  23.6.1
+  Operations Agent loads             PASS  agent core 1.0.0
+  Component engine (23.6.1)          PASS  ok
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  No data lost                       PASS  every table kept its rows
+  Patch files present                PASS  all
+
+== Result
+Patched 23.5.0 -> 23.6.1. Backup for rollback: <work>/inst-23.5.0/app/patch-backups/23.5.0-to-23.6.1-20261114-044636
+
+== 23.5.0: verify (offline)
+
+== Verifying <work>/inst-23.5.0/app
+  Version file                       PASS  23.6.1
+  Application loads                  PASS  23.6.1
+  Operations Agent loads             PASS  agent core 1.0.0
+  Component engine (23.6.1)          PASS  ok
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  Patch files present                PASS  all
+
+== SkyGuard QA 23.6.0 installation (git archive of the release commit) with a database
+__version__ = "23.6.0"
+schema 18
+
+== 23.6.0: apply (offline)
+
+== SkyGuard QA 23.6.1: guided playback of suggestion lists, calendars and counters (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1)
+Application folder : <work>/inst-23.6.0/app
+Data folder        : <work>/inst-23.6.0/data  (kept)
+Installed version  : 23.6.0 -> 23.6.1
+
+== Checking the patch files (SHA-256)
+97 files verified.
+
+== Checking disk space, permissions and that the application is stopped
+Free space: 30211 MB, needed: 305 MB
+
+== Backing up
+Backup: <work>/inst-23.6.0/app/patch-backups/23.6.0-to-23.6.1-20261114-044642  (97 files replaced, 0 new, database copied)
+
+== Copying the new files
+97 files copied.
+
+== Migrating the database
+Main database schema version 18 (expected 18).
+Operations Agent knowledge database schema version 1 (<work>/inst-23.6.0/data/opsagent/knowledge.sqlite3).
+
+== Verifying
+  Version file                       PASS  23.6.1
+  Application loads                  PASS  23.6.1
+  Operations Agent loads             PASS  agent core 1.0.0
+  Component engine (23.6.1)          PASS  ok
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  No data lost                       PASS  every table kept its rows
+  Patch files present                PASS  all
+
+== Result
+Patched 23.6.0 -> 23.6.1. Backup for rollback: <work>/inst-23.6.0/app/patch-backups/23.6.0-to-23.6.1-20261114-044642
+
+== 23.6.0: verify (offline)
+
+== Verifying <work>/inst-23.6.0/app
+  Version file                       PASS  23.6.1
+  Application loads                  PASS  23.6.1
+  Operations Agent loads             PASS  agent core 1.0.0
+  Component engine (23.6.1)          PASS  ok
+  Knowledge database                 PASS  schema 1, integrity ok, tables present
+  Database migrations                PASS  schema version 18 (expected 18)
+  Database integrity                 PASS  ok
+  Comparison tables                  PASS  present
+  Login sign-in method column        PASS  present
+  Patch files present                PASS  all
+
+== Start the patched SkyGuard (offline) and call it
+GET /api/health -> {"ok":true,"version":"23.6.1","time":"2026-11-14T04:46:50.053+00:00","data_root":"<work>/inst-23.3.35/data"}
+GET / (dashboard) -> HTTP 200
+GET /api/automation/scripts/FWS-B211AC4E14 -> {"ok":false,"error_code":"SCRIPT_ID_WRONG_PAGE","message":"FWS-B211AC4E14 is an AI-Driven framework script. Open it from AI-Driven Automation > Script Inventory.","details":{"script_id":"FWS-B211AC4E14","open":"#/ai-automation?script=FWS-B211AC4E14"},"agent":null,"run_id":null}
+
+== Rollback to 23.3.35, then apply again (offline)
+
+== Rolling back 23.6.1 -> 23.3.35 from <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.6.1-20261114-044625
+Databases kept as they are (23.3.35 reads them as they are; nothing is lost).
+Version now 23.3.35.
+__version__ = "23.3.35"
+== Result
+Patched 23.3.35 -> 23.6.1. Backup for rollback: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.6.1-20261114-044650
+
+== No administrator rights: a fresh 23.4.0 installation owned by an ordinary user (nobody), patched as that user
+nobody
+== Result
+Patched 23.4.0 -> 23.6.1. Backup for rollback: <work>/inst-user/app/patch-backups/23.4.0-to-23.6.1-20261114-044653
+
+== DONE

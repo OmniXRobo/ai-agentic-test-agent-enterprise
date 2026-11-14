@@ -8,7 +8,7 @@ import { startRecording } from "../wav-recorder.js";
 import { looksSecret, SECRET_WARNING } from "../secret-check.js";
 
 const TABS = [["chat", "Chat & Voice"], ["apps", "Applications & Accounts"], ["learn", "Learning"],
-  ["knowledge", "Knowledge"], ["runs", "Executions"], ["audit", "Audit & Security"], ["config", "Agent Configuration"]];
+  ["understand", "Understanding"], ["knowledge", "Knowledge"], ["runs", "Executions"], ["audit", "Audit & Security"], ["config", "Agent Configuration"]];
 const STATES = { discovered: "Discovered", ai_suggested: "AI Suggested", awaiting_approval: "Awaiting Approval", approved: "Approved", rejected: "Rejected", superseded: "Superseded", needs_revalidation: "Needs Revalidation" };
 const ITEM_PILL = { confirmed_success: "PASS", confirmed_failure: "FAIL", skipped: "WARN", pending: "INFO", unknown: "WARN", running: "INFO" };
 const ITEM_TEXT = { confirmed_success: "Confirmed success", confirmed_failure: "Confirmed failure", skipped: "Skipped", pending: "Pending", unknown: "Unknown / unverified", running: "Running", manual_required: "Manual intervention required" };
@@ -54,8 +54,16 @@ async function show(tab) {
   state.view.querySelectorAll("[data-tab]").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab));
   const body = state.view.querySelector("#opsBody");
   try {
-    await ({ chat: chatTab, apps: appsTab, learn: learnTab, knowledge: knowledgeTab, runs: runsTab, audit: auditTab, config: configTab })[tab](body);
-  } catch (err) { body.innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`; }
+    await ({ chat: chatTab, apps: appsTab, learn: learnTab, understand: understandTab, knowledge: knowledgeTab, runs: runsTab, audit: auditTab, config: configTab })[tab](body);
+  } catch (err) {
+    // 23.7.1: a readable card with a retry, never a bare error pill
+    const label = (TABS.find(([k]) => k === tab) || [tab, tab])[1];
+    body.innerHTML = `<div class="card" style="margin-top:8px"><h3>${esc(label)} could not be loaded</h3>
+      <p class="muted">${esc(err.message || "The server did not answer.")} Your data is not affected. Try again; if it keeps happening, the details are in the server log (logs folder of the installation).</p>
+      <button class="btn primary" id="opsRetry">Try again</button></div>`;
+    const retry = body.querySelector("#opsRetry");
+    if (retry) retry.addEventListener("click", () => show(tab));
+  }
   renderStatus();
 }
 
@@ -127,7 +135,7 @@ async function chatTab(body) {
   if (state.conversation) {
     const { messages } = await api(`/api/ops/chat/${encodeURIComponent(state.conversation)}`);
     messages.forEach((m) => addMsg(log, m.speaker, m.text, m.data));
-  } else addMsg(log, "agent", "Hello. I learn your applications and operate them through their normal screens. Say 'help' for examples.");
+  } else addMsg(log, "agent", "Hello. I learn your applications by watching you use them (Learning > Learn while I browse), then answer questions about them and operate them through their normal screens. Ask 'what have you learned?', 'how do I create a trip?', 'who approves trips?' or say 'help'.");
   const form = body.querySelector("#chatForm"), text = body.querySelector("#chatText");
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -136,6 +144,7 @@ async function chatTab(body) {
     if (looksSecret(t)) { addMsg(log, "agent", SECRET_WARNING); text.value = ""; return; }
     text.value = "";
     addMsg(log, "user", t);
+    state.lastText = t;
     try {
       const out = await api("/api/ops/chat", { method: "POST", body: { text: t, conversation: state.conversation, app_id: state.app, source: form.dataset.voice ? "voice" : "typed" } });
       delete form.dataset.voice;
@@ -191,6 +200,25 @@ function handleReply(log, reply) {
     const b = document.createElement("button"); b.className = "btn"; b.textContent = "Open the secure credential form";
     b.addEventListener("click", () => show("apps")); div.appendChild(b);
   }
+  if (reply.type === "needs_approval" && reply.entry_id) {
+    // 23.7.0: a task learned by watching needs one approval before the agent may perform it
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = `<button class="btn primary">Approve and run</button> <button class="btn">Review it first</button>`;
+    const [approve, review] = row.querySelectorAll("button");
+    approve.addEventListener("click", async () => {
+      approve.disabled = true;
+      try {
+        await api(`/api/ops/knowledge/${reply.entry_id}/approve`, { method: "POST", body: { note: "approved from chat" } });
+        const text = state.lastText;
+        addMsg(log, "agent", `Approved '${reply.workflow}'. Preparing your request again…`);
+        const out = await api("/api/ops/chat", { method: "POST", body: { text, conversation: state.conversation, app_id: state.app } });
+        handleReply(log, out.reply);
+      } catch (err) { toast(err.message, "error"); approve.disabled = false; }
+    });
+    review.addEventListener("click", () => { state.kKind = "workflow"; show("knowledge"); });
+    div.appendChild(row);
+  }
+  if (reply.type === "suggest_watch") { const b = document.createElement("button"); b.className = "btn primary"; b.textContent = "Learn while I browse"; b.addEventListener("click", () => startWatch()); div.appendChild(b); }
   if (reply.type === "suggest_discovery") { const b = document.createElement("button"); b.className = "btn"; b.textContent = "Go to Learning"; b.addEventListener("click", () => show("learn")); div.appendChild(b); }
   if (reply.type === "suggest_guided") { const b = document.createElement("button"); b.className = "btn"; b.textContent = "Start guided learning"; b.addEventListener("click", () => { state.guidedTitle = reply.title; show("learn"); }); div.appendChild(b); }
 }
@@ -288,8 +316,14 @@ async function learnTab(body) {
   const accounts = state.app ? (await api(`/api/ops/accounts?app_id=${encodeURIComponent(state.app)}`)).accounts : [];
   const { sessions } = state.app ? await api(`/api/ops/learning?app_id=${encodeURIComponent(state.app)}`) : { sessions: [] };
   const accOpts = `<option value="">No sign-in (public pages only)</option>` + accounts.map((a) => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join("");
+  const watching = (await api("/api/ops/watch")).sessions || [];
   body.innerHTML = `
     <div class="row">${appPicker()}</div>
+    <div class="card" style="margin-top:8px"><h3>Learn while I browse (recommended)</h3>
+      <p class="muted">A browser opens on the application. Just use it as you normally do: sign in, open screens, create, approve, search. You do not need to name anything or explain. The agent watches what you do and what the application shows, and works out the screens, tasks (flows), statuses, business rules and roles itself; see them in <b>Understanding</b>. Passwords and one-time codes are never captured. The agent never clicks or types in this browser. What you submit is real: use test data.</p>
+      <div class="row"><button class="btn primary" id="watchBtn"${state.app ? "" : " disabled"}>Learn while I browse</button>
+      ${watching.map((sid) => `<button class="btn" data-stopwatch="${esc(sid)}">Stop learning (${esc(sid)})</button>`).join(" ")}</div>
+      <p class="muted">Using Chrome or Edge with the SkyGuard extension? Turn on <i>Learn automatically while I browse</i> in its Options; it learns from your normal tabs the same way.</p></div>
     <div class="grid two" style="margin-top:8px">
       <form class="card settings" id="discForm"><h3>Automatic discovery (read-only)</h3>
         <p class="muted">Signs in normally (pauses for MFA / one-time codes), then only opens links inside the application and inspects each screen: menus, forms, fields, dropdowns, buttons, tables, pagination and messages. It never clicks buttons or submits forms.</p>
@@ -303,10 +337,16 @@ async function learnTab(body) {
         <button class="btn primary">Start guided learning</button></form>
     </div>
     <div class="card" style="margin-top:12px"><h3>Learning sessions</h3>
-      ${table(["Started", "Workflow", "Events", "Status", ""], sessions.map((s) => `<tr><td>${esc(dateTimeOf(s.created_at))}</td><td>${esc(s.title || "")}</td><td>${s.events}</td><td>${esc(s.status)}</td>
-        <td>${s.status === "recording" ? `<button class="btn primary" data-finish="${esc(s.id)}">Finish & build workflow</button> <button class="btn" data-cancel="${esc(s.id)}">Cancel</button>` : ""}</td></tr>`))}
+      ${table(["Started", "Workflow", "Events", "Status", ""], sessions.map((s) => `<tr><td>${esc(dateTimeOf(s.created_at))}</td><td>${esc(s.title || "")}${s.mode === "watch" ? " (watching)" : ""}</td><td>${s.events}</td><td>${esc(s.status)}</td>
+        <td>${s.status === "recording" && s.mode === "guided" ? `<button class="btn primary" data-finish="${esc(s.id)}">Finish & build workflow</button> <button class="btn" data-cancel="${esc(s.id)}">Cancel</button>` : ""}</td></tr>`))}
     </div>`;
   bindPicker(body);
+  body.querySelector("#watchBtn")?.addEventListener("click", () => startWatch());
+  body.querySelectorAll("[data-stopwatch]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try { await api(`/api/ops/watch/${encodeURIComponent(b.dataset.stopwatch)}/stop`, { method: "POST" }); toast("Learning stopped. Here is what I understood.", "success"); show("understand"); }
+    catch (err) { toast(err.message, "error"); b.disabled = false; }
+  }));
   body.querySelector("#discForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
@@ -331,6 +371,53 @@ async function learnTab(body) {
   }));
 }
 
+async function startWatch() {
+  if (!state.app) { toast("Register an application first.", "error"); return; }
+  try {
+    await api("/api/ops/watch", { method: "POST", body: { application_id: state.app } });
+    toast("A browser opened. Use the application normally; close the window or press Stop when you are done.", "success");
+    show("learn");
+  } catch (err) { toast(err.message, "error"); }
+}
+
+// ---- understanding (23.7.0) -----------------------------------------------------------------------------------------
+async function understandTab(body) {
+  if (!state.app) { body.innerHTML = '<p class="muted">Register an application first.</p>'; return; }
+  const v = await api(`/api/ops/understanding?app_id=${encodeURIComponent(state.app)}`);
+  const m = v.model;
+  const j = v.journal || {};
+  const head = `<div class="row" style="gap:8px;flex-wrap:wrap">${appPicker()}<span class="spacer"></span>
+    <span class="muted">${j.pages || 0} pages and ${j.events || 0} actions observed in ${j.sessions || 0} session(s)${v.pending ? `, ${v.pending} not yet analysed` : ""}</span>
+    <button class="btn" id="uDigest">Analyse now</button><button class="btn" id="uClear">Forget observations (admin)</button></div>`;
+  if (!m) {
+    body.innerHTML = head + `<div class="card" style="margin-top:8px"><p class="muted">Nothing understood yet. Go to Learning and press <b>Learn while I browse</b>, then use the application normally.</p></div>`;
+  } else {
+    const flows = (m.flows || []).map((f) => `<tr><td><b>${esc(f.title)}</b>${f.purpose ? `<br><span class="muted">${esc(f.purpose)}</span>` : ""}</td><td>${esc(f.screen_name || "")}</td>
+      <td>${(f.parameters || []).map((p) => esc(p.field) + (p.optional ? " (optional)" : "")).join(", ")}</td><td>${esc((f.roles || []).join(", "))}</td>
+      <td>${f.successes} ✔ ${f.failures ? `/ ${f.failures} ✖` : ""}</td><td>${f.usable ? pill(f.successes >= 2 ? "PASS" : "WARN", f.successes >= 2 ? "ready to approve" : "seen once") : pill("INFO", "not completed yet")}</td></tr>`);
+    const lcs = (m.lifecycles || []).map((lc) => `<div class="card" style="margin:6px 0"><b>${esc(lc.entity)}</b>: ${lc.statuses.map(esc).join(" → ")}
+      <ul>${lc.initial ? `<li>starts as <b>${esc(lc.initial.status)}</b> after ${esc(lc.initial.action)}${lc.initial.role ? ` (${esc(lc.initial.role)})` : ""}</li>` : ""}${lc.transitions.map((t) => `<li>${esc(t.from)} → ${esc(t.to)}: ${esc(t.action || "?")}${t.roles.length ? ` by ${esc(t.roles.join(", "))}` : ""} (${t.count}×)</li>`).join("")}</ul></div>`).join("");
+    const rules = (m.rules || []).map((r) => `<tr><td>${esc(r.text)}</td><td>${esc(r.flow)}</td><td>${esc(r.source)}</td><td>${esc((r.evidence || [])[0] || "")}</td><td>${Math.round(r.confidence * 100)}%</td></tr>`);
+    const roles = (m.roles || []).map((r) => `<tr><td><b>${esc(r.name)}</b></td><td>${esc((r.users || []).join(", "))}</td><td>${esc(r.performed.map((p) => `${p.flow} (${p.times})`).join(", "))}</td><td>${esc((r.offered_actions || []).join(", "))}</td><td>${esc((r.refused || []).join("; "))}</td></tr>`);
+    const screens = (m.screens || []).map((s) => `<tr><td>${esc(s.name)}</td><td><code>${esc(s.path)}</code></td><td>${esc(s.type)}</td><td>${esc(s.entity || "")}</td><td>${s.fields.length}</td><td>${esc((s.roles || []).join(", "))}</td><td>${s.visits}</td></tr>`);
+    body.innerHTML = head + `
+      <div class="card" style="margin-top:8px"><h3>Tasks I saw you do (flows)</h3>${table(["Task", "Screen", "Fields", "Done by", "Seen", ""], flows)}
+        <p class="muted">A task becomes a workflow in Knowledge. Approve it once there (or from Chat with <i>Approve and run</i>) and you can ask me to do it.</p></div>
+      <div class="card" style="margin-top:8px"><h3>Statuses and lifecycle</h3>${lcs || '<p class="muted">No status column seen yet.</p>'}</div>
+      <div class="card" style="margin-top:8px"><h3>Business rules</h3>${table(["Rule", "Task", "Learned from", "Evidence", "Confidence"], rules)}</div>
+      <div class="card" style="margin-top:8px"><h3>Roles</h3>${table(["Role", "Users seen", "Does", "Offered", "Refused"], roles)}
+        ${m.identity ? `<p class="muted">Signed-in user is read from the page with: <code>${esc(m.identity.pattern)}</code>${m.login ? `; sign-in screen ${esc(m.login.url)} (${esc(m.login.username)} / ${esc(m.login.password)} / ${esc(m.login.submit)})` : ""}</p>` : ""}</div>
+      <div class="card" style="margin-top:8px"><h3>Screens</h3>${table(["Screen", "Address", "Kind", "About", "Fields", "Used by", "Visits"], screens)}
+        ${(m.navigation?.menu || []).length ? `<p class="muted">Menu: ${m.navigation.menu.map((x) => esc(x.label)).join(" · ")}</p>` : ""}</div>`;
+  }
+  bindPicker(body);
+  body.querySelector("#uDigest").addEventListener("click", async () => { try { const out = await api(`/api/ops/understanding/${encodeURIComponent(state.app)}/digest`, { method: "POST" }); toast(`${out.changes.length} new or changed finding(s).`, "success"); show("understand"); } catch (err) { toast(err.message, "error"); } });
+  body.querySelector("#uClear").addEventListener("click", async () => {
+    if (!confirm("Forget everything observed for this application? Approved knowledge stays.")) return;
+    try { await api(`/api/ops/admin/journal-clear/${encodeURIComponent(state.app)}`, { method: "POST" }); show("understand"); } catch (err) { toast(err.message, "error"); }
+  });
+}
+
 // ---- knowledge ----------------------------------------------------------------------------------------------------
 async function knowledgeTab(body) {
   if (!state.app) { body.innerHTML = '<p class="muted">Register an application first.</p>'; return; }
@@ -339,7 +426,7 @@ async function knowledgeTab(body) {
   const { backups } = await api("/api/ops/knowledge-backups");
   body.innerHTML = `
     <div class="row" style="gap:8px;flex-wrap:wrap">${appPicker()}
-      <label>Kind <select id="kKind">${["workflow", "rule", "screen", "relationship", "role"].map((k) => `<option${k === kind ? " selected" : ""}>${k}</option>`).join("")}</select></label>
+      <label>Kind <select id="kKind">${["workflow", "rule", "screen", "relationship", "role", "lifecycle"].map((k) => `<option${k === kind ? " selected" : ""}>${k}</option>`).join("")}</select></label>
       <span class="spacer"></span><button class="btn" id="kNew">New ${esc(kind)}</button><button class="btn" id="kExport">Export</button><button class="btn" id="kBackup">Back up</button></div>
     <div class="card" style="margin-top:8px">
       ${table(["Key", "Version", "State", "Source", "Confidence", "Approver", "Updated", ""], items.map((e) => `<tr><td>${esc(e.key)}</td><td>${e.version}</td>

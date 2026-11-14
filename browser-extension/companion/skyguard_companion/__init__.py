@@ -9,5 +9,5 @@ It does not need SkyGuard. When SkyGuard is installed on the same PC, its local 
 be reused instead of starting second copies.
 """
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 NAME = "SkyGuard Adaptive AI Companion"

@@ -164,6 +164,27 @@ MIGRATIONS: list[str] = [
     CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit
         BEGIN SELECT RAISE(ABORT, 'audit records cannot be deleted'); END;
     """,
+    # 2 (23.7.0): passive learning. The observation journal (what a person did and saw while browsing a registered
+    # application) and the current understanding of each application built from it.
+    """
+    CREATE TABLE IF NOT EXISTS observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        url TEXT NOT NULL DEFAULT '',
+        data TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS ix_observations_app ON observations(application_id, id);
+    CREATE TABLE IF NOT EXISTS app_model (
+        application_id TEXT PRIMARY KEY REFERENCES applications(id) ON DELETE CASCADE,
+        data TEXT NOT NULL DEFAULT '{}',
+        upto INTEGER NOT NULL DEFAULT 0,
+        promoted TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+    );
+    """,
 ]
 
 

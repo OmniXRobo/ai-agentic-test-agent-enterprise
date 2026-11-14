@@ -378,6 +378,45 @@ def cancel_guided(sid: str, request: Request, svc: Any = Depends(ops)) -> dict[s
     return {"ok": True, "session": svc.cancel_guided(sid, actor(request))}
 
 
+# ---- 23.7.0: passive learning ("Learn while I browse") and the application model ----------------------------------
+
+
+class WatchIn(BaseModel):
+    application_id: str
+
+
+@router.post("/watch", status_code=201)
+def start_watch(body: WatchIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    return {"ok": True, "session": svc.start_watch(body.application_id, actor(request))}
+
+
+@router.post("/watch/{sid}/stop")
+async def stop_watch(sid: str, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    return {"ok": True, **(await run_in_threadpool(svc.stop_watch, sid, actor(request)))}
+
+
+@router.get("/watch")
+def watching(svc: Any = Depends(ops)) -> dict[str, Any]:
+    return {"ok": True, "sessions": svc.watching()}
+
+
+@router.get("/understanding")
+def understanding(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
+    return {"ok": True, **svc.agent.understanding_view(app_id)}
+
+
+@router.post("/understanding/{app_id}/digest")
+async def digest(app_id: str, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    res = await run_in_threadpool(svc.agent.understanding.digest, app_id, by=actor(request),
+                                  use_ai=bool(svc.config().get("use_ai")))
+    return {"ok": True, "changes": res["changes"], **svc.agent.understanding_view(app_id)}
+
+
+@router.post("/admin/journal-clear/{app_id}")
+def clear_journal(app_id: str, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    return {"ok": True, "cleared": svc.agent.journal.clear(app_id, by=actor(request))}
+
+
 # ---- executions ---------------------------------------------------------------------------------------------------
 
 

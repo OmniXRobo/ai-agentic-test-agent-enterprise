@@ -42,7 +42,7 @@ ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "pick_date", "
 Action = Literal["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
                  "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
                  "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
-                 "right_click", "drag_to", "dialog", "choose_option", "dismiss"]
+                 "right_click", "drag_to", "dialog", "choose_option", "dismiss", "set_count"]
 
 NEEDS_TARGET = {"click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "hover",
                 "expect_visible", "expect_hidden", "expect_text", "expect_value", "upload_file", "download_file",

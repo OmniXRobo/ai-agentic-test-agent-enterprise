@@ -8,7 +8,8 @@
 import * as api from "./lib/api.js";
 
 const DRIVES = new Map();      // runId -> { tabId, stop }
-const OBSERVE = new Map();     // tabId -> { purpose: "learning" | "manual", id, events: [] }
+const OBSERVE = new Map();     // tabId -> { purpose: "learning" | "manual" | "watch", id, events: [] }
+const WATCH_TIMERS = new Map(); // tabId -> pending flush timer (23.7.0 automatic learning)
 let blinkTimer = null;
 
 // ---- side panel ------------------------------------------------------------------------------------------------
@@ -160,6 +161,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     if (obs && msg.event && typeof msg.event === "object") {
       obs.events.push(msg.event);
       if (obs.purpose === "learning" && obs.events.length >= 5) flushLearning(sender.tab.id).catch(() => {});
+      if (obs.purpose === "watch") scheduleWatchFlush(sender.tab.id, ["submit", "click"].includes(msg.event.kind) ? 900 : obs.events.length >= 8 ? 50 : 4000);
     }
     return false;
   }
@@ -172,7 +174,75 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
     observe(tabId, true);
     const o = OBSERVE.get(tabId);
     if (o.banner) banner(tabId, o.banner);
+    if (o.purpose === "watch") scheduleWatchFlush(tabId, 700);
+  } else if (info.status === "complete") {
+    maybeWatch(tabId).catch(() => {});
   }
+});
+
+// ---- 23.7.0: learn automatically while the person browses ------------------------------------------------------------
+// With "Learn automatically while I browse" on (Options), every tab of a registered application whose access was
+// granted is observed: the person's own clicks, choices and entries (passwords and codes only as "[secret]") and what
+// the page shows afterwards go to the companion, which works out screens, flows, statuses, rules and roles itself.
+// Nothing is clicked or typed by the extension for this, and tabs the agent is driving are never observed.
+let appCache = { at: 0, apps: [] };
+async function registeredApp(url) {
+  if (Date.now() - appCache.at > 30000) {
+    try { appCache = { at: Date.now(), apps: (await api.get("/v1/applications")).applications || [] }; } catch (e) { return null; }
+  }
+  const origin = originOf(url || "");
+  return appCache.apps.find((a) => (a.origins || [originOf(a.base_url)]).includes(origin)) || null;
+}
+
+async function maybeWatch(tabId) {
+  const { auto_learn } = await api.settings();
+  if (!auto_learn || OBSERVE.has(tabId) || [...DRIVES.values()].some((d) => d.tabId === tabId)) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !/^https?:/.test(tab.url || "")) return;
+  const app = await registeredApp(tab.url);
+  if (!app || !(await chrome.permissions.contains({ origins: [originOf(tab.url) + "/*"] }))) return;
+  const key = "watch:" + tabId;
+  const saved = (await chrome.storage.session.get(key))[key];
+  const id = saved && saved.appId === app.id ? saved.id : `ext-${app.id.slice(-6)}-${tabId}-${Date.now().toString(36)}`;
+  await chrome.storage.session.set({ [key]: { id, appId: app.id } });
+  OBSERVE.set(tabId, { purpose: "watch", id, appId: app.id, events: [] });
+  await observe(tabId, true);
+  scheduleWatchFlush(tabId, 700);
+}
+
+function scheduleWatchFlush(tabId, ms) {
+  clearTimeout(WATCH_TIMERS.get(tabId));
+  WATCH_TIMERS.set(tabId, setTimeout(() => { WATCH_TIMERS.delete(tabId); flushWatch(tabId).catch(() => {}); }, ms));
+}
+
+async function flushWatch(tabId, final = false) {
+  const obs = OBSERVE.get(tabId);
+  if (!obs || obs.purpose !== "watch") return;
+  const events = obs.events.splice(0, obs.events.length);
+  let snap;
+  if (!final) {
+    try { snap = await snapshot(tabId); } catch (e) { snap = undefined; }
+    if (snap && !(await registeredApp(snap.url))) { snap = undefined; await stopWatch(tabId); }
+  }
+  if (!events.length && !snap && !final) return;
+  const r = await api.post("/v1/observe", { application_id: obs.appId, session_id: obs.id, events, snapshot: snap, final: final || undefined });
+  if (r && r.session_id) obs.id = r.session_id;
+  broadcast({ type: "learned", appId: obs.appId, digested: !!(r && r.digested), changes: (r && r.changes) || [] });
+}
+
+async function stopWatch(tabId, final = false) {
+  const obs = OBSERVE.get(tabId);
+  if (!obs || obs.purpose !== "watch") return;
+  if (final) await flushWatch(tabId, true).catch(() => {});
+  OBSERVE.delete(tabId);
+  clearTimeout(WATCH_TIMERS.get(tabId));
+  await observe(tabId, false);
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  const obs = OBSERVE.get(tabId);
+  if (obs && obs.purpose === "watch") stopWatch(tabId, true).catch(() => {});
+  chrome.storage.session.remove("watch:" + tabId).catch(() => {});
 });
 
 async function flushLearning(tabId) {
@@ -206,6 +276,7 @@ chrome.notifications.onClicked.addListener(async () => {
 // ---- execution loop ----------------------------------------------------------------------------------------------
 async function drive(runId, tabId) {
   if (DRIVES.has(runId)) return { already: true };
+  await stopWatch(tabId, true); // the agent's own actions are never learned
   const state = { tabId, stop: false };
   DRIVES.set(runId, state);
   await chrome.storage.session.set({ ["drive:" + runId]: { tabId } });
@@ -306,6 +377,7 @@ async function handle(msg) {
     case "learn-start": {
       const tabId = await tabFor(msg.appId, msg.tabId);
       await allowedTab(tabId);
+      await stopWatch(tabId, true);
       OBSERVE.set(tabId, { purpose: "learning", id: msg.sessionId, events: [], banner: "SkyGuard Agent is learning: perform the task normally, then press Finish in the side panel." });
       await observe(tabId, true);
       await banner(tabId, OBSERVE.get(tabId).banner);
@@ -320,6 +392,13 @@ async function handle(msg) {
       }
       return { ok: true };
     }
+    case "auto-learn": {
+      // Options turned automatic learning on or off: apply it to the open tabs at once
+      if (msg.on) { for (const t of await chrome.tabs.query({})) maybeWatch(t.id).catch(() => {}); }
+      else { for (const [tabId, o] of [...OBSERVE]) if (o.purpose === "watch") await stopWatch(tabId, true); }
+      return { ok: true };
+    }
+    case "watching": return { ok: true, tabs: [...OBSERVE].filter(([, o]) => o.purpose === "watch").map(([tabId, o]) => ({ tabId, appId: o.appId })) };
     case "acknowledge": attention(false); return { ok: true };
     case "drives": return { ok: true, runs: [...DRIVES.keys()] };
     default: return { ok: false, error: "unknown request" };

@@ -29,6 +29,7 @@ from .security import Pairing, Refused, RateLimiter, Users, check_host, check_or
 
 log = logging.getLogger("companion")
 JSON_LIMIT = 256 * 1024
+DRAIN_LIMIT = 4 * 1024 * 1024  # an oversized request body is read and dropped up to this size before the 413
 OBSERVATION_LIMIT = 4 * 1024 * 1024  # page snapshots
 AUDIO_LIMIT = 10 * 1024 * 1024
 KINDS = ("screen", "workflow", "rule", "relationship", "role", "profile")
@@ -492,6 +493,36 @@ def cancel_guided(x: Ctx, sid: str) -> dict[str, Any]:
     return {"session": x.c.agent.learning.cancel_guided(sid, by=x.user)}
 
 
+# 23.7.0: learn while the person browses (the extension sends what they do and see in registered application tabs)
+
+
+@route("POST", "/v1/observe", "write")
+def observe(x: Ctx) -> dict[str, Any]:
+    b = validate(x.body, {"application_id": ("str", True, 80), "session_id": ("str", False, 80),
+                          "events": ("list", False, 300), "snapshot": ("dict", False, 40), "final": ("bool", False)})
+    return x.c.agent.observe(b["application_id"], b.get("session_id"), b.get("events") or [], b.get("snapshot"),
+                             by=x.user, interface="extension", final=bool(b.get("final")),
+                             use_ai=bool(b.get("final")))
+
+
+@route("GET", "/v1/understanding")
+def understanding(x: Ctx) -> dict[str, Any]:
+    if not x.query.get("app_id"):
+        raise Refused(400, "FIELD_REQUIRED", "'app_id' is required.")
+    return x.c.agent.understanding_view(x.query["app_id"])
+
+
+@route("POST", "/v1/understanding/{app_id}/digest", "write", "llm")
+def digest(x: Ctx, app_id: str) -> dict[str, Any]:
+    res = x.c.agent.understanding.digest(app_id, by=x.user)
+    return {"changes": res["changes"], **x.c.agent.understanding_view(app_id)}
+
+
+@route("POST", "/v1/journal-clear/{app_id}", "admin")
+def journal_clear(x: Ctx, app_id: str) -> dict[str, Any]:
+    return {"cleared": x.c.agent.journal.clear(app_id, by=x.user)}
+
+
 # executions
 
 
@@ -616,6 +647,8 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            if self.close_connection:
+                self.send_header("Connection", "close")
             if origin:
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
@@ -676,6 +709,16 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
                 limit = (AUDIO_LIMIT if url.path.endswith("/voice/transcribe") else
                          OBSERVATION_LIMIT if url.path.endswith("/next") or url.path.endswith("/events") else JSON_LIMIT)
                 if length > limit:
+                    # read (and drop) a moderately oversized body before answering, then close: answering while the
+                    # client is still sending makes Windows abort the connection (WinError 10053) instead of
+                    # delivering the 413. Nothing beyond DRAIN_LIMIT is read.
+                    self.close_connection = True
+                    left = min(length, DRAIN_LIMIT)
+                    while left > 0:
+                        chunk = self.rfile.read(min(65536, left))
+                        if not chunk:
+                            break
+                        left -= len(chunk)
                     raise Refused(413, "TOO_LARGE", "The request is too large.")
                 raw = self.rfile.read(length) if length else b""
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
