@@ -492,6 +492,36 @@ def cancel_guided(x: Ctx, sid: str) -> dict[str, Any]:
     return {"session": x.c.agent.learning.cancel_guided(sid, by=x.user)}
 
 
+# 23.7.0: learn while the person browses (the extension sends what they do and see in registered application tabs)
+
+
+@route("POST", "/v1/observe", "write")
+def observe(x: Ctx) -> dict[str, Any]:
+    b = validate(x.body, {"application_id": ("str", True, 80), "session_id": ("str", False, 80),
+                          "events": ("list", False, 300), "snapshot": ("dict", False, 40), "final": ("bool", False)})
+    return x.c.agent.observe(b["application_id"], b.get("session_id"), b.get("events") or [], b.get("snapshot"),
+                             by=x.user, interface="extension", final=bool(b.get("final")),
+                             use_ai=bool(b.get("final")))
+
+
+@route("GET", "/v1/understanding")
+def understanding(x: Ctx) -> dict[str, Any]:
+    if not x.query.get("app_id"):
+        raise Refused(400, "FIELD_REQUIRED", "'app_id' is required.")
+    return x.c.agent.understanding_view(x.query["app_id"])
+
+
+@route("POST", "/v1/understanding/{app_id}/digest", "write", "llm")
+def digest(x: Ctx, app_id: str) -> dict[str, Any]:
+    res = x.c.agent.understanding.digest(app_id, by=x.user)
+    return {"changes": res["changes"], **x.c.agent.understanding_view(app_id)}
+
+
+@route("POST", "/v1/journal-clear/{app_id}", "admin")
+def journal_clear(x: Ctx, app_id: str) -> dict[str, Any]:
+    return {"cleared": x.c.agent.journal.clear(app_id, by=x.user)}
+
+
 # executions
 
 
