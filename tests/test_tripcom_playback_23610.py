@@ -322,3 +322,114 @@ def test_older_trip_recording_plays_in_a_visible_browser_with_the_cursor(rt, sit
     rec = _play(a, "SCR-TRIPOLD001", headless=False)
     assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
     assert rec["steps"][3]["chosen"] == "New Delhi - All airports India"
+
+
+# ---- 23.7.1: the tester's re-test of 14 Nov 2026 (script SCR-9D41509DEA) on Trip.com's current flight box --------
+def user_trip_recording_20261114(site: str, dep: date, ret: date) -> Script:
+    """Steps 6 to 15 of SCR-9D41509DEA exactly as the tester's 23.7.0 recorded them (the banner clicks 2 to 5 are
+    left out: the stand-in has no banner). The departure was typed and never chosen from the list, the arrival
+    suggestion is a click on [data-testid="0"], the end day's label holds that day's price, and the Adults "+" was
+    recorded as a click on the whole Adults row (positional li)."""
+    T = Target
+    start = f"{DAYS[dep.weekday()]}, {MONTHS[dep.month - 1]} {dep.day}, {dep.year}, Select the start date you want"
+    end = f"{DAYS[ret.weekday()]}, {MONTHS[ret.month - 1]} {ret.day}, {ret.year}, The price is AED 1.36k, Select the end date you want"
+    d1, d2 = (dep - date.today()).days, (ret - date.today()).days
+    steps = [
+        Step(action="goto", value=f"{site}/tripcom/flights.html"),
+        Step(action="click", target=T(selector='role=tab[name="Flights"]', role="tab", name="Flights", text="Flights",
+                                      alternates=["#trip_searchBoxTabs > li:nth-of-type(2)"]), description="Click Flights"),
+        Step(action="fill", target=T(selector='role=combobox[name="Departure airport or city"]', tag="input",
+                                     role="combobox", name="Departure airport or city", input_type="text",
+                                     placeholder="Leaving from"),
+             value="dubai international airport", description="Enter value in Departure airport or city"),
+        Step(action="click", target=T(selector='div[aria-label="Arrival airport or city"]', role="group",
+                                      name="Arrival airport or city", tag="div",
+                                      alternates=['role=group[name="Arrival airport or city"]']),
+             description="Click Arrival airport or city"),
+        Step(action="fill", target=T(selector='role=combobox[name="Arrival airport or city"]', tag="input",
+                                     role="combobox", name="Arrival airport or city", input_type="text",
+                                     placeholder="Going to"),
+             value="del indira gandhi international airport", description="Enter value in Arrival airport or city"),
+        Step(action="click", target=T(selector='[data-testid="0"]', test_id="0", tag="div", role="button",
+                                      text="DEL Indira Gandhi International Airport New Delhi, India",
+                                      name="DEL Indira Gandhi International Airport New Delhi, India",
+                                      alternates=['role=button[name="DEL Indira Gandhi International Airport New Delhi, India"]',
+                                                  "#m-flight-poi-list > div:nth-of-type(2) > ul > li > div:nth-of-type(1)"]),
+             description="Click DEL Indira Gandhi International Airport New Delhi, India"),
+        Step(action="pick_date", target=T(selector=f'role=checkbox[name="{start}"]', role="checkbox", name=start),
+             value=f"{{{{TODAY+{d1}d:%Y-%m-%d}}}}", description="Choose the start date"),
+        Step(action="pick_date", target=T(selector=f'div[aria-label="{end}"]', tag="div", name=end),
+             value=f"{{{{TODAY+{d2}d:%Y-%m-%d}}}}", description="Choose the end date"),
+        Step(action="click", target=T(selector='div[aria-label="1 adult, Economy"]', role="button",
+                                      name="1 adult, Economy", text="1 adult, Economy",
+                                      alternates=['role=button[name="1 adult, Economy"]']),
+             description="Click 1 adult, Economy"),
+        Step(action="click", target=T(selector="div > div:nth-of-type(2) > div > div:nth-of-type(3) > ul > li:nth-of-type(1)",
+                                      tag="li", text="Adults 12+ years old 1"),
+             description="Click Adults 12+ years old 1"),
+        Step(action="click", target=T(selector='[data-testid="passengernum_cabin_search"]', test_id="passengernum_cabin_search",
+                                      role="button", name="Search", text="Search",
+                                      alternates=['role=button[name="Search"]']),
+             description="Click Search"),
+        Step(action="expect_text", target=T(selector="h2.results"),
+             value=f"Flights Dubai to New Delhi · {dep.isoformat()} to {ret.isoformat()} · 2 adult, 0 child, 0 infant · Economy"),
+    ]
+    return Script(id="SCR-9D41509DEA", name="Recorded https://trip.com", mode="guided", steps=steps, browser="chromium",
+                  base_url="https://trip.com")
+
+
+def test_tester_recording_of_14_november_plays_back(rt, site):
+    a = rt.automation
+    t = date.today()
+    dep, ret = t + timedelta(days=8), t + timedelta(days=14)
+    a.scripts.save(user_trip_recording_20261114(site, dep, ret))
+    rec = _play(a, "SCR-9D41509DEA", headless=True)
+    print(_steps(rec))
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+def _counter_script(site: str, sid: str, middle: list[Step]) -> Script:
+    T = Target
+    steps = [Step(action="goto", value=f"{site}/tripcom/flights.html"),
+             Step(action="click", target=T(selector='div[aria-label="1 adult, Economy"]', role="button",
+                                           name="1 adult, Economy", text="1 adult, Economy")),
+             *middle,
+             Step(action="expect_text", target=T(selector="#paxText"), value="3 adults, 1 child, Economy")]
+    return Script(id=sid, name="counters", mode="guided", steps=steps, browser="chromium", base_url=site)
+
+
+def test_set_count_step_written_by_hand(rt, site):
+    """23.7.1: the step editor's set_count action (Value "Adults=3"), for fixing a recording without recording again."""
+    a = rt.automation
+    a.scripts.save(_counter_script(site, "SCR-SETCOUNT01", [Step(action="set_count", value="Adults=3"),
+                                                            Step(action="set_count", value="Children: 1")]))
+    rec = _play(a, "SCR-SETCOUNT01", headless=True)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+def test_ambiguous_older_counter_row_click_says_how_to_fix_it(rt, site):
+    """A row click recorded at a number where both + and - work cannot be guessed: the run stops and names the fix."""
+    a = rt.automation
+    row = Step(action="click", target=Target(selector="ul > li:nth-of-type(2)", tag="li", text="Children 2-11 years old 1"))
+    a.scripts.save(_counter_script(site, "SCR-SETCOUNT02", [Step(action="set_count", value="Children=1"), row]))
+    rec = _play(a, "SCR-SETCOUNT02", headless=True)
+    assert rec["status"] == "FAILED"
+    assert "set_count" in rec["error"] and "Children=2" in rec["error"], rec["error"]
+
+
+def test_exported_python_sets_counters_and_chooses_typed_suggestion(site, tmp_path):
+    """The downloadable pytest file plays set_count steps (by hand or recorded as "Set Children to 1")."""
+    import subprocess
+
+    from qa_platform.automation import pytest_export
+
+    script = _counter_script(site, "SCR-SETCOUNT03", [
+        Step(action="set_count", value="Adults=3"),
+        Step(action="click", target=Target(selector="span.qT7v >> nth=3"),
+             semantic={"intent": "set_count", "label": "Children", "count": 1}),
+    ])
+    path = tmp_path / pytest_export.file_name(script)
+    path.write_text(pytest_export.to_pytest(script), encoding="utf-8")
+    env = {**os.environ, "HEADLESS": "1", "BROWSER": "chromium", "BASE_URL": site}
+    out = subprocess.run([sys.executable, str(path)], capture_output=True, text=True, env=env, timeout=180)
+    assert out.returncode == 0, out.stdout + out.stderr

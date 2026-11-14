@@ -429,6 +429,9 @@
       (o) => norm(o.getAttribute("aria-label")) === w || norm(o.getAttribute("data-value")) === w || norm(o.getAttribute("title")) === w,
       (o) => firstLine(o).startsWith(w + " ") || firstLine(o).startsWith(w),
       (o) => ` ${firstLine(o)} `.includes(` ${w} `),  // w is normalised: letters, digits and spaces only
+      // 23.7.1: the typed words in a row whose parts are laid out side by side ("DXB | Dubai International Airport |
+      // Dubai, United Arab Emirates" for "dubai international airport")
+      (o) => full(o).some((t) => ` ${t} `.includes(` ${w} `)),
       (o) => similar(rowText(o) || optionText(o), want) >= 0.75,  // 23.6.1: same words, other punctuation / order
     ];
     for (let i = 0; i < tiers.length; i++) {

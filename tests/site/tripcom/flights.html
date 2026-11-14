@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Trip.com flights stand-in (Nov 2026 markup)</title>
+<!-- Test fixture (23.6.2). Trip.com's flight search box as the tester's recording of 14 Nov 2026 shows it (script
+     SCR-9D41509DEA): inputs with role=combobox named "Departure airport or city" / "Arrival airport or city" inside
+     role=group wrappers with the same aria-label; suggestion rows that are div[role=button][data-testid="0".."n"] in
+     #m-flight-poi-list > div > ul > li, reading "DEL Indira Gandhi International Airport New Delhi, India"; the field
+     goes back to its last chosen city when it loses focus without a choice; the calendar opens by itself after the
+     arrival city and names its days "Sunday, November 22, 2026, Select the start date you want" or "Saturday,
+     November 28, 2026, The price is AED 1.36k, Select the end date you want" (prices change on every load); the
+     passengers button is named "1 adult, Economy" and opens a list of li rows ("Adults 12+ years old [-] 1 [+]")
+     with icon-only + and - and its own Search button (data-testid passengernum_cabin_search). No Trip.com code. -->
+<style>
+  body { font: 14px Arial, sans-serif; margin: 0; }
+  #main { padding: 16px; }
+  #trip_searchBoxTabs { list-style: none; display: flex; gap: 16px; padding: 0; }
+  #trip_searchBoxTabs li { cursor: pointer; padding: 6px 10px; }
+  #trip_searchBoxTabs li[aria-selected=true] { border-bottom: 2px solid #3264ff; }
+  .fl-box { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+  .fl-box > div { border: 1px solid #ccc; border-radius: 6px; padding: 6px 10px; min-width: 150px; cursor: pointer; }
+  .fl-box input { border: 0; outline: 0; font: inherit; width: 220px; cursor: pointer; }
+  .lb { color: #777; font-size: 12px; }
+  .pop { position: absolute; background: #fff; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 16px #0003; z-index: 10; min-width: 340px; }
+  .pop [role=button], .pop li.cty { cursor: pointer; padding: 6px 10px; }
+  .pop ul { list-style: none; margin: 0; padding: 0; }
+  .X9ak2 { display: flex; gap: 6px; } .X9ak2 .cd { font-weight: bold; width: 36px; } .X9ak2 .ct { color: #777; }
+  .cal { display: flex; gap: 12px; padding: 8px; }
+  .cal .grid { display: grid; grid-template-columns: repeat(7, 34px); gap: 2px; }
+  .cal [role=checkbox] { height: 34px; text-align: center; cursor: pointer; font-size: 12px; }
+  .cal [role=checkbox][aria-disabled=true] { color: #bbb; cursor: default; }
+  .cal [role=checkbox] i { display: block; font-style: normal; font-size: 9px; color: #090; }
+  .nav { cursor: pointer; padding: 4px 8px; }
+  .pxp { padding: 10px; width: 360px; }
+  .pxp li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; }
+  .pxp .sub { display: block; color: #777; font-size: 12px; }
+  .ctl { display: flex; align-items: center; gap: 10px; }
+  .qT7v { width: 26px; height: 26px; border: 1px solid #3264ff; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .qT7v.qT7v--disabled { border-color: #ccc; cursor: not-allowed; }
+  .qT7v i::before { content: "\2212"; font-style: normal; } .qT7v i.fi-plus::before { content: "+"; }
+  .srch { background: #3264ff; color: #fff; border-radius: 6px; padding: 8px 16px; text-align: center; cursor: pointer; }
+</style></head>
+<body>
+<div id="trip_main_content"><div id="main">
+  <ul id="trip_searchBoxTabs" role="tablist">
+    <li role="tab" aria-selected="false" tabindex="-1">Hotels &amp; Homes</li>
+    <li role="tab" aria-selected="true" tabindex="0">Flights</li>
+  </ul>
+  <div class="fl-box">
+    <div role="group" aria-label="Departure airport or city" id="fromBox"><div class="lb">Leaving from</div><input type="text" autocomplete="off" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="Departure airport or city" data-testid="search_city_from0" placeholder="Leaving from" value=""></div>
+    <div role="group" aria-label="Arrival airport or city" id="toBox"><div class="lb">Going to</div><input type="text" autocomplete="off" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="Arrival airport or city" data-testid="search_city_to0" placeholder="Going to" value=""></div>
+    <div role="group" aria-label="Departure date" id="depBox"><div class="lb">Depart</div><input type="text" readonly data-testid="search_date_depart0" placeholder="Depart" value=""></div>
+    <div role="group" aria-label="Return date" id="retBox"><div class="lb">Return</div><input type="text" readonly data-testid="search_date_return0" placeholder="Return" value=""></div>
+    <div role="button" tabindex="0" aria-label="1 adult, Economy" id="paxBtn"><div class="lb">Passengers and cabin class</div><div id="paxText">1 adult, Economy</div></div>
+    <div class="srch" role="button" data-testid="search_btn">Search</div>
+  </div>
+</div></div>
+<div id="out"></div>
+<div id="portal"></div>
+<script src="flights.js"></script>
+</body></html>

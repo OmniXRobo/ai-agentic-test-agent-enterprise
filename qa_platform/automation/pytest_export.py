@@ -323,6 +323,52 @@ def choose(page, locator, text, timeout, typed=None):
         page.locator("li,[role=option],[data-testid],[class*=item],[class*=title],[class*=result]", has_text=head).filter(
             has_not=page.locator("input"))).first
     option.click(timeout=timeout)
+
+
+_COUNTER_JS = """(label) => {
+    const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    const want = norm(label);
+    document.querySelectorAll('[data-qa-step]').forEach((e) => e.removeAttribute('data-qa-step'));
+    const read = (n) => n.tagName === 'INPUT' ? n.value : n.textContent;
+    const small = (c) => { const r = c.getBoundingClientRect();
+        return r.width >= 6 && r.height >= 6 && r.width <= 64 && r.height <= 64 && (c.innerText || '').trim().length <= 1; };
+    const top = (list) => list.filter((c) => !list.some((o) => o !== c && o.contains(c)));
+    const nums = [...document.querySelectorAll('span,div,b,strong,p,em,label,input,output')].filter((n) =>
+        (n.tagName === 'INPUT' || !n.children.length) && /^\\s*\\d{1,3}\\s*$/.test(read(n)) && n.getClientRects().length);
+    for (const n of nums) {
+        let row = n.parentElement;
+        for (let i = 0; row && i < 5; i++, row = row.parentElement) {
+            if (!norm(row.innerText).startsWith(want)) continue;
+            const ctl = [...row.querySelectorAll('button,[role=button],span,i,a,div,svg')].filter((c) =>
+                c !== n && !c.contains(n) && !n.contains(c) && small(c));
+            const before = top(ctl.filter((c) => c.compareDocumentPosition(n) & 4));
+            const after = top(ctl.filter((c) => n.compareDocumentPosition(c) & 4));
+            if (!before.length || !after.length) continue;
+            before[before.length - 1].setAttribute('data-qa-step', 'minus');
+            after[0].setAttribute('data-qa-step', 'plus');
+            return Number(read(n));
+        }
+    }
+    return null;
+}"""
+
+
+def set_count(page, label, count, timeout):
+    """Press the + or - of the counter named ``label`` ("Adults", "Children") until it shows ``count``."""
+    deadline = datetime.now() + timedelta(milliseconds=timeout)
+    shown = None
+    for _ in range(40):
+        shown = page.evaluate(_COUNTER_JS, label)
+        if shown is None:
+            if datetime.now() > deadline:
+                raise AssertionError(f"No counter named {label!r} is shown.")
+            page.wait_for_timeout(250)
+            continue
+        if shown == count:
+            return
+        page.locator('[data-qa-step="plus"]' if count > shown else '[data-qa-step="minus"]').first.click(timeout=timeout)
+        page.wait_for_timeout(200)
+    raise AssertionError(f"{label} shows {shown}, not {count}.")
 '''
 
 
@@ -365,7 +411,8 @@ def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> s
     body = _RUNTIME.format(base_url=script.base_url or "", browser=script.browser, files_folder=files_folder(script))
     if uses_files(script):
         body += _FILE_HELPERS.format()
-    if any(st.action in ("pick_date", "choose_option") for st in script.steps):
+    if any(st.action in ("pick_date", "choose_option", "set_count") or (st.semantic or {}).get("intent") == "set_count"
+           for st in script.steps):
         body += _COMPONENT_HELPERS
     steps = [
         "",
@@ -444,6 +491,14 @@ def _step_lines(step: Any) -> list[str]:
         lines = [f"{a}({step.value!r}, data)"]
     elif a == "dismiss":  # 23.6.0: close an open pop-up (never a click in the middle of the page)
         lines = ["page.keyboard.press(\"Escape\")"]
+    elif a == "set_count" or (step.semantic or {}).get("intent") == "set_count":  # 23.7.1 / 23.6.1: a counter
+        sem = step.semantic or {}
+        if a == "set_count":
+            m = re.match(r"^\s*(.+?)\s*(?:=|:|\bto\b)\s*(\d{1,3})\s*$", step.value or "", re.I)
+            label, count = (m.group(1), int(m.group(2))) if m else (step.value or "", 0)
+        else:
+            label, count = sem.get("label") or "", int(sem.get("count") or 0)
+        lines = [f"set_count(page, {label!r}, {count}, {timeout})"]
     elif a == "dialog":  # 23.3.21: answer the next pop-up (alert / confirm / prompt)
         how = "dismiss" if step.value == "dismiss" else "accept"
         lines = [f"page.once(\"dialog\", lambda d: d.{how}())"]

@@ -55,6 +55,7 @@ COMMIT_RE = re.compile(r"\b(pay now|pay\b|purchase|buy now|place (?:your )?order
                        r"finali[sz]e (?:booking|payment))", re.I)
 
 
+SET_COUNT_RE = re.compile(r"^\s*(.+?)\s*(?:=|:|\bto\b)\s*(\d{1,3})\s*$", re.I)
 VISUAL_KIND = {"fill": "type", "type": "type", "select": "type", "press": "type"}
 
 
@@ -417,6 +418,13 @@ class Runner:
             return None
         if meaning.get("intent") == "set_count":  # 23.6.1: the + / - of a counter, played as "set it to N"
             return self._set_count(page, step, index, act, record, meaning, visual, delay)
+        if step.action == "set_count":  # 23.7.1: a step written by hand: Value "Adults=2" (or "Adults: 2", "Adults to 2")
+            m = SET_COUNT_RE.match(value or "")
+            if not m:
+                raise StepFailed(index, f"set_count needs a Value such as Adults=2 (the counter's label, then the "
+                                        f"number); got '{value}'.")
+            return self._set_count(page, step, index, act, record, {"label": m.group(1), "count": int(m.group(2))},
+                                   visual, delay)
         if index in record.get("_done_by_choice", {}) and step.action in ("fill", "type"):
             # 23.6.1: the suggestion chosen in an earlier step already entered this field's value
             by = record["_done_by_choice"][index]
@@ -437,6 +445,8 @@ class Runner:
                 done = self._choose_suggestion(page, script, step, index, act, record, sug, visual, delay)
                 if done:
                     return None
+            if sug is None and self._counter_row_click(page, script, step, index, act, record, visual, delay):
+                return None
         if step.action == "click" and meaning.get("intent") == "pick_date":
             # 23.6.0: a recorded click on a calendar day plays as "choose this date", whatever the calendar's HTML
             return self._choose_date(page, step, index, act, record, meaning["date"], meaning, None, visual, delay)
@@ -812,6 +822,66 @@ class Runner:
         if not sel:
             return None
         return {"field": Target(selector=sel), "typed": "", "option": text, "fill_index": -1, "after": False}
+
+    def _counter_row_click(self, page: Any, script: Script, step: Step, index: int, act: Any,
+                           record: dict[str, Any], visual: bool, delay: int) -> bool:
+        """23.7.1: recordings made before 23.6.1 kept a press of a counter's icon-only + as a click on the counter's
+        whole row ("Click Adults 12+ years old 1", positional li). Clicking the row does nothing, so the passengers
+        never changed. The row's text names the counter and the number it showed when it was pressed; when exactly
+        one of + and - could have been pressed at that number (Trip.com disables - at 1 adult), the step plays as
+        "set Adults to 2". Otherwise it stops and says how to write the step, never guessing."""
+        m = re.match(r"^(.*?\D)\s*(\d{1,2})$", semantic.option_text(step))
+        if not m:
+            return False
+        text, shown = m.group(1).strip(), int(m.group(2))
+        if not text or len(text) > 80:
+            return False
+        counters: list[dict[str, Any]] = []
+        prev = script.steps[index - 1] if index > 0 else None
+        rounds = 8 if prev is not None and prev.action == "click" else 1  # the pop-up the step before opened
+        for _ in range(rounds):
+            try:
+                components.ensure(page)
+                counters = page.evaluate("() => window.__sgComp.counters().map(c => ({label: c.label, sub: c.sub}))")
+            except Exception:
+                counters = []
+            if counters:
+                break
+            page.wait_for_timeout(250)
+        words = semantic._words(text)
+        hits = [c for c in counters if semantic._words(c["label"]) and
+                words[:len(semantic._words(c["label"]))] == semantic._words(c["label"])]
+        if len(hits) != 1:
+            return False
+        here = self._quick(page, step.target, 600)
+        if here is not None:
+            try:
+                if here.evaluate("el => !!(window.__sgComp && window.__sgComp.stepperOf(el))"):
+                    return False  # the recorded element is the + or - itself: an ordinary click presses it
+            except Exception:
+                pass
+        label = hits[0]["label"]
+        state = page.evaluate("l => window.__sgComp.counter(l, 0)", label) or {}
+        page.evaluate("() => window.__sgComp.clear()")
+        if state.get("value") == shown and state.get("minusDisabled") and not state.get("plusDisabled"):
+            count, which = shown + 1, "+"
+        elif state.get("value") == shown and state.get("plusDisabled") and not state.get("minusDisabled"):
+            count, which = shown - 1, "-"
+        else:
+            raise components.ComponentError(
+                "COUNTER_AMBIGUOUS",
+                f"Step {index + 1} was recorded by an older version as a click on the whole '{label}' row (showing "
+                f"{shown}), so it does not say whether + or - was pressed. Change this step to the action set_count "
+                f"with the Value {label}={shown + 1} (or the number you want), or record it again.",
+                choices=[f"{label}={shown + 1}", f"{label}={max(0, shown - 1)}"])
+        res = components.set_count(page, label, count, timeout=step.timeout_ms, pointer=self._pointer(page, visual, delay))
+        act.event(names.EXECUTION_STEP, f"Step {index + 1}: the click on the '{label}' row (older recording) was its "
+                                        f"{which} (the other control is disabled at {shown}); {label} set to {count} "
+                                        f"({res['presses']} press{'es' if res['presses'] != 1 else ''}, verified)",
+                  step=index)
+        record["steps"][-1]["semantic"] = {"intent": "set_count", "label": label, "count": count, "verified": True}
+        record["steps"][-1]["note"] = f"older recording: row click played as {label} {which}"
+        return True
 
     def _set_count(self, page: Any, step: Step, index: int, act: Any, record: dict[str, Any],
                    meaning: dict[str, Any], visual: bool, delay: int) -> str | None:

@@ -1,6 +1,7 @@
 <#
-  SkyGuard QA - 23.6.1 cumulative patch (guided playback of suggestion lists, calendars and counters; includes 23.4.0,
-  23.5.0 and 23.6.0), for 23.3.35, 23.4.0, 23.5.0 or 23.6.0. No administrator rights needed; works offline.
+  SkyGuard QA - 23.7.1 cumulative patch (guided playback of suggestion lists, calendars and counters, and
+  Autonomous Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1 and 23.7.0), for 23.3.35, 23.4.0, 23.5.0,
+  23.6.0, 23.6.1 or 23.7.0. No administrator rights needed; works offline.
 
   Finds the installation, stops it, and runs install_patch.py with the application's own Python:
   verify the patch files (SHA-256), check disk space and permissions, back up the files it replaces, the database
@@ -22,13 +23,13 @@ param(
     [switch]$RestoreDatabase
 )
 $ErrorActionPreference = "Stop"
-$PatchVersion = "23.6.1"
+$PatchVersion = "23.7.1"
 $Here = $PSScriptRoot
 function Say([string]$msg) { Write-Host $msg }
 function Step([string]$msg) { Write-Host ""; Write-Host "== $msg" -ForegroundColor Cyan }
 function Fail([string]$msg) { Write-Host ""; Write-Host "PATCH FAILED: $msg" -ForegroundColor Red; exit 1 }
 
-Say "SkyGuard QA ${PatchVersion}: guided playback of suggestion lists, calendars and counters (cumulative)"
+Say "SkyGuard QA ${PatchVersion}: guided playback fixes and Autonomous Application Learning (cumulative)"
 $roots = @()
 if ($InstallDir) { $roots += $InstallDir }
 $roots += (Join-Path $env:LOCALAPPDATA "Programs\AIAgenticTestAgent")
@@ -103,5 +104,8 @@ if ($Health) { Say "Running: http://127.0.0.1:$Port/  version $($Health.version)
 elseif ($NoStart) { Say "Done. Start it with START_QA_PLATFORM.cmd." }
 else { Say "Done, but the health check did not answer within 90 seconds. Look at the application window." }
 Say "Press Ctrl+F5 once in the browser. Log: $Log"
+if (Test-Path (Join-Path $env:LOCALAPPDATA "SkyGuardAgent\app\companion_main.py")) {
+    Say "The SkyGuard browser extension is installed for this user: run UPDATE_EXTENSION.cmd in this folder to bring it to 1.1.0 (learn while you browse)."
+}
 try { Stop-Transcript | Out-Null } catch { }
 exit 0

@@ -28,6 +28,10 @@ NAME = "SkyGuard_Autonomous_Application_Learning_Final_Patch"
 PKG = ROOT / "packaging" / "autolearn-patch"
 RELEASES = {"23.3.35": "6d448fa", "23.4.0": "53e80093fe99272f27dc424392d1fd3d746b3c7c", "23.5.0": "900e4e0",
             "23.6.0": "c229f6b"}
+# 23.7.1: this package is built from the working tree, which is 23.7.1 now; its installer would refuse it. The
+# cumulative 23.7.1 patch is tested in tests/test_cumulative_patch_23710.py.
+pytestmark = pytest.mark.skipif('__version__ = "23.7.0"' not in (ROOT / "qa_platform" / "__init__.py").read_text(encoding="utf-8"),
+                                reason="superseded by the 23.7.1 cumulative patch (tests/test_cumulative_patch_23710.py)")
 
 
 def _git(*args: str) -> bytes:

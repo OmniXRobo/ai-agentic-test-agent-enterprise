@@ -484,24 +484,29 @@ def commit_autocomplete(page: Any, field: Any, value: str, *, timeout: int = 400
                         pointer: Callable[[Any, str], None] | None = None) -> dict[str, Any] | None:
     """After a value was typed into an autocomplete: if a suggestion list opened, choose the suggestion that is the
     typed value. Returns None when there is no suggestion list (a plain text field), {"chosen"} when one was chosen,
-    or raises OPTION_AMBIGUOUS when several suggestions fit (never a guess)."""
+    or raises OPTION_AMBIGUOUS when several suggestions fit (never a guess).
+
+    23.7.1: a recording can type into a city field and move on without clicking a suggestion (Trip.com: "dubai
+    international airport", then a click on the arrival field); the site then puts back the last chosen city. A list
+    already open (the popular-cities panel shown on focus) is not the answer yet: the results list that replaces it
+    is waited for, and when the site ignored the filled text (no results at all), the text is typed key by key."""
     if not value:
         return None
     ensure(page)
     kind = classify(field).get("kind")
     if kind not in ("autocomplete", "combobox", "textbox", "date_field"):
         return None
+    suggesting = kind in ("autocomplete", "combobox")
     settle(page, 300, timeout)
-    res = field.evaluate("(el, t) => window.__sgComp.findOption(t, el)", value) or {}
-    if res.get("status") == "none" and not res.get("count") and kind in ("autocomplete", "combobox"):
-        page.wait_for_timeout(600)  # suggestions loaded from the server
-        res = field.evaluate("(el, t) => window.__sgComp.findOption(t, el)", value) or {}
+    res = _find_option(page, field, value, rounds=16 if suggesting else 1)
+    if res.get("status") not in ("found", "ambiguous") and suggesting and res.get("count"):
+        res = _retype(page, field, value, value, timeout, pointer) or {}  # a list is open, but not for this text
     if res.get("status") == "found":
         chosen = res.get("text") or value
         _click_marked(page, timeout, pointer, chosen[:40])
         settle(page, 300, 3000)
         return {"chosen": chosen, "tier": res.get("tier")}
-    if res.get("status") == "ambiguous" and kind in ("autocomplete", "combobox"):
+    if res.get("status") == "ambiguous" and suggesting:
         raise ComponentError("OPTION_AMBIGUOUS", f"Several suggestions match '{value}'.", choices=res.get("options") or [])
     return None
 
