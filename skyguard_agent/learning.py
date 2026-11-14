@@ -265,9 +265,17 @@ class Learning:
                                    "FROM learning_sessions" + (" WHERE application_id = ?" if app_id else "")
                                    + " ORDER BY created_at DESC LIMIT 100", (app_id,) if app_id else ())
         for r in rows:
-            d = loads(r.pop("data"))
+            try:
+                d = loads(r.pop("data")) or {}
+            except Exception:  # noqa: BLE001 - one damaged row must not hide the others
+                d = {}
+            if not isinstance(d, dict):
+                d = {}
+            ev = d.get("events")
+            # guided sessions keep the events themselves; "Learn while I browse" sessions (23.7.0) keep a count
+            r["events"] = len(ev) if isinstance(ev, list) else int(ev) if isinstance(ev, (int, float)) else 0
+            r["pages"] = int(d.get("pages") or 0) if isinstance(d.get("pages"), (int, float)) else 0
             r["title"] = d.get("title")
-            r["events"] = len(d.get("events", []))
             r["result"] = d.get("result")
         return rows
 
@@ -275,6 +283,7 @@ class Learning:
         s = self.session(sid)
         if s["status"] != "recording":
             raise AgentError("LEARNING_CLOSED", "This learning session is no longer recording.", 409)
+        _guided_only(s)
         app = self.kb.application(s["application_id"])
         data = s["data"]
         for e in events[:200]:
@@ -308,6 +317,7 @@ class Learning:
         s = self.session(sid)
         if s["status"] != "recording":
             raise AgentError("LEARNING_CLOSED", "This learning session is already finished.", 409)
+        _guided_only(s)
         app = self.kb.application(s["application_id"])
         data = s["data"]
         events = [e for e in data["events"] if e.get("element") or e["kind"] == "navigate"]
@@ -532,3 +542,11 @@ def _entity(title: str) -> str:
     words = [w for w in re.findall(r"[a-z]+", norm(title)) if not COMMIT_WORDS.fullmatch(w) and len(w) > 2
              and w not in ("the", "new", "and", "for")]
     return words[0] if words else ""
+
+
+def _guided_only(s: dict[str, Any]) -> None:
+    """23.7.1: a "Learn while I browse" session keeps a count of events, not the events (they are observations);
+    it is stopped with Stop learning, not finished as a demonstrated workflow."""
+    if s.get("mode") == "watch" or not isinstance((s.get("data") or {}).get("events"), list):
+        raise AgentError("LEARNING_NOT_GUIDED", "This is a 'Learn while I browse' session. Stop it with Stop learning; "
+                         "what it learned is under Understanding.", 409)

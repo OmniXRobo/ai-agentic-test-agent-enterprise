@@ -198,16 +198,18 @@ MIGRATE = ("import sys; sys.path.insert(0, '.'); from qa_platform.config import 
 LOADS = "import sys; sys.path.insert(0, '.'); import qa_platform, qa_platform.main; print(qa_platform.__version__)"
 AGENT_LOADS = ("import sys; sys.path.insert(0, '.'); import skyguard_agent, skyguard_agent.agent, qa_platform.opsagent.service, "
                "qa_platform.api.opsagent; print(skyguard_agent.__version__)")
-COMPONENTS_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automation import components, semantic, runner; "
+COMPONENTS_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automation import components, semantic, runner, site_diagnostic; "
                    "from qa_platform.automation.browser import js; "
                    "print('ok' if 'window.__sgComp' in js('components') and components.stable_text('a, The price is AED 1k') == 'a' "
                    "and hasattr(components, 'set_count') and hasattr(semantic, 'suggestion_context') "
                    "and hasattr(runner.Runner, '_counter_row_click') and 'nearRows' in js('components') "
+                   "and hasattr(runner.Runner, '_choice_field') and 'probe(want)' in js('components') "
                    "else 'component engine incomplete')")
-LEARNING_LOAD = ("import sys; sys.path.insert(0, '.'); from skyguard_agent import journal, understanding, assistant; "
+LEARNING_LOAD = ("import sys; sys.path.insert(0, '.'); from skyguard_agent import journal, understanding, assistant, learning; "
                  "from skyguard_agent.assistant import canonical; "
                  "print('ok' if canonical('who authorises trips') == 'who authorize trips' and "
-                 "hasattr(understanding, 'Miner') and hasattr(journal, 'Journal') else 'learning engine incomplete')")
+                 "hasattr(understanding, 'Miner') and hasattr(journal, 'Journal') and hasattr(learning, '_guided_only') "
+                 "else 'learning engine incomplete')")
 AGENT_MIGRATE = ("import sys; sys.path.insert(0, '.'); from pathlib import Path; from qa_platform.config import Paths; "
                  "from skyguard_agent.store import Store; p = Paths().ensure(); s = Store(Path(p.root) / 'opsagent' / "
                  "'knowledge.sqlite3'); print(s.schema_version); s.close()")

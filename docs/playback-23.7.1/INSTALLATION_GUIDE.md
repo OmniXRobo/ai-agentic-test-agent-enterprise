@@ -99,3 +99,22 @@ normally; or tick the extension option above and just work in your browser.
    Children=1, Infants=1). It needs the passengers pop-up to be open, so put it after the click on
    "1 adult, Economy".
 5. New recordings made with 23.7.1 record the + and - as "Set Adults to 2" directly.
+
+## 8. If a step still fails on Trip.com: run the site diagnostic
+
+Trip.com cannot be opened from our build machine, so this tool records what the real page looks like on your PC.
+
+1. Double-click `DIAGNOSE_SITE.cmd` in the extracted patch folder (after `APPLY_PATCH.cmd`). Microsoft Edge opens on
+   trip.com flights. To use another city or browser: `DIAGNOSE_SITE.ps1 -City "Dubai" -Browser chrome`.
+2. The window asks you for five steps, one at a time. Do each step in the browser, then press **Enter** in the window:
+   1. close any banner so the flight search box is visible;
+   2. click once into the departure field (do not type);
+   3. type the city (Manila) and wait for the airport list;
+   4. choose the city and an arrival city, then open the departure calendar;
+   5. choose two dates, then open the passengers list.
+   Type `s` to skip a step or `q` to finish early.
+3. When it says **Done**, send back the file `SkyGuard_SiteDiagnostic_<date>.zip` from your Desktop.
+
+It saves screenshots, the accessibility tree, the page HTML (without scripts or passwords), what the automation's
+component engine finds at each step, and your newest Trip.com scripts with their last run results. It never clicks or
+types by itself and never books. Cookies and saved sign-ins are not collected.

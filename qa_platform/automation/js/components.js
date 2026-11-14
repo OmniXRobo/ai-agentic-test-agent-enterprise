@@ -638,6 +638,32 @@
     // 23.6.1: lists without roles, counters (+ / -)
     rowText, rowOf, pointerRoot, repeated, nearRows, counter, counters: () => counters().map((c) => ({ label: c.label, sub: c.sub, value: numberOf(c.num) })),
     stepperOf, numberOf,
+    // 23.7.1: what the component engine sees now (for the site diagnostic the tester runs on their own PC)
+    probe(want) {
+      const desc = (el) => {
+        if (!el || el === document.body) return null;
+        const a = {};
+        for (const at of el.attributes || []) if (at.name !== "style" && at.name !== "value") a[at.name] = clean(at.value, 160);
+        const r = el.getBoundingClientRect();
+        return { tag: el.tagName.toLowerCase(), attrs: a, text: clean(el.innerText || el.textContent, 160),
+                 value: el.type === "password" ? "[secret]" : clean(el.value, 80), box: [r.left, r.top, r.width, r.height].map(Math.round) };
+      };
+      const active = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+      const chain = []; for (let n = active, i = 0; n && n !== document.body && i < 5; n = n.parentElement, i++) chain.push(desc(n));
+      const cells = dayCells();
+      const safe = (f) => { try { return f(); } catch (e) { return { error: String(e && e.message || e) }; } };
+      return {
+        url: location.href, title: document.title, active: chain, frames: document.querySelectorAll("iframe").length,
+        popups: safe(() => popups().slice(0, 6).map((p) => ({ el: desc(p), options: optionsOf(p).slice(0, 15).map(optionText) }))),
+        near_rows: safe(() => (active ? nearRows(active) : []).slice(0, 15).map((r) => ({ text: rowText(r), el: desc(r) }))),
+        find_option: want ? safe(() => { const res = findOption(want, active); clear(); return res; }) : null,
+        group_text: active ? safe(() => groupText(active)) : null,
+        calendar: safe(() => ({ months: months(cells), cells: cells.length,
+                                sample: cells.slice(0, 12).map((c) => ({ iso: c.iso, source: c.source, disabled: disabled(c.el), selected: selected(c.el), el: desc(c.el) })) })),
+        date_fields: safe(() => dateFields().map((f) => ({ role: f.role, text: f.text, el: desc(f.el) }))),
+        counters: safe(() => counters().map((c) => ({ label: c.label, sub: c.sub, value: numberOf(c.num), minus: desc(c.minus), plus: desc(c.plus) }))),
+      };
+    },
     // for the recorder: the date of a clicked calendar cell (with its panel), the option a click chose
     cellDate(el) {
       if (!el) return "";

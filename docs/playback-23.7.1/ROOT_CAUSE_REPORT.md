@@ -76,3 +76,33 @@ same way (role only while focused, "Dubai" in the input, "DXB" beside it), and t
 
 - No site-specific code: nothing refers to Trip.com; the rules read text, structure and state.
 - No coordinates are recorded or replayed; no page scripts are run; offline; no new packages; no administrator rights.
+
+## Your second 23.7.1 run on trip.com (RUN-20261114-151722)
+
+**Reported:** step 7 "Choose 'Manila' in Departure airport or city" failed with "Neither the list field nor an open
+list with 'Manila' was found", the dates could not be chosen, and the AI Learning page showed "Unexpected server
+error" on the Learning tab.
+
+**Root cause (Manila):** the step comes right after "Click Flights": Manila was clicked in the list that opens when the
+departure field gets focus, so nothing was typed. The step's field locator matches the input only while it has focus
+(the same reason as the DXB run), and the recorded element gave no other locator that matched. Playback then looked
+only for an already open list, found none, and stopped without opening the field or typing.
+
+**Fix:** a choose_option step finds its field in this order: recorded locators and stable attributes; the field's
+name as a combobox, as the aria-label of the input or of the box around it, as its label; its placeholder; the input
+inside a recorded box; self-healing. Only then does it use a list that is already open. With the field found, the
+list is opened by clicking it, and if the city is not in it, the city is typed and chosen from the results. Tests:
+`test_choice_from_the_popular_list_when_the_field_was_never_focused`, `test_choice_when_only_the_group_around_the_field_was_recorded`
+(fails without the fix with exactly your message), `test_record_and_play_a_city_clicked_in_the_popular_list`.
+
+**Dates:** the run stopped at step 7, so the date steps were not reached on 23.7.1. On the stand-in they pass (the day
+is found by its full date; the price in the label is ignored). Because trip.com cannot be opened from the build
+machine, `DIAGNOSE_SITE.cmd` captures the real calendar (and the city list and passengers) on your PC so that any
+difference can be fixed from evidence rather than guessed.
+
+**Root cause (Learning tab):** "Learn while I browse" sessions store a count of events (`"events": 0`), guided
+sessions store the list of events. The session list took the length of that value, which fails for a number, so the
+request behind the Learning tab ended in a server error as soon as one such session existed. **Fix:** the list reads
+both forms and one damaged row no longer hides the others; guided-only actions on a watch session answer with a clear
+409 message. Test: `test_learning_tab_lists_learn_while_i_browse_sessions` (fails without the fix).
+

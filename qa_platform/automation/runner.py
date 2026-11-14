@@ -510,6 +510,8 @@ class Runner:
             # briefly; the calendar handler finds the day by its date anyway
             cell = step.action == "pick_date" and bool(components.date_in_text(step.target.selector))
             located = self._quick(page, step.target, 800 if cell else min(timeout, 4000))
+            if step.action == "choose_option":
+                located = self._choice_field(page, step, index, script, act, record, evidence_dir, visual, located)
             if step.action == "pick_date":
                 iso = visual_fx.parse_date(value or "").isoformat()
                 if located is not None and components.classify(located).get("kind") in (
@@ -705,6 +707,86 @@ class Runner:
             except Exception:
                 continue
         return None
+
+    @staticmethod
+    def _field_name(target: Any) -> str:
+        """The accessible name the field was recorded with (also read from role=...[name="..."] or
+        [aria-label="..."] in its locators)."""
+        if target.name:
+            return str(target.name).strip()
+        for sel in [target.selector, *target.alternates]:
+            m = re.search(r'(?:\[name=|aria-label=)"((?:[^"\\]|\\.)+)"', sel or "")
+            if m:
+                return m.group(1).replace('\\"', '"')
+        return str(target.label or "").strip()
+
+    @staticmethod
+    def _editable_inside(loc: Any) -> Any | None:
+        """The text field inside a recorded box (div[role=group] around the input), if there is exactly one."""
+        try:
+            if loc.evaluate("el => ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable"):
+                return loc
+            inner = loc.locator("input:not([type=hidden]), textarea, select, [role=combobox], [contenteditable=true]")
+            if inner.count() == 1 and inner.first.is_visible():
+                return inner.first
+        except Exception:
+            pass
+        return None
+
+    def _choice_field(self, page: Any, step: Step, index: int, script: Script, act: Any, record: dict[str, Any],
+                      evidence_dir: Path, visual: bool, located: Any | None) -> Any | None:
+        """23.7.2: the field a choose_option step chooses in. Trip.com's city input is role=combobox[name=...] only
+        while it has focus, and a city clicked in the list that opens on focus is recorded right after "Click
+        Flights", so the recorded locator matched nothing, nothing was opened or typed, and the step failed with
+        "Neither the list field nor an open list ... was found". Now: the recorded locators and stable attributes,
+        then the field by its name (combobox, aria-label on it or on its box, label, placeholder), the input inside a
+        recorded box, and self-healing; only then an already open list."""
+        target = step.target
+        assert target is not None
+        if located is not None:
+            return self._editable_inside(located) or located
+        if target.frames:
+            return None
+        name = self._field_name(target)
+        q = lambda v: str(v).replace("\\", "\\\\").replace('"', '\\"')  # noqa: E731
+        tries: list[tuple[str, Any]] = []
+        if name:
+            tries += [(f"its name '{name}' (combobox)", lambda: page.get_by_role("combobox", name=name, exact=True)),
+                      (f"its name '{name}' (field)", lambda: page.locator(
+                          f'input[aria-label="{q(name)}"], textarea[aria-label="{q(name)}"]')),
+                      (f"the box named '{name}'", lambda: page.locator(
+                          f'[aria-label="{q(name)}"] input:not([type=hidden]), [aria-label="{q(name)}"] [role=combobox]')),
+                      (f"its label '{name}'", lambda: page.get_by_label(name, exact=True))]
+        if target.placeholder:
+            tries.append((f"its placeholder '{target.placeholder}'", lambda: page.get_by_placeholder(
+                target.placeholder, exact=True)))
+        for _ in range(6 if tries else 0):  # the search box may still be drawing after the tab click
+            for how, make in tries:
+                try:
+                    loc = make()
+                    n = loc.count()
+                    if n == 0:
+                        continue
+                    visible = [loc.nth(i) for i in range(min(n, 5)) if loc.nth(i).is_visible()]
+                    if len(visible) == 1:
+                        field = self._editable_inside(visible[0]) or visible[0]
+                        act.log(f"Step {index + 1}: the list field was found by {how}", step=index)
+                        return field
+                except Exception:
+                    continue
+            page.wait_for_timeout(500)
+        # an open list with the option needs no field (the previous step opened it)
+        try:
+            components.ensure(page)
+            if (page.evaluate("t => window.__sgComp.findOption(t, null)", step.value or "") or {}).get("status") == "found":
+                return None
+        except Exception:
+            pass
+        try:
+            healed = self._locate(page, step, index, script, act, record, evidence_dir, visual)
+        except StepFailed:
+            return None
+        return self._editable_inside(healed) or healed
 
     def _commit_guard(self, step: Step, info: dict[str, Any], index: int, playback: dict[str, Any],
                       allow: bool) -> None:

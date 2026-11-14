@@ -24,6 +24,13 @@ On 14 Nov 2026 your PC had 23.7.0. 23.7.0 was built on 23.6.0, so it did not hav
   the field is pinned to the very element before the choice, and the choice counts as applied when the field's own box
   shows the airport code or a distinctive word of the option and the input no longer holds just the typed text
   (checked for up to 3 s). A field that disappears after the click counts when the list closed.
+- **"Neither the list field nor an open list with 'Manila' was found"** (your run RUN-20261114-151722, step 7, right
+  after "Click Flights"): you clicked Manila in the list that opens on focus, so nothing was typed, and the field's
+  recorded locator matches only while it has focus. Playback found no field, so it neither opened the list nor typed.
+  Now the field is also found by its name ("Departure airport or city" as a combobox, as the aria-label of the input or
+  of the box around it, as its label) and by its placeholder, the input inside a recorded box is used, and
+  self-healing is tried, before an already open list is looked for. The list is then opened by clicking the field,
+  and if the city is not in it, the city is typed and chosen from the results.
 - **Recorded test id, id, label and placeholder** are tried right after the recorded locators, before self-healing:
   the departure field is found at once by `[data-testid="search_city_from0"]` instead of self-healing it on every run.
 - **Rows laid out in parts** ("DXB | Dubai International Airport | Dubai, United Arab Emirates"): the typed words are
@@ -36,7 +43,24 @@ On 14 Nov 2026 your PC had 23.7.0. 23.7.0 was built on 23.6.0, so it did not hav
 - **Step editor:** steps written by Semantic upgrade (`choose_option`) and `dismiss` steps were not in the Action list,
   so pressing Save turned them into `goto`. They are kept now.
 
+## Fixed (AI Application Learning & Operations Agent)
+
+- **Learning tab: "Unexpected server error"**. A "Learn while I browse" session (23.7.0, also started by the browser
+  extension) keeps a count of what it saw, while the session list expected the list of events of a guided
+  demonstration, so the whole tab failed once such a session existed. The list now reads both. "Finish & build
+  workflow" on a "Learn while I browse" session answers with a clear message (stop it with Stop learning) instead of an
+  error. When a tab of the agent page cannot be loaded, it shows a card that names the tab, says your data is not
+  affected and offers Try again, instead of a red error label.
+
 ## Added
+
+- **Site diagnostic (`DIAGNOSE_SITE.cmd`)**: opens trip.com flights in Edge with the application's own Playwright and
+  asks you to do five ordinary steps (show the search box, click the departure field, type a city, open the calendar,
+  open the passengers). After each one it saves a screenshot, the accessibility tree, the page HTML (no scripts, no
+  passwords) and what the component engine finds (the focused field and its box, open lists and their rows, the
+  option it would choose, calendar days, date fields, counters). It adds your newest trip.com scripts and their last
+  runs, and saves one ZIP on your Desktop. You do every click; nothing is booked; cookies and passwords are not
+  collected. Options: `-City`, `-Browser msedge|chrome|chromium`, `-Url`.
 
 - **`set_count` action** for the step editor: Value `Adults=2` (also `Children: 1`, `Infants to 1`). It presses the
   counter's + or - by its label until it shows the number, checking after every press, and reports the application's

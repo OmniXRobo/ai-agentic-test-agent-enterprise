@@ -26,6 +26,7 @@
     { code: "HDO", name: "Hindon Airport", city: "New Delhi", country: "India" },
     { code: "BOM", name: "Chhatrapati Shivaji Maharaj International Airport", city: "Mumbai", country: "India" },
     { code: "LHR", name: "Heathrow Airport", city: "London", country: "United Kingdom" },
+    { code: "MNL", name: "Ninoy Aquino International Airport", city: "Manila", country: "Philippines" },
   ];
   const codeOf = (box) => box.querySelector(".cc") || box.appendChild(el("span", { class: "cc" }));
   const hay = (p) => `${p.code} ${p.name} ${p.city} ${p.country}`.toLowerCase();
@@ -40,7 +41,7 @@
     const row = (node, p) => { node.addEventListener("mousedown", (e) => e.preventDefault()); node.addEventListener("click", (e) => { e.stopPropagation(); pick(p); }); return node; };
     const popular = () => {
       const b = el("div", { class: "pop" }); b.appendChild(el("div", { class: "lb" }, "Popular cities"));
-      const ul = el("ul"); ["DXB", "LHR", "DEL", "BOM"].forEach((c, i) => { const p = PLACES.find((x) => x.code === c); const li = el("li", { class: "cty", "data-testid": String(i) }, p.city); ul.appendChild(row(li, p)); });
+      const ul = el("ul"); ["DXB", "LHR", "DEL", "MNL", "BOM"].forEach((c, i) => { const p = PLACES.find((x) => x.code === c); const li = el("li", { class: "cty", "data-testid": String(i) }, p.city); ul.appendChild(row(li, p)); });
       b.appendChild(ul); return b;
     };
     const results = (items) => {

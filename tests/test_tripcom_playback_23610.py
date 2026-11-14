@@ -503,3 +503,54 @@ def test_choice_in_a_field_whose_locator_only_matches_while_focused(rt, site):
     a.scripts.save(Script(id="SCR-TRIPPIN001", name="pin", mode="guided", steps=steps, browser="chromium", base_url=site))
     rec = _play(a, "SCR-TRIPPIN001", headless=True)
     assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+def _manila_script(site: str, sid: str, dep: Target) -> Script:
+    T = Target
+    steps = [Step(action="goto", value=f"{site}/tripcom/flights.html"),
+             Step(action="click", target=T(selector='role=tab[name="Flights"]', role="tab", name="Flights",
+                                           text="Flights"), description="Click Flights"),
+             Step(action="choose_option", target=dep, value="Manila",
+                  semantic={"intent": "choose_option", "option": "Manila", "list": "suggestion",
+                            "option_selector": '[data-testid="3"]'}),
+             Step(action="expect_value", target=T(selector='[data-testid="search_city_from0"]'), value="Manila")]
+    return Script(id=sid, name="manila", mode="guided", steps=steps, browser="chromium", base_url=site)
+
+
+def test_choice_from_the_popular_list_when_the_field_was_never_focused(rt, site):
+    """The tester's run RUN-20261114-151722: "Choose 'Manila' in Departure airport or city" right after "Click
+    Flights" failed with "Neither the list field nor an open list with 'Manila' was found". The city was clicked in
+    the list that opens on focus (nothing typed), and the field's recorded locator role=combobox[name=...] matches
+    only while it has focus, so nothing was found, nothing was opened and nothing was typed. The field is now found by
+    its name (group label, aria-label, label, placeholder) and opened before the city is chosen."""
+    dep = Target(selector='role=combobox[name="Departure airport or city"]', tag="input", role="combobox",
+                 name="Departure airport or city", description="Departure airport or city")
+    a = rt.automation
+    a.scripts.save(_manila_script(site, "SCR-TRIPMNL001", dep))
+    rec = _play(a, "SCR-TRIPMNL001", headless=True)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+def test_choice_when_only_the_group_around_the_field_was_recorded(rt, site):
+    """The same choice recorded on the box around the input (div[role=group][aria-label=...]), not the input."""
+    dep = Target(selector='div[aria-label="Departure airport or city"] > div:nth-of-type(9)', tag="div", role="group",
+                 name="Departure airport or city")
+    a = rt.automation
+    a.scripts.save(_manila_script(site, "SCR-TRIPMNL002", dep))
+    rec = _play(a, "SCR-TRIPMNL002", headless=True)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+def test_record_and_play_a_city_clicked_in_the_popular_list(rt, site):
+    """Clicking the departure box and then "Manila" in the list that opens on focus, typing nothing."""
+    a = rt.automation
+    run_id, s = _session(a, f"{site}/tripcom/flights.html")
+    s.command("click", '#trip_searchBoxTabs > li:nth-of-type(2)'); _pause()
+    s.command("click", '[data-testid="search_city_from0"]'); _pause()
+    s.command("click", '.pop li.cty[data-testid="3"]'); _pause()
+    script = a.stop_recording(run_id)
+    print([(st.action, st.value, st.target.selector if st.target else None) for st in script.steps])
+    script.steps.append(Step(action="expect_value", target=Target(selector='[data-testid="search_city_from0"]'), value="Manila"))
+    a.scripts.save(script)
+    rec = _play(a, script.id, headless=True)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))

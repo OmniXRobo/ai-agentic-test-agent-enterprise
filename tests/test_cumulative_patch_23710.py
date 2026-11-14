@@ -110,9 +110,10 @@ def test_patch_contents(built):
         assert must in files, must
     assert not any("__pycache__" in f or f.startswith(("tests/", "data/")) for f in files)
     for tool in ("APPLY_PATCH.cmd", "APPLY_PATCH.ps1", "ROLLBACK_PATCH.cmd", "VERIFY_PATCH.cmd", "install_patch.py",
-                 "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "SHA256_CHECKSUM.txt"):
+                 "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "DIAGNOSE_SITE.cmd", "DIAGNOSE_SITE.ps1",
+                 "SHA256_CHECKSUM.txt"):
         assert (built / tool).is_file(), tool
-    for crlf in ("APPLY_PATCH.cmd", "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1"):
+    for crlf in ("APPLY_PATCH.cmd", "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "DIAGNOSE_SITE.cmd", "DIAGNOSE_SITE.ps1"):
         assert b"\r\n" in (built / crlf).read_bytes(), crlf
     ext = built / "browser-extension-update"
     assert json.loads((ext / "extension" / "manifest.json").read_text())["version"] == "1.1.0"

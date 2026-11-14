@@ -55,7 +55,15 @@ async function show(tab) {
   const body = state.view.querySelector("#opsBody");
   try {
     await ({ chat: chatTab, apps: appsTab, learn: learnTab, understand: understandTab, knowledge: knowledgeTab, runs: runsTab, audit: auditTab, config: configTab })[tab](body);
-  } catch (err) { body.innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`; }
+  } catch (err) {
+    // 23.7.1: a readable card with a retry, never a bare error pill
+    const label = (TABS.find(([k]) => k === tab) || [tab, tab])[1];
+    body.innerHTML = `<div class="card" style="margin-top:8px"><h3>${esc(label)} could not be loaded</h3>
+      <p class="muted">${esc(err.message || "The server did not answer.")} Your data is not affected. Try again; if it keeps happening, the details are in the server log (logs folder of the installation).</p>
+      <button class="btn primary" id="opsRetry">Try again</button></div>`;
+    const retry = body.querySelector("#opsRetry");
+    if (retry) retry.addEventListener("click", () => show(tab));
+  }
   renderStatus();
 }
 

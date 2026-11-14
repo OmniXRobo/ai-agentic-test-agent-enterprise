@@ -279,3 +279,20 @@ def test_api_routes(client):
     d = client.post(f"/api/ops/understanding/{app_id}/digest").json()
     assert d["ok"] and d["model"]["screens"] == []
     assert client.post(f"/api/ops/admin/journal-clear/{app_id}").json()["cleared"] == 0
+
+
+def test_learning_tab_lists_learn_while_i_browse_sessions(client):
+    """23.7.1: the Learning tab showed "Unexpected server error" once a "Learn while I browse" session existed (it
+    keeps a count of events, and the session list took the length of a number)."""
+    r = client.post("/api/ops/applications", json={"name": "Trip", "base_url": "http://127.0.0.1:9/"})
+    app_id = r.json()["application"]["id"]
+    agent = client.app.state.runtime.opsagent.agent
+    sid = agent.journal.new_session(app_id, interface="browser", by="tester")["id"]
+    agent.journal.ensure_session(app_id, "ext-tab-1234", interface="extension", by="tester")
+    out = client.get(f"/api/ops/learning?app_id={app_id}")
+    assert out.status_code == 200, out.text
+    rows = {s["id"]: s for s in out.json()["sessions"]}
+    assert rows[sid]["events"] == 0 and rows[sid]["mode"] == "watch" and "ext-tab-1234" in rows
+    assert client.get("/api/ops/learning").status_code == 200
+    bad = client.post(f"/api/ops/learning/{sid}/finish")
+    assert bad.status_code == 409 and "Stop learning" in bad.text
