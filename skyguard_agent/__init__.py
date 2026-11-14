@@ -20,8 +20,11 @@ Layers (each a module):
   executor       PARSE -> PLAN -> INSPECT -> VALIDATE -> PREVIEW -> CONFIRM -> EXECUTE -> VERIFY, checkpoints,
                  pause / manual intervention / resume / stop
   learning       automatic read-only discovery and guided demonstration learning
+  journal        23.7.0: the observation journal of passive learning (what a person did and saw while browsing)
+  understanding  23.7.0: screens, flows, statuses, rules and roles worked out from the journal; the app model
+  assistant      23.7.0: chat answers from the app model (how / who / what next / rules / status of a record)
   agent          the facade both interfaces call
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 AGENT_NAME = "SkyGuard Adaptive AI Application Learning & Operations Agent"

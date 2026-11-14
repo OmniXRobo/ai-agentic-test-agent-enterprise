@@ -1,0 +1,55 @@
+<!doctype html>
+<!-- Test fixture (23.6.1): a stand-in for the Trip.com home page search box, built from Trip.com's real markup
+     (class names, data-testid values and calendar structure seen in its public page source). It is used only by the
+     tests, because the build machine cannot reach trip.com. What it copies on purpose:
+     - generated CSS-module class names (no role on the suggestion rows, no "option"/"suggest" in any class),
+     - index-numbered data-testid values on suggestion rows ("0", "1" ...) that are reused by the popular-city panel,
+     - the suggestion list closes when the field loses focus and is only filled from typed text,
+     - the hotel calendar (ul/li cells with span.day, a "Nov 2026" heading, icon-only next / previous spans with
+       "is-disable", past days greyed with "is-disable"),
+     - the flight calendar (div role=checkbox cells named "Sunday, November 15, 2026, ..., The price is AED 1.65k"),
+     - the rooms / guests and passengers pop-ups with icon-only + and - controls and a child-age list. -->
+<html lang="en-US" dir="ltr" data-platform="online"><head><meta charset="utf-8"><title>Trip.com test stand-in</title>
+<link rel="stylesheet" href="trip.css"></head><body>
+<div id="main">
+<div class="c-srh-holder-deep-blue"><div class="mc-srh-box">
+  <div class="mc-srh-box__tab-con u-clearfix"><ul class="mc-srh-box__tabs oneline" id="trip_searchBoxTabs" role="tablist">
+    <li class="mc-srh-box__tab-item js-srh-tab-item is-active" role="tab" tabindex="0" aria-selected="true" data-tab="hotels"><i class="fi fi-hotel_new"></i><span class="mc-srh-box__tab-name">Hotels &amp; Homes</span></li>
+    <li class="mc-srh-box__tab-item js-srh-tab-item" role="tab" tabindex="-1" aria-selected="false" data-tab="flights"><i class="fi fi-flight"></i><span class="mc-srh-box__tab-name">Flights</span></li>
+  </ul></div>
+  <div class="mc-srh-box__forms"><div id="searchBoxCon" role="tabpanel">
+    <!-- hotels -->
+    <div class="search-box-instance-con hotels" data-form="hotels"><div class="TripHomePageSearchBox"><div dir="ltr" class="AuzgCMGfeOktnuVfBEJB"><div class="DVsbb9IYpr8wqkJiqZ08">
+      <div class="WTchTLTa3EVyF3wCp_RK"><div class="wcukWNYMwVtb9yVjYqWa"><label for="destinationInput" class="Z6KZauxwPGyraHz6XXyw">Destination</label>
+        <div class="t2jAB0kLa8PbqLlGQAM1"><div class="RjHQqkyZuQ3VnBTjrEPs ckOsFcbc4wlgngXhQ4cD"><input id="destinationInput" class="Lv9sExYNgio1sOQtYF40" type="text" autocomplete="off" placeholder="City, airport, region, landmark or property name" value=""><div class="TEyHmILK2DzOsAm_6iif"></div></div></div></div></div>
+      <div class="xYMCg_QqPorbG5WNg6Ms" id="hotelDates">
+        <div class="ziv0jEjaxcgWq6iiTrEQ"><label class="jveskUk1O3jO0s1QGao3" for="checkInInput">Check-in</label><input id="checkInInput" type="text" readonly placeholder="Select date" class="fopYR063n_bHFn3cPl0y" value=""></div>
+        <div class="i7MrTkrtLpx7POgWf7Hz" id="nights">1 night</div>
+        <div class="ziv0jEjaxcgWq6iiTrEQ"><label class="oM3BzqhqljBbLzxQeXut" for="checkOutInput">Check-out</label><input id="checkOutInput" type="text" readonly placeholder="Select date" class="ZAGwwtjiY_ms5G2VJzKa" value=""></div>
+        <div tabindex="-1" data-stop-blur="stop-calendar-blur" class="xS7S6cfkov8iToE5epqQ"><div class="c-calendar is-hide" id="hotelCal"></div></div>
+      </div>
+      <div class="hBD91TxW6Uv2IEd2ZK_X" tabindex="-1" id="guestsBox"><div class="JgTLYfe72K8806T3N7YD"><div class="WFB2FItt1R5mKmbAn8Rk">Rooms and guests</div><div class="KPcnGfJAicIvGoo_H8ra" id="guestsText">1 room, 2 adults, 0 children</div></div><i class="smarticon u-icon u-icon-ic_new_dropdown_line"></i></div>
+      <div class="IgwegXJMvIyzRYxULZmT"><button class="tripui-online-btn tripui-online-btn-large tripui-online-btn-block kDYEOBquYIGEsXVEHYOg" type="button" id="hotelSearch"><div class="tripui-online-btn-content"><span class="tripui-online-btn-icon"><i class="smarticon u-icon u-icon-search"></i></span><span class="tripui-online-btn-content-children">Search</span></div></button></div>
+    </div></div></div></div>
+    <!-- flights -->
+    <div class="search-box-instance-con flights" data-form="flights" hidden><div class="nh_sp-wrapper">
+      <div class="nh_sp-flighttype"><span class="nh_sp-radio is-active" data-testid="flightType_RT">Round-trip</span><span class="nh_sp-radio" data-testid="flightType_OW">One-way</span></div>
+      <div class="nh_sp-row">
+        <div class="fuzzy-input nh_sp-city" data-testid="search_city_from0_wrapper"><div class="fuzzy-input__label">Leaving from</div><input type="text" autocomplete="off" data-testid="search_city_from0" aria-label="Departure airport or city" placeholder="Leaving from" value="Dubai"></div>
+        <i class="fi fi-ic_switch nh_sp-switch" aria-hidden="true"></i>
+        <div class="fuzzy-input nh_sp-city" data-testid="search_city_to0_wrapper"><div class="fuzzy-input__label">Going to</div><input type="text" autocomplete="off" data-testid="search_city_to0" aria-label="Arrival airport or city" placeholder="Going to" value=""></div>
+        <div data-testid="search_date_wrapper" class="nh_sp-date">
+          <div class="input-wrapper flex" aria-label="Departure date"><div class="fuzzy-input__label">Depart</div><input type="text" readonly data-testid="search_date_depart0" placeholder="Depart" value=""></div>
+          <div class="input-wrapper flex" aria-label="Return date" id="retWrap"><div class="fuzzy-input__label">Return</div><input type="text" readonly data-testid="search_date_return0" placeholder="Return" value=""></div>
+        </div>
+        <div class="nh_sp-pax" data-testid="flt_passenger_class" tabindex="0"><div class="fuzzy-input__label">Passengers and cabin class</div><div class="Ae4cXbXq0Hb2i8Lk" id="paxText">1 Adult, Economy</div></div>
+        <div class="nh_sp-btn2" data-testid="search_btn">Search</div>
+      </div>
+    </div></div>
+  </div></div>
+</div></div>
+<div id="out"></div>
+</div>
+<div id="portal"></div>
+<script src="trip.js"></script>
+</body></html>

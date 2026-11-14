@@ -9,13 +9,14 @@ and the verified result. Real Chrome / Edge builds and Windows were not availabl
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import threading
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "browser-extension" / "companion"))
@@ -95,7 +96,12 @@ def options_sign_in(w):
     errors = []
     p.on("pageerror", lambda e: errors.append(str(e)))
     p.goto(w["base"] + "/options.html")
+    # Let the page finish its own first check (old port; ~2 s to fail on Windows) before changing the port, as a
+    # person would; options.js also keeps a typed port and ignores a stale check (the CI race seen on Windows).
+    # Locator assertions, not wait_for_function: the extension page's CSP forbids evaluating strings.
+    expect(p.locator("#conn")).not_to_have_text(re.compile(r"^\s*(checking)?\s*$"), timeout=15000)
     p.fill("#port", str(w["port"]))
+    expect(p.locator("#port")).to_have_value(str(w["port"]), timeout=5000)
     p.click("#savePort")
     try:
         p.wait_for_selector("#pairCard:not(.hidden)", timeout=10000)

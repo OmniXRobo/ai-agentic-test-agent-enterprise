@@ -12,9 +12,12 @@ import { hasRule, openRuleBuilder, previewRule, ruleLabel } from "../date-rules.
 
 const ACTIONS = ["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover", "wait",
   "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
-  "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell"];
+  "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
+  // 23.7.1: listed so that Save keeps them (a step whose action was not in this list was saved as "goto")
+  "choose_option", "set_count", "dismiss"];
 // 23.3.17: what the Value means for the file steps (shown as the field's placeholder).
 const VALUE_HINT = { upload_file: "file name(s) from Files, e.g. invoice.pdf; photo.png", download_file: "save as (optional)",
+  set_count: "counter=number, e.g. Adults=2", choose_option: "the option's text",
   expect_file_name: "e.g. .pdf or Invoice", expect_file_text: "text in the file (|| for more)", expect_excel_cell: "B2=Total or Sheet1!C5=10" };
 const RULE_ACTIONS = new Set(["fill", "type", "pick_date", "select", "expect_value", "expect_text", "expect_file_text", "expect_excel_cell"]);
 
@@ -341,7 +344,7 @@ function renderDataTable(card, script, batches, headless, currentSteps, onTable)
 // 23.3.18: the imported Excel / CSV table the Data button offers (kept up to date by the Test data card).
 const dataCtx = { columns: [], row: {} };
 const DATA_ACTIONS = new Set(["fill", "type", "select", "pick_date", "press", "goto", "expect_text", "expect_value", "expect_url",
-  "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell"]);
+  "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell", "set_count"]);
 
 // 23.3.18: older recordings of a date picker: a click that opened it, then "Click 2" (a day). Same test as the server.
 function dayOf(s) {
@@ -384,7 +387,7 @@ function stepRow(s, i, suggestions, pairs) {
     + (DATA_ACTIONS.has(s.action) ? `<button type="button" class="btn small" data-data="${i}" title="Take this value from a column of the imported Excel / CSV">Data</button>` : "");
   return `<tr data-i="${i}">
     <td>${i + 1}</td>
-    <td><select data-f="action">${ACTIONS.map((a) => `<option ${a === s.action ? "selected" : ""}>${a}</option>`).join("")}</select></td>
+    <td><select data-f="action">${(ACTIONS.includes(s.action) ? ACTIONS : [...ACTIONS, s.action]).map((a) => `<option ${a === s.action ? "selected" : ""}>${a}</option>`).join("")}</select></td>
     <td><input data-f="selector" value="${esc(t.selector || "")}" placeholder="${["expect_file_name", "expect_file_text", "expect_excel_cell", "goto", "wait", "expect_url"].includes(s.action) ? "(no element)" : "selector"}" style="width:100%">
       ${t.alternates?.length ? `<div class="muted" title="${esc(t.alternates.join("\n"))}">${t.alternates.length} alternate locator(s)</div>` : ""}</td>
     <td><div class="value-cell"><input data-f="value" value="${esc(s.value ?? "")}" placeholder="${esc(VALUE_HINT[s.action] || "value")}">${ruleBtn}</div>${valueHint(s, i, suggestions, pairs)}</td>

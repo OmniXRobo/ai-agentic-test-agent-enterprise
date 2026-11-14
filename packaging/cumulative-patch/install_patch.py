@@ -1,4 +1,5 @@
-"""SkyGuard QA 23.6.0 cumulative patch (Adaptive Browser Learning & bug fixes; includes 23.4.0 and 23.5.0): offline
+"""SkyGuard QA 23.7.1 cumulative patch (guided playback of suggestion lists, calendars and counters on sites such as
+Trip.com, and Autonomous Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1 and 23.7.0): offline
 installer, verifier and rollback. No administrator rights are needed: everything is written inside the installation
 folder of the user who installed SkyGuard QA.
 
@@ -10,27 +11,29 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35, 23.4.0 or 23.5.0; 23.6.0 to apply again),
+  1. detects the installation and its version (23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1 or 23.7.0;
+     23.7.1 to apply again),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256),
   3. checks free disk space and that the application and data folders can be written,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
      backup) and settings.json,
   6. copies the new files (each written to a temporary name, then renamed),
-  7. migrates: the main database is brought to 18 migrations (from 23.3.35 this applies the 23.4.0 migrations; 23.5.0
-     and 23.6.0 add none); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
-     separate file) is created or migrated,
-  8. verifies: the new version loads, the agent core and its API load, every migration is recorded, PRAGMA
-     integrity_check is ok for both databases and no table has fewer rows than before,
+  7. migrates: the main database is brought to 18 migrations (from 23.3.35 this applies the 23.4.0 migrations; 23.5.0,
+     23.6.0, 23.6.1, 23.7.0 and 23.7.1 add none); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
+     separate file) is created or migrated to schema 2 (23.7.0 adds the observation journal and the learned
+     application model: two new tables, nothing existing is changed),
+  8. verifies: the new version loads, the agent core, its API and the passive learning engine load, every migration
+     is recorded, PRAGMA integrity_check is ok for both databases and no table has fewer rows than before,
   9. on any failure restores the previous files and the database copy taken in step 5 (the half-migrated database is
      kept next to it, renamed, never deleted).
 
 rollback (after a successful apply): restores the previous application files and removes the files the patch added.
-The databases are kept as they are by default: 23.5.0 and 23.6.0 do not change the main database, and older versions
-do not use the separate knowledge database, so nothing created after the upgrade is lost. Rolling back to 23.3.35: the
-23.4.0 migrations stay in the database (23.3.35 ignores the added tables and columns); use --restore-database for the
-exact pre-upgrade copy. --restore-database puts back the copy taken before the upgrade instead (the
-current database is kept next to it, renamed).
+The databases are kept as they are by default: 23.5.0 to 23.7.1 do not change the main database; the knowledge
+database keeps its two 23.7.0 tables, which 23.5.0 and 23.6.0 ignore, and older versions do not use it, so nothing
+created after the upgrade is lost. Rolling back to 23.3.35: the 23.4.0 migrations stay in the database (23.3.35
+ignores the added tables and columns); use --restore-database for the exact pre-upgrade copy. --restore-database puts
+back the copy taken before the upgrade instead (the current database is kept next to it, renamed).
 """
 
 from __future__ import annotations
@@ -47,10 +50,10 @@ import sys
 import time
 from pathlib import Path
 
-PATCH_VERSION = "23.6.0"
-BASELINE = "23.3.35, 23.4.0 or 23.5.0"
-BASELINES = ("23.3.35", "23.4.0", "23.5.0", PATCH_VERSION)
-AGENT_SCHEMA = 1
+PATCH_VERSION = "23.7.1"
+BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1 or 23.7.0"
+BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", PATCH_VERSION)
+AGENT_SCHEMA = 2
 MIGRATION_COUNT = 18
 MARGIN_MB = 300
 
@@ -195,10 +198,18 @@ MIGRATE = ("import sys; sys.path.insert(0, '.'); from qa_platform.config import 
 LOADS = "import sys; sys.path.insert(0, '.'); import qa_platform, qa_platform.main; print(qa_platform.__version__)"
 AGENT_LOADS = ("import sys; sys.path.insert(0, '.'); import skyguard_agent, skyguard_agent.agent, qa_platform.opsagent.service, "
                "qa_platform.api.opsagent; print(skyguard_agent.__version__)")
-COMPONENTS_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automation import components, semantic, runner; "
+COMPONENTS_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automation import components, semantic, runner, site_diagnostic; "
                    "from qa_platform.automation.browser import js; "
                    "print('ok' if 'window.__sgComp' in js('components') and components.stable_text('a, The price is AED 1k') == 'a' "
+                   "and hasattr(components, 'set_count') and hasattr(semantic, 'suggestion_context') "
+                   "and hasattr(runner.Runner, '_counter_row_click') and 'nearRows' in js('components') "
+                   "and hasattr(runner.Runner, '_choice_field') and 'probe(want)' in js('components') "
                    "else 'component engine incomplete')")
+LEARNING_LOAD = ("import sys; sys.path.insert(0, '.'); from skyguard_agent import journal, understanding, assistant, learning; "
+                 "from skyguard_agent.assistant import canonical; "
+                 "print('ok' if canonical('who authorises trips') == 'who authorize trips' and "
+                 "hasattr(understanding, 'Miner') and hasattr(journal, 'Journal') and hasattr(learning, '_guided_only') "
+                 "else 'learning engine incomplete')")
 AGENT_MIGRATE = ("import sys; sys.path.insert(0, '.'); from pathlib import Path; from qa_platform.config import Paths; "
                  "from skyguard_agent.store import Store; p = Paths().ensure(); s = Store(Path(p.root) / 'opsagent' / "
                  "'knowledge.sqlite3'); print(s.schema_version); s.close()")
@@ -225,9 +236,14 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("Operations Agent loads", False, str(exc))
     try:
         comp = run_py(python, app, data, COMPONENTS_LOAD).splitlines()[-1]
-        check("Component engine (23.6.0)", comp == "ok", comp)
+        check("Component engine (23.7.1)", comp == "ok", comp)
     except PatchError as exc:
-        check("Component engine (23.6.0)", False, str(exc))
+        check("Component engine (23.7.1)", False, str(exc))
+    try:
+        learn = run_py(python, app, data, LEARNING_LOAD).splitlines()[-1]
+        check("Passive learning engine (23.7.0)", learn == "ok", learn)
+    except PatchError as exc:
+        check("Passive learning engine (23.7.0)", False, str(exc))
     kdb = data / "opsagent" / "knowledge.sqlite3"
     if kdb.exists():
         conn = sqlite3.connect(f"file:{kdb}?mode=ro", uri=True)
@@ -237,7 +253,8 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
             ktables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         finally:
             conn.close()
-        want = {"applications", "accounts", "knowledge", "locators", "runs", "run_items", "audit"}
+        want = {"applications", "accounts", "knowledge", "locators", "runs", "run_items", "audit", "observations",
+                "app_model"}
         check("Knowledge database", kver == AGENT_SCHEMA and kint == "ok" and want <= ktables,
               f"schema {kver}, integrity {kint}, tables {'present' if want <= ktables else 'missing'}")
     else:
@@ -264,8 +281,8 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
                   "; ".join(f"{t}: {a} -> {b}" for t, (a, b) in lost.items()))
     else:
         check("Database", True, "no database yet (created at first start)")
-    missing = [rel for rel in json.loads((app / "PATCH_FILES_23.6.0.json").read_text(encoding="utf-8"))["files"]
-               if not (app / rel).exists()] if (app / "PATCH_FILES_23.6.0.json").exists() else ["PATCH_FILES_23.6.0.json"]
+    missing = [rel for rel in json.loads((app / f"PATCH_FILES_{PATCH_VERSION}.json").read_text(encoding="utf-8"))["files"]
+               if not (app / rel).exists()] if (app / f"PATCH_FILES_{PATCH_VERSION}.json").exists() else [f"PATCH_FILES_{PATCH_VERSION}.json"]
     check("Patch files present", not missing, "all" if not missing else ", ".join(missing[:5]))
     report["ok"] = all(c["status"] == "PASS" for c in report["checks"])
     return report
@@ -296,7 +313,8 @@ def restore_files(app: Path, backup: Path, added: list[str]) -> None:
 def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
-    step(f"SkyGuard QA {PATCH_VERSION}: Adaptive Browser Learning & bug fixes (cumulative: 23.4.0 + 23.5.0 + 23.6.0)")
+    step(f"SkyGuard QA {PATCH_VERSION}: guided playback fixes and Autonomous Application Learning "
+         "(cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     say(f"Application folder : {app}\nData folder        : {data}  (kept)\nInstalled version  : {before} -> {PATCH_VERSION}")
@@ -361,7 +379,7 @@ def apply(args: argparse.Namespace) -> int:
             tmp = dst.with_name(dst.name + ".patch-tmp")
             shutil.copy2(src, tmp)
             os.replace(tmp, dst)
-        (app / "PATCH_FILES_23.6.0.json").write_text(json.dumps({"version": PATCH_VERSION, "files": files}, indent=1),
+        (app / f"PATCH_FILES_{PATCH_VERSION}.json").write_text(json.dumps({"version": PATCH_VERSION, "files": files}, indent=1),
                                                      encoding="utf-8")
         say(f"{len(files)} files copied.")
         if args.fail_after_copy:  # test hook: proves the automatic rollback
@@ -380,7 +398,7 @@ def apply(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 - every failure rolls back
         step("Restoring the previous version")
         restore_files(app, backup, added)
-        (app / "PATCH_FILES_23.6.0.json").unlink(missing_ok=True)
+        (app / f"PATCH_FILES_{PATCH_VERSION}.json").unlink(missing_ok=True)
         if db.exists() and (backup / "qa_platform.sqlite3").exists():
             kept = db.with_name(f"qa_platform.failed-upgrade-{stamp}.sqlite3")
             for suffix in ("-wal", "-shm"):
@@ -423,7 +441,7 @@ def rollback(args: argparse.Namespace) -> int:
         raise PatchError(f"SkyGuard QA is still running (port {port} answers). Close it first.")
     step(f"Rolling back {PATCH_VERSION} -> {info['from']} from {backup}")
     restore_files(app, backup, info["added"])
-    (app / "PATCH_FILES_23.6.0.json").unlink(missing_ok=True)
+    (app / f"PATCH_FILES_{PATCH_VERSION}.json").unlink(missing_ok=True)
     db = data / "qa_platform.sqlite3"
     if args.restore_database and (backup / "qa_platform.sqlite3").exists():
         kept = db.with_name(f"qa_platform.before-rollback-{time.strftime('%Y%m%d-%H%M%S')}.sqlite3")

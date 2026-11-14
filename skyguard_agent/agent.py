@@ -13,17 +13,23 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import AGENT_NAME, __version__, planner, secrets_guard
+from .assistant import Assistant, canonical, is_question
 from .audit import Audit
 from .executor import Engine
+from .journal import Journal
 from .knowledge import KnowledgeBase
 from .learning import Learning
 from .llm import NoLLM
 from .store import Store
+from .understanding import Understanding
 from .util import AgentError, dumps, loads, new_id, norm, now_iso
 from .vault import Vault
 
-HELP = ("I learn your applications and then operate them through their normal screens. Try: "
-        "'discover Transport', 'learn Create trip', 'create 3 trips on 2026-12-01 from 06:00 every 30 minutes, "
+HELP = ("I learn your applications by watching you use them, and then answer questions about them and operate "
+        "them through their normal screens. Turn on 'Learn while I browse' and just work as usual; I work out the "
+        "screens, tasks, statuses, rules and roles myself. Then ask: 'how do I create a trip', 'who approves trips', "
+        "'what happens after a trip is approved', 'what rules apply to trip number', 'what is the status of T100'. "
+        "Or try: 'discover Transport', 'learn Create trip', 'create 3 trips on 2026-12-01 from 06:00 every 30 minutes, "
         "routes: Dubai to Abu Dhabi, Abu Dhabi to Dubai, buses: BUS-1, BUS-2, drivers: available, trip numbers "
         "starting at DXB100', 'status', 'what do you know about Transport'. Every operation shows a preview first "
         "and runs only after you confirm it. Never type passwords or codes here: use Accounts.")
@@ -43,6 +49,10 @@ class OperationsAgent:
         self.llm = llm or NoLLM()
         self.learning = Learning(self.kb, self.engine, None if isinstance(self.llm, NoLLM) else self.llm)
         self.engine.learning = self.learning
+        # 23.7.0: passive learning (journal -> understanding) and chat that answers from what was understood
+        self.journal = Journal(self.kb, known_secrets=vault.known_values)
+        self.understanding = Understanding(self.kb, self.journal, None if isinstance(self.llm, NoLLM) else self.llm)
+        self.assistant = Assistant(self.kb, self.understanding, None if isinstance(self.llm, NoLLM) else self.llm)
         self.transcriber = transcriber
         self.interface = interface
         self.recovered = self.engine.recover_interrupted()
@@ -55,6 +65,32 @@ class OperationsAgent:
         """The model is replaceable at any time; knowledge lives in the database, not in the model."""
         self.llm = llm or NoLLM()
         self.learning.llm = None if isinstance(self.llm, NoLLM) else self.llm
+        self.understanding.llm = self.learning.llm
+        self.assistant.llm = self.learning.llm
+
+    # ---- 23.7.0: learn while the person browses ---------------------------------------------------------------
+
+    DIGEST_EVERY = 25
+
+    def observe(self, app_id: str, session_id: str | None, events: list[dict[str, Any]] | None,
+                snapshot: dict[str, Any] | None, *, by: str | None = None, interface: str | None = None,
+                final: bool = False, use_ai: bool = True) -> dict[str, Any]:
+        """Record what the person did and saw; rebuild the understanding every few observations."""
+        app = self.kb.application(app_id)
+        sid = self.journal.ensure_session(app["id"], session_id, interface=interface or self.interface, by=by)
+        stored = self.journal.record(app["id"], sid, events or [], snapshot)
+        out: dict[str, Any] = {"session_id": sid, **stored, "digested": False}
+        if final:
+            self.journal.end_session(sid, by=by)
+        if final or self.understanding.pending(app["id"]) >= self.DIGEST_EVERY:
+            res = self.understanding.digest(app["id"], by="passive-learning", use_ai=use_ai)
+            out.update(digested=True, changes=res["changes"])
+        return out
+
+    def understanding_view(self, app_id: str) -> dict[str, Any]:
+        app = self.kb.application(app_id)
+        return {"application": {"id": app["id"], "name": app["name"]}, "model": self.understanding.model(app["id"]),
+                "journal": self.journal.stats(app["id"]), "pending": self.understanding.pending(app["id"])}
 
     def info(self) -> dict[str, Any]:
         return {"agent": AGENT_NAME, "version": __version__, "interface": self.interface,
@@ -136,6 +172,17 @@ class OperationsAgent:
                                                     "under Applications, then add its accounts."}
             return {"type": "need_app", "text": "Which application? " + ", ".join(a["name"] for a in apps),
                     "applications": [{"id": a["id"], "name": a["name"]} for a in apps]}
+        if re.search(r"\b(watch me|learn while i (browse|work)|watch (what|how) i|learn by watching|start watching|"
+                     r"learn automatically|observe me)\b", t):
+            return {"type": "suggest_watch", "app_id": app["id"],
+                    "text": f"Press 'Learn while I browse' (Learning tab, or turn on automatic learning in the browser "
+                            f"extension) and use {app['name']} as you normally do. I work out the screens, tasks, "
+                            "statuses, rules and roles myself; you do not need to explain anything. Passwords and "
+                            "codes are never captured."}
+        if is_question(text) or re.match(r"^(what do you know|knowledge|show knowledge|what have you learned)\b", t):
+            ans = self.assistant.answer(app, text)
+            if ans:
+                return ans
         if re.match(r"^(discover|explore|scan|learn the application)\b", t):
             return {"type": "suggest_discovery", "app_id": app["id"],
                     "text": f"Automatic discovery opens {app['name']}, signs in with the account you choose and "
@@ -160,12 +207,16 @@ class OperationsAgent:
 
     def _operation(self, text: str, app: dict[str, Any], *, user: str | None, interface: str) -> dict[str, Any]:
         workflows = self.kb.approved_items(app["id"], "workflow")
+        learned = self._learned_match(app, text, workflows)
+        if learned:
+            return learned
         if not workflows:
             return {"type": "no_workflows", "app_id": app["id"],
-                    "text": f"I have no approved workflows for {app['name']} yet. Run discovery or guided learning "
-                            "and approve the result in Knowledge first."}
+                    "text": f"I have no approved workflows for {app['name']} yet. Turn on 'Learn while I browse' and "
+                            "do the task once yourself (or run discovery / guided learning), then approve it in "
+                            "Knowledge."}
         accounts = self.kb.accounts(app["id"])
-        wf = planner.match_workflow(text, workflows)
+        wf = planner.match_workflow(canonical(text, nouns=False), workflows) or planner.match_workflow(text, workflows)
         parsed: dict[str, Any] | None = None
         dropped: list[str] = []
         if wf:
@@ -221,6 +272,29 @@ class OperationsAgent:
                    f"in as {account['label']} and inspect the application (read-only) to check duplicates and "
                    "conflicts; then the preview appears for your confirmation.")
         return {"type": "run", "run_id": run["id"], "app_id": app["id"], "text": msg, "status": run["status"]}
+
+    def _learned_match(self, app: dict[str, Any], text: str, approved: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """A request for a task that was learned by watching but is not approved yet: offer the one approval."""
+        if approved and (planner.match_workflow(canonical(text, nouns=False), approved) or planner.match_workflow(text, approved)):
+            return None
+        learned = [e for e in self.kb.items(app["id"], "workflow")
+                   if e["state"] in ("discovered", "awaiting_approval", "needs_revalidation")
+                   and not (e["data"] or {}).get("draft")]
+        if not learned:
+            return None
+        wf = planner.match_workflow(canonical(text, nouns=False), learned) or planner.match_workflow(text, learned)
+        if not wf:
+            return None
+        d = wf["data"]
+        ev = d.get("evidence") or {}
+        steps = [s for s in d.get("steps") or [] if s.get("action") != "navigate"]
+        return {"type": "needs_approval", "app_id": app["id"], "entry_id": wf["id"], "workflow": wf["key"],
+                "text": f"I learned '{d.get('title') or wf['key']}' by watching"
+                        + (f" (done {ev.get('successes')} time(s))" if ev.get("successes") else "")
+                        + f": {len(d.get('parameters') or [])} field(s), {len(steps)} step(s)"
+                        + (f", done by {', '.join(r.title() for r in d.get('roles') or [])}" if d.get("roles") else "")
+                        + ". It needs one approval before I may run it. Press 'Approve and run' (or review it in "
+                          "Knowledge) and I will prepare the preview."}
 
     # ---- voice -------------------------------------------------------------------------------------------------
 

@@ -74,6 +74,69 @@
     if (pickField) { flushPick(); pickField = null; }
   }, true);
 
+  // 23.6.1: what appeared on the page, and when (a suggestion list after typing, a list after a click), and the text
+  // being typed. The typed text is recorded the moment the person presses anything else, so a suggestion click is
+  // always recorded after the text that produced the suggestions (sites such as Trip.com report the field's change
+  // only when it loses focus, which is after the click).
+  const shownAt = new WeakMap();
+  new MutationObserver((records) => {
+    const t = Date.now();
+    for (const r of records) {
+      if (r.type === "attributes") shownAt.set(r.target, t);
+      else r.addedNodes && r.addedNodes.forEach((x) => { if (x.nodeType === 1) shownAt.set(x, t); });
+    }
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style", "hidden", "aria-hidden", "aria-expanded"] });
+  const freshSince = (el, since) => { for (let n = el; n && n !== document.body; n = n.parentElement) if ((shownAt.get(n) || 0) >= since) return true; return false; };
+  let typing = null;     // {el, start, at, dirty}
+  let lastFocus = null;  // {el, at}: the text field the person went into last
+  let opener = null;     // {el, at, fp}: the last recorded click (a list it opens belongs to it)
+  const fieldValue = (el) => (el.type === "password" ? "__PASSWORD__" : (el.value ?? el.innerText));
+  function flushTyping() {
+    if (!typing || !typing.dirty || !typing.el.isConnected) return;
+    typing.dirty = false;
+    const el = typing.el, v = fieldValue(el);
+    if (el.__qaSent === v) return;
+    el.__qaSent = v;
+    send({ action: "fill", target: target(el), value: v, placeholder: el.getAttribute("placeholder") || "", _typed: true });
+  }
+  document.addEventListener("input", (e) => {
+    const el = e.target;
+    if (isOverlay(el) || !editable(el) || el === pickField) return;
+    const t = Date.now();
+    if (!typing || typing.el !== el || !typing.dirty) typing = { el, start: t, at: t, dirty: true, text: "" };
+    typing.at = t; typing.dirty = true; typing.text = fieldValue(el);
+  }, true);
+  document.addEventListener("focusin", (e) => { if (!isOverlay(e.target) && editable(e.target)) lastFocus = { el: e.target, at: Date.now() }; }, true);
+  let downActive = null; // the focused element when the mouse went down (before the press moves focus)
+  document.addEventListener("mousedown", (e) => {
+    downActive = document.activeElement;
+    if (isOverlay(e.target) || !typing || !typing.dirty) return;
+    if (typing.el === e.target || typing.el.contains(e.target)) return;
+    flushTyping();
+  }, true);
+  // a click on a row of a list that appeared for a field (suggestions) or after a click (a custom dropdown's list)
+  function listChoice(raw) {
+    const c = comp(); if (!c) return null;
+    const row = c.rowOf(raw);
+    if (!row) return null;
+    const now = Date.now();
+    const value = c.rowText(row);
+    if (!value || value.length > 160) return null;
+    const near = (f) => { const a = f.getBoundingClientRect(), b = row.getBoundingClientRect(); return b.top > a.top - 460 && b.top < a.bottom + 700 && b.left < a.right + 500 && b.right > a.left - 500; };
+    // the field is still the focused one when the row is pressed (suggestion rows keep the focus in the field), or
+    // the person typed in it moments ago
+    const tf = typing && typing.el.isConnected && !row.contains(typing.el) && (downActive === typing.el || now - typing.at < 15000)
+      && freshSince(row, typing.start - 30) ? typing.el : null;
+    const ff = !tf && lastFocus && lastFocus.el.isConnected && !row.contains(lastFocus.el) && downActive === lastFocus.el
+      && freshSince(row, lastFocus.at - 30) ? lastFocus.el : null;
+    const field = tf || ff;
+    if (field && near(field)) return { kind: "suggestion", field, row, value, typed: tf ? (typing.text || "") : "" };
+    if (opener && opener.el !== row && !row.contains(opener.el) && now - opener.at < 60000 && freshSince(row, opener.at - 30) && c.repeated(row)) {
+      return { kind: "list", field: opener.el, fp: opener.fp, row, value, typed: "" };
+    }
+    return null;
+  }
+
   // 23.6.0: semantic recording. A click on a calendar day is "choose this date" (with the date field that opened the
   // calendar), a click on a suggestion or custom-list option is "choose this option in that field", and a click is
   // never recorded on a whole form or container when the person clicked one small control inside it.
@@ -112,11 +175,35 @@
           field_label: lastDateField ? (c.classify(lastDateField).label || "") : "" });
         return;
       }
+      // 23.6.1: the + or - of a counter (rooms, adults, children, passengers): "set Children to N", read after the click
+      const st = c.stepperOf(e.target);
+      if (st) {
+        const fp = target(st.control);
+        setTimeout(() => {
+          const after = st.num.isConnected ? c.numberOf(st.num) : null;
+          send({ action: "set_count", target: fp, label: st.label, sub: st.sub || "", direction: st.dir, before: st.before,
+            value: after != null ? after : (st.before != null ? st.before + st.dir : null) });
+        }, 250);
+        opener = null;
+        return;
+      }
+      const lc = listChoice(e.target);
+      if (lc) {
+        if (lc.kind === "suggestion") lc.field.__qaChosenAt = Date.now();
+        send({ action: "choose_option", target: lc.fp || target(lc.field), value: lc.value, option: target(lc.row), has_field: true,
+          typed: lc.typed, list: lc.kind, option_index: [...(lc.row.parentElement ? lc.row.parentElement.children : [])].indexOf(lc.row) });
+        if (lc.kind === "suggestion") typing = null;
+        opener = null;
+        return;
+      }
       const opt = c.optionOf(e.target);
       if (opt && opt.first) {
         const field = lastListField && lastListField.isConnected ? lastListField : null;
+        if (field) field.__qaChosenAt = Date.now();
         send({ action: "choose_option", target: field ? target(field) : target(el.closest("[role=option],li") || el),
-          value: opt.first, option: target(e.target.closest("[role=option],[role=menuitem],li") || el), has_field: !!field });
+          value: opt.first, option: target(e.target.closest("[role=option],[role=menuitem],li") || el), has_field: !!field,
+          typed: typing && typing.el === field ? typing.text || "" : "" });
+        opener = null;
         return;
       }
       const kind = c.classify(el).kind;
@@ -125,7 +212,9 @@
       if (k2 === "date_field") lastDateField = el;
       if (["dropdown", "combobox", "autocomplete"].includes(k2)) lastListField = el;
     }
-    send({ action: "click", target: target(el) });
+    const fp = target(el);
+    opener = { el, at: Date.now(), fp };
+    send({ action: "click", target: fp });
   }, true);
 
   // 23.3.17: files chosen for an upload are copied to the script (up to 50 MB each) so playback can upload them again.
@@ -159,6 +248,10 @@
       send({ action: el.checked || el.type === "radio" ? "check" : "uncheck", target: target(el) });
     } else if (editable(el)) {
       if (el === pickField) { flushPick(); return; } // typed into a picker field: one "picked" value
+      if (el.__qaChosenAt && Date.now() - el.__qaChosenAt < 5000) return; // 23.6.1: written by the chosen suggestion
+      if (typing && typing.el === el) typing.dirty = false;
+      if (el.__qaSent === fieldValue(el)) return; // 23.6.1: already recorded when the person pressed something else
+      el.__qaSent = fieldValue(el);
       send({ action: "fill", target: target(el), value: el.type === "password" ? "__PASSWORD__" : (el.value ?? el.innerText), placeholder: el.getAttribute("placeholder") || "" });
     }
   }, true);
@@ -170,6 +263,8 @@
     if (e.key !== "Enter" || isOverlay(e.target)) return;
     const el = e.target;
     if (editable(el) && el.tagName !== "TEXTAREA") {
+      if (typing && typing.el === el) typing.dirty = false;
+      el.__qaSent = fieldValue(el);
       send({ action: "fill", target: target(el), value: el.type === "password" ? "__PASSWORD__" : el.value });
       send({ action: "press", target: target(el), value: "Enter" });
     }
@@ -218,6 +313,7 @@
   };
   document.addEventListener("mousedown", (e) => {
     if (e.button !== 0 || isOverlay(e.target) || window.__qaPick) return;
+    if ((typing && typing.dirty) || listChoice(e.target)) { hover = null; appeared.clear(); return; } // 23.6.1
     const h = revealedBy(e.target);
     if (h) { send({ action: "hover", target: target(h) }); hover = null; appeared.clear(); }
   }, true);

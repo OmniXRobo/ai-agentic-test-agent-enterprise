@@ -30,7 +30,7 @@ from .vault import Vault, expired
 
 STATES = ("discovered", "ai_suggested", "awaiting_approval", "approved", "rejected", "superseded",
           "needs_revalidation")
-KINDS = ("screen", "workflow", "rule", "relationship", "role", "profile")
+KINDS = ("screen", "workflow", "rule", "relationship", "role", "profile", "lifecycle")
 MODES = ("testing", "role_testing", "production")
 STATE_LABELS = {"discovered": "Discovered", "ai_suggested": "AI Suggested", "awaiting_approval": "Awaiting Approval",
                 "approved": "Approved", "rejected": "Rejected", "superseded": "Superseded",

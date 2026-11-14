@@ -122,6 +122,23 @@ def parse_structured(text: str, workflow: dict[str, Any]) -> dict[str, Any]:
             p = next(p for n, p in labels if n == norm(mm.group(1)))
             if p["name"] not in out["fixed"] and p["name"] not in out["lists"]:
                 out["fixed"][p["name"]] = mm.group(2)
+    # 23.7.0: a value that is one of a field's known options names the field by itself ("route Dubai to Sharjah",
+    # "driver Dina Yousef", or just "BUS-102"), and "<entity> T300" names the record's key
+    taken = set(out["fixed"]) | set(out["lists"]) | set(out["auto"])
+    low = norm(t)
+    for p in params:
+        if p["name"] in taken or not p.get("options"):
+            continue
+        hits = [o for o in p["options"] if norm(o) and re.search(rf"(?<![\w-]){re.escape(norm(o))}(?![\w-])", low)]
+        hits = [o for o in hits if not any(o != h and norm(o) in norm(h) for h in hits)]
+        if len(hits) == 1:
+            out["fixed"][p["name"]] = hits[0]
+    entity = norm(workflow["data"].get("entity"))
+    key = (workflow["data"].get("exists_check") or {}).get("param") or workflow["data"].get("key_param")
+    if entity and key and key not in out["fixed"] and key not in out["lists"] and "numbering" not in out:
+        km = re.search(rf"\b{re.escape(entity)}s?\s+(?:(?:no|number|id|code)\.?\s+)?([A-Za-z]*-?\d[\w-]*)\b", t, re.I)
+        if km and not re.fullmatch(r"\d{1,3}", km.group(1)):
+            out["fixed"][key] = km.group(1)
     date_p = next((p for p in params if p.get("type") == "date"), None)
     time_p = next((p for p in params if p.get("type") == "time"), None)
     if date_p and date_p["name"] not in out["fixed"]:
@@ -239,6 +256,11 @@ def expand(spec: dict[str, Any], workflow: dict[str, Any], *, options: dict[str,
                 r[num["param"]] = f"{num.get('prefix', '')}{str(int(num['start']) + i).zfill(int(num.get('pad') or 1))}"
     for name in spec.get("auto") or []:
         _assign_available(records, name, (options or {}).get(name) or [], rules or [], existing_bookings or [])
+    for p in params:  # 23.7.0: a value the person always used (learned by watching) fills a field left unsaid
+        if p.get("default") not in (None, ""):
+            for r in records:
+                if r.get(p["name"]) in (None, ""):
+                    r[p["name"]] = p["default"]
     return records
 
 

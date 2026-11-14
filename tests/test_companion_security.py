@@ -254,3 +254,43 @@ def test_voice_accepts_only_wav(comp):
     assert st == 200 and out["text"] == "create 1 trip"
     st, out = call(base, "POST", "/v1/voice/transcribe", raw=b"x", ctype="text/plain", headers=auth)
     assert st == 415
+
+
+def test_learn_while_browsing_through_the_companion(comp):
+    """23.7.0: the extension's observations; secrets never stored, other sites dropped, roles enforced."""
+    c, base, _ = comp
+    auth, dev = paired(comp)
+    app = call(base, "POST", "/v1/applications", {"name": "FleetOps", "base_url": "http://127.0.0.1:9/"},
+               headers=auth)[1]["application"]
+    secret = "Pw-Observe-2026!"
+    login = {"url": "http://127.0.0.1:9/login", "title": "Sign in", "heading": "Sign in",
+             "fields": [{"label": "User", "tag": "input", "type": "text", "value": "operator"},
+                        {"label": "Password", "tag": "input", "type": "password", "value": secret}],
+             "buttons": [{"label": "Sign in"}], "auth": {"password_fields": 1}}
+    events = [{"kind": "fill", "url": "http://127.0.0.1:9/login", "value": "operator",
+               "element": {"tag": "input", "type": "text", "name": "u", "label": "User"}},
+              {"kind": "fill", "url": "http://127.0.0.1:9/login", "value": secret,
+               "element": {"tag": "input", "type": "password", "name": "p", "label": "Password"}},
+              {"kind": "click", "url": "https://elsewhere.example/", "element": {"tag": "button", "label": "Buy"}}]
+    st, out = call(base, "POST", "/v1/observe", {"application_id": app["id"], "session_id": "ext-tab-1",
+                                                  "events": events, "snapshot": login}, headers=auth)
+    assert st == 200 and out["events"] == 2 and out["pages"] == 1, out  # the other site's click is dropped
+    st, out = call(base, "POST", "/v1/observe", {"application_id": app["id"], "session_id": "ext-tab-1",
+                                                  "snapshot": {**login, "url": "https://elsewhere.example/"},
+                                                  "final": True}, headers=auth)
+    assert st == 200 and out["pages"] == 0 and out["digested"] is True
+    st, view = call(base, "GET", f"/v1/understanding?app_id={app['id']}", headers=auth)
+    assert st == 200 and view["journal"]["observations"] == 3
+    for f in c.paths.root.rglob("*"):
+        if f.is_file():
+            assert secret.encode() not in f.read_bytes(), f
+    assert call(base, "POST", "/v1/observe", {"application_id": app["id"], "events": "x"}, headers=auth)[0] == 400
+    assert call(base, "POST", "/v1/users", {"username": "viewer2", "password": "Viewer-pass-2", "role": "viewer"},
+                headers=auth)[0] == 200
+    tok = call(base, "POST", "/v1/auth/login", {"username": "viewer2", "password": "Viewer-pass-2"}, headers=dev)[1]
+    viewer = {**dev, "Authorization": "Bearer " + tok["token"]}
+    assert call(base, "GET", f"/v1/understanding?app_id={app['id']}", headers=viewer)[0] == 200
+    assert call(base, "POST", "/v1/observe", {"application_id": app["id"]}, headers=viewer)[0] == 403
+    assert call(base, "POST", f"/v1/journal-clear/{app['id']}", headers=viewer)[0] == 403
+    st, out = call(base, "POST", f"/v1/journal-clear/{app['id']}", headers=auth)
+    assert st == 200 and out["cleared"] == 3

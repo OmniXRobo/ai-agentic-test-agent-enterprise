@@ -4,8 +4,8 @@
 const DEFAULT_PORT = 8790;
 
 export async function settings() {
-  const s = await chrome.storage.local.get(["port", "device_id", "device_secret", "trusted_input"]);
-  return { port: Number(s.port) || DEFAULT_PORT, device_id: s.device_id || "", device_secret: s.device_secret || "", trusted_input: !!s.trusted_input };
+  const s = await chrome.storage.local.get(["port", "device_id", "device_secret", "trusted_input", "auto_learn"]);
+  return { port: Number(s.port) || DEFAULT_PORT, device_id: s.device_id || "", device_secret: s.device_secret || "", trusted_input: !!s.trusted_input, auto_learn: !!s.auto_learn };
 }
 
 export async function setPort(port) {

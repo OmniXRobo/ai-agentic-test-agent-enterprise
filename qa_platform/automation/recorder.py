@@ -245,6 +245,10 @@ class RecordingSession:
         if step["action"] == "choose_option":  # 23.6.0
             self._on_option(step)
             return
+        if step["action"] == "set_count":  # 23.6.1: the + / - of a counter
+            self._on_count(step)
+            return
+        step.pop("_typed", None)
         target = step.get("target")
         if isinstance(target, dict) and target.get("input_type") == "password":
             target["text"] = None  # never keep a typed password in the fingerprint
@@ -450,17 +454,61 @@ class RecordingSession:
                         details={"steps": len(self.steps)})
 
     def _on_option(self, step: dict[str, Any]) -> None:
-        """23.6.0: a suggestion or a custom-list option was clicked: "choose <text> in <field>"."""
+        """23.6.0: a suggestion or a custom-list option was clicked: "choose <text> in <field>".
+
+        23.6.1: also rows of lists that have no role or known class (Trip.com's city suggestions), with the text that
+        was typed to get them (``typed``) and the clicked row's own locator (``option``, a last resort at playback)."""
         value = str(step.get("value") or "")[:200]
         target = step.get("target") or {}
         name = target.get("name") or target.get("label") or target.get("placeholder") or "the list"
+        typed = str(step.get("typed") or "")[:200]
+        option = step.get("option") if isinstance(step.get("option"), dict) else {}
+        sem: dict[str, Any] = {"intent": "choose_option", "option": value, "field": str(name)[:80],
+                               "with_field": bool(step.get("has_field"))}
+        if typed and typed != "__PASSWORD__":
+            sem["typed"] = typed
+        if step.get("list"):
+            sem["list"] = str(step["list"])[:20]
+        if option.get("selector"):
+            sem["option_selector"] = str(option["selector"])[:300]
         with self._lock:
             new = {"action": "choose_option", "target": target, "value": value, "_at": step.get("_at"),
-                   "_t": step.get("_t"),
-                   "semantic": {"intent": "choose_option", "option": value, "field": str(name)[:80],
-                                "with_field": bool(step.get("has_field"))},
-                   "description": f"Choose '{value[:60]}' in {str(name)[:60]}"}
+                   "_t": step.get("_t"), "semantic": sem,
+                   "description": f"Choose '{value[:60]}' in {str(name)[:60]}"
+                                  + (f" (typed '{typed[:40]}')" if sem.get("typed") else "")}
             merge_step(self.steps, new)
+        self.agent.emit(names.AGENT_LOG, f"Recorded {new['description']}", run_id=self.run_id,
+                        details={"steps": len(self.steps)})
+
+    def _on_count(self, step: dict[str, Any]) -> None:
+        """23.6.1: a + / - of a counter (rooms, adults, children, passengers) was pressed: "set <label> to N".
+
+        Played back by reading the counter and pressing + or - until it shows N, so it does not matter what the
+        counter showed when playback started, and two presses on the same counter become one step."""
+        label = str(step.get("label") or "").strip()[:60]
+        try:
+            count = int(step.get("value"))
+        except (TypeError, ValueError):
+            count = None
+        target = step.get("target") or {}
+        if not label or count is None:  # not readable: keep the plain click
+            with self._lock:
+                merge_step(self.steps, {"action": "click", "target": target, "_at": step.get("_at"), "_t": step.get("_t")})
+            return
+        sign = "+" if int(step.get("direction") or 1) > 0 else "-"
+        with self._lock:
+            last = self.steps[-1] if self.steps else None
+            if last and (last.get("semantic") or {}).get("intent") == "set_count" and \
+                    last["semantic"].get("label") == label:
+                last["semantic"]["count"] = count
+                last["description"] = f"Set {label} to {count}"
+                new = last
+            else:
+                new = {"action": "click", "target": target, "_at": step.get("_at"), "_t": step.get("_t"),
+                       "semantic": {"intent": "set_count", "label": label, "count": count, "press": sign,
+                                    **({"detail": str(step.get("sub"))[:60]} if step.get("sub") else {})},
+                       "description": f"Set {label} to {count}"}
+                self.steps.append(new)
         self.agent.emit(names.AGENT_LOG, f"Recorded {new['description']}", run_id=self.run_id,
                         details={"steps": len(self.steps)})
 
@@ -810,6 +858,11 @@ def cmd_result(page: Any, cmd: str, arg: Any) -> Any:
     if cmd == "select":
         selector, value = arg
         page.locator(selector).first.select_option(value)
+        return True
+    if cmd == "type":  # 23.6.1 (tests): key by key, as a person types (suggestion lists react to each key)
+        selector, value = arg
+        page.locator(selector).first.click()
+        page.locator(selector).first.press_sequentially(value, delay=40)
         return True
     if cmd == "url":
         return page.url
