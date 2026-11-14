@@ -29,6 +29,7 @@ from .security import Pairing, Refused, RateLimiter, Users, check_host, check_or
 
 log = logging.getLogger("companion")
 JSON_LIMIT = 256 * 1024
+DRAIN_LIMIT = 4 * 1024 * 1024  # an oversized request body is read and dropped up to this size before the 413
 OBSERVATION_LIMIT = 4 * 1024 * 1024  # page snapshots
 AUDIO_LIMIT = 10 * 1024 * 1024
 KINDS = ("screen", "workflow", "rule", "relationship", "role", "profile")
@@ -646,6 +647,8 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            if self.close_connection:
+                self.send_header("Connection", "close")
             if origin:
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
@@ -706,6 +709,16 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
                 limit = (AUDIO_LIMIT if url.path.endswith("/voice/transcribe") else
                          OBSERVATION_LIMIT if url.path.endswith("/next") or url.path.endswith("/events") else JSON_LIMIT)
                 if length > limit:
+                    # read (and drop) a moderately oversized body before answering, then close: answering while the
+                    # client is still sending makes Windows abort the connection (WinError 10053) instead of
+                    # delivering the 413. Nothing beyond DRAIN_LIMIT is read.
+                    self.close_connection = True
+                    left = min(length, DRAIN_LIMIT)
+                    while left > 0:
+                        chunk = self.rfile.read(min(65536, left))
+                        if not chunk:
+                            break
+                        left -= len(chunk)
                     raise Refused(413, "TOO_LARGE", "The request is too large.")
                 raw = self.rfile.read(length) if length else b""
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
