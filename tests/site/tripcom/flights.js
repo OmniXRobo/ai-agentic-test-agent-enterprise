@@ -85,22 +85,28 @@
     const wrap = el("div", { class: "cal" }); wrap.appendChild(prev);
     for (let p = 0; p < 2; p++) {
       const m = new Date(first.getFullYear(), first.getMonth() + p, 1);
-      const panel = el("div"); panel.appendChild(el("div", { class: "lb" }, `${MONTHS[m.getMonth()]} ${m.getFullYear()}`));
-      const grid = el("div", { class: "grid" });
-      for (let i = 0; i < m.getDay(); i++) grid.appendChild(el("div"));
+      // live markup (tester's recording SCR-ADE216A761): div.c-calendar-month > table > tbody.c-calendar-month__days >
+      // tr.c-calendar-month__week > td.is-allow-hover > div.tipWrapper[role=checkbox]
+      const panel = el("div", { class: "c-calendar-month" }); panel.appendChild(el("div", { class: "lb" }, `${MONTHS[m.getMonth()]} ${m.getFullYear()}`));
+      const table = el("table"); const grid = el("tbody", { class: "c-calendar-month__days" }); table.appendChild(grid);
+      let week = el("tr", { class: "c-calendar-month__week" }); grid.appendChild(week);
+      for (let i = 0; i < m.getDay(); i++) week.appendChild(el("td"));
       for (let d = 1; d <= new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate(); d++) {
         const date = new Date(m.getFullYear(), m.getMonth(), d); const past = date < today;
         const full = `${DAYS[date.getDay()]}, ${MONTHS[date.getMonth()]} ${d}, ${date.getFullYear()}`;
         const name = past ? full : leg === "dep" ? `${full}, Select the start date you want` : `${full}, The price is ${price(date)}, Select the end date you want`;
-        const c = el("div", { role: "checkbox", "aria-label": name, "aria-checked": String(!!((state.dep && +date === +state.dep) || (state.ret && +date === +state.ret))), "aria-disabled": String(past) });
+        if (date.getDay() === 0 && d > 1) { week = el("tr", { class: "c-calendar-month__week" }); grid.appendChild(week); }
+        const inRange = state.dep && state.ret && date > state.dep && date < state.ret;
+        const td = el("td", { class: (past ? "is-disable" : "is-allow-hover") + (inRange ? " is-in-range" : "") }); week.appendChild(td);
+        const c = el("div", { class: "tipWrapper", role: "checkbox", "aria-label": name, "aria-checked": String(!!((state.dep && +date === +state.dep) || (state.ret && +date === +state.ret))), "aria-disabled": String(past) });
         c.appendChild(document.createTextNode(String(d))); if (!past) c.appendChild(el("i", {}, price(date).replace("AED ", "")));
         if (!past) c.addEventListener("click", () => {
           if (leg === "dep" || (state.dep && date < state.dep)) { state.dep = date; state.ret = null; $('[data-testid="search_date_depart0"]').value = `${MON[date.getMonth()]} ${d}`; leg = "ret"; drawCal(); return; }
           state.ret = date; $('[data-testid="search_date_return0"]').value = `${MON[date.getMonth()]} ${d}`; cal.remove(); cal = null;
         });
-        grid.appendChild(c);
+        td.appendChild(c);
       }
-      panel.appendChild(grid); wrap.appendChild(panel);
+      panel.appendChild(table); wrap.appendChild(panel);
     }
     wrap.appendChild(next); cal.appendChild(wrap);
   }

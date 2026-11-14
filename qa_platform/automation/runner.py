@@ -808,8 +808,14 @@ class Runner:
         from ..clock import now as clock_now
 
         role = meaning.get("role") or (step.semantic or {}).get("role")
+        # 23.7.1: the recorded day's label ("Monday, November 23, 2026, Select the start date you want") and its date
+        # give the wording to look the day up by, if the calendar reading misses it
+        sem = step.semantic or {}
+        rec_label = (step.target.name or step.target.description) if step.target else None
+        rec_iso = sem.get("recorded_value") or step.original_value or components.date_in_text(rec_label)
+        labels = components.date_labels(iso, rec_label, rec_iso if rec_iso and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(rec_iso)) else None)
         res = components.pick_date(page, iso, field=field, role=role, timeout=step.timeout_ms,
-                                   pointer=self._pointer(page, visual, delay), today=clock_now().date())
+                                   pointer=self._pointer(page, visual, delay), today=clock_now().date(), labels=labels)
         if not res.get("verified"):
             raise components.ComponentError("NOT_VERIFIED", f"{iso} was clicked in the calendar but neither the "
                                                             "calendar nor a date field shows it as chosen.")

@@ -554,3 +554,49 @@ def test_record_and_play_a_city_clicked_in_the_popular_list(rt, site):
     a.scripts.save(script)
     rec = _play(a, script.id, headless=True)
     assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+_MISSING_DAY_PAGE = """<!doctype html><html><body><div class="c-calendar-month"><h3>November 2026</h3>
+<table><tbody class="c-calendar-month__days" id="days"></tbody></table></div><p id="picked"></p>
+<script>
+const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const body = document.getElementById("days"); let tr;
+for (let d = 1; d <= 30; d++) {
+  const dt = new Date(2026, 10, d);
+  if (d === 1 || dt.getDay() === 0) { tr = document.createElement("tr"); tr.className = "c-calendar-month__week"; body.appendChild(tr); }
+  const td = document.createElement("td"); td.className = "is-allow-hover"; tr.appendChild(td);
+  const label = `${DAYS[dt.getDay()]}, November ${d}, 2026, Select the start date you want`;
+  let host = td;
+  if (d === 23) { const sp = document.createElement("span"); td.appendChild(sp); host = sp.attachShadow({ mode: "open" }); }  // drawn where the page reading does not look
+  const c = document.createElement("div"); c.className = "tipWrapper"; c.setAttribute("role", "checkbox");
+  c.setAttribute("aria-label", label); c.setAttribute("aria-checked", "false"); c.textContent = String(d);
+  c.style.cssText = "width:34px;height:34px;cursor:pointer";
+  c.addEventListener("click", () => { c.setAttribute("aria-checked", "true"); document.getElementById("picked").textContent = "Nov " + d + ", 2026"; });
+  host.appendChild(c);
+}
+</script></body></html>"""
+
+
+def test_calendar_day_the_reading_misses_is_found_by_its_recorded_label(browser_page):
+    """The tester's runs RUN-20261114-164528 and -164836 on trip.com: "The calendar shows the month of 23 November
+    2026 but not that day" for the start date (the end date worked). The month is read but the day is not; the day is
+    then looked up by the wording of the recorded label ("Monday, November 23, 2026, ...") and clicked."""
+    from qa_platform.automation import components
+
+    page = browser_page
+    page.set_content(_MISSING_DAY_PAGE)
+    assert page.evaluate("window.__sgComp.findDay('2026-11-23')")["status"] == "missing"
+    labels = components.date_labels("2026-11-23", "Monday, November 23, 2026, Select the start date you want", "2026-11-23")
+    res = components.pick_date(page, "2026-11-23", labels=labels, timeout=4000)
+    assert res["how"] == "calendar (day label)" and res["verified"], res
+    assert page.inner_text("#picked") == "Nov 23, 2026"
+
+
+def test_calendar_day_missing_everywhere_names_the_days_it_read(browser_page):
+    from qa_platform.automation import components
+
+    page = browser_page
+    page.set_content(_MISSING_DAY_PAGE.replace("if (d === 23) {", "if (d === 23) { continue;"))
+    with pytest.raises(components.ComponentError) as err:
+        components.pick_date(page, "2026-11-23", timeout=3000)
+    assert "days read: 1-22, 24-30" in err.value.message

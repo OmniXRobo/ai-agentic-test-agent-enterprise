@@ -62,3 +62,5 @@ def test_diagnostic_captures_each_stage_into_one_zip(site, tmp_path):
     assert any("Manila" in r["text"] for r in typed["near_rows"])
     assert "<script" not in z.read("1-search-box.html").decode()
     assert report["stages"][2]["find_option"]["status"] == "found"
+    assert report["answers"] == ["enter", "enter", "enter", "q"]
+    assert "4-calendar-at-finish.json" in names  # finishing early still captures the page

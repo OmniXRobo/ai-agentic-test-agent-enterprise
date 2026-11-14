@@ -173,7 +173,12 @@ def run(args: argparse.Namespace, ask: Any = input) -> Path:
             _say("")
             _say(f"Step {i} of {len(STAGES)}: " + text.format(city=args.city))
             answer = ask("   Press Enter when it is shown (or type s to skip this step, q to finish now): ").strip().lower()
+            report.setdefault("answers", []).append(answer or "enter")
             if answer == "q":
+                # finishing early still keeps what the page shows now
+                page = ctx.pages[-1] if ctx.pages else page
+                got = _capture(page, work, f"{stage}-at-finish", args.city)
+                report["stages"].append({"stage": f"{stage}-at-finish", "url": (got.get("engine") or {}).get("url")})
                 break
             if answer == "s":
                 report["stages"].append({"stage": stage, "skipped": True})

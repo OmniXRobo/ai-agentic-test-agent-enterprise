@@ -161,8 +161,99 @@ def _field_shows(page: Any, field: Any, iso: str) -> bool:
 
 # ---- calendars and date ranges ------------------------------------------------------------------------------------
 
+_EN_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_EN_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+              "November", "December"]
+# how calendars name a day in aria-label / title, most specific first
+_LABEL_FORMATS = ["{A}, {B} {d}, {Y}", "{a}, {b} {d}, {Y}", "{A} {d} {B} {Y}", "{A}, {d} {B} {Y}", "{B} {d}, {Y}",
+                  "{b} {d}, {Y}", "{d} {B} {Y}", "{d} {b} {Y}", "{Y}-{mm}-{dd}", "{Y}/{mm}/{dd}"]
+
+
+def _render(fmt: str, d: date) -> str:
+    return fmt.format(A=_EN_DAYS[d.weekday()], a=_EN_DAYS[d.weekday()][:3], B=_EN_MONTHS[d.month - 1],
+                      b=_EN_MONTHS[d.month - 1][:3], d=d.day, Y=d.year, mm=f"{d.month:02d}", dd=f"{d.day:02d}")
+
+
+def date_labels(iso: str, recorded_label: str | None = None, recorded_iso: str | None = None) -> list[str]:
+    """23.7.1: texts a calendar day for ``iso`` carries in its aria-label or title. When the recording kept the day's
+    label ("Monday, November 23, 2026, Select the start date you want") and its date, the same wording is rebuilt for
+    the date to choose; the common English forms follow."""
+    want = date.fromisoformat(iso)
+    out: list[str] = []
+    if recorded_label and recorded_iso:
+        try:
+            rec = date.fromisoformat(recorded_iso)
+            low = recorded_label.lower()
+            for fmt in _LABEL_FORMATS:
+                if _render(fmt, rec).lower() in low:
+                    out.append(_render(fmt, want))
+                    break
+        except ValueError:
+            pass
+    for fmt in ("{A}, {B} {d}, {Y}", "{B} {d}, {Y}", "{d} {B} {Y}", "{Y}-{mm}-{dd}"):
+        t = _render(fmt, want)
+        if t not in out:
+            out.append(t)
+    return out
+
+
+def _click_day_by_label(page: Any, iso: str, labels: list[str], timeout: int,
+                        pointer: Callable[[Any, str], None] | None) -> bool:
+    """Click the one visible day whose aria-label / title names ``iso`` (Playwright's own locators, so days inside
+    shadow DOM or outside the reading of the component engine are found too). False when there is not exactly one."""
+    for frag in labels:
+        q = frag.replace("\\", "\\\\").replace('"', '\\"')
+        loc = page.locator(f'[aria-label*="{q}" i], [title*="{q}" i], [data-date="{iso}"]')
+        try:
+            n = min(loc.count(), 12)
+        except Exception:
+            continue
+        cands = []
+        for i in range(n):
+            el = loc.nth(i)
+            try:
+                if not el.is_visible():
+                    continue
+                box = el.bounding_box()
+                if not box or box["width"] > 220 or box["height"] > 160:
+                    continue
+                if el.evaluate("e => e.getAttribute('aria-disabled') === 'true' || e.disabled === true || "
+                               "/(disabled|is-disable|is-past|unavailable)/i.test(e.className && e.className.baseVal "
+                               "!== undefined ? e.className.baseVal : (e.className || '')) || "
+                               "/(disabled|is-disable|is-past)/i.test((e.parentElement && e.parentElement.className) || '')"):
+                    continue
+                cands.append(el)
+            except Exception:
+                continue
+        if not cands:
+            continue
+        # nested matches (cell and its inner label): the innermost; a second copy elsewhere: the first in view
+        inner = []
+        for el in cands:
+            try:
+                if not any(o is not el and el.evaluate("(a, b) => a !== b && a.contains(b)", o.element_handle())
+                           for o in cands):
+                    inner.append(el)
+            except Exception:
+                inner.append(el)
+        target = inner[0] if inner else cands[0]
+        try:
+            target.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        if pointer:
+            try:
+                pointer(target, frag)
+            except Exception:
+                pass
+        target.click(timeout=timeout)
+        return True
+    return False
+
+
 def pick_date(page: Any, iso: str, *, field: Any = None, role: str | None = None, timeout: int = 10000,
-              pointer: Callable[[Any, str], None] | None = None, today: date | None = None) -> dict[str, Any]:
+              pointer: Callable[[Any, str], None] | None = None, today: date | None = None,
+              labels: list[str] | None = None) -> dict[str, Any]:
     """Choose ``iso`` (YYYY-MM-DD) in whatever calendar the page uses.
 
     ``field`` is the date field that opens the calendar (check-in, departure ...), when known; ``role`` ('start' /
@@ -214,13 +305,66 @@ def pick_date(page: Any, iso: str, *, field: Any = None, role: str | None = None
             raise ComponentError("DATE_DISABLED", f"{want:%d %B %Y} is shown but cannot be chosen "
                                                   f"(not available: {res.get('label') or 'disabled day'}).")
         if status == "missing":
-            raise ComponentError("DATE_NOT_SHOWN", f"The calendar shows the month of {want:%d %B %Y} but not that day.")
+            # 23.7.1 (Trip.com, start date): the month was read but not the day. The calendar may still be drawing
+            # (prices arrive after the days): read it again for a moment, then look the day up by its label.
+            for _ in range(8):
+                page.wait_for_timeout(300)
+                res = page.evaluate("d => window.__sgComp.findDay(d)", iso) or {}
+                if res.get("status") != "missing":
+                    break
+            if res.get("status") in ("day", "next", "prev", "disabled"):
+                continue
+            if _click_day_by_label(page, iso, date_labels(iso) if labels is None else labels, timeout, pointer):
+                settle(page, 250, 2500)
+                return {"how": "calendar (day label)", "verified": _label_verified(page, iso, field, labels)}
+            seen = res.get("seen") or []
+            raise ComponentError("DATE_NOT_SHOWN", f"The calendar shows the month of {want:%d %B %Y} but not that day"
+                                 + (f" (days read: {_ranges(seen)})" if seen else "") + ".")
         if status == "no_nav":
+            if _click_day_by_label(page, iso, date_labels(iso) if labels is None else labels, timeout, pointer):
+                settle(page, 250, 2500)
+                return {"how": "calendar (day label)", "verified": _label_verified(page, iso, field, labels)}
             raise ComponentError("CALENDAR_NO_NAV", f"The calendar does not show {want:%B %Y} and has no "
                                                     f"{res.get('direction')} month control I can recognise.")
         break
+    if _click_day_by_label(page, iso, date_labels(iso) if labels is None else labels, timeout, pointer):
+        settle(page, 250, 2500)
+        return {"how": "calendar (day label)", "verified": _label_verified(page, iso, field, labels)}
     raise ComponentError("CALENDAR_NOT_FOUND", "No open calendar could be read on the page"
                          + ("" if field is not None or role else " and no date field was recognised") + ".")
+
+
+def _label_verified(page: Any, iso: str, field: Any, labels: list[str] | None) -> bool:
+    """A day clicked by its label counts as chosen when the usual checks see it, or the labelled day itself now says
+    it is chosen (aria-checked / aria-selected / aria-pressed, or a selected / start / end class)."""
+    if _verify_day(page, iso, field):
+        return True
+    for frag in (labels if labels is not None else date_labels(iso)):
+        q = frag.replace("\\", "\\\\").replace('"', '\\"')
+        loc = page.locator(f'[aria-label*="{q}" i], [title*="{q}" i]')
+        try:
+            for i in range(min(loc.count(), 6)):
+                if loc.nth(i).evaluate(
+                        "e => [e, e.parentElement].some(n => n && (['aria-checked', 'aria-selected', 'aria-pressed']"
+                        ".some(a => n.getAttribute(a) === 'true') || /(selected|is-start|is-end|range-start|range-end"
+                        "|checked|active)/i.test(typeof n.className === 'string' ? n.className : '')))"):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _ranges(days: list[int]) -> str:
+    """[1, 2, 3, 5] -> "1-3, 5"."""
+    out: list[str] = []
+    for d in sorted(set(int(x) for x in days)):
+        if out and "-" not in out[-1].split(", ")[-1] and int(out[-1].split("-")[-1]) == d - 1:
+            out[-1] = f"{out[-1]}-{d}"
+        elif out and "-" in out[-1] and int(out[-1].split("-")[-1]) == d - 1:
+            out[-1] = f"{out[-1].rsplit('-', 1)[0]}-{d}"
+        else:
+            out.append(str(d))
+    return ", ".join(out)
 
 
 def _verify_day(page: Any, iso: str, field: Any) -> bool:

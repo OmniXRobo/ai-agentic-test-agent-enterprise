@@ -63,9 +63,22 @@ files (10 files): **92 passed, 0 failed**.
 All 22 tests in `test_tripcom_playback_23610.py` passed after this change; the 23.7.1 package tests (11) passed with the
 new files (`DIAGNOSE_SITE.cmd` / `.ps1`) and installer checks.
 
+## After your runs with 23.7.1 on trip.com (RUN-20261114-164528, RUN-20261114-164836)
+
+Both runs passed on trip.com; only the start date was done by hand. New tests:
+
+| Test | What it proves |
+|---|---|
+| `test_calendar_day_the_reading_misses_is_found_by_its_recorded_label` | The month is read but not the day (your message); the day is found by the recorded label wording, clicked and verified. **Fails without the fix.** |
+| `test_calendar_day_missing_everywhere_names_the_days_it_read` | A day that is really not there stops with the days that were read ("1-22, 24-30"). |
+
+The trip.com test copy now draws its calendar with the live markup from your recording; all 24 tests of
+`test_tripcom_playback_23610.py` passed with it.
+
 ## Full regression suite
 
-`pytest tests/` after the Manila and Learning tab fixes: **768 passed, 0 failed, 53 skipped** (earlier 23.7.1 build:
+`pytest tests/` after the start-date fix: **770 passed, 0 failed, 53 skipped** (after the Manila and Learning tab
+fixes: 768 passed) (earlier 23.7.1 build:
 759 passed). The skipped tests are Windows-only
 tests, optional tools not installed here, and the 18 tests of the 23.6.1 and 23.7.0 packages, which this package
 replaces (they build from the working tree, which is now 23.7.1). The tests added after that run (visible browser,
