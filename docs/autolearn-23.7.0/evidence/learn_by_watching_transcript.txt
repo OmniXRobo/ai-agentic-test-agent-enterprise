@@ -1,0 +1,79 @@
+{'session': 'watch-20261114042157-f3a143', 'events': 67, 'pages': 48}
+Q: what have you learned? 
+ answer | From watching FleetOps (48 pages, 67 actions) I understand:
+• It manages trips.
+• Tasks: Create trip (seen 3 times), Approve trip (seen twice) and Authorize trip (seen once).
+• A trip goes through Planned → Approved → Authorized.
+• Roles: Entry Operator (Create trip), Manager (Approve trip) and Second-Level Manager (Authorize trip).
+• 7 business rule(s), for example: Departure date is a date (YYYY-MM-DD), Trip No must be unique and A bus cannot be booked twice at overlapping times.
+• 3 main screen(s): New trip, Trips and Dashboard.
+Ask me how any task works, who does it or what the rules are. To let me perform a task, approve its workflow once in Knowledge. 
+
+Q: how do I create a trip? 
+ answer | Create trip (I saw it done 3 times, rejected by the application 3 times).
+1. Open New trip (/trips/new) from the menu.
+2. Enter Trip No (for example T102).
+3. Choose Route (one of Dubai to Abu Dhabi, Abu Dhabi to Dubai and Dubai to Sharjah).
+4. Enter Departure date (for example 2026-11-18, format YYYY-MM-DD).
+5. Enter Departure time (for example 08:00).
+6. Choose Bus (one of BUS-101, BUS-102 and BUS-103).
+7. Choose Driver (one of Ahmed Khan, Bilal Saeed, Carlos Diaz and Dina Yousef).
+8. Press Save trip.
+The application confirms with a message like "Trip T100 created successfully.".
+A new trip starts as Planned.
+Done by Entry Operator.
+Rules: Departure date is a date (YYYY-MM-DD), Trip No must be unique and A bus cannot be booked twice at overlapping times. 
+
+Q: who can approve trips? 
+ answer | 'Approve trip' is done by Manager (seen twice). I did not see Entry Operator and Second-Level Manager do it. 
+
+Q: what happens after a trip is approved? 
+ answer | After Approved, a trip becomes Authorized when second-level manager does 'Authorize trip' (seen once). 
+
+Q: what statuses can a trip have? 
+ answer | A trip moves through: Planned → Approved → Authorized. It starts as Planned after 'Create trip' by Entry Operator. Planned → Approved: 'Approve trip' by Manager (seen twice). Approved → Authorized: 'Authorize trip' by Second-Level Manager (seen once). 
+
+Q: what rules apply to trip number? 
+ answer | Rules I learned:
+• Trip No must be unique (Create trip; the application said so e.g. "Trip number T101 already exists.").
+Rules are checked in the preview; only approved ones block a record. 
+
+Q: what can a manager do? 
+ answer | Manager (users I saw: manager): does Approve trip (twice); is offered Approve; uses the screens Trips and Dashboard. Refused: Not allowed: Your role cannot create trips. 
+
+Q: where is the trip list? 
+ answer | Screens for trips:
+• Trips (/trips, list), reached with 'Trips' 
+
+Q: what is the status of T100? 
+ answer | Trip T100 was Authorized when I last saw it (Trip No: T100, Route: Dubai to Abu Dhabi, Date: 2026-11-17, Time: 07:00, Bus: BUS-101, Driver: Ahmed Khan, Status: Authorized). This is what the application showed while you browsed; I can open the list to check it now. 
+
+Q: how many trips are planned? 
+ answer | In the lists I saw, 1 trip was Planned (out of 3 I have seen). Counts come from the pages you browsed, not a live query. 
+
+Q: what fields do I need to add a trip? 
+ answer | 'Create trip' needs:
+• Trip No (for example T102)
+• Route: one of Dubai to Abu Dhabi, Abu Dhabi to Dubai and Dubai to Sharjah
+• Departure date (for example 2026-11-18)
+• Departure time (for example 08:00)
+• Bus: one of BUS-101, BUS-102 and BUS-103
+• Driver: one of Ahmed Khan, Bilal Saeed, Carlos Diaz and Dina Yousef 
+
+Q: which roles are there? 
+ answer | Roles I saw: Entry Operator (Create trip); Manager (Approve trip); Second-Level Manager (Authorize trip). 
+
+Q: is a bus allowed to be double booked? 
+ answer | Rules I learned:
+• A bus cannot be booked twice at overlapping times (Create trip; the application said so e.g. "Bus BUS-101 is not available at that time.").
+• Bus must be one of the options the screen offers (Create trip; screen options).
+Rules are checked in the preview; only approved ones block a record. 
+
+Q: add 1 trip T300 on 2026-11-20 at 10:00, route Dubai to Sharjah, bus BUS-102, driver Dina Yousef as Entry Operator 
+ needs_approval | I learned 'Create trip' by watching (done 3 time(s)): 6 field(s), 7 step(s), done by Entry Operator. It needs one approval before I may run it. Press 'Approve and run' (or review it in Knowledge) and I will prepare the preview. 
+
+{'type': 'run', 'run_id': 'OPS-20261114-042218-55B675', 'app_id': 'app-20261114042157-47ab17', 'text': 'Planned 1 record(s) for Create trip. I will first sign in as Operator and inspect the application (read-only) to check duplicates and conflicts; then the preview appears for your confirmation.', 'status': 'inspecting'}
+{"application": "FleetOps", "environment": "", "mode": "testing", "stages": [{"title": "Create trip", "workflow": "Create trip", "workflow_version": 1, "account": "Operator", "login_id": "operator", "role_claimed": "entry operator", "role_verified": "entry operator", "identity_verified": true, "page": "/trips/new", "expected_status": null, "commits": true}], "records": [{"seq": 1, "values": {"bus": "BUS-102", "route": "Dubai to Sharjah", "driver": "Dina Yousef", "trip_no": "T300", "departure_date": "2026-11-20", "departure_time": "10:00"}, "auto_assigned": [], "findings": [], "status": "ready"}], "rules": [{"name": "Create trip: allowed_values bus", "type": "allowed_values", "enforced": true}, {"name": "Create trip: allowed_values driver", "type": "allowed_values", "enforced": true}, {"name": "Create trip: allowed_values route", "type": "allowed_values", "enforced": true}, {"name": "Create trip: date departure_date", "type": "date", "enforced": true}, {"name": "Create trip: no_overlap bus", "type": "no_overlap", "enforced": true}, {"name": "Create trip: time departure_time", "type": "time", "enforced": true}, {"name": "Create trip: unique trip_no", "type": "unique", "enforced": true}, {"name": "trip_no required", "type": "required", "enforced": true}, {"name": "route required", "type": "required", "enforced": true}, {"name": "departure_date required", "type": "required", "enforced": true}, {"name": "departure_time required", "type": "required", "enforced": true}, {"name": "bus required", "type": "required", "enforced": true}, {"name": "driver required", "type": "required", "enforced": true}], "inspection": {"done": true, "existing_keys": 3, "existing_bookings": 3}, "warnings": [], "totals": {"records": 1, "ready": 1, "blocked": 0, "operations": 1}, "hash": "1e04faf0868f1ca58235a33ca42076185e37d6c5caf72b622022525f49ec92c3"}
+None
+{'status': 'completed', 'confirmed_hash': '1e04faf0868f1ca58235a33ca42076185e37d6c5caf72b622022525f49ec92c3', 'execution_started_at': '2026-11-14T04:22:20+00:00', 'counts': {'confirmed_success': 1}, 'total': 1, 'message': 'Create trip: all 1 record(s) completed and verified in FleetOps.'} [('confirmed_success', "verified in the application's list")]
+['T100:Authorized', 'T101:Approved', 'T102:Planned', 'T300:Planned']

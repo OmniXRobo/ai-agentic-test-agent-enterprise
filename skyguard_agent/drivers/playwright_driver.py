@@ -217,6 +217,57 @@ class PlaywrightDriver:
             obs = {"snapshot": self.snapshot(), "result": result, "capabilities": {"isolated_contexts": True}}
         return {"status": engine.run(run_id)["status"]}
 
+    # ---- 23.7.0: learn while the person browses -------------------------------------------------------------------
+
+    _AUTO_OBSERVE = "window.__sgAgent && window.__sgAgent.observe(e => window.__sgReport && window.__sgReport(e))"
+
+    def watch(self, record: Callable[[list[dict[str, Any]], dict[str, Any] | None], None], *,
+              stop: threading.Event | None = None, poll_s: float = 0.6, idle_snapshot_s: float = 3.0,
+              on_tick: Callable[["PlaywrightDriver"], None] | None = None) -> str:
+        """Passive learning: the person uses the application in this browser; every action and every page they
+        see is handed to ``record(events, snapshot)``. Nothing is clicked or typed by the agent. Ends when ``stop``
+        is set or the person closes the browser window. Returns why it ended ("stopped" or "closed")."""
+        ctx = self.contexts[self.current]
+        ctx.add_init_script(self._AUTO_OBSERVE)  # armed again on every page and frame, before the page's own code
+        self._observing = True
+        self.observe_user(True)
+        last_url, last_snap = None, 0.0
+        while True:
+            if stop is not None and stop.is_set():
+                reason = "stopped"
+                break
+            open_pages = [pg for pg in ctx.pages if not pg.is_closed()]
+            if not open_pages:
+                reason = "closed"
+                break
+            if self.pages.get(self.current) is not open_pages[-1]:
+                self.pages[self.current] = open_pages[-1]  # the person opened a new tab: follow it
+            if on_tick:
+                on_tick(self)
+            self._idle(poll_s)
+            events, self.manual_events = self.manual_events, []
+            try:
+                url = self.page.url
+            except Exception:
+                continue
+            now = time.monotonic()
+            if events or url != last_url or now - last_snap >= idle_snapshot_s:
+                if any(e.get("kind") in ("submit", "click") for e in events if isinstance(e, dict)):
+                    self._settle()
+                try:
+                    snap = self.snapshot()
+                except Exception:
+                    snap = None
+                events += self.manual_events
+                self.manual_events = []
+                record(events, snap)
+                last_url, last_snap = url, now
+        events, self.manual_events = self.manual_events, []
+        if events:
+            record(events, None)
+        self._observing = False
+        return reason
+
     def _idle(self, seconds: float) -> None:
         """Wait while letting Playwright deliver the page's events (the person's clicks and typing are reported
         through an exposed binding, which is only dispatched while Playwright is waiting)."""

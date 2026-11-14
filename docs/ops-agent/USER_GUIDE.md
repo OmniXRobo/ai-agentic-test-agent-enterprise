@@ -35,7 +35,15 @@ Accounts that need a one-time code, MFA, a driver authentication code or a CAPTC
 the screen: the agent stops and says *Authentication required. Please complete the one-time code / MFA step yourself
 in the browser.* It never reads, stores or types those codes.
 
-## 2. Teach it (three ways, all needing your approval)
+## 2. Teach it (all needing your approval)
+
+* **Learn while I browse** (23.7.0, recommended; Learn tab, or the extension option *Learn automatically while I
+  browse*): just use the application. The agent works out the screens, tasks, statuses, business rules and roles by
+  itself and shows them in the **Understanding** tab; chat answers questions from them. See
+  `docs/autolearn-23.7.0/USER_GUIDE.md`.
+
+The three earlier ways still work:
+
 
 * **Discovery** (Learn tab): the agent signs in with a saved account and visits the application's pages (at most 25
   by default), recording screens, fields, labels, menus and links. Nothing is submitted.

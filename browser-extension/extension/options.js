@@ -8,6 +8,7 @@ async function refresh() {
   const s = await api.settings();
   $("#port").value = s.port;
   $("#trusted").checked = s.trusted_input;
+  $("#autoLearn").checked = s.auto_learn;
   const pill = $("#conn");
   let online = true;
   try { await api.hello(); } catch (e) { online = false; msg("#connErr", e.message); }
@@ -51,6 +52,10 @@ $("#trusted").onchange = async (e) => {
     await chrome.permissions.remove({ permissions: ["debugger"] }).catch(() => {});
   }
   await chrome.storage.local.set({ trusted_input: e.target.checked });
+};
+$("#autoLearn").onchange = async (e) => {
+  await chrome.storage.local.set({ auto_learn: e.target.checked });
+  chrome.runtime.sendMessage({ type: "auto-learn", on: e.target.checked }).catch(() => {});
 };
 $("#micBtn").onclick = () => chrome.tabs.create({ url: chrome.runtime.getURL("mic.html") });
 $("#addUser").onclick = async () => { try { await api.post("/v1/users", { username: $("#nuUser").value.trim(), password: $("#nuPass").value, role: $("#nuRole").value }); $("#nuPass").value = ""; admin(); } catch (e) { msg("#userErr", e.message); } };
