@@ -56,6 +56,22 @@ and "Saturday, November 28, 2026, The price is AED 1.36k, Select the end date yo
 - **Step editor**: `choose_option`, `set_count` and `dismiss` are in the Action list, and an action that is not in the
   list is shown as it is, so Save never changes it.
 
+## Your first 23.7.1 run on trip.com (RUN-20261114-105553)
+
+Your new recording made with 23.7.1 recorded the departure correctly as "Choose 'DXB Dubai International Airport
+Dubai, United Arab Emirates' (typed 'dubai international airport')", which shows the 23.7.1 recorder works on the real
+site. Playing it clicked the DXB row, then stopped with "was clicked but the field does not show it".
+
+**Root cause:** the step's field locator is `role=combobox[name="Departure airport or city"]`. Trip.com's input has
+that role and name only while it has focus (the same reason step 5 needed self-healing on every run). The click moves
+the focus to the arrival field, so the locator matched nothing any more and the check read an empty text. Trip.com also
+writes only "Dubai" into the input, not the option's full text.
+
+**Fix:** the field is pinned to the very element before the choice; the check accepts the airport code or a
+distinctive word of the option anywhere in the field's own box once the input no longer holds just the typed text; and
+the element's recorded test id, id, label and placeholder are tried before self-healing. The stand-in now behaves the
+same way (role only while focused, "Dubai" in the input, "DXB" beside it), and the test fails without the fix.
+
 ## Not changed
 
 - No site-specific code: nothing refers to Trip.com; the rules read text, structure and state.

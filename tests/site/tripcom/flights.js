@@ -27,7 +27,7 @@
     { code: "BOM", name: "Chhatrapati Shivaji Maharaj International Airport", city: "Mumbai", country: "India" },
     { code: "LHR", name: "Heathrow Airport", city: "London", country: "United Kingdom" },
   ];
-  const CITY = { DXB: "Dubai", DEL: "New Delhi" };
+  const codeOf = (box) => box.querySelector(".cc") || box.appendChild(el("span", { class: "cc" }));
   const hay = (p) => `${p.code} ${p.name} ${p.city} ${p.country}`.toLowerCase();
   const search = (q) => { const words = q.toLowerCase().split(/\s+/).filter(Boolean); return PLACES.filter((p) => words.every((w) => hay(p).includes(w))); };
 
@@ -35,7 +35,8 @@
     let pop = null, seq = 0, timer = null;
     const close = () => { if (pop) pop.remove(); pop = null; input.setAttribute("aria-expanded", "false"); };
     const show = (node) => { close(); pop = node; place(pop, box); portal.appendChild(pop); input.setAttribute("aria-expanded", "true"); };
-    const pick = (p) => { state[key] = p.city; state.picks.push(key); input.value = `${p.city} (${p.code})`; close(); onPick(p); };
+    // Trip.com writes only the city into the input after a choice; the airport code shows in a label beside it
+    const pick = (p) => { state[key] = p.city; state.picks.push(key); input.value = p.city; codeOf(box).textContent = p.code; close(); onPick(p); };
     const row = (node, p) => { node.addEventListener("mousedown", (e) => e.preventDefault()); node.addEventListener("click", (e) => { e.stopPropagation(); pick(p); }); return node; };
     const popular = () => {
       const b = el("div", { class: "pop" }); b.appendChild(el("div", { class: "lb" }, "Popular cities"));
@@ -50,6 +51,11 @@
       if (!items.length) ul.appendChild(el("li", { class: "lb" }, "No results"));
       wrap.appendChild(ul); list.appendChild(wrap); b.appendChild(list); return b;
     };
+    // the input is a combobox (role and name) only while it has focus, as on the real site: the recorded
+    // role=combobox[name=...] locator stops matching when the focus moves on
+    input.removeAttribute("role");
+    input.addEventListener("focus", () => { input.setAttribute("role", "combobox"); });
+    input.addEventListener("blur", () => setTimeout(() => input.removeAttribute("role"), 200));
     input.addEventListener("focus", () => { input.select(); if (!input.value.trim() || state[key]) show(popular()); });
     box.addEventListener("click", () => input.focus());
     input.addEventListener("input", () => {
@@ -58,7 +64,7 @@
       timer = setTimeout(async () => { await later(300); if (mine !== seq || document.activeElement !== input) return; show(results(search(q))); }, 250);
     });
     // no choice made: the field goes back to the last chosen city
-    input.addEventListener("blur", () => setTimeout(() => { close(); const p = PLACES.find((x) => x.city === state[key] && CITY[x.code] === x.city); input.value = state[key] ? `${state[key]} (${p ? p.code : ""})` : ""; }, 150));
+    input.addEventListener("blur", () => setTimeout(() => { close(); input.value = state[key] || ""; }, 150));
   }
   const from = $('[data-testid="search_city_from0"]'), to = $('[data-testid="search_city_to0"]');
   cityField(from, $("#fromBox"), "from", () => to.focus());

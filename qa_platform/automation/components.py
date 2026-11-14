@@ -275,6 +275,7 @@ def choose_option(page: Any, field: Any, text: str, *, timeout: int = 10000,
         shown = field.evaluate("el => window.__sgComp.fieldText(el)")
         return {"how": "native", "chosen": shown, "verified": text.lower() in str(shown).lower()}
     editable = kind in ("autocomplete", "combobox", "textbox") or _is_text_field(field)
+    field = _pin(page, field)  # 23.7.1: the same element afterwards, even if its role or name changes on blur
     before = _field_value(field)
     # an open list next to the field that already has it (the recording's previous step typed the text)
     res = field.evaluate("(el, t) => window.__sgComp.findOption(t, el)", text) or {}
@@ -335,7 +336,55 @@ def choose_option(page: Any, field: Any, text: str, *, timeout: int = 10000,
         verified = _shows_choice(field, text, chosen) or not _option_visible(page, field, text)
     else:
         verified = _shows_choice(field, text, chosen) or _value_follows(before, _field_value(field), chosen, typed)
+        if not verified:  # 23.7.1: the site shows the choice next to the input, or rewrites it after a moment
+            verified, how = _choice_applied(page, field, chosen, typed, how)
     return {"how": how, "chosen": chosen, "verified": verified}
+
+
+_PIN = [0]
+
+
+def _pin(page: Any, field: Any) -> Any:
+    """A locator for this very element: Trip.com's departure input matches role=combobox[name=...] only while it has
+    focus, so the recorded locator stops matching right after the choice and the check read nothing."""
+    try:
+        if not field.evaluate("el => window === window.top", timeout=2000):
+            return field  # inside a frame: keep the frame-scoped locator
+        _PIN[0] += 1
+        token = f"f{_PIN[0]}"
+        field.evaluate("(el, t) => el.setAttribute('data-sg-field', t)", token, timeout=2000)
+        return page.locator(f'[data-sg-field="{token}"]').or_(field).first
+    except Exception:
+        return field
+
+
+_STOP = {"all", "airport", "airports", "international", "the", "of", "and", "city", "station", "in", "to"}
+
+
+def _choice_applied(page: Any, field: Any, chosen: str, typed: str | None, how: str) -> tuple[bool, str]:
+    """The choice took effect although the input does not show the option's text: the field's group (the box around
+    it, chips, labels, other inputs in it) shows the option's code or a distinctive word of it and is no longer just
+    the typed text, checked for up to 3 s; or the field cannot be read any more and the list closed after the click."""
+    words = [w for w in _words(chosen) if len(w) > 1 and w not in _STOP]
+    typed_words = _words(typed or "")
+    codes = {c.lower() for c in re.findall(r"\b[A-Z]{3}\b", chosen)} - set(typed_words)
+    readable = False
+    for _ in range(12):
+        try:
+            seen = field.evaluate("el => ({own: window.__sgComp.fieldText(el), group: window.__sgComp.groupText(el)})",
+                                  timeout=1500) or {}
+            readable = True
+        except Exception:
+            seen = {}
+        own, group = _words(str(seen.get("own") or "")), _words(str(seen.get("group") or ""))
+        if codes and codes & set(group):
+            return True, f"{how}; the field shows {', '.join(sorted(c.upper() for c in codes & set(group)))}"
+        if group and own != typed_words and any(w in group for w in words):
+            return True, f"{how}; the field now shows '{str(seen.get('own') or seen.get('group'))[:60]}'"
+        page.wait_for_timeout(250)
+    if not readable and not _option_visible(page, field, chosen):
+        return True, f"{how}; the list closed after the click (the field could not be read back)"
+    return False, how
 
 
 def _is_text_field(field: Any) -> bool:

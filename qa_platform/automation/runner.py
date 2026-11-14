@@ -677,9 +677,27 @@ class Runner:
         return False
 
     @staticmethod
+    def _fingerprint_selectors(target: Any) -> list[str]:
+        """23.7.1: stable attributes recorded with the element, tried after its locators. Trip.com's city inputs match
+        role=combobox[name=...] only while they have focus, so the recorded locator failed on every run and needed
+        self-healing (which found [data-testid="search_city_from0"] each time)."""
+        out: list[str] = []
+        q = lambda v: str(v).replace("\\", "\\\\").replace('"', '\\"')  # noqa: E731
+        if target.test_id and not re.fullmatch(r"\d+(-\d+)*", str(target.test_id)):  # "0", "1-2": a row's position
+            out.append(f'[data-testid="{q(target.test_id)}"]')
+        if target.element_id and not re.search(r"\d{3,}|[:]", str(target.element_id)):
+            out.append(f'[id="{q(target.element_id)}"]')
+        tag = target.tag or ""
+        if tag in ("input", "textarea", "select") and target.name:
+            out.append(f'{tag}[aria-label="{q(target.name)}"]')
+        if tag in ("input", "textarea") and target.placeholder:
+            out.append(f'{tag}[placeholder="{q(target.placeholder)}"]')
+        return [o for o in out if o != target.selector and o not in target.alternates]
+
+    @staticmethod
     def _quick(page: Any, target: Any, timeout: int) -> Any | None:
         scope = Runner._scope(page, target)
-        for sel in [target.selector, *target.alternates]:
+        for sel in [target.selector, *target.alternates, *Runner._fingerprint_selectors(target)]:
             try:
                 loc = scope.locator(sel)
                 loc.first.wait_for(state="visible", timeout=timeout if sel == target.selector else 800)
@@ -1009,6 +1027,11 @@ class Runner:
             loc = self._try(scope, alt, 1500, state)
             if loc is not None:
                 act.log(f"Primary locator failed; recorded alternate worked: {_short(alt)}", step=index)
+                return loc
+        for alt in self._fingerprint_selectors(target):  # 23.7.1: recorded test id, id, label, placeholder
+            loc = self._try(scope, alt, 1500, state)
+            if loc is not None and scope.locator(alt).count() == 1:
+                act.log(f"Primary locator failed; the element's recorded {_short(alt)} worked", step=index)
                 return loc
         # final patch: a locator correction a person approved earlier (AURA memory) is tried before self-healing.
         # It is only a candidate: the element must still be there and visible, and the step must still pass.

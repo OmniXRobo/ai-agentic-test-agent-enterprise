@@ -339,7 +339,7 @@ def user_trip_recording_20261114(site: str, dep: date, ret: date) -> Script:
         Step(action="click", target=T(selector='role=tab[name="Flights"]', role="tab", name="Flights", text="Flights",
                                       alternates=["#trip_searchBoxTabs > li:nth-of-type(2)"]), description="Click Flights"),
         Step(action="fill", target=T(selector='role=combobox[name="Departure airport or city"]', tag="input",
-                                     role="combobox", name="Departure airport or city", input_type="text",
+                                     role="combobox", name="Departure airport or city", input_type="text", test_id="search_city_from0",
                                      placeholder="Leaving from"),
              value="dubai international airport", description="Enter value in Departure airport or city"),
         Step(action="click", target=T(selector='div[aria-label="Arrival airport or city"]', role="group",
@@ -347,7 +347,7 @@ def user_trip_recording_20261114(site: str, dep: date, ret: date) -> Script:
                                       alternates=['role=group[name="Arrival airport or city"]']),
              description="Click Arrival airport or city"),
         Step(action="fill", target=T(selector='role=combobox[name="Arrival airport or city"]', tag="input",
-                                     role="combobox", name="Arrival airport or city", input_type="text",
+                                     role="combobox", name="Arrival airport or city", input_type="text", test_id="search_city_to0",
                                      placeholder="Going to"),
              value="del indira gandhi international airport", description="Enter value in Arrival airport or city"),
         Step(action="click", target=T(selector='[data-testid="0"]', test_id="0", tag="div", role="button",
@@ -461,3 +461,45 @@ def test_step_editor_keeps_semantic_actions_on_save():
         assert f'"{action}"' in listed, action
     assert "set_count" in typing.get_args(Action)
     assert "ACTIONS.includes(s.action) ? ACTIONS : [...ACTIONS, s.action]" in js_src
+
+
+def test_record_and_play_departure_choice_on_the_current_flight_box(rt, site):
+    """The tester's 23.7.1 recording on trip.com (run RUN-20261114-105553): typing the departure and clicking the
+    DXB row is recorded as "Choose 'DXB Dubai International Airport ...' (typed ...)". Playing it failed with "was
+    clicked but the field does not show it": the input matches role=combobox only while focused, and shows only
+    "Dubai" afterwards (the code is in a label beside it)."""
+    a = rt.automation
+    run_id, s = _session(a, f"{site}/tripcom/flights.html")
+    s.command("type", ('[data-testid="search_city_from0"]', "dubai international airport")); _pause(1.4)
+    s.command("click", '[data-testid="search_result_box"] [data-testid="0"]'); _pause()
+    s.command("type", ('[data-testid="search_city_to0"]', "del indira gandhi international airport")); _pause(1.4)
+    s.command("click", '[data-testid="search_result_box"] [data-testid="0"]'); _pause()
+    script = a.stop_recording(run_id)
+    got = [(st.action, st.value) for st in script.steps]
+    print(got, [st.target.selector for st in script.steps if st.target])
+    assert ("choose_option", "DXB Dubai International Airport Dubai, United Arab Emirates") in got
+    script.steps.append(Step(action="expect_value", target=Target(selector='[data-testid="search_city_from0"]'), value="Dubai"))
+    script.steps.append(Step(action="expect_value", target=Target(selector='[data-testid="search_city_to0"]'), value="New Delhi"))
+    a.scripts.save(script)
+    rec = _play(a, script.id, headless=True)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+def test_choice_in_a_field_whose_locator_only_matches_while_focused(rt, site):
+    """As recorded on trip.com: the field's locator is role=combobox[name=...], which matches only while the input
+    has focus. The choice is checked on the element itself (pinned), and on what its group shows ("Dubai" plus the
+    "DXB" label), not on a locator that no longer matches."""
+    T = Target
+    dep = T(selector='role=combobox[name="Departure airport or city"]', tag="input", role="combobox",
+            name="Departure airport or city", placeholder="Leaving from", test_id="search_city_from0")
+    option = "DXB Dubai International Airport Dubai, United Arab Emirates"
+    steps = [Step(action="goto", value=f"{site}/tripcom/flights.html"),
+             Step(action="fill", target=dep, value="dubai international airport"),
+             Step(action="choose_option", target=dep, value=option,
+                  semantic={"intent": "choose_option", "option": option, "typed": "dubai international airport",
+                            "list": "suggestion", "option_selector": '[data-testid="0"]'}),
+             Step(action="expect_value", target=T(selector='[data-testid="search_city_from0"]'), value="Dubai")]
+    a = rt.automation
+    a.scripts.save(Script(id="SCR-TRIPPIN001", name="pin", mode="guided", steps=steps, browser="chromium", base_url=site))
+    rec = _play(a, "SCR-TRIPPIN001", headless=True)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))

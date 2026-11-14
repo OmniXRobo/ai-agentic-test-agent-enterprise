@@ -18,6 +18,14 @@ On 14 Nov 2026 your PC had 23.7.0. 23.7.0 was built on 23.6.0, so it did not hav
   (not the "Popular cities" panel shown on focus) and chooses the row that holds the typed words,
   "DXB Dubai International Airport Dubai, United Arab Emirates". When the site ignores the filled text, it is typed key
   by key. Several matching rows are reported as choices, never guessed.
+- **"... was clicked but the field does not show it"** (your first 23.7.1 run on trip.com, step 6, the DXB choice):
+  Trip.com's city input matches its recorded locator `role=combobox[name="Departure airport or city"]` only while it
+  has focus, and after the choice it shows only "Dubai" (the code sits beside it). The check then read nothing. Now
+  the field is pinned to the very element before the choice, and the choice counts as applied when the field's own box
+  shows the airport code or a distinctive word of the option and the input no longer holds just the typed text
+  (checked for up to 3 s). A field that disappears after the click counts when the list closed.
+- **Recorded test id, id, label and placeholder** are tried right after the recorded locators, before self-healing:
+  the departure field is found at once by `[data-testid="search_city_from0"]` instead of self-healing it on every run.
 - **Rows laid out in parts** ("DXB | Dubai International Airport | Dubai, United Arab Emirates"): the typed words are
   matched across the parts of the row, so "dubai international airport" and "del indira gandhi international airport"
   find their airport and "Al Maktoum International Airport, Dubai" is not taken by mistake.

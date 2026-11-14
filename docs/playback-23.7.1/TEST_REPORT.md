@@ -40,6 +40,16 @@ The same script also **passed in a visible browser** with the visual cursor and 
 | `test_step_editor_keeps_semantic_actions_on_save` | The step editor lists `choose_option`, `set_count` and `dismiss`, and keeps an unknown action as it is. |
 | `tests/test_cumulative_patch_23710.py` (11 tests) | The 23.7.1 package: contents, no network and no administrator rights, wrong version refused, changed file refused, automatic rollback after a failure, and apply / verify / rollback / apply again on **23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1 and 23.7.0**. |
 
+## After your first 23.7.1 run on trip.com ("was clicked but the field does not show it")
+
+| Test | What it proves |
+|---|---|
+| `test_choice_in_a_field_whose_locator_only_matches_while_focused` | Your failing step: the field's locator `role=combobox[name="Departure airport or city"]` matches only while focused, and the input shows only "Dubai" with "DXB" beside it. **Fails without the fix, passes with it.** |
+| `test_record_and_play_departure_choice_on_the_current_flight_box` | Typing the departure and clicking the DXB row is recorded as "Choose 'DXB Dubai International Airport ...' (typed ...)" (as your 23.7.1 recording shows), and plays back with "Dubai" in the field. |
+
+Re-run after this fix of the playback, component, healing, recorder, visual-playback, voice-guided and installer test
+files (10 files): **92 passed, 0 failed**.
+
 ## Full regression suite
 
 `pytest tests/` on the merged 23.7.1 code: **759 passed, 0 failed, 52 skipped**. The skipped tests are Windows-only

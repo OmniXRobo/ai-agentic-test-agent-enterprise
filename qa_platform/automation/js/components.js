@@ -591,6 +591,23 @@
     return clean(`${own} ${p ? p.innerText : ""}`, 600);
   }
 
+  /** 23.7.1: what a field's own group shows (the field, the box around it up to the first ancestor that holds
+   * another text field, chips and labels in it), to check a choice that a site writes somewhere else than the input
+   * (Trip.com: "Dubai" in the input, or a chip / label next to it). */
+  function groupText(el) {
+    if (!el) return "";
+    const isText = (i) => i.matches("input:not([type=hidden]):not([type=checkbox]):not([type=radio]),textarea,[role=combobox],[contenteditable=true]");
+    let box = el;
+    for (let p = el.parentElement, i = 0; p && i < 4; p = p.parentElement, i++) {
+      const others = [...p.querySelectorAll("input,textarea,[role=combobox],[contenteditable=true]")].filter((x) => isText(x) && x !== el && !x.contains(el) && !el.contains(x) && visible(x));
+      if (others.length || (p.innerText || "").length > 400) break;
+      box = p;
+    }
+    const vals = [...box.querySelectorAll("input,textarea")].map((i) => i.value || "").join(" ");
+    const attrs = [box.getAttribute("aria-label"), box.getAttribute("title"), el.getAttribute("title")].filter(Boolean).join(" ");
+    return clean(`${fieldText(el)} ${vals} ${box === el ? "" : box.innerText || ""} ${attrs}`, 600);
+  }
+
   // Resolves when the page has not changed for ``quiet`` ms (or after ``max`` ms): state-aware waiting, not sleeps.
   function settle(quiet = 300, max = 4000) {
     return new Promise((resolve) => {
@@ -617,7 +634,7 @@
   window.__sgComp = {
     version: "23.6.1", parseDate, monthYear, classify, isContainer, findDay, daySelected, showsDate, dateFields, markDateField,
     findOption, popups: () => popups().map((p) => ({ options: optionsOf(p).slice(0, 30).map(optionText) })), overlays, busy,
-    fieldText, shownNear, settle, clear,
+    fieldText, shownNear, groupText, settle, clear,
     // 23.6.1: lists without roles, counters (+ / -)
     rowText, rowOf, pointerRoot, repeated, nearRows, counter, counters: () => counters().map((c) => ({ label: c.label, sub: c.sub, value: numberOf(c.num) })),
     stepperOf, numberOf,
