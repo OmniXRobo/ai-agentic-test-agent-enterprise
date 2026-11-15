@@ -42,6 +42,32 @@ def test_two_searches_with_different_values_pass_on_the_stand_in(site, tmp_path)
     assert "**PASS**" in md and "nothing was booked" in md
 
 
+def test_date_is_not_confused_with_the_departure_city_when_the_calendar_stays_closed(site, tmp_path):
+    """Live check on trip.com, 15 Nov (both searches): the calendar did not open after the arrival city, and the field
+    named "Departure airport or city" was clicked as the start date ("No open calendar could be read"). The stand-in in
+    live mode behaves the same way; the date fields must be the ones that say date."""
+    args = argparse.Namespace(url=f"{site}/tripcom/flights.html?live=1", browser="chromium", headless=True,
+                              out=str(tmp_path), set=["Dubai|DXB>New Delhi|DEL@+9,+13#2"])
+    path, report = live_check.run(args)
+    r = report["runs"][0]
+    assert r["status"] == "PASS", r["steps"]
+    assert [s["status"] for s in r["steps"]] == ["PASS"] * 7
+
+
+def test_date_fields_skip_place_fields(site):
+    from playwright.sync_api import sync_playwright
+    from qa_platform.automation import components
+    with sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page()
+        page.goto(f"{site}/tripcom/flights.html?live=1")
+        components.ensure(page)
+        fields = page.evaluate("() => window.__sgComp.dateFields().map(f => [f.role, f.text])")
+        b.close()
+    assert fields and all("airport" not in t.lower() for _, t in fields), fields
+    assert fields[0][0] == "start" and "search_date_depart0" in fields[0][1], fields
+
+
 def test_a_failing_step_is_reported_with_evidence_and_stops_that_search(site, tmp_path):
     """A city the site does not know: the From step fails with what was offered, the later steps do not run, and the
     engine's view, the accessibility tree and the HTML are saved."""

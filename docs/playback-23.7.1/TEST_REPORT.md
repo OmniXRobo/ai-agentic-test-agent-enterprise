@@ -92,9 +92,17 @@ All run on the build machine against the local trip.com stand-in pages (`tests/s
 - `tests/test_live_check_23710.py`: the live-site check runs two searches end to end on the stand-in (7 steps each, results verified) and stops with evidence when a city is missing.
 - `tests/test_site_diagnostic_23710.py`: diagnostic downloads are served as text with a sandbox policy; page handlers are stripped.
 
+## After your live check of 15 Nov, 13:34 (departure date)
+
+- `test_date_is_not_confused_with_the_departure_city_when_the_calendar_stays_closed`: the live check on the stand-in in
+  live mode (calendar does not open by itself, date fields named as on trip.com) passes all 7 steps; without the fix it
+  fails with "No open calendar could be read on the page", as on trip.com.
+- `test_date_fields_skip_place_fields`: "Departure airport or city" is not listed as a date field; the first start date
+  field is `search_date_depart0`. Fails without the fix.
+
 ## Full regression suite
 
-`pytest tests/` with the advanced locator fix: **781 passed, 0 failed, 54 skipped** (after the closed-calendar fix: 772 passed, 0 failed, 53 skipped) (after the label fix: 770) (after the Manila and Learning tab
+`pytest tests/` with the departure date fix: **783 passed, 0 failed, 54 skipped** (first build of the advanced locator fix: 781 passed) (after the closed-calendar fix: 772 passed, 0 failed, 53 skipped) (after the label fix: 770) (after the Manila and Learning tab
 fixes: 768 passed) (earlier 23.7.1 build:
 759 passed). The skipped tests are Windows-only
 tests, optional tools not installed here, and the 18 tests of the 23.6.1 and 23.7.0 packages, which this package

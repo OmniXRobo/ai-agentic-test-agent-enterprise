@@ -10,8 +10,9 @@ Every result in this report is marked with where it was produced:
   (`tests/site/tripcom/flights.html`), and against small generic test pages.
 
 No result here was simulated. The real-site check of this package is the new **`VERIFY_LIVE_SITE.cmd`** (section 6): it
-runs on your PC against trip.com and writes `REPORT.md` with every step's result. Until you have run it, this package
-is **not yet verified on trip.com**.
+runs on your PC against trip.com and writes `REPORT.md` with every step's result. Your first run of it (15 Nov, 13:34) passed From and To
+and failed at the departure date, fixed since (section 1, start date (3)); the full search is **not yet verified on
+trip.com**.
 
 ## 1. Root causes found (in the order they were found)
 
@@ -26,6 +27,7 @@ is **not yet verified on trip.com**.
 | Start date (1) | "shows the month of 23 November 2026 but not that day": the step stopped on the first reading. | RUN-20261114-164528 and -164836 [your PC]; in both runs every other step passed by itself | re-read while drawing; find the day by its recorded label |
 | Start date (2) | "days read: 16, 18": the calendar was closed; the Depart and Return boxes (16 and 18 Nov, named in full) were read as calendar days, so the calendar was never opened. | screenshots of 14 Nov, 18:45 [your PC] | a day must show its day number; open the date field when no real month is shown |
 | From (typed twice) | Step 8 paused with "Several suggestions match 'dubai'" although step 12 of the same script chooses DXB. | screenshots of 14 Nov, 18:38 [your PC] | `_later_sets_field` |
+| Start date (3) | "No open calendar could be read on the page" in both live-check searches: the calendar stayed closed after the arrival city, and the date-field finder took "Departure airport or city" (it contains "depart") for the departure date, so it clicked the city box. | `SkyGuard_LiveCheck_20261115-133402.zip`, engine view of step 4 [your PC, trip.com] | a field named for a place (airport, city, destination ...) counts as a date field only when it says or shows a date; fields that say date are tried first |
 | Return date | No failure of its own was seen on trip.com: it passed in both runs of 14 Nov afternoon [your PC]. It uses the same calendar code, so causes (1) and (2) applied to it too. | | same fixes |
 | Search | Passed in every run that reached it [your PC]. A Search click was reported as passed because it was clicked. | | the run now waits for the page to answer (section 3.6) |
 
@@ -138,8 +140,11 @@ From your run records (sent in the site diagnostic ZIP):
 | RUN-20261114-164836 | SCR-ADE216A761 | PASSED, same | start date and one banner click |
 | 14 Nov 18:45 | 21-step script | FAILED at the start date ("days read: 16, 18") | step 8 paused (fixed since) |
 
-**This package on trip.com:** not run yet. Run `VERIFY_LIVE_SITE.cmd` and play your script; send back the
-`SkyGuard_LiveCheck_<date>.zip`.
+**Live check of 15 Nov, 13:34 (`SkyGuard_LiveCheck_20261115-133402.zip`, Edge 157, first build of this package):**
+FAIL in both searches at the departure date. Open, From (DXB, LHR) and To (DEL, MNL) passed on trip.com and were
+verified. The date step clicked the departure city box (start date (3) above); fixed in the second build. The steps
+after it (return date, adults, Search, results) did not run, so they are **not yet verified on trip.com**. Run
+`VERIFY_LIVE_SITE.cmd` again with the second build.
 
 ### 3.2 On this machine [fixture]
 
@@ -152,6 +157,7 @@ See `TEST_REPORT.md` for every test. The ones for this package:
 | `test_failed_step_saves_component_diagnostics` | Play saves the diagnostics of a failed step and lists them in the run's evidence. |
 | `test_changed_selector_is_found_by_role_and_name`, `test_semantic_locators_built_from_the_fingerprint` | A changed selector is still found; role and name, label, title and alt text each find exactly one element on a changed page; texts with numbers are never used. |
 | `test_search_counts_only_when_the_page_answers` | Search passes when the page answers; a Search that does nothing fails after the wait. |
+| `test_date_is_not_confused_with_the_departure_city_when_the_calendar_stays_closed`, `test_date_fields_skip_place_fields` | The live-check failure of 15 Nov ("No open calendar could be read"), on the stand-in in live mode (calendar does not open by itself, date fields named as on trip.com); both fail without the fix. |
 | `test_closed_calendar_date_boxes_are_not_read_as_days` | The "days read: 16, 18" failure; fails without the fix. |
 | `test_calendar_day_the_reading_misses_is_found_by_its_recorded_label` | The "but not that day" failure; fails without the fix. |
 | `test_typing_repeated_later_in_the_recording_does_not_pause` | The "Several suggestions match 'dubai'" pause; fails without the fix. |
@@ -166,7 +172,7 @@ browser, so every run is one), slow networks beyond the stand-in's delays.
 
 ## 4. Known limitations
 
-- Verified on trip.com only through your runs; this package is not yet verified there.
+- On trip.com, this package is verified up to the arrival city (live check of 15 Nov); dates, adults and Search are verified there only through your earlier runs until the live check passes.
 - English labels: dates in labels are read in English month names and ISO forms; other languages fall back to the
   month heading plus day number.
 - No OCR or image recognition.
