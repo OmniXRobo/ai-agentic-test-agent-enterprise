@@ -1,5 +1,5 @@
 <#
-  SkyGuard QA 23.7.1 - site diagnostic (run after APPLY_PATCH).
+  SkyGuard QA 23.7.2 - site diagnostic (run after APPLY_PATCH).
 
   Opens a visible browser on the site with the application's own Python, Playwright and browser, asks you to do five
   ordinary steps (show the search box, click the departure field, type a city, open the calendar, open the
@@ -29,7 +29,7 @@ foreach ($r in $roots) {
     if (Test-Path (Join-Path $r "qa_platform\__init__.py")) { $App = (Resolve-Path $r).Path; break }
 }
 if (-not $App) { Fail "No installation found in: $($roots -join '; '). Run again with -InstallDir ""<folder that holds app or qa_platform>""." }
-if (-not (Test-Path (Join-Path $App "qa_platform\automation\site_diagnostic.py"))) { Fail "Apply the 23.7.1 patch first (APPLY_PATCH.cmd in this folder)." }
+if (-not (Test-Path (Join-Path $App "qa_platform\automation\site_diagnostic.py"))) { Fail "Apply the 23.7.2 patch first (APPLY_PATCH.cmd in this folder)." }
 if (Test-Path (Join-Path $App "INSTALLED.json")) { $Data = Join-Path (Split-Path $App -Parent) "data" } else { $Data = Join-Path $App "data" }
 if ($env:QA_HOME) { $Data = $env:QA_HOME }
 $Py = Join-Path $App "runtime\python\python.exe"

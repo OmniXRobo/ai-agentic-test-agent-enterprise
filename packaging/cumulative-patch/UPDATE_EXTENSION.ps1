@@ -1,5 +1,5 @@
 <#
-  SkyGuard Adaptive AI Browser Extension - update to 1.1.0 (learn while you browse), part of the SkyGuard QA 23.7.1
+  SkyGuard Adaptive AI Browser Extension - update to 1.1.0 (learn while you browse), part of the SkyGuard QA 23.7.2
   patch. For a companion already installed with Install-SkyGuardAgent.ps1. No administrator rights; works offline.
 
   What it does (all inside %LOCALAPPDATA%\SkyGuardAgent, nothing machine-wide):

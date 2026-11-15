@@ -298,8 +298,14 @@ def test_agentic_chain_reads_requirements_discovers_and_generates_scripts(paths,
         assert gen["status"] == "COMPLETED", gen
         assert gen["request"]["discovery_id"] == job["discovery_id"]  # no second crawl: reuses this discovery
         assert [i["test_case_id"] for i in gen["items"]] == ["1268"] and gen["items"][0]["status"] == "GENERATED"
-        prompt = next(b["messages"][1]["content"] for b in llm.calls if "Test Case: TC1268" in b["messages"][1]["content"])
-        assert "UNIFIED QA KNOWLEDGE" in prompt and "LoginPage" in prompt
+        # 23.7.2: the steps are walked in the browser with the saved credentials; the AI mapping (which carries the
+        # Unified QA Knowledge) is only asked for steps the walk leaves open.
+        log = "\n".join(gen["items"][0].get("log") or [])
+        assert "Steps walked in the browser" in log, log
+        prompts = [b["messages"][1]["content"] for b in llm.calls if "Test Case: TC1268" in b["messages"][1]["content"]]
+        assert all("UNIFIED QA KNOWLEDGE" in p and "LoginPage" in p for p in prompts)
+        src = rt.studio.script(gen["items"][0]["script_id"])["source"]
+        assert "enter_password(credentials.password)" in src and ".click_login()" in src, src
         assert "secret_sauce" not in json.dumps(gen)
         # The coverage page can start the same generation again later.
         r = c.post(f"/api/knowledge/{job['knowledge_id']}/scripts", json={"on_existing": "skip"})

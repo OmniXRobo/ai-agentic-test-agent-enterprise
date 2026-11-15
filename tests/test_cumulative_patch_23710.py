@@ -24,6 +24,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+# 23.7.2: the working tree is 23.7.2 now and the cumulative patch is tested in tests/test_cumulative_patch_23720.py.
+pytestmark = pytest.mark.skipif('__version__ = "23.7.1"' not in (ROOT / "qa_platform" / "__init__.py").read_text(encoding="utf-8"),
+                                reason="superseded by the 23.7.2 cumulative patch (tests/test_cumulative_patch_23720.py)")
 NAME = "SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix"
 PKG = ROOT / "packaging" / "cumulative-patch"
 RELEASES = {"23.3.35": "6d448fa", "23.4.0": "53e80093fe99272f27dc424392d1fd3d746b3c7c", "23.5.0": "900e4e0",

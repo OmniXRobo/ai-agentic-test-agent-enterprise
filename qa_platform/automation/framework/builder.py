@@ -29,8 +29,8 @@ from .codegen import FlowCall, FlowPlan, LocatorPlan, MethodPlan, TestPlan, Test
 from .registry import BASE_PAGE_METHODS, PageObjectInfo, Registry
 
 ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
-           "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url")
-ELEMENT_ACTIONS = set(ACTIONS) - {"goto", "expect_url"}
+           "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "not_on_application")
+ELEMENT_ACTIONS = set(ACTIONS) - {"goto", "expect_url", "not_on_application"}
 CHECKPOINT_ACTIONS = {"expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url"}
 _CRED = re.compile(r"^\{\{\s*CRED:([^}.]+)\.(username|password)\s*\}\}$")
 _DATA = re.compile(r"^\{\{\s*DATA:([^}]+?)\s*\}\}$")
@@ -83,6 +83,7 @@ class CaseContext:
     credential_role: str | None = None
     variant: int = 1
     generated_at: str = ""
+    precondition: str | None = None  # 23.7.2: the Test Case precondition (setup steps run first)
 
 
 @dataclass
@@ -96,6 +97,7 @@ class Inventory:
     """Elements discovered on the application, by selector, with the page they are on."""
 
     def __init__(self, discovery: dict[str, Any] | None) -> None:
+        self.discovery = discovery
         self.by_selector: dict[str, InventoryElement] = {}
         self.pages: dict[str, str] = {}
         self.lines: list[str] = []
@@ -244,6 +246,7 @@ class _Action:
     checkpoint: bool
     manual_step: int | None
     flow: str | None
+    flagged: str | None = None  # 23.7.2: the reason a Test Case step is not on the application
 
 
 class FrameworkBuilder:
@@ -257,6 +260,7 @@ class FrameworkBuilder:
         self.data_labels: dict[str, str] = {}
         self.uses_credentials = False
         self.credential_roles: list[str] = []
+        self._walked = False
 
     # ---- pages, locators, methods ------------------------------------------------------
 
@@ -275,11 +279,16 @@ class FrameworkBuilder:
                             for n, m in existing.methods.items()}
         else:
             name = page_class_name(rel, title)
+            if rel in ("", "/") or re.fullmatch(r"(index|default|home)(\.\w+)?", rel, re.I):
+                url = urljoin(base_url.rstrip("/") + "/", rel)
+                if any(e.page_url == url and e.element.get("input_type") == "password"
+                       for e in self.inventory.by_selector.values()):
+                    name = "LoginPage"  # 23.7.2: the start page with a sign-in form
             taken = set(self.registry.page_objects) | {p.class_name for p in self.pages.values()}
             base, n = name, 2
             while name in taken:
                 name, n = f"{base[:-4]}{n}Page", n + 1
-            module = f"page_objects/{codegen.snake(name[:-4] if name.endswith('Page') else name, 'home')}_page.py"
+            module = f"page_objects/{codegen.snake(_split_camel(name[:-4] if name.endswith('Page') else name), 'home', 6)}_page.py"
             page = _Page(name, module, rel, title, None)
         self.pages[page.class_name] = page
         return page
@@ -295,7 +304,7 @@ class FrameworkBuilder:
             if same:
                 return name
         strategy, value, role_name = choose_locator(fp, selector)
-        base = codegen.snake(label, "element", 4).upper()
+        base = codegen.snake(label, "element", 4).rstrip("_").upper()
         name, n = base, 2
         while name in page.locators or name in BASE_PAGE_METHODS:
             name, n = f"{base}_{n}", n + 1
@@ -316,7 +325,7 @@ class FrameworkBuilder:
                 existing_params = page.existing.methods[name].params if page.existing and name in page.existing.methods \
                     else params
                 return name, existing_params
-        stem = codegen.snake(label, "element", 4)
+        stem = codegen.snake(label, "element", 4).rstrip("_")
         name, n = template.format(stem), 2
         while name in page.methods or name in BASE_PAGE_METHODS:
             name, n = f"{template.format(stem)}_{n}", n + 1
@@ -358,7 +367,11 @@ class FrameworkBuilder:
 
     # ---- main --------------------------------------------------------------------------
 
-    def build(self, ctx: CaseContext, mapped: MappedTest) -> BuildResult:
+    def build(self, ctx: CaseContext, mapped: MappedTest,
+              origins: list[tuple[str, dict[str, Any]] | None] | None = None) -> BuildResult:
+        """``origins`` (23.7.2): for each mapped step, the page it was performed on and the element as seen in the
+        browser while the steps were walked through (exact page, also when one selector exists on several pages)."""
+        self._walked = origins is not None
         tc = ctx.test_case_id
         if not ctx.base_url:
             raise QAError("APPLICATION_URL_MISSING", "The application URL is required to generate automation.", status=422)
@@ -375,13 +388,19 @@ class FrameworkBuilder:
                 self.notes.append(f"Unsupported action '{step.action}' skipped: {step.description}")
                 continue
             title = codegen.comment(step.description) or action
+            origin = origins[i] if origins and i < len(origins) else None
+            if action == "not_on_application":
+                page = current or self._page(ctx.base_url, ctx.base_url)
+                actions.append(_Action(page, "", [], title, False, step.manual_step, None,
+                                       flagged=codegen.comment(step.value) or "Not found on the application"))
+                continue
             if action == "goto":
                 page = self._page(step.value or ctx.base_url, ctx.base_url)
                 actions.append(_Action(page, "open", [], title, False, step.manual_step, step.business_flow))
                 current = page
                 continue
             if action == "expect_url":
-                page = current or self._page(ctx.base_url, ctx.base_url)
+                page = self._page(origin[0], ctx.base_url) if origin else (current or self._page(ctx.base_url, ctx.base_url))
                 actions.append(_Action(page, "expect_url", [codegen.py_str(step.value or "")], title, True,
                                        step.manual_step, step.business_flow))
                 continue
@@ -389,7 +408,10 @@ class FrameworkBuilder:
                 self.notes.append(f"Step '{title}' has no element; skipped for review.")
                 continue
             found = self.inventory.by_selector.get(step.selector)
-            if found:
+            if origin is not None and origin[1]:
+                fp = dict(origin[1])
+                page = self._page(origin[0], ctx.base_url)
+            elif found:
                 fp = dict(found.element)
                 page = self._page(found.page_url, ctx.base_url)
             else:
@@ -409,7 +431,21 @@ class FrameworkBuilder:
             actions.append(_Action(page, method, args, title, action in CHECKPOINT_ACTIONS, step.manual_step,
                                    step.business_flow))
             current = page
-        if not actions:
+        # 23.7.2: every Test Case step is in the script. A step the mapping left out is kept as a flagged step (it
+        # says why) instead of disappearing, so a one-step answer can never pass as the automation of the whole case.
+        if any(a.manual_step for a in actions):
+            covered = {a.manual_step for a in actions if a.manual_step is not None}
+            for n, st in enumerate(ctx.steps, start=1):
+                if n in covered:
+                    continue
+                at = max((i + 1 for i, a in enumerate(actions) if a.manual_step is not None and a.manual_step < n),
+                         default=0)
+                reason = "No automation action was produced for this step; review it and add the action."
+                self.notes.append(f"Test Case step {n} ('{codegen.comment(st.get('action'))}') is not automated: {reason}")
+                actions.insert(at, _Action(current or self._page(ctx.base_url, ctx.base_url), "",
+                                           [], codegen.comment(st.get("action")) or f"Step {n}", False, n, None,
+                                           flagged=reason))
+        if not [a for a in actions if not a.flagged]:
             raise QAError("PYTHON_GENERATION_FAILED", f"No automatable step was produced for Test Case #{tc}.",
                           status=422, details=self.notes)
         if missing:
@@ -449,27 +485,56 @@ class FrameworkBuilder:
         flow_logic: list[str] = []
 
         def var_of(page: _Page) -> str:
-            return codegen.snake(page.class_name[:-4] if page.class_name.endswith("Page") else page.class_name, "app") + "_page"
+            cls = page.class_name[:-4] if page.class_name.endswith("Page") else page.class_name
+            return codegen.snake(_split_camel(cls), "app", 6) + "_page"
 
-        for name, group in self._flows(actions):
-            tc_steps = sorted({a.manual_step for a in group if a.manual_step})
-            if name is None:
-                for act in group:
-                    var = var_of(act.page)
-                    instances.setdefault(var, act.page.class_name)
-                    test_imports.setdefault(_module(act.page.module), set()).add(act.page.class_name)
-                    steps.append(TestStepPlan(act.title, [f"{var}.{act.method}({', '.join(act.args)})"], act.checkpoint,
-                                              [act.manual_step] if act.manual_step else []))
-                    flow_logic.append(act.title)
+        def call_of(act: _Action) -> str:
+            if act.flagged:
+                test_imports["utilities.reporting"].add("not_on_application")
+                return f"not_on_application({codegen.py_str(act.flagged)})"
+            var = var_of(act.page)
+            instances.setdefault(var, act.page.class_name)
+            test_imports.setdefault(_module(act.page.module), set()).add(act.page.class_name)
+            return f"{var}.{act.method}({', '.join(act.args)})"
+
+        # 23.7.2: scripts from the step walk have one business step per Test Case step; a mapping made by the AI alone
+        # keeps the earlier layout (one step per action or business flow, flows in flows/).
+        by_step = self._walked
+        for number, title, tc_group in (self._by_tc_step(actions, ctx) if by_step else [(None, "", actions)]):
+            if number is None:  # no Test Case step number: one business step per action or flow (as before 23.7.2)
+                for name, group in self._flows(tc_group):
+                    if name is None:
+                        for act in group:
+                            steps.append(TestStepPlan(act.title, [call_of(act)], act.checkpoint,
+                                                      [act.manual_step] if act.manual_step else []))
+                            flow_logic.append(act.title)
+                        continue
+                    if by_step:
+                        line = self._group_call(name, group, var_of, call_of, changes, components, impact, flows_used,
+                                                test_imports, instances)
+                    else:
+                        func, call_args, _created = self._flow(name, group, var_of, changes, components, impact)
+                        flows_used[func] = f"flows/{codegen.snake(name, 'flow')}_flow.py"
+                        test_imports.setdefault(_module(flows_used[func]), set()).add(func)
+                        line = f"{func}({', '.join(['page', *call_args])})"
+                    label = codegen.comment(name).strip()
+                    label = label[0].upper() + label[1:] if label else name
+                    steps.append(TestStepPlan(label, [line], any(a.checkpoint for a in group),
+                                              sorted({a.manual_step for a in group if a.manual_step})))
+                    flow_logic.append(label + "".join(f"\n    {a.title}" for a in group))
                 continue
-            func, call_args, created = self._flow(name, group, var_of, changes, components, impact)
-            flows_used[func] = f"flows/{codegen.snake(name, 'flow')}_flow.py"
-            test_imports.setdefault(_module(flows_used[func]), set()).add(func)
-            title = codegen.comment(name).strip()
-            title = title[0].upper() + title[1:] if title else func
-            steps.append(TestStepPlan(title, [f"{func}({', '.join(['page', *call_args])})"],
-                                      any(a.checkpoint for a in group), tc_steps))
-            flow_logic.append(title + "".join(f"\n    {a.title}" for a in group))
+            # 23.7.2: one business step per Test Case step (the precondition first), titled with the step itself,
+            # holding its actions (reusable business methods where a step does several things on one page) and the
+            # checks of its expected result.
+            lines: list[str] = []
+            for name, group in self._flows(tc_group):
+                if name is None:
+                    lines += [call_of(act) for act in group]
+                else:
+                    lines.append(self._group_call(name, group, var_of, call_of, changes, components, impact, flows_used,
+                                                  test_imports, instances))
+            steps.append(TestStepPlan(title, lines, any(a.checkpoint for a in tc_group), [number] if number else []))
+            flow_logic.append(title + "".join(f"\n    {a.title}" for a in tc_group))
 
         # Page Objects: new files or additive extensions.
         for page in self.pages.values():
@@ -547,6 +612,80 @@ class FrameworkBuilder:
         return BuildResult(changes, test_rel, data_rel, data, components, impact, self.notes + list(mapped.notes),
                            flow_logic, role, covered)
 
+    @staticmethod
+    def _by_tc_step(actions: list[_Action], ctx: CaseContext) -> list[tuple[int | None, str, list[_Action]]]:
+        """Consecutive actions of the same Test Case step (0 = precondition), with the step's title."""
+        out: list[tuple[int | None, str, list[_Action]]] = []
+        for act in actions:
+            number = act.manual_step if act.manual_step is not None and act.manual_step >= 0 else None
+            if number is not None and out and out[-1][0] == number:
+                out[-1][2].append(act)
+                continue
+            if number is None:
+                out.append((None, act.title, [act]))
+                continue
+            if number == 0:
+                pre = codegen.comment(ctx.precondition or "").rstrip(".")
+                title = f"Precondition: {pre}" if pre else "Open the application"
+            elif 0 < number <= len(ctx.steps):
+                title = codegen.comment(ctx.steps[number - 1].get("action") or "").rstrip(".") or act.title
+            else:
+                title = act.title
+            out.append((number, title, [act]))
+        return out
+
+    def _group_call(self, name: str, group: list[_Action], var_of: Any, call_of: Any, changes: dict[str, str],
+                    components: list[dict[str, Any]], impact: list[dict[str, Any]], flows_used: dict[str, str],
+                    test_imports: dict[str, set[str]], instances: dict[str, str]) -> str:
+        """A business process: a method of the Page Object when it happens on one page (login, enter checkout
+        information), else a flow function in flows/ (23.7.2)."""
+        if len({id(a.page) for a in group}) == 1 and not any(a.checkpoint or a.flagged for a in group):
+            page = group[0].page
+            method, call_args = self._page_method(page, name, group)
+            var = var_of(page)
+            instances.setdefault(var, page.class_name)
+            test_imports.setdefault(_module(page.module), set()).add(page.class_name)
+            return f"{var}.{method}({', '.join(call_args)})"
+        func, call_args, _created = self._flow(name, group, var_of, changes, components, impact)
+        flows_used[func] = f"flows/{codegen.snake(name, 'flow')}_flow.py"
+        test_imports.setdefault(_module(flows_used[func]), set()).add(func)
+        return f"{func}({', '.join(['page', *call_args])})"
+
+    def _page_method(self, page: _Page, name: str, group: list[_Action]) -> tuple[str, list[str]]:
+        func = codegen.snake(name, "business_action", 5)
+        params: list[str] = []
+        call_args: list[str] = []
+        body: list[str] = []
+        for act in group:
+            mapped_args = []
+            for arg in act.args:
+                if arg.startswith("credentials.") or arg.startswith("data["):
+                    pname = arg.split(".", 1)[1] if arg.startswith("credentials.") else \
+                        codegen.snake(json.loads(arg[5:-1]), "value", 4)
+                    if pname not in params:
+                        params.append(pname)
+                        call_args.append(arg)
+                    mapped_args.append(pname)
+                else:
+                    mapped_args.append(arg)
+            body.append(f"self.{act.method}({', '.join(mapped_args)})")
+        sequence = [(a.method, None) for a in group]
+        final, n = func, 2
+        while final in page.methods or final in BASE_PAGE_METHODS:
+            existing = page.existing.methods.get(final) if page.existing else None
+            planned = next((m for m in page.new_methods if m.name == final), None)
+            if existing is not None and existing.actions == sequence and existing.params == params:
+                return final, call_args
+            if planned is not None and planned.body == body and planned.params == params:
+                return final, call_args
+            final, n = f"{func}_{n}", n + 1
+        doc = codegen.comment(name)
+        doc = (doc[0].upper() + doc[1:]) if doc else final
+        page.new_methods.append(MethodPlan(final, params, doc + ": " + ", ".join(a.title.rstrip(".") for a in group),
+                                           body))
+        page.methods[final] = ("", None)
+        return final, call_args
+
     def _flow(self, name: str, group: list[_Action], var_of: Any, changes: dict[str, str],
               components: list[dict[str, Any]], impact: list[dict[str, Any]]) -> tuple[str, list[str], bool]:
         func = codegen.snake(name, "flow")
@@ -613,3 +752,8 @@ def _flow_info(name: str, module: str, params: list[str], doc: str, calls: list[
 
 def _module(path: str) -> str:
     return path[:-3].replace("/", ".")
+
+
+def _split_camel(name: str) -> str:
+    """CheckoutStepOne -> Checkout Step One (module and variable names: checkout_step_one_page)."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
