@@ -481,12 +481,48 @@ export function executionStepsHtml(r) {
   return `<div style="overflow-x:auto"><table class="data run-steps"><thead><tr><th>#</th><th>Step</th><th>Result</th><th>Time</th><th>Screenshot</th></tr></thead><tbody>
     ${(r.steps || []).map((s) => `<tr><td>${s.index + 1}</td><td>${esc(s.description || s.action)}
       ${s.healed ? `<div class="pill WARN">Self-healed: ${esc(s.healed.original)} → ${esc(s.healed.healed)} (${Number(s.healed.confidence).toFixed(2)})</div>` : ""}
-      ${s.error ? `<div class="muted">${esc(s.error)}</div>` : ""}</td>
+      ${s.error ? `<div class="muted">${esc(s.error)}</div>` : ""}
+      ${s.diagnostics ? `<details class="diag" data-diag="${esc(s.diagnostics)}"><summary class="muted">What the automation saw (component diagnostics)</summary><div class="diag-body muted small">Loading…</div></details>` : ""}</td>
       <td><span class="pill ${esc(s.status)}">${esc(s.status)}</span></td><td>${s.duration_ms ?? ""} ms</td><td>${thumb(s)}</td></tr>`).join("")}
     </tbody></table></div>
     ${(r.steps || []).length && !used.size ? '<p class="muted small">Step screenshots are taken from 23.3.31 on; this run has only the evidence below.</p>' : ""}
     ${others.length ? `<div class="shots">${others.map((p) => `<a href="${evidenceUrl(p)}" data-step-shot="${esc(r.run_id)}" data-path="${esc(p)}"><img src="${evidenceUrl(p)}" alt="${esc(fileName(p))}" loading="lazy"><span>${esc(fileName(p))}</span></a>`).join("")}</div>` : ""}
     ${r.evidence?.video ? `<p><a href="${evidenceUrl(r.evidence.video)}" target="_blank" rel="noopener">Video recording</a></p>` : ""}`;
+}
+
+// 23.7.1: Object Inspector for a failed or paused step: what the component engine read when it happened
+const _diagSeen = new WeakSet();
+document.addEventListener("toggle", async (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.matches("details.diag") || !d.open || _diagSeen.has(d)) return;
+  _diagSeen.add(d);
+  const body = d.querySelector(".diag-body");
+  try {
+    const res = await fetch(evidenceUrl(d.dataset.diag), { credentials: "same-origin" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    body.innerHTML = diagHtml(await res.json(), d.dataset.diag);
+  } catch (err) { body.textContent = `The diagnostics could not be read (${err.message}).`; }
+}, true);
+
+function diagHtml(g, path) {
+  const e = g.engine || {};
+  const el = (x) => x ? `${esc(x.tag)}${x.attrs?.role ? ` role=${esc(x.attrs.role)}` : ""}${x.attrs?.["aria-label"] ? ` "${esc(x.attrs["aria-label"])}"` : ""}${x.text ? ` · ${esc(x.text.slice(0, 80))}` : ""}` : "none";
+  const rows = [];
+  const t = g.target || {};
+  rows.push(["Recorded element", `${esc(t.description || t.name || "")} <code>${esc(t.selector || "")}</code>${t.test_id ? ` · test id <code>${esc(t.test_id)}</code>` : ""}${t.role ? ` · role ${esc(t.role)}` : ""}${t.placeholder ? ` · placeholder "${esc(t.placeholder)}"` : ""}`]);
+  rows.push(["Page", esc(e.url || g.url || "")]);
+  rows.push(["Focused element", (e.active || []).length ? el(e.active[0]) : "none"]);
+  const pops = Array.isArray(e.popups) ? e.popups : [];
+  rows.push(["Open lists", pops.length ? pops.map((p) => esc((p.options || []).slice(0, 8).join(" | "))).join("<br>") : "none"]);
+  if (Array.isArray(e.near_rows) && e.near_rows.length) rows.push(["Rows next to the field", e.near_rows.slice(0, 8).map((r) => esc(r.text)).join("<br>")]);
+  if (e.find_option) rows.push(["Option for the step's value", `${esc(e.find_option.status || "")}${e.find_option.text ? `: ${esc(e.find_option.text)}` : ""}`]);
+  const cal = e.calendar || {};
+  rows.push(["Calendar", cal.cells ? `${cal.cells} days read; months ${(cal.months || []).map((m) => `${m.year}-${String(m.month).padStart(2, "0")}`).join(", ") || "none"}` : "no calendar open"]);
+  if (Array.isArray(e.date_fields) && e.date_fields.length) rows.push(["Date fields", e.date_fields.slice(0, 6).map((f) => `${esc(f.role || "?")}: ${esc(f.text)}`).join("<br>")]);
+  if (Array.isArray(e.counters) && e.counters.length) rows.push(["Counters", e.counters.map((c) => `${esc(c.label)} = ${esc(String(c.value))}`).join(", ")]);
+  const base = path.replace(/\.json$/, "");
+  return `<table class="data">${rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("")}</table>
+    <p><a href="${evidenceUrl(path)}" target="_blank" rel="noopener">Full details (JSON)</a> · <a href="${evidenceUrl(base + ".aria.yml")}">Accessibility tree</a> · <a href="${evidenceUrl(base + ".html")}">Page HTML</a></p>`;
 }
 
 function healingHtml(items) {

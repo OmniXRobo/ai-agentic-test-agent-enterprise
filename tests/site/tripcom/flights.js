@@ -37,7 +37,7 @@
     const close = () => { if (pop) pop.remove(); pop = null; input.setAttribute("aria-expanded", "false"); };
     const show = (node) => { close(); pop = node; place(pop, box); portal.appendChild(pop); input.setAttribute("aria-expanded", "true"); };
     // Trip.com writes only the city into the input after a choice; the airport code shows in a label beside it
-    const pick = (p) => { state[key] = p.city; state.picks.push(key); input.value = p.city; codeOf(box).textContent = p.code; close(); onPick(p); };
+    const pick = (p) => { state[key] = p.city; state[`${key}Code`] = p.code; state.picks.push(key); input.value = p.city; codeOf(box).textContent = p.code; close(); onPick(p); };
     const row = (node, p) => { node.addEventListener("mousedown", (e) => e.preventDefault()); node.addEventListener("click", (e) => { e.stopPropagation(); pick(p); }); return node; };
     const popular = () => {
       const b = el("div", { class: "pop" }); b.appendChild(el("div", { class: "lb" }, "Popular cities"));
@@ -156,6 +156,11 @@
     $("#out").innerHTML = '<div class="loading" aria-busy="true">Loading…</div>';
     await later(500);
     $("#out").innerHTML = `<h2 class="results">Flights ${state.from || "?"} to ${state.to || "?"} · ${state.dep ? iso(state.dep) : "?"} to ${state.ret ? iso(state.ret) : "?"} · ${state.adults} adult, ${state.children} child, ${state.infants} infant · ${state.cabin}</h2>`;
+    // a results list with the airports and prices, on its own address (as the real site opens a results page)
+    const ul = el("ul", { class: "flights" });
+    for (let i = 0; i < 4; i++) ul.appendChild(el("li", {}, `${state.fromCode || "?"} 0${8 + i}:15 → ${state.toCode || "?"} 1${2 + i}:40 · ${i ? "1 stop" : "Nonstop"} · AED ${(900 + i * 137 + seed).toLocaleString("en-US")}`));
+    $("#out").appendChild(ul);
+    history.pushState({}, "", `?search=${encodeURIComponent(`${state.fromCode}-${state.toCode}`)}&depart=${state.dep ? iso(state.dep) : ""}`);
   }
   $('[data-testid="search_btn"]').addEventListener("click", runSearch);
 })();

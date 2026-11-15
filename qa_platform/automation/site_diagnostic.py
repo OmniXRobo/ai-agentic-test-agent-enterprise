@@ -48,6 +48,7 @@ CLEAN_HTML = r"""() => {
   const doc = document.documentElement.cloneNode(true);
   doc.querySelectorAll('script,style,noscript,link[rel=stylesheet],svg path,iframe').forEach((n) => n.remove());
   doc.querySelectorAll('input[type=password]').forEach((n) => n.setAttribute('value', ''));
+  doc.querySelectorAll('*').forEach((n) => { for (const a of [...n.attributes]) if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) n.removeAttribute(a.name); });
   doc.querySelectorAll('[style]').forEach((n) => { if (n.getAttribute('style').length > 200) n.removeAttribute('style'); });
   return '<!doctype html>\n' + doc.outerHTML;
 }"""
@@ -57,7 +58,7 @@ def _say(msg: str = "") -> None:
     print(msg, flush=True)
 
 
-def _aria(page: Any) -> str:
+def aria_snapshot(page: Any) -> str:
     try:
         return page.locator("body").aria_snapshot(timeout=15000)
     except Exception as exc:  # older Playwright: the deprecated accessibility snapshot
@@ -75,7 +76,7 @@ def _capture(page: Any, folder: Path, stage: str, city: str | None) -> dict[str,
         page.screenshot(path=str(folder / f"{stage}.png"), full_page=False)
     except Exception as exc:
         out["screenshot_error"] = str(exc)[:200]
-    (folder / f"{stage}.aria.yml").write_text(_aria(page), encoding="utf-8")
+    (folder / f"{stage}.aria.yml").write_text(aria_snapshot(page), encoding="utf-8")
     try:
         html = page.evaluate(CLEAN_HTML)
         (folder / f"{stage}.html").write_text(html[:6_000_000], encoding="utf-8")
@@ -126,6 +127,10 @@ def _recent(data: Path, host: str, folder: Path) -> list[str]:
         (folder / "runs" / f"{p.parent.name}.json").write_text(json.dumps(d, indent=1, ensure_ascii=False, default=str),
                                                                encoding="utf-8")
         found.append(f"run {p.parent.name}")
+        # 23.7.1: what playback saved when a step failed or paused (engine view, accessibility tree, HTML)
+        for diag in sorted(p.parent.glob("diag-step-*"))[:12]:
+            if diag.is_file() and diag.stat().st_size < 4_000_000:
+                (folder / "runs" / f"{p.parent.name}-{diag.name}").write_bytes(diag.read_bytes())
         # the screenshot of the failed step, if there is one
         failed = [s for s in d.get("steps", []) if s.get("status") == "FAILED"]
         for s in failed[:1]:

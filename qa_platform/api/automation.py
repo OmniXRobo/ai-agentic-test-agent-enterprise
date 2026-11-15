@@ -367,6 +367,10 @@ def evidence(path: str, rt: Runtime = Depends(runtime)) -> FileResponse:
     target = Path(path).resolve()
     if root not in target.parents or not target.is_file():
         raise QAError("EVIDENCE_NOT_FOUND", "That evidence file is not available.", status=404)
+    if target.suffix.lower() in (".html", ".htm", ".yml", ".svg", ".xml"):
+        # 23.7.1: a captured page (component diagnostics) is evidence to read, never a page to run on this origin
+        return FileResponse(target, media_type="text/plain; charset=utf-8", filename=target.name,
+                            headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"})
     return FileResponse(target)
 
 

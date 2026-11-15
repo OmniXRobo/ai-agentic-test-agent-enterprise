@@ -82,9 +82,19 @@ The trip.com test copy now draws its calendar with the live markup from your rec
 | `test_closed_calendar_date_boxes_are_not_read_as_days` | With the calendar closed, the Depart / Return boxes that show full dates are not taken for days; the calendar is opened and the 23rd chosen. **Fails without the fix.** |
 | `test_typing_repeated_later_in_the_recording_does_not_pause` | Typing "dubai" that the script repeats and then chooses later no longer pauses. **Fails without the fix.** |
 
+## Advanced locator fix (15 Nov)
+
+All run on the build machine against the local trip.com stand-in pages (`tests/site/tripcom/`), not on trip.com:
+
+- `test_semantic_locators_built_from_the_fingerprint`: label, role, title and alt-text locators each find exactly one element; no text locator is built from changing text ("Price 120").
+- `test_search_counts_only_when_the_page_answers`: Search passes only when the page changes, the URL changes or a new tab opens; a dead Search button fails the step.
+- `test_failed_step_saves_component_diagnostics`: a failed step saves what the automation saw (JSON, accessibility tree, cleaned HTML).
+- `tests/test_live_check_23710.py`: the live-site check runs two searches end to end on the stand-in (7 steps each, results verified) and stops with evidence when a city is missing.
+- `tests/test_site_diagnostic_23710.py`: diagnostic downloads are served as text with a sandbox policy; page handlers are stripped.
+
 ## Full regression suite
 
-`pytest tests/` after the closed-calendar fix: **772 passed, 0 failed, 53 skipped** (after the label fix: 770) (after the Manila and Learning tab
+`pytest tests/` with the advanced locator fix: **781 passed, 0 failed, 54 skipped** (after the closed-calendar fix: 772 passed, 0 failed, 53 skipped) (after the label fix: 770) (after the Manila and Learning tab
 fixes: 768 passed) (earlier 23.7.1 build:
 759 passed). The skipped tests are Windows-only
 tests, optional tools not installed here, and the 18 tests of the 23.6.1 and 23.7.0 packages, which this package

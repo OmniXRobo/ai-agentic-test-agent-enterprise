@@ -3,10 +3,10 @@
 no internet (as intended)
 
 == Zip checksum
-SkyGuard_Trip_Playback_Fix_Cumulative_Patch_23.7.1.zip: OK
+SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix.zip: OK
 
 == Extract and check every file against SHA256_CHECKSUM.txt
-SkyGuard_Trip_Playback_Fix_Cumulative_Patch_23.7.1: 194 files OK
+SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix: 205 files OK
 
 == SkyGuard QA 23.3.35 installation (git archive of the release commit) with a database
 __version__ = "23.3.35"
@@ -20,16 +20,16 @@ Data folder        : <work>/inst-23.3.35/data  (kept)
 Installed version  : 23.3.35 -> 23.7.1
 
 == Checking the patch files (SHA-256)
-100 files verified.
+102 files verified.
 
 == Checking disk space, permissions and that the application is stopped
-Free space: 30114 MB, needed: 304 MB
+Free space: 29535 MB, needed: 304 MB
 
 == Backing up
-Backup: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.7.1-20261114-054731  (48 files replaced, 52 new, database copied)
+Backup: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.7.1-20261115-083641  (48 files replaced, 54 new, database copied)
 
 == Copying the new files
-100 files copied.
+102 files copied.
 
 == Migrating the database
 Main database schema version 18 (expected 18).
@@ -50,7 +50,7 @@ Operations Agent knowledge database schema version 2 (<work>/inst-23.3.35/data/o
   Patch files present                PASS  all
 
 == Result
-Patched 23.3.35 -> 23.7.1. Backup for rollback: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.7.1-20261114-054731
+Patched 23.3.35 -> 23.7.1. Backup for rollback: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.7.1-20261115-083641
 
 == 23.3.35: verify (offline)
 
@@ -79,16 +79,16 @@ Data folder        : <work>/inst-23.4.0/data  (kept)
 Installed version  : 23.4.0 -> 23.7.1
 
 == Checking the patch files (SHA-256)
-100 files verified.
+102 files verified.
 
 == Checking disk space, permissions and that the application is stopped
-Free space: 30102 MB, needed: 304 MB
+Free space: 29521 MB, needed: 304 MB
 
 == Backing up
-Backup: <work>/inst-23.4.0/app/patch-backups/23.4.0-to-23.7.1-20261114-054736  (68 files replaced, 32 new, database copied)
+Backup: <work>/inst-23.4.0/app/patch-backups/23.4.0-to-23.7.1-20261115-083647  (68 files replaced, 34 new, database copied)
 
 == Copying the new files
-100 files copied.
+102 files copied.
 
 == Migrating the database
 Main database schema version 18 (expected 18).
@@ -109,7 +109,7 @@ Operations Agent knowledge database schema version 2 (<work>/inst-23.4.0/data/op
   Patch files present                PASS  all
 
 == Result
-Patched 23.4.0 -> 23.7.1. Backup for rollback: <work>/inst-23.4.0/app/patch-backups/23.4.0-to-23.7.1-20261114-054736
+Patched 23.4.0 -> 23.7.1. Backup for rollback: <work>/inst-23.4.0/app/patch-backups/23.4.0-to-23.7.1-20261115-083647
 
 == 23.4.0: verify (offline)
 
@@ -138,16 +138,16 @@ Data folder        : <work>/inst-23.5.0/data  (kept)
 Installed version  : 23.5.0 -> 23.7.1
 
 == Checking the patch files (SHA-256)
-100 files verified.
+102 files verified.
 
 == Checking disk space, permissions and that the application is stopped
-Free space: 30088 MB, needed: 305 MB
+Free space: 29507 MB, needed: 305 MB
 
 == Backing up
-Backup: <work>/inst-23.5.0/app/patch-backups/23.5.0-to-23.7.1-20261114-054742  (94 files replaced, 6 new, database copied)
+Backup: <work>/inst-23.5.0/app/patch-backups/23.5.0-to-23.7.1-20261115-083652  (94 files replaced, 8 new, database copied)
 
 == Copying the new files
-100 files copied.
+102 files copied.
 
 == Migrating the database
 Main database schema version 18 (expected 18).
@@ -168,7 +168,7 @@ Operations Agent knowledge database schema version 2 (<work>/inst-23.5.0/data/op
   Patch files present                PASS  all
 
 == Result
-Patched 23.5.0 -> 23.7.1. Backup for rollback: <work>/inst-23.5.0/app/patch-backups/23.5.0-to-23.7.1-20261114-054742
+Patched 23.5.0 -> 23.7.1. Backup for rollback: <work>/inst-23.5.0/app/patch-backups/23.5.0-to-23.7.1-20261115-083652
 
 == 23.5.0: verify (offline)
 
@@ -198,16 +198,16 @@ Data folder        : <work>/inst-23.6.0/data  (kept)
 Installed version  : 23.6.0 -> 23.7.1
 
 == Checking the patch files (SHA-256)
-100 files verified.
+102 files verified.
 
 == Checking disk space, permissions and that the application is stopped
-Free space: 30070 MB, needed: 305 MB
+Free space: 29493 MB, needed: 305 MB
 
 == Backing up
-Backup: <work>/inst-23.6.0/app/patch-backups/23.6.0-to-23.7.1-20261114-054747  (97 files replaced, 3 new, database copied)
+Backup: <work>/inst-23.6.0/app/patch-backups/23.6.0-to-23.7.1-20261115-083658  (97 files replaced, 5 new, database copied)
 
 == Copying the new files
-100 files copied.
+102 files copied.
 
 == Migrating the database
 Main database schema version 18 (expected 18).
@@ -228,7 +228,7 @@ Operations Agent knowledge database schema version 2 (<work>/inst-23.6.0/data/op
   Patch files present                PASS  all
 
 == Result
-Patched 23.6.0 -> 23.7.1. Backup for rollback: <work>/inst-23.6.0/app/patch-backups/23.6.0-to-23.7.1-20261114-054747
+Patched 23.6.0 -> 23.7.1. Backup for rollback: <work>/inst-23.6.0/app/patch-backups/23.6.0-to-23.7.1-20261115-083658
 
 == 23.6.0: verify (offline)
 
@@ -257,16 +257,16 @@ Data folder        : <work>/inst-23.6.1/data  (kept)
 Installed version  : 23.6.1 -> 23.7.1
 
 == Checking the patch files (SHA-256)
-100 files verified.
+102 files verified.
 
 == Checking disk space, permissions and that the application is stopped
-Free space: 30057 MB, needed: 305 MB
+Free space: 29479 MB, needed: 305 MB
 
 == Backing up
-Backup: <work>/inst-23.6.1/app/patch-backups/23.6.1-to-23.7.1-20261114-054753  (97 files replaced, 3 new, database copied)
+Backup: <work>/inst-23.6.1/app/patch-backups/23.6.1-to-23.7.1-20261115-083703  (97 files replaced, 5 new, database copied)
 
 == Copying the new files
-100 files copied.
+102 files copied.
 
 == Migrating the database
 Main database schema version 18 (expected 18).
@@ -287,7 +287,7 @@ Operations Agent knowledge database schema version 2 (<work>/inst-23.6.1/data/op
   Patch files present                PASS  all
 
 == Result
-Patched 23.6.1 -> 23.7.1. Backup for rollback: <work>/inst-23.6.1/app/patch-backups/23.6.1-to-23.7.1-20261114-054753
+Patched 23.6.1 -> 23.7.1. Backup for rollback: <work>/inst-23.6.1/app/patch-backups/23.6.1-to-23.7.1-20261115-083703
 
 == 23.6.1: verify (offline)
 
@@ -316,16 +316,16 @@ Data folder        : <work>/inst-23.7.0/data  (kept)
 Installed version  : 23.7.0 -> 23.7.1
 
 == Checking the patch files (SHA-256)
-100 files verified.
+102 files verified.
 
 == Checking disk space, permissions and that the application is stopped
-Free space: 30048 MB, needed: 305 MB
+Free space: 29465 MB, needed: 305 MB
 
 == Backing up
-Backup: <work>/inst-23.7.0/app/patch-backups/23.7.0-to-23.7.1-20261114-054758  (100 files replaced, 0 new, database copied)
+Backup: <work>/inst-23.7.0/app/patch-backups/23.7.0-to-23.7.1-20261115-083709  (100 files replaced, 2 new, database copied)
 
 == Copying the new files
-100 files copied.
+102 files copied.
 
 == Migrating the database
 Main database schema version 18 (expected 18).
@@ -346,7 +346,7 @@ Operations Agent knowledge database schema version 2 (<work>/inst-23.7.0/data/op
   Patch files present                PASS  all
 
 == Result
-Patched 23.7.0 -> 23.7.1. Backup for rollback: <work>/inst-23.7.0/app/patch-backups/23.7.0-to-23.7.1-20261114-054758
+Patched 23.7.0 -> 23.7.1. Backup for rollback: <work>/inst-23.7.0/app/patch-backups/23.7.0-to-23.7.1-20261115-083709
 
 == 23.7.0: verify (offline)
 
@@ -364,30 +364,30 @@ Patched 23.7.0 -> 23.7.1. Backup for rollback: <work>/inst-23.7.0/app/patch-back
   Patch files present                PASS  all
 
 == Start the patched SkyGuard (offline) and call it
-GET /api/health -> {"ok":true,"version":"23.7.1","time":"2026-11-14T05:48:05.723+00:00","data_root":"<work>/inst-23.3.35/data"}
+GET /api/health -> {"ok":true,"version":"23.7.1","time":"2026-11-15T08:37:16.629+00:00","data_root":"<work>/inst-23.3.35/data"}
 GET / (dashboard) -> HTTP 200
 GET /api/automation/scripts/FWS-B211AC4E14 -> {"ok":false,"error_code":"SCRIPT_ID_WRONG_PAGE","message":"FWS-B211AC4E14 is an AI-Driven framework script. Open it from AI-Driven Automation > Script Inventory.","details":{"script_id":"FWS-B211AC4E14","open":"#/ai-automation?script=FWS-B211AC4E14"},"agent":null,"run_id":null}
 
 == Rollback to 23.3.35, then apply again (offline)
 
-== Rolling back 23.7.1 -> 23.3.35 from <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.7.1-20261114-054731
+== Rolling back 23.7.1 -> 23.3.35 from <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.7.1-20261115-083641
 Databases kept as they are (23.3.35 reads them as they are; nothing is lost).
 Version now 23.3.35.
 __version__ = "23.3.35"
 == Result
-Patched 23.3.35 -> 23.7.1. Backup for rollback: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.7.1-20261114-054806
+Patched 23.3.35 -> 23.7.1. Backup for rollback: <work>/inst-23.3.35/app/patch-backups/23.3.35-to-23.7.1-20261115-083717
 
 == Rollback to 23.7.0 (the tester's version), then apply again (offline)
-== Rolling back 23.7.1 -> 23.7.0 from <work>/inst-23.7.0/app/patch-backups/23.7.0-to-23.7.1-20261114-054758
+== Rolling back 23.7.1 -> 23.7.0 from <work>/inst-23.7.0/app/patch-backups/23.7.0-to-23.7.1-20261115-083709
 Databases kept as they are (23.7.0 reads them as they are; nothing is lost).
 Version now 23.7.0.
 __version__ = "23.7.0"
 == Result
-Patched 23.7.0 -> 23.7.1. Backup for rollback: <work>/inst-23.7.0/app/patch-backups/23.7.0-to-23.7.1-20261114-054809
+Patched 23.7.0 -> 23.7.1. Backup for rollback: <work>/inst-23.7.0/app/patch-backups/23.7.0-to-23.7.1-20261115-083720
 
 == No administrator rights: a fresh 23.4.0 installation owned by an ordinary user (nobody), patched as that user
 nobody
 == Result
-Patched 23.4.0 -> 23.7.1. Backup for rollback: <work>/inst-user/app/patch-backups/23.4.0-to-23.7.1-20261114-054812
+Patched 23.4.0 -> 23.7.1. Backup for rollback: <work>/inst-user/app/patch-backups/23.4.0-to-23.7.1-20261115-083723
 
 == DONE

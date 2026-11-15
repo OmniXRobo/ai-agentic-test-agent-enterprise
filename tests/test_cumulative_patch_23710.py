@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-NAME = "SkyGuard_Trip_Playback_Fix_Cumulative_Patch_23.7.1"
+NAME = "SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix"
 PKG = ROOT / "packaging" / "cumulative-patch"
 RELEASES = {"23.3.35": "6d448fa", "23.4.0": "53e80093fe99272f27dc424392d1fd3d746b3c7c", "23.5.0": "900e4e0",
             "23.6.0": "c229f6b", "23.6.1": "e344315", "23.7.0": "fbefa64"}
@@ -111,7 +111,7 @@ def test_patch_contents(built):
     assert not any("__pycache__" in f or f.startswith(("tests/", "data/")) for f in files)
     for tool in ("APPLY_PATCH.cmd", "APPLY_PATCH.ps1", "ROLLBACK_PATCH.cmd", "VERIFY_PATCH.cmd", "install_patch.py",
                  "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "DIAGNOSE_SITE.cmd", "DIAGNOSE_SITE.ps1",
-                 "SHA256_CHECKSUM.txt"):
+                 "VERIFY_LIVE_SITE.cmd", "VERIFY_LIVE_SITE.ps1", "SHA256_CHECKSUM.txt"):
         assert (built / tool).is_file(), tool
     for crlf in ("APPLY_PATCH.cmd", "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "DIAGNOSE_SITE.cmd", "DIAGNOSE_SITE.ps1"):
         assert b"\r\n" in (built / crlf).read_bytes(), crlf
