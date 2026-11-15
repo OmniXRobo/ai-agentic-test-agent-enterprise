@@ -81,6 +81,8 @@ def test_every_page_loads_like_before(tmp_path):
                              "defects", "investigation", "reports", "evidence")}
     # 23.5.0: AI Application Learning & Operations Agent
     added |= {"ops-agent"}
+    # 23.8.0: the comparison pages are one Integration Comparison workspace
+    added |= {"integration-comparison"}
     assert set(old) == set(new) - added and len(new) >= 30
     for r in added & set(new):
         assert not new[r]["failed"] and not new[r]["errors"], (r, new[r])

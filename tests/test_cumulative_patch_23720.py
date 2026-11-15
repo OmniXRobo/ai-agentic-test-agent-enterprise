@@ -28,6 +28,9 @@ NAME = "SkyGuard_AI_Automation_Complete_Scripts_Cumulative_Patch_23.7.2"
 PKG = ROOT / "packaging" / "cumulative-patch"
 RELEASES = {"23.3.35": "6d448fa", "23.4.0": "53e80093fe99272f27dc424392d1fd3d746b3c7c", "23.5.0": "900e4e0",
             "23.6.0": "c229f6b", "23.6.1": "e344315", "23.7.0": "fbefa64", "23.7.1": "a15c01f"}
+# 23.8.0: the working tree is 23.8.0 now and the cumulative patch is tested in tests/test_cumulative_patch_23800.py.
+pytestmark = pytest.mark.skipif('__version__ = "23.7.2"' not in (ROOT / "qa_platform" / "__init__.py").read_text(encoding="utf-8"),
+                                reason="superseded by the 23.8.0 cumulative patch (tests/test_cumulative_patch_23800.py)")
 AGENT = ("23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1")  # versions that have the Operations Agent (skyguard_agent)
 
 

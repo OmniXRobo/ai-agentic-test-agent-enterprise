@@ -1,11 +1,11 @@
 <#
-  SkyGuard QA - 23.7.2 cumulative patch (complete AI-Driven Automation scripts, guided playback of suggestion lists, calendars and counters, and
-  Autonomous Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 and 23.7.1), for 23.3.35, 23.4.0, 23.5.0,
-  23.6.0, 23.6.1, 23.7.0 or 23.7.1. No administrator rights needed; works offline.
+  SkyGuard QA - 23.8.0 cumulative patch (Integration Comparison Workspace, complete AI-Driven Automation scripts, guided playback of suggestion lists, calendars and counters, and
+  Autonomous Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1 and 23.7.2), for 23.3.35, 23.4.0,
+  23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1 or 23.7.2. No administrator rights needed; works offline.
 
   Finds the installation, stops it, and runs install_patch.py with the application's own Python:
   verify the patch files (SHA-256), check disk space and permissions, back up the files it replaces, the database
-  and settings.json, copy the files, migrate the main database (18 migrations) and create or migrate the agent's own
+  and settings.json, copy the files, migrate the main database (19 migrations) and create or migrate the agent's own
   knowledge database, verify, and restore everything automatically if any step fails. Then starts the application and checks /api/health.
 
   Usage (PowerShell, in the extracted patch folder):
@@ -23,13 +23,13 @@ param(
     [switch]$RestoreDatabase
 )
 $ErrorActionPreference = "Stop"
-$PatchVersion = "23.7.2"
+$PatchVersion = "23.8.0"
 $Here = $PSScriptRoot
 function Say([string]$msg) { Write-Host $msg }
 function Step([string]$msg) { Write-Host ""; Write-Host "== $msg" -ForegroundColor Cyan }
 function Fail([string]$msg) { Write-Host ""; Write-Host "PATCH FAILED: $msg" -ForegroundColor Red; exit 1 }
 
-Say "SkyGuard QA ${PatchVersion}: guided playback fixes and Autonomous Application Learning (cumulative)"
+Say "SkyGuard QA ${PatchVersion}: Integration Comparison Workspace, guided playback fixes and Autonomous Application Learning (cumulative)"
 $roots = @()
 if ($InstallDir) { $roots += $InstallDir }
 $roots += (Join-Path $env:LOCALAPPDATA "Programs\AIAgenticTestAgent")
