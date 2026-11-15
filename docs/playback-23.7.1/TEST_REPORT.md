@@ -100,6 +100,12 @@ All run on the build machine against the local trip.com stand-in pages (`tests/s
 - `test_date_fields_skip_place_fields`: "Departure airport or city" is not listed as a date field; the first start date
   field is `search_date_depart0`. Fails without the fix.
 
+## Live check on trip.com, 15 Nov 16:25 (your PC, Edge 157)
+
+`VERIFY_LIVE_SITE.cmd` with the second build: **both searches PASS, 7 of 7 steps each** (Dubai > New Delhi, 2 adults;
+London > Manila, 1 adult), ending on trip.com results pages with 33 and 31 prices. Report:
+`SkyGuard_LiveCheck_20261115-162529.zip`. This is a run on the real site, not a fixture.
+
 ## Full regression suite
 
 `pytest tests/` with the departure date fix: **783 passed, 0 failed, 54 skipped** (first build of the advanced locator fix: 781 passed) (after the closed-calendar fix: 772 passed, 0 failed, 53 skipped) (after the label fix: 770) (after the Manila and Learning tab
