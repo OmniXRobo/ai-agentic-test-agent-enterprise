@@ -1,7 +1,7 @@
 # SkyGuard QA 23.7.1 cumulative patch: installation and rollback
 
-**Package:** `SkyGuard_Trip_Playback_Fix_Cumulative_Patch_23.7.1.zip`. Check it against
-`SkyGuard_Trip_Playback_Fix_Cumulative_Patch_23.7.1.zip.sha256`.
+**Package:** `SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix.zip`. Check it against
+`SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix.zip.sha256`.
 
 **Installs on:** SkyGuard QA **23.7.0** (your version), and also **23.3.35, 23.4.0, 23.5.0, 23.6.0 or 23.6.1**. It also applies again over 23.7.1. One package
 covers 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 and 23.7.1. The same zip updates the SkyGuard browser extension and its companion to
@@ -21,8 +21,8 @@ covers 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 and 23.7.1. The same zip updates t
 PowerShell, in the download folder:
 
 ```powershell
-Get-FileHash .\SkyGuard_Trip_Playback_Fix_Cumulative_Patch_23.7.1.zip -Algorithm SHA256
-Get-Content .\SkyGuard_Trip_Playback_Fix_Cumulative_Patch_23.7.1.zip.sha256
+Get-FileHash .\SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix.zip -Algorithm SHA256
+Get-Content .\SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix.zip.sha256
 ```
 
 The two values must be the same. Then extract the zip (right-click, **Extract All**).
@@ -118,3 +118,19 @@ Trip.com cannot be opened from our build machine, so this tool records what the 
 It saves screenshots, the accessibility tree, the page HTML (without scripts or passwords), what the automation's
 component engine finds at each step, and your newest Trip.com scripts with their last run results. It never clicks or
 types by itself and never books. Cookies and saved sign-ins are not collected.
+
+## 9. Check the fix on trip.com yourself (live check)
+
+1. After `APPLY_PATCH.cmd`, double-click `VERIFY_LIVE_SITE.cmd` in the extracted folder.
+2. Edge opens and searches trip.com **by itself**, twice: Dubai (DXB) to New Delhi (DEL), 9 and 13 days from today,
+   2 adults; then London (LHR) to Manila (MNL), 20 and 27 days from today, 1 adult. Please do not click in that window.
+3. Each search: From, To, departure date, return date, Adults, Search, and a check that the results page names both
+   airports with prices. It stops there; nothing is booked or paid.
+4. The window prints PASS or FAIL for every step, then the name of a ZIP on your Desktop
+   (`SkyGuard_LiveCheck_<date>.zip`). Please send it back: it holds `REPORT.md`, the results screenshots, and for a
+   failed step what the automation saw.
+
+Other values: `VERIFY_LIVE_SITE.ps1 -Set "Dubai|DXB>Mumbai|BOM@+5,+9#3"` (from city | code > to city | code @ +days
+to departure, +days to return # adults).
+
+To undo this package, see section 4 (Roll back).

@@ -1,4 +1,4 @@
-# Changelog: SkyGuard QA 23.7.1 (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1)
+# Changelog: SkyGuard QA 23.7.1, Guided Browser Automation advanced locator fix (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1)
 
 One package installs on **23.7.0** (your version) and also on 23.3.35, 23.4.0, 23.5.0, 23.6.0 or 23.6.1. It brings the
 installation to 23.7.1. You do not need to apply any earlier patch first. The 23.7.0 notes (Operations Agent learns by
@@ -52,6 +52,24 @@ On 14 Nov 2026 your PC had 23.7.0. 23.7.0 was built on 23.6.0, so it did not hav
   and is verified. When both could have been pressed, the run stops and says exactly how to write the step.
 - **Step editor:** steps written by Semantic upgrade (`choose_option`) and `dismiss` steps were not in the Action list,
   so pressing Save turned them into `goto`. They are kept now.
+
+## Advanced locator fix (your specification of 15 Nov 2026; full report in `ADVANCED_LOCATOR_REPORT.md`)
+
+- **User-facing locators**: when the recorded selector, its alternates, its stable attributes and self-healing do not
+  find the element confidently, Play tries its role and accessible name, label, title, alt text and short text
+  (Playwright `get_by_role` / `get_by_label` / `get_by_title` / `get_by_alt_text` / `get_by_text`), each only when
+  exactly one element matches.
+- **Search must be answered**: a click on Search / Find flights passes only when the page answers within 30 s (a new
+  address, a new tab, or new content); otherwise the step fails with that message.
+- **Failure diagnostics on every failed or paused step** (`diag-step-NN.json`, `.aria.yml`, `.html` next to the
+  screenshot), shown on the run page as "What the automation saw" (focused field, open lists and rows, the option it
+  would choose, calendar months and days read, date fields, counters). Captured pages are served as text downloads only,
+  without scripts or event handlers.
+- **Live flight-search check (`VERIFY_LIVE_SITE.cmd`)** for your PC: searches trip.com by itself twice with different
+  values using the playback engine's handlers (From, To, both dates, Adults, Search), verifies the results page, stops
+  there (nothing booked), and saves `REPORT.md` with every step's result plus evidence of any failure in one ZIP.
+- Package renamed `SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix.zip` (still application version 23.7.1,
+  cumulative, installs over 23.7.1 too).
 
 ## Fixed (AI Application Learning & Operations Agent)
 

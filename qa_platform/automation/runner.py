@@ -50,6 +50,8 @@ class CommitBlocked(StepFailed):
 
 
 # 23.6.0: controls that commit money or a booking. "Checkout" and "Search" are not commitments.
+SEARCH_RE = re.compile(r"^(search|search flights?|find flights?|search hotels?|find hotels?)$", re.I)
+SEARCH_WAIT_S = 30
 COMMIT_RE = re.compile(r"\b(pay now|pay\b|purchase|buy now|place (?:your )?order|complete (?:booking|purchase|payment|"
                        r"order)|confirm (?:booking|and pay|payment|purchase|reservation)|book now|reserve now|"
                        r"finali[sz]e (?:booking|payment))", re.I)
@@ -283,13 +285,17 @@ class Runner:
                         shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}")
                         if shot:
                             entry["screenshot"] = shot
-                except StepFailed:
+                except StepFailed as exc:
                     entry["status"] = "FAILED"
+                    if not entry.get("diagnostics"):
+                        self._diagnose(page, evidence_dir, index, step, record, resolver, str(exc)[:300])
                     raise
                 except Exception as exc:  # Playwright errors become a failed step with evidence
                     entry["status"] = "SKIPPED" if step.optional else "FAILED"
                     message = resolver.mask(str(exc).splitlines()[0][:400])
                     entry["error"] = message
+                    if not step.optional:
+                        self._diagnose(page, evidence_dir, index, step, record, resolver, message)
                     shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}-failed")
                     if shot:
                         entry["screenshot"] = shot
@@ -353,6 +359,43 @@ class Runner:
         except Exception:
             return None
 
+    def _diagnose(self, page: Any, folder: Path, index: int, step: Step, record: dict[str, Any],
+                  resolver: ValueResolver | None = None, reason: str = "") -> str | None:
+        """23.7.1: what the page held when a step failed or paused, saved next to the screenshot so that a failure on
+        a site that cannot be reached from the build machine can be fixed from evidence: what the component engine
+        reads (focused field and its box, open lists and rows, the option it would choose, calendar days and date
+        fields, counters), the accessibility tree and the page HTML (no scripts; password fields blank). Typed values
+        are not in the HTML; the focused field's value is masked like the run log."""
+        from .site_diagnostic import CLEAN_HTML, aria_snapshot
+
+        stem = folder / f"diag-step-{index + 1:02d}"
+        out: dict[str, Any] = {"step": index + 1, "action": step.action, "reason": reason,
+                               "target": step.target.model_dump() if step.target else None,
+                               "semantic": step.semantic, "url": None}
+        try:
+            out["url"] = page.url
+            components.ensure(page)
+            want = step.value if step.action in ("choose_option", "fill", "type") and "{{" not in (step.value or "") else None
+            probe = page.evaluate("w => window.__sgComp.probe(w)", want)
+            if resolver is not None:
+                probe = json.loads(resolver.mask(json.dumps(probe, ensure_ascii=False)) or "{}")
+            out["engine"] = probe
+        except Exception as exc:  # noqa: BLE001 - diagnostics never break a run
+            out["engine_error"] = str(exc)[:300]
+        try:
+            (stem.with_suffix(".aria.yml")).write_text(aria_snapshot(page), encoding="utf-8")
+            (stem.with_suffix(".html")).write_text(page.evaluate(CLEAN_HTML)[:3_000_000], encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            out["page_error"] = str(exc)[:300]
+        try:
+            path = stem.with_suffix(".json")
+            path.write_text(json.dumps(out, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
+            record["steps"][-1]["diagnostics"] = str(path)
+            record["evidence"].setdefault("diagnostics", []).append(str(path))
+            return str(path)
+        except Exception:
+            return None
+
     def _step_with_help(self, page: Any, script: Script, step: Step, index: int, act: Any, resolver: ValueResolver,
                         record: dict[str, Any], evidence_dir: Path, visual: bool, delay: int, desc: str,
                         stop: threading.Event, playback: dict[str, Any]) -> str | None:
@@ -373,6 +416,7 @@ class Runner:
                 choices = list(getattr(exc, "choices", []) or [])[:15]
                 options = (["allow", "skip", "stop"] if commit else
                            (["choose"] if choices else []) + ["continue", "retry", "skip", "stop"])
+                self._diagnose(page, evidence_dir, index, step, record, resolver, reason)
                 shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}-paused")
                 if shot:
                     record["evidence"]["screenshots"].append(shot)
@@ -554,7 +598,16 @@ class Runner:
         if a == "click":
             if box:
                 visual_fx.click(page, box)
+            searching = self._is_search(step)
+            before = self._page_state(page) if searching else None
             locator.click(timeout=timeout)
+            if searching:
+                how = self._search_answered(page, before)
+                if not how:
+                    raise StepFailed(index, f"{describe(step)}: Search was clicked but the page did not answer within "
+                                            f"{SEARCH_WAIT_S} s (no new address, tab or results). Check the form above.")
+                act.event(names.EXECUTION_STEP, f"Search answered: {how}", step=index)
+                record["steps"][-1]["note"] = f"search answered ({how})"
         elif a == "right_click":  # 23.3.21
             if box:
                 visual_fx.click(page, box)
@@ -716,6 +769,73 @@ class Runner:
         if tag in ("input", "textarea") and target.placeholder:
             out.append(f'{tag}[placeholder="{q(target.placeholder)}"]')
         return [o for o in out if o != target.selector and o not in target.alternates]
+
+    @staticmethod
+    def _is_search(step: Step) -> bool:
+        """A click on a Search / Find flights button: the run waits for the page to answer before it continues."""
+        t = step.target
+        return t is not None and any(SEARCH_RE.match(str(x or "").strip()) for x in (t.text, t.name))
+
+    @staticmethod
+    def _page_state(page: Any) -> dict[str, Any]:
+        """Address, tabs, and a counter of content changes (nodes or text added / removed) from now on."""
+        try:
+            return {"url": page.url, "pages": len(page.context.pages),
+                    "changes": page.evaluate("""() => {
+                      if (window.__sgObs) window.__sgObs.disconnect();
+                      window.__sgChanges = 0;
+                      window.__sgObs = new MutationObserver((list) => {
+                        for (const m of list) if (m.type === 'characterData' || m.addedNodes.length || m.removedNodes.length) window.__sgChanges++;
+                      });
+                      window.__sgObs.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+                      return 0; }""")}
+        except Exception:
+            return {"url": "", "pages": 0, "changes": 0}
+
+    def _search_answered(self, page: Any, before: dict[str, Any] | None) -> str:
+        """23.7.1: success is the page answering, not the click: a new address, a new tab, or new content (results
+        drawn in place), checked for up to SEARCH_WAIT_S seconds."""
+        before = before or {}
+        deadline = time.monotonic() + SEARCH_WAIT_S
+        while time.monotonic() < deadline:
+            try:
+                if len(page.context.pages) > before.get("pages", 0):
+                    return "a results tab opened"
+                if page.url and page.url != before.get("url"):
+                    return f"the page moved to {page.url[:120]}"
+                if page.evaluate("() => window.__sgChanges || 0") > 0:
+                    components.settle(page, 300, 4000)
+                    return "the page drew new content"
+            except Exception:  # the page navigated while it was read: it answered
+                return "the page navigated"
+            page.wait_for_timeout(400)
+        return ""
+
+    @staticmethod
+    def _semantic_candidates(scope: Any, target: Any) -> list[tuple[str, Any]]:
+        """23.7.1: user-facing locators built from the recorded fingerprint (Playwright get_by_role / label / title /
+        alt text / text). Each is used only when it matches exactly one element. Long or changing texts (prices,
+        counts) are not used: a name with digits is matched only as the role's accessible name."""
+        out: list[tuple[str, Any]] = []
+        name = str(target.name or "").strip()
+        text = str(target.text or "").strip()
+        role = str(target.role or "").strip()
+        tag = str(target.tag or "")
+        if role and name and len(name) <= 80 and role not in ("generic", "presentation", "none"):
+            out.append((f"role {role} named '{name}'", lambda: scope.get_by_role(role, name=name, exact=True)))
+        if target.label and len(target.label) <= 80:
+            out.append((f"label '{target.label}'", lambda: scope.get_by_label(target.label, exact=True)))
+        if name and tag in ("input", "textarea", "select") and len(name) <= 80:
+            out.append((f"label '{name}'", lambda: scope.get_by_label(name, exact=True)))
+        title = next((a.split("=", 1)[1].strip('"]') for a in [target.selector, *target.alternates]
+                      if a.startswith("[title=")), None)
+        if title:
+            out.append((f"title '{title}'", lambda: scope.get_by_title(title, exact=True)))
+        if tag == "img" and name:
+            out.append((f"alt text '{name}'", lambda: scope.get_by_alt_text(name, exact=True)))
+        if text and len(text) <= 60 and not re.search(r"\d", text) and tag in ("a", "button", "span", "div", "li", "label"):
+            out.append((f"text '{text}'", lambda: scope.get_by_text(text, exact=True)))
+        return out
 
     @staticmethod
     def _quick(page: Any, target: Any, timeout: int) -> Any | None:
@@ -1160,6 +1280,18 @@ class Runner:
                                     f"(selector {_short(target.selector)}).")
         healed = self._heal(page, step, index, script, act, record, evidence_dir, visual)
         if healed is None:
+            # 23.7.1: self-healing found no confident replacement (it keeps the fixes a person can apply); what the
+            # element is (role and name, label, title, alt text, short text) still finds it when exactly one matches
+            for how, make in self._semantic_candidates(scope, target):
+                try:
+                    loc = make()
+                    if loc.count() != 1:
+                        continue
+                    loc.first.wait_for(state=state, timeout=1500)
+                    act.log(f"Primary locator failed; found by its {how}", step=index)
+                    return loc.first
+                except Exception:
+                    continue
             pending = [n for n in record.get("needs_confirmation", []) if n["step"] == index]
             if pending:
                 raise StepFailed(index, f"Element not found: {target.description or target.selector} "

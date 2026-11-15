@@ -5,7 +5,7 @@
 # Usage: packaging/cumulative-patch/test_offline_install.sh <folder with the zip> <work folder>
 set -euo pipefail
 ZIPS=$(cd "$1" && pwd); WORK=$2; REPO=$(cd "$(dirname "$0")/../.." && pwd)
-P=SkyGuard_Trip_Playback_Fix_Cumulative_Patch_23.7.1
+P=SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix
 rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
 LO_UP="import fcntl, socket, struct; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); fcntl.ioctl(s.fileno(), 0x8914, struct.pack('16sH14x', b'lo', 0x49))"
 offline() { unshare -rn bash -c "python3 -c \"$LO_UP\" && $*"; }

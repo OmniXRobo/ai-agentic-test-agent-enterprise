@@ -64,3 +64,29 @@ def test_diagnostic_captures_each_stage_into_one_zip(site, tmp_path):
     assert report["stages"][2]["find_option"]["status"] == "found"
     assert report["answers"] == ["enter", "enter", "enter", "q"]
     assert "4-calendar-at-finish.json" in names  # finishing early still captures the page
+
+
+def test_captured_pages_are_served_as_text_downloads(client):
+    """A captured third-party page in the evidence folder is never served as a page of this application."""
+    rt = client.app.state.runtime
+    folder = rt.paths.evidence / "RUN-DIAG"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "diag-step-01.html").write_text('<div onclick="alert(1)">x</div>')
+    (folder / "diag-step-01.json").write_text('{"step": 1}')
+    r = client.get("/api/automation/evidence", params={"path": str(folder / "diag-step-01.html")})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    assert "attachment" in r.headers["content-disposition"] and r.headers["x-content-type-options"] == "nosniff"
+    r = client.get("/api/automation/evidence", params={"path": str(folder / "diag-step-01.json")})
+    assert r.status_code == 200 and r.json() == {"step": 1}
+
+
+def test_captured_html_has_no_event_handlers(site):
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        p = b.new_page()
+        p.set_content('<a href="javascript:alert(1)" onclick="x()">a</a><img src=x onerror="y()"><script>1</script>')
+        html = p.evaluate(site_diagnostic.CLEAN_HTML)
+        b.close()
+    assert "onclick" not in html and "onerror" not in html and "javascript:" not in html and "<script" not in html

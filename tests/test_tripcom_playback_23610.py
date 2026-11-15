@@ -7,6 +7,7 @@ names, index-numbered data-testid values, its two calendars, icon-only steppers)
 presses and clicks in headless Chromium, then plays the recording back on a fresh page."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -665,3 +666,83 @@ def test_typing_repeated_later_in_the_recording_does_not_pause(rt, site):
                           base_url=site))
     rec = _play(a, "SCR-TRIPDUB001", headless=True)
     assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+def test_failed_step_saves_component_diagnostics(rt, site):
+    """23.7.1: a failed step saves what the page held (engine view, accessibility tree, HTML) next to its screenshot,
+    so a failure on a site the build machine cannot open is fixed from evidence."""
+    dep = Target(selector='role=combobox[name="Departure airport or city"]', tag="input", role="combobox",
+                 name="Departure airport or city", test_id="search_city_from0")
+    steps = [Step(action="goto", value=f"{site}/tripcom/flights.html"),
+             Step(action="choose_option", target=dep, value="Atlantis", timeout_ms=4000,
+                  semantic={"intent": "choose_option", "option": "Atlantis", "typed": "atlantis", "list": "suggestion"})]
+    a = rt.automation
+    a.scripts.save(Script(id="SCR-TRIPDIAG02", name="diag", mode="guided", steps=steps, browser="chromium", base_url=site))
+    rec = _play(a, "SCR-TRIPDIAG02", headless=True)
+    assert rec["status"] == "FAILED"
+    diag = Path(rec["steps"][1]["diagnostics"])
+    data = json.loads(diag.read_text())
+    assert data["step"] == 2 and data["target"]["test_id"] == "search_city_from0" and "engine" in data
+    assert diag.with_suffix(".aria.yml").is_file() and "<script" not in diag.with_suffix(".html").read_text()
+    assert str(diag) in rec["evidence"]["diagnostics"]
+
+
+def test_changed_selector_is_found_by_role_and_name(rt, site):
+    """A recorded selector that no longer exists (changed DOM, generated ids) and whose element self-healing cannot
+    score confidently (no id, no classes, no recorded context): it is found by its role and accessible name."""
+    T = Target
+    steps = [Step(action="goto", value=f"{site}/tripcom/flights.html"),
+             Step(action="click", target=T(selector="#tab-7f3a9c > li:nth-of-type(2)", role="tab", name="Flights"),
+                  timeout_ms=1500),
+             Step(action="expect_visible", target=T(selector='[data-testid="search_city_from0"]'))]
+    a = rt.automation
+    a.scripts.save(Script(id="SCR-TRIPROLE01", name="role", mode="guided", steps=steps, browser="chromium", base_url=site))
+    rec = _play(a, "SCR-TRIPROLE01", headless=True)
+    assert rec["status"] == "PASSED", (rec["error"], _steps(rec))
+
+
+def test_semantic_locators_built_from_the_fingerprint(browser_page):
+    """The user-facing locators Play tries when self-healing finds no confident replacement: each must match exactly
+    one element on the changed page."""
+    from qa_platform.automation.runner import Runner
+
+    page = browser_page
+    page.set_content('<label for="e9">Email address</label><input id="e9">'
+                     '<button title="Swap cities"><svg></svg></button><img alt="Trip logo" src="data:,">'
+                     '<div role="tab">Flights</div><a>Price 120</a>')
+    found = {}
+    cases = {"label": Target(selector="#email-old", tag="input", name="Email address"),
+             "role": Target(selector="#t1", role="tab", name="Flights"),
+             "title": Target(selector='[title="Swap cities"]', tag="button"),
+             "alt": Target(selector="#logo-old", tag="img", name="Trip logo")}
+    for key, target in cases.items():
+        for how, make in Runner._semantic_candidates(page, target):
+            if make().count() == 1:
+                found[key] = how
+                break
+    assert set(found) == {"label", "role", "title", "alt"}, found
+    # a text with numbers (a price, a count) is never used as a locator
+    assert not any(h.startswith("text") for h, _ in Runner._semantic_candidates(page, Target(selector="#p", tag="a", text="Price 120")))
+
+
+def test_search_counts_only_when_the_page_answers(rt, site):
+    """A Search click passes only when the page answers (new address, tab or content), not because it was clicked."""
+    T = Target
+    search = T(selector='[data-testid="search_btn"]', role="button", name="Search", text="Search", test_id="search_btn")
+    a = rt.automation
+    a.scripts.save(Script(id="SCR-TRIPSRCH01", name="search", mode="guided", browser="chromium", base_url=site, steps=[
+        Step(action="goto", value=f"{site}/tripcom/flights.html"), Step(action="click", target=search)]))
+    rec = _play(a, "SCR-TRIPSRCH01", headless=True)
+    assert rec["status"] == "PASSED" and "search answered" in rec["steps"][1]["note"], _steps(rec)
+    # a Search button that does nothing
+    a.scripts.save(Script(id="SCR-TRIPSRCH02", name="dead search", mode="guided", browser="chromium", base_url=site, steps=[
+        Step(action="goto", value=f"{site}/tripcom/flights.html"),
+        Step(action="click", target=T(selector="#trip_searchBoxTabs > li:nth-of-type(2)", text="Search", name="Search"))]))
+    import qa_platform.automation.runner as runner_mod
+    old = runner_mod.SEARCH_WAIT_S
+    runner_mod.SEARCH_WAIT_S = 3
+    try:
+        rec = _play(a, "SCR-TRIPSRCH02", headless=True)
+    finally:
+        runner_mod.SEARCH_WAIT_S = old
+    assert rec["status"] == "FAILED" and "did not answer" in rec["error"], _steps(rec)
