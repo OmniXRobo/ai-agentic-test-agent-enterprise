@@ -11,8 +11,8 @@ Every result in this report is marked with where it was produced:
 
 No result here was simulated. The real-site check of this package is the new **`VERIFY_LIVE_SITE.cmd`** (section 6): it
 runs on your PC against trip.com and writes `REPORT.md` with every step's result. Your first run of it (15 Nov, 13:34) passed From and To
-and failed at the departure date, fixed since (section 1, start date (3)); the full search is **not yet verified on
-trip.com**.
+and failed at the departure date, fixed since (section 1, start date (3)); the second run (16:25) **passed every step of both searches on
+trip.com** (section 3.1).
 
 ## 1. Root causes found (in the order they were found)
 
@@ -146,6 +146,16 @@ verified. The date step clicked the departure city box (start date (3) above); f
 after it (return date, adults, Search, results) did not run, so they are **not yet verified on trip.com**. Run
 `VERIFY_LIVE_SITE.cmd` again with the second build.
 
+**Live check of 15 Nov, 16:25 (`SkyGuard_LiveCheck_20261115-162529.zip`, Edge 157, second build): PASS, both
+searches, every step [your PC, trip.com].**
+
+| Search | From | To | Depart | Return | Adults | Results page |
+|---|---|---|---|---|---|---|
+| Dubai > New Delhi | DXB, verified | DEL, verified | 2026-11-24, verified | 2026-11-28, verified | 1 -> 2, form shows "2 adults" | `showfarefirst?dcity=dxb&acity=del&...ddate=2026-11-24&rdate=2026-11-28`, 33 prices, both airports named |
+| London > Manila | LHR, verified | MNL, verified | 2026-12-05, verified | 2026-12-12, verified | 2 -> 1, form shows "1 adult" | `showfarefirst?dcity=lon&acity=mnl&...ddate=2026-12-05&rdate=2026-12-12`, 31 prices, both airports named |
+
+Nothing was booked. Still to confirm on trip.com: your own recorded script played back with this build.
+
 ### 3.2 On this machine [fixture]
 
 See `TEST_REPORT.md` for every test. The ones for this package:
@@ -172,7 +182,7 @@ browser, so every run is one), slow networks beyond the stand-in's delays.
 
 ## 4. Known limitations
 
-- On trip.com, this package is verified up to the arrival city (live check of 15 Nov); dates, adults and Search are verified there only through your earlier runs until the live check passes.
+- On trip.com, the playback handlers passed the full search twice (live check of 15 Nov, 16:25); your own recorded script with this build is still to be confirmed there.
 - English labels: dates in labels are read in English month names and ISO forms; other languages fall back to the
   month heading plus day number.
 - No OCR or image recognition.
