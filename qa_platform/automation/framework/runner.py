@@ -316,6 +316,12 @@ class _Follow:
                 if self.act:
                     self.act.event(names.EXECUTION_STEP, f"Step {entry['index'] + 1}: {entry['description']}",
                                    progress=min(95, int((key[1]) * 100 / total)), step=entry["index"])
+            if rec.get("status") == "NOT_AUTOMATED":  # 23.7.2: a Test Case step the application does not have
+                entry["status"] = "NOT_AUTOMATED"
+                entry["duration_ms"] = rec.get("duration_ms")
+                entry["finished_at"] = rec.get("ts")
+                entry["actual"] = self.mask(rec.get("error") or "Not on the application")
+                entry["error"] = entry["actual"]
             if rec.get("status") in ("PASSED", "FAILED"):
                 entry["status"] = rec["status"]
                 entry["duration_ms"] = rec.get("duration_ms")

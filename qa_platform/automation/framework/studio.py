@@ -43,7 +43,9 @@ from ...tfs.service import TfsService
 from ..generator import AutomationEngineeringAgent, parse_tfs_steps
 from . import codegen, registry, validator
 from .focus import focus_inventory, known_selectors, case_keywords
-from .builder import CaseContext, FrameworkBuilder, Inventory, MappedTest
+from .builder import CaseContext, FrameworkBuilder, Inventory, MappedStep, MappedTest
+from .steps import PlannedStep, extract_precondition, plan_steps
+from .walker import LiveDriver, Snapshot, StepWalker, WalkAborted, WalkResult, describe, merge_pages
 from .runner import FrameworkRunner
 from .workspace import DELETED_FOLDER, FrameworkWorkspace, sha256
 
@@ -70,6 +72,18 @@ SYSTEM_PROMPT = (
     "test_data and refer to them as {{DATA:field}}; use {{CRED:role.username}} and {{CRED:role.password}} for login "
     "fields and never write a password. Never write a fixed date or time: use {{TODAY+7d:%d/%m/%Y}}, {{TODAY-1d:%d/%m/%Y}} or {{NOW+2h:%H:%M}}. List the "
     "ids of the Acceptance Criteria the test covers.")
+
+
+STEP_PROMPT = (
+    "You are the Automation Engineering Agent. Map ONE manual test step to browser actions on the page that is open "
+    "now. Use only selectors copied exactly from the ELEMENTS list. Actions: click, fill, select, check, uncheck, "
+    "expect_visible, expect_text. For fill/select put the text in value. Return at most 3 steps; return an empty "
+    "steps list when no element on this page fits the step.")
+
+
+class StepMapping(BaseModel):
+    """The AI's answer for one manual step (23.7.2)."""
+    steps: list[MappedStep] = Field(default_factory=list, max_length=4)
 
 
 class JobSelection(BaseModel):
@@ -446,6 +460,32 @@ class ScriptStudio:
         if stop.is_set():
             raise QAError("GENERATION_STOPPED", "Generation stopped by the user.")
         act.progress(30, f"Mapping {len(steps)} manual steps to {len(inventory)} discovered elements")
+        # 23.7.2: every step is read and walked through the application one at a time (precondition first); the
+        # one-request mapping below is only used when the walk could not automate any step at all.
+        precondition = extract_precondition(case.get("description"))
+        if precondition:
+            note(f"Precondition: {precondition}")
+        planned = plan_steps(steps, precondition)
+        walk = self._walk(job_id, req, planned, inventory, datasets, note, stop)
+        origins = None
+        mapped = None
+        numbers = range(1, len(steps) + 1)
+        if walk is not None and not walk.resolved_steps - {0}:
+            walk = None  # nothing could be automated this way: the AI maps the whole Test Case
+        if walk is not None:
+            merge_pages(inventory, walk.pages)
+            n_flag = len({f["tc_step"] for f in walk.flagged if f["tc_step"] and f["authoritative"]})
+            note(f"Steps walked {'in the browser' if walk.live else 'on the discovered elements'}: "
+                 f"{len(walk.resolved_steps - {0})} of {len(steps)} Test Case step(s) automated"
+                 + (f" ({len(walk.ai_steps)} with the AI)" if walk.ai_steps else "")
+                 + (f", {n_flag} name something the application does not have" if n_flag else ""))
+            if all(n in walk.resolved_steps or walk.settled(n) for n in numbers):
+                mapped = MappedTest(steps=walk.steps, test_data=walk.test_data, notes=walk.notes)
+                origins = walk.origins
+                note(f"Mapped {len(mapped.steps)} automation step(s)")
+            else:
+                open_steps = [n for n in numbers if n not in walk.resolved_steps and not walk.settled(n)]
+                note(f"Step(s) {', '.join(map(str, open_steps))} still open: asking the AI to map the Test Case")
         manual = "\n".join(f"{i + 1}. {s['action']} => expected: {s['expected']}" for i, s in enumerate(steps))
         flows = "\n".join(f"- {f.name}: {f.doc}" for f in reg.flows.values()) or "(none yet)"
         ac_text = "\n".join(f"{c['id']}: {c['title']}" for c in criteria) or "(none recorded)"
@@ -469,8 +509,8 @@ class ScriptStudio:
         timeout = max(cfg["timeout_seconds"], cfg.get("generation_timeout_seconds") or 600)
         answer = min(6000, max(1200, 600 + 450 * len(steps)))
         schema = _mapping_schema(len(steps))
-        mapped = None
-        for attempt, limit in enumerate(limits):
+        ai_mapped: MappedTest | None = None
+        for attempt, limit in enumerate(limits if mapped is None else []):
             focus = focus_inventory(inventory.lines, words, start_url=req.base_url, prefer=prefer, limit=limit)
             user = head + f"ELEMENT INVENTORY (selector | role | name):\n{focus.text}"
             if known:
@@ -480,31 +520,39 @@ class ScriptStudio:
                  f"prompt about {tokens} tokens, answer limit {answer} tokens, waiting up to {int(timeout // 60)} min")
             note(f"Asking the {self._ai_label()} to map the steps" + (" (again, with fewer elements)" if attempt else ""))
             try:
-                mapped = self.ai.complete_json(SYSTEM_PROMPT, user, MappedTest, max_tokens=answer, timeout=timeout,
-                                               enforce_schema=schema)
+                ai_mapped = self.ai.complete_json(SYSTEM_PROMPT, user, MappedTest, max_tokens=answer, timeout=timeout,
+                                                  enforce_schema=schema)
                 break
             except QAError as exc:
                 retry = exc.error_code in RETRY_SMALLER and attempt + 1 < len(limits) and focus.shown > limits[-1]
                 if retry and not stop.is_set():
                     note(f"{exc.message} Asking again with fewer elements.")
                     continue
+                if walk is not None:  # keep what the walk automated; the open steps stay flagged
+                    note(f"{self._ai_label()} could not map the open steps ({exc.message}); they stay flagged.")
+                    break
                 if exc.error_code in AI_ERRORS:
                     raise QAError("AI_UNAVAILABLE", f"{self._ai_label()} unavailable: {exc.message}", status=503,
                                   details=exc.details) from exc
                 raise
-        assert mapped is not None
-        note(f"Mapped {len(mapped.steps)} automation step(s)")
+        if mapped is None and walk is not None:
+            mapped, origins = _merge_walk_and_ai(walk, ai_mapped, len(steps), note)
+        elif mapped is None:
+            mapped = ai_mapped
+            assert mapped is not None
+            note(f"Mapped {len(mapped.steps)} automation step(s)")
         if stop.is_set():
             raise QAError("GENERATION_STOPPED", "Generation stopped by the user.")
         ctx = CaseContext(
             test_case_id=tc, test_case_title=case["title"], steps=steps, user_story_id=story_id,
             user_story_title=story["title"] if story else None, sprint=_sprint(case.get("iteration_path")),
             project=self.tfs.profile().get("project"), acceptance_criteria=criteria, datasets=datasets,
-            base_url=req.base_url, application=req.application, environment=req.environment,
-            credential_role=req.credential_role, variant=variant, generated_at=now_iso()[:16].replace("T", " "))
+            base_url=req.base_url, application=self._credential_application(req), environment=req.environment,
+            credential_role=req.credential_role, variant=variant, generated_at=now_iso()[:16].replace("T", " "),
+            precondition=precondition)
         act.progress(55, "Building Page Objects, flows and the test (reusing existing components)")
         with self._write_lock:
-            build = FrameworkBuilder(reg, inventory, self.ws.read).build(ctx, mapped)
+            build = FrameworkBuilder(reg, inventory, self.ws.read).build(ctx, mapped, origins)
             changes = dict(build.changes)
             test_rel, data_rel = build.test_rel, build.data_rel
             if target:  # keep the script's files; merge the user's data edits
@@ -549,7 +597,84 @@ class ScriptStudio:
                            f"(file verified)",
                 "details": {"validation": report.checks, "components": build.components, "impact": build.impact,
                             "files": [w["path"] for w in written], "notes": build.notes, "file": test_rel,
+                            "flagged_steps": walk.flagged if walk is not None and origins is not None else [],
                             "file_verified": True}}
+
+    def _credential_application(self, req: JobRequest) -> str | None:
+        """The application whose saved credentials the script uses: the one chosen, else the one saved for the
+        application's host (www.saucedemo.com -> saucedemo.com), so generation and Play use the same credentials."""
+        if req.application:
+            return req.application
+        from ..discovery import default_application
+        app = default_application(req.base_url)
+        return app if self.creds.find(app, req.credential_role or "user", req.environment) else None
+
+    def _walk_credentials(self, req: JobRequest) -> tuple[str | None, str | None]:
+        from ..discovery import default_application
+        role = req.credential_role or "user"
+        for app in dict.fromkeys([req.application, default_application(req.base_url)]):
+            shared = self.creds.find(app, role, req.environment) if app else None
+            if shared:
+                return shared["username"], self.creds.password_of(shared["id"])
+        app = req.application or default_application(req.base_url)
+        return self.creds.lookup(app, role, "username"), self.creds.lookup(app, role, "password")
+
+    def _ask_step(self, ps: PlannedStep, snap: Snapshot, note: Any) -> list[MappedStep]:
+        """One manual step, the elements of the page on screen (at most 40), one small AI request (23.7.2)."""
+        if not self.ai.config().get("base_url"):
+            return []
+        from .steps import key_words
+        want = key_words(ps.action + " " + ps.expected)
+        ranked = sorted(snap.elements, key=lambda e: -len(want & set(key_words(describe(e)))))[:40]
+        lines = "\n".join(f"{e['selector']} | {e.get('role') or e.get('tag')} | {describe(e)}" for e in ranked)
+        user = (f"PAGE: {snap.url} ({snap.title})\nELEMENTS (selector | role | name):\n{lines}\n\n"
+                f"MANUAL STEP {ps.number}: {ps.action}\nEXPECTED: {ps.expected or '(not given)'}")
+        note(f"Step {ps.number}: asking the {self._ai_label()} to map this step on {snap.title or snap.url}")
+        cfg = self.ai.config()
+        answer = self.ai.complete_json(STEP_PROMPT, user, StepMapping, max_tokens=500,
+                                       timeout=max(cfg["timeout_seconds"], 180), enforce_schema=True)
+        return answer.steps
+
+    def _walk(self, job_id: str, req: JobRequest, planned: list[PlannedStep], inventory: Inventory,
+              datasets: list[dict[str, Any]], note: Any, stop: threading.Event) -> WalkResult | None:
+        """Walk the steps in a browser (the pages behind sign-in, cart and forms are seen this way). None when no
+        browser can be used: the AI then maps the steps on the discovered element inventory."""
+        auto = self.settings.section("automation") or {}
+        creds = self._walk_credentials(req)
+        role = req.credential_role or "user"
+        ask = lambda ps, snap: self._ask_step(ps, snap, note)  # noqa: E731
+        if stop.is_set():
+            raise QAError("GENERATION_STOPPED", "Generation stopped by the user.")
+        if auto.get("live_step_walk", True):
+            from ..browser import context_options, js, launch, start_playwright
+            pw = browser = None
+            try:
+                note("Walking the Test Case steps in the browser to find the element of every step")
+                pw = start_playwright()
+                browser = launch(pw, None, headless=True)
+                context = browser.new_context(**context_options(True, ignore_https_errors=True))
+                context.add_init_script(js("fingerprint"))
+                page = context.new_page()
+                walker = StepWalker(LiveDriver(page), req.base_url, role=role, credentials=creds, datasets=datasets,
+                                    ask_ai=ask, log=note)
+                return walker.walk(planned)
+            except WalkAborted as exc:
+                note(f"The application did not open in the browser ({exc}); the AI maps the steps on the discovered elements.")
+            except QAError as exc:
+                note(f"The browser could not be used for the step walk ({exc.message}); the AI maps the steps on the discovered elements.")
+            except Exception as exc:
+                log.exception("Step walk failed")
+                note(f"The step walk in the browser failed ({type(exc).__name__}: {str(exc).splitlines()[0][:200] if str(exc) else ''}); "
+                     "the AI maps the steps on the discovered elements.")
+            finally:
+                for closer in (browser, pw):
+                    try:
+                        if closer is not None:
+                            closer.close() if closer is browser else closer.stop()
+                    except Exception:
+                        pass
+        # Without a browser nothing can be confirmed on the application: the AI maps the Test Case as before.
+        return None
 
     def _retarget(self, changes: dict[str, str], build: Any, target: dict[str, Any]) -> dict[str, str]:
         test_src = changes.pop(build.test_rel)
@@ -619,13 +744,13 @@ class ScriptStudio:
                   data_rel: str, job_id: str, report: validator.Report) -> dict[str, Any]:
         ts = now_iso()
         criteria = [c for c in ctx.acceptance_criteria if c["id"] in build.covered_acceptance_criteria]
-        warnings = self._credential_warnings(req.application, req.environment, build.credential_role,
+        warnings = self._credential_warnings(ctx.application, req.environment, build.credential_role,
                                              target["id"] if target else None) if build.credential_role else []
         fields = {
             "project": ctx.project, "sprint": ctx.sprint, "user_story_id": ctx.user_story_id,
             "user_story_title": ctx.user_story_title, "acceptance_criteria": dumps(criteria),
             "test_case_id": ctx.test_case_id, "test_case_title": ctx.test_case_title, "file": test_rel,
-            "data_file": data_rel, "application": req.application, "environment": req.environment,
+            "data_file": data_rel, "application": ctx.application, "environment": req.environment,
             "credential_role": build.credential_role, "base_url": req.base_url, "status": "GENERATED",
             "updated_at": ts, "file_sha256": sha256(self.ws.path(test_rel).read_bytes()),
             "components": dumps(build.components), "notes": "\n".join(build.notes) or None,
@@ -848,6 +973,9 @@ class ScriptStudio:
                 return [f"Open {cls[:-4] if cls.endswith('Page') else cls} page ({p.url if p else ''})"]
             return [(m.doc.rstrip(".") if m and m.doc else call.func.attr.replace("_", " ").capitalize())
                     + (f" ({', '.join(ast.unparse(a) for a in call.args)})" if call.args else "")]
+        if isinstance(call.func, ast.Name) and call.func.id == "not_on_application":  # 23.7.2
+            reason = call.args[0].value if call.args and isinstance(call.args[0], ast.Constant) else ""
+            return [f"NOT AUTOMATED: {reason}".strip()]
         if isinstance(call.func, ast.Name) and call.func.id in reg.flows and imported.get(call.func.id, "").startswith("flows"):
             f = reg.flows[call.func.id]
             out = []
@@ -993,7 +1121,8 @@ class ScriptStudio:
             p = reg.page_objects.get(cls)
             if p is None or (method not in p.methods and method not in registry.BASE_PAGE_METHODS):
                 raise QAError("PAGE_OBJECT_REFERENCE_INVALID", f"{call} does not exist.", status=422)
-            var = codegen.snake(cls[:-4] if cls.endswith("Page") else cls, "app") + "_page"
+            base_name = cls[:-4] if cls.endswith("Page") else cls
+            var = codegen.snake(re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", base_name), "app", 6) + "_page"
             stmt = f"{cls}(page).{method}({', '.join(rendered)})" if f"{var} = {cls}(page)" not in source else \
                 f"{var}.{method}({', '.join(rendered)})"
         checkpoint = ", checkpoint=True" if op.get("checkpoint") else ""
@@ -1472,6 +1601,36 @@ def _dynamic_dates(changes: dict[str, str], data_rel: str | None) -> list[tuple[
     if out:
         changes[data_rel] = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     return out
+
+
+def _merge_walk_and_ai(walk: WalkResult, ai: MappedTest | None, n_steps: int,
+                       note: Any) -> tuple[MappedTest, list[tuple[str, dict[str, Any]] | None]]:
+    """23.7.2: per Test Case step, the actions the walk performed in the browser; for a step the walk could not
+    automate (and that does not name something the application lacks), the AI's actions for that step."""
+    ai_by_step: dict[int, list[MappedStep]] = {}
+    for st in (ai.steps if ai else []):
+        if st.manual_step is not None:
+            ai_by_step.setdefault(st.manual_step, []).append(st)
+    steps: list[MappedStep] = []
+    origins: list[tuple[str, dict[str, Any]] | None] = []
+    from_ai = []
+    for n in range(0, n_steps + 1):
+        walked = walk.for_step(n)
+        if n and n not in walk.resolved_steps and not walk.settled(n) and ai_by_step.get(n):
+            steps += ai_by_step[n]
+            origins += [None] * len(ai_by_step[n])
+            from_ai.append(n)
+            continue
+        for st, origin in walked:
+            steps.append(st)
+            origins.append(origin)
+    if from_ai:
+        note(f"Step(s) {', '.join(map(str, from_ai))} mapped by the AI (not confirmed in the browser)")
+    data = dict(ai.test_data if ai else {})
+    data.update(walk.test_data)
+    note(f"Mapped {len(steps)} automation step(s)")
+    return MappedTest(steps=steps, test_data=data, covered_acceptance_criteria=ai.covered_acceptance_criteria if ai else [],
+                      notes=walk.notes + (list(ai.notes) if ai else [])), origins
 
 
 def _sprint(iteration_path: str | None) -> str | None:

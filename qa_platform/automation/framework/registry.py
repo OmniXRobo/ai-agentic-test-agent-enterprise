@@ -35,7 +35,7 @@ class LocatorInfo:
         """The primary locator as the selector text a run reports (same as utilities.locators.Loc.selector)."""
         s, v = self.strategy, self.value
         if s == "test_id":
-            return f"[data-testid={json.dumps(v)}]"
+            return f"[data-testid={json.dumps(v)}], [data-test={json.dumps(v)}], [data-qa={json.dumps(v)}]"
         if s == "role":
             return f"role={v}[name={json.dumps(self.role_name)}]" if self.role_name else f"role={v}"
         if s in ("label", "placeholder", "text"):
