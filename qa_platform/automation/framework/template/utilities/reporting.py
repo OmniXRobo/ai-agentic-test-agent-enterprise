@@ -153,6 +153,9 @@ def step(title: str, checkpoint: bool = False, tc_step: int | str | None = None)
     started = time.monotonic()
     try:
         yield
+    except NotOnApplication as exc:
+        emit("step", index=index, title=title, status="NOT_AUTOMATED", error=str(exc)[:400],
+             duration_ms=int((time.monotonic() - started) * 1000), tc_step=tc_step)
     except BaseException as exc:
         shot = screenshot(f"{name}_FAILED", highlight=state.target)
         full = screenshot(f"{name}_FAILED_full", full_page=True)
@@ -167,6 +170,24 @@ def step(title: str, checkpoint: bool = False, tc_step: int | str | None = None)
              screenshot=shot, tc_step=tc_step)
     finally:
         state.step_title = None
+
+
+class NotOnApplication(Exception):
+    """Raised inside a step by ``not_on_application``; the step is reported as NOT AUTOMATED, the test goes on."""
+
+
+def not_on_application(reason: str) -> None:
+    """23.7.2: this Test Case step names something the application does not have (a field, a button, a page).
+
+    The generator never invents an element for it. The step is reported as NOT AUTOMATED with the reason, a pytest
+    warning is raised so the run summary shows it, and the rest of the test continues. Update the Test Case (or the
+    application), then regenerate or edit the step in Flow Logic.
+    """
+    import warnings
+
+    emit("action", step=state.step_index, action="not_on_application", description=reason)
+    warnings.warn(f"Test Case step not automated: {reason}", UserWarning, stacklevel=2)
+    raise NotOnApplication(reason)
 
 
 def action(kind: str, description: str, **fields: Any) -> None:

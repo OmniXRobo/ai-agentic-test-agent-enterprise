@@ -30,6 +30,11 @@ FINGERPRINT_FIELDS = ("tag", "text", "role", "name", "element_id", "test_id", "l
                       "classes", "href")
 
 
+def test_id_selector(value: str) -> str:
+    v = json.dumps(value)
+    return f"[data-testid={v}], [data-test={v}], [data-qa={v}]"
+
+
 class LocatorNotFound(AssertionError):
     pass
 
@@ -55,7 +60,7 @@ class Loc:
         """The primary locator as a readable selector (used in reports and healing records)."""
         s, v = self.strategy, self.value
         if s == "test_id":
-            return f"[data-testid={json.dumps(v)}]"
+            return test_id_selector(v)
         if s == "role":
             return f"role={v}[name={json.dumps(self.name)}]" if self.name else f"role={v}"
         if s == "label":
@@ -71,7 +76,9 @@ class Loc:
     def build(self, page: Any) -> Any:
         s, v = self.strategy, self.value
         if s == "test_id":
-            return page.get_by_test_id(v)
+            # 23.7.2: data-testid, data-test and data-qa (the attribute the element was discovered with); before,
+            # only data-testid was searched, so a data-test locator waited the full timeout before its alternate.
+            return page.locator(test_id_selector(v))
         if s == "role":
             return page.get_by_role(v, name=self.name, exact=self.exact) if self.name else page.get_by_role(v)
         if s == "label":

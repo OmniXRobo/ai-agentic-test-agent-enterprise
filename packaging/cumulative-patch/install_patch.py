@@ -1,5 +1,6 @@
-"""SkyGuard QA 23.7.1 cumulative patch (guided playback of suggestion lists, calendars and counters on sites such as
-Trip.com, and Autonomous Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1 and 23.7.0): offline
+"""SkyGuard QA 23.7.2 cumulative patch (AI-Driven Automation writes every Test Case step, from the sign-in to the
+last step; guided playback of suggestion lists, calendars and counters on sites such as Trip.com, and Autonomous
+Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 and 23.7.1): offline
 installer, verifier and rollback. No administrator rights are needed: everything is written inside the installation
 folder of the user who installed SkyGuard QA.
 
@@ -11,8 +12,8 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1 or 23.7.0;
-     23.7.1 to apply again),
+  1. detects the installation and its version (23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 or 23.7.1;
+     23.7.2 to apply again),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256),
   3. checks free disk space and that the application and data folders can be written,
   4. checks the application is not running (its port does not answer),
@@ -20,7 +21,7 @@ apply:
      backup) and settings.json,
   6. copies the new files (each written to a temporary name, then renamed),
   7. migrates: the main database is brought to 18 migrations (from 23.3.35 this applies the 23.4.0 migrations; 23.5.0,
-     23.6.0, 23.6.1, 23.7.0 and 23.7.1 add none); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
+     23.6.0, 23.6.1, 23.7.0, 23.7.1 and 23.7.2 add none); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
      separate file) is created or migrated to schema 2 (23.7.0 adds the observation journal and the learned
      application model: two new tables, nothing existing is changed),
   8. verifies: the new version loads, the agent core, its API and the passive learning engine load, every migration
@@ -29,7 +30,7 @@ apply:
      kept next to it, renamed, never deleted).
 
 rollback (after a successful apply): restores the previous application files and removes the files the patch added.
-The databases are kept as they are by default: 23.5.0 to 23.7.1 do not change the main database; the knowledge
+The databases are kept as they are by default: 23.5.0 to 23.7.2 do not change the main database; the knowledge
 database keeps its two 23.7.0 tables, which 23.5.0 and 23.6.0 ignore, and older versions do not use it, so nothing
 created after the upgrade is lost. Rolling back to 23.3.35: the 23.4.0 migrations stay in the database (23.3.35
 ignores the added tables and columns); use --restore-database for the exact pre-upgrade copy. --restore-database puts
@@ -50,9 +51,9 @@ import sys
 import time
 from pathlib import Path
 
-PATCH_VERSION = "23.7.1"
-BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1 or 23.7.0"
-BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", PATCH_VERSION)
+PATCH_VERSION = "23.7.2"
+BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 or 23.7.1"
+BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", PATCH_VERSION)
 AGENT_SCHEMA = 2
 MIGRATION_COUNT = 18
 MARGIN_MB = 300
@@ -206,6 +207,13 @@ COMPONENTS_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automa
                    "and hasattr(runner.Runner, '_choice_field') and 'probe(want)' in js('components') "
                    "and hasattr(runner.Runner, '_semantic_candidates') and hasattr(runner.Runner, '_diagnose') "
                    "else 'component engine incomplete')")
+STEPS_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automation.framework import steps, walker, builder; "
+              "p = steps.plan_steps([{'action': 'Log in', 'expected': 'Logged in'}, {'action': \"Enter 'Ann' in the First "
+              "Name field.\", 'expected': \"The First Name field shows 'Ann'.\"}], 'The user is logged in and is on the "
+              "checkout page.'); "
+              "print('ok' if [i.kind for x in p for i in x.intents] == ['goto', 'login', 'reach', 'login', 'fill'] "
+              "and hasattr(walker, 'StepWalker') and 'not_on_application' in builder.ACTIONS "
+              "else 'step reader incomplete')")
 LEARNING_LOAD = ("import sys; sys.path.insert(0, '.'); from skyguard_agent import journal, understanding, assistant, learning; "
                  "from skyguard_agent.assistant import canonical; "
                  "print('ok' if canonical('who authorises trips') == 'who authorize trips' and "
@@ -240,6 +248,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("Component engine (23.7.1)", comp == "ok", comp)
     except PatchError as exc:
         check("Component engine (23.7.1)", False, str(exc))
+    try:
+        st = run_py(python, app, data, STEPS_LOAD).splitlines()[-1]
+        check("Step reader (23.7.2)", st == "ok", st)
+    except PatchError as exc:
+        check("Step reader (23.7.2)", False, str(exc))
     try:
         learn = run_py(python, app, data, LEARNING_LOAD).splitlines()[-1]
         check("Passive learning engine (23.7.0)", learn == "ok", learn)
@@ -314,8 +327,8 @@ def restore_files(app: Path, backup: Path, added: list[str]) -> None:
 def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
-    step(f"SkyGuard QA {PATCH_VERSION}: guided playback fixes and Autonomous Application Learning "
-         "(cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1)")
+    step(f"SkyGuard QA {PATCH_VERSION}: complete AI-Driven Automation scripts, guided playback fixes and Autonomous "
+         "Application Learning (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     say(f"Application folder : {app}\nData folder        : {data}  (kept)\nInstalled version  : {before} -> {PATCH_VERSION}")

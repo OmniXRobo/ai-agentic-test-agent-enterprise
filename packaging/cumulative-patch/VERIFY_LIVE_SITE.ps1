@@ -1,5 +1,5 @@
 <#
-  SkyGuard QA 23.7.1 - live flight-search check (run after APPLY_PATCH).
+  SkyGuard QA 23.7.2 - live flight-search check (run after APPLY_PATCH).
 
   A visible browser (the application's own Python, Playwright and Edge) searches the site by itself with the same
   component handlers Play uses: From and To (typed and chosen from the suggestions by airport code), departure and

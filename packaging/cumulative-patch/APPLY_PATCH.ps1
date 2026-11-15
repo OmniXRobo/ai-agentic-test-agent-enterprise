@@ -1,7 +1,7 @@
 <#
-  SkyGuard QA - 23.7.1 cumulative patch (guided playback of suggestion lists, calendars and counters, and
-  Autonomous Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1 and 23.7.0), for 23.3.35, 23.4.0, 23.5.0,
-  23.6.0, 23.6.1 or 23.7.0. No administrator rights needed; works offline.
+  SkyGuard QA - 23.7.2 cumulative patch (complete AI-Driven Automation scripts, guided playback of suggestion lists, calendars and counters, and
+  Autonomous Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 and 23.7.1), for 23.3.35, 23.4.0, 23.5.0,
+  23.6.0, 23.6.1, 23.7.0 or 23.7.1. No administrator rights needed; works offline.
 
   Finds the installation, stops it, and runs install_patch.py with the application's own Python:
   verify the patch files (SHA-256), check disk space and permissions, back up the files it replaces, the database
@@ -23,7 +23,7 @@ param(
     [switch]$RestoreDatabase
 )
 $ErrorActionPreference = "Stop"
-$PatchVersion = "23.7.1"
+$PatchVersion = "23.7.2"
 $Here = $PSScriptRoot
 function Say([string]$msg) { Write-Host $msg }
 function Step([string]$msg) { Write-Host ""; Write-Host "== $msg" -ForegroundColor Cyan }
