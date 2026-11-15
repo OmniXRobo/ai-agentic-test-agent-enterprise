@@ -69,7 +69,20 @@
   }
   const from = $('[data-testid="search_city_from0"]'), to = $('[data-testid="search_city_to0"]');
   cityField(from, $("#fromBox"), "from", () => to.focus());
-  cityField(to, $("#toBox"), "to", () => { to.blur(); openCal("dep"); });
+  // ?live=1: as trip.com showed on 15 Nov: the calendar does not open by itself after the arrival city, the date
+  // groups are named "Depart: Tue, Nov 17" and the inputs say "Choose date" / "Return" and carry data-date
+  const LIVE = /[?&]live=1\b/.test(location.search);
+  if (LIVE) {
+    const fmt = (d) => `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]}, ${MON[d.getMonth()]} ${d.getDate()}`;
+    const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const t0 = new Date(); const d1 = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate() + 2); const d2 = new Date(d1.getFullYear(), d1.getMonth(), d1.getDate() + 2);
+    $("#depBox").setAttribute("aria-label", `Depart: ${fmt(d1)}`); $("#retBox").setAttribute("aria-label", `Return: ${fmt(d2)}`);
+    for (const [sel, ph, d] of [['[data-testid="search_date_depart0"]', "Choose date", d1], ['[data-testid="search_date_return0"]', "Return", d2]]) {
+      const i = $(sel); i.placeholder = ph; i.setAttribute("data-date", iso(d)); i.setAttribute("aria-hidden", "true"); i.tabIndex = -1;
+    }
+    $("#fromBox").classList.add("is-live"); $("#toBox").classList.add("is-live");
+  }
+  cityField(to, $("#toBox"), "to", () => { to.blur(); if (!LIVE) openCal("dep"); });
   document.querySelectorAll("[role=tab]").forEach((t) => t.addEventListener("click", () => document.querySelectorAll("[role=tab]").forEach((x) => x.setAttribute("aria-selected", x === t))));
 
   // ---- calendar ------------------------------------------------------------------------------------------------------

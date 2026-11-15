@@ -254,6 +254,11 @@
   const DATEISH = /(check.?in|check.?out|depart|departure|return|arrival date|start date|end date|from date|to date|\bdate\b|\bdates\b|calendar|when\b|travel date|dob|birth)/i;
   const START = /(check.?in|depart|departure|start|from|outbound|begin)/i;
   const END = /(check.?out|return|end\b|end date|until|inbound|to date)/i;
+  // 23.7.1 (Trip.com live check, 15 Nov): "Departure airport or city" matched "depart" and was clicked as the start
+  // date. A field named for a place is a date field only when something on it says date.
+  const PLACE = /(airport|\bcity\b|cities|destination|origin|location|station|where\b|address|leaving from|going to)/i;
+  const MON3 = "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?";
+  const DATED = new RegExp(`(\\bdates?\\b|calendar|check.?in|check.?out|\\b(mon|tues?|wed|thu|thurs?|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\\b|\\b${MON3}\\s+\\d{1,2}\\b|\\b\\d{1,2}\\s+${MON3}|\\d{4}-\\d{2}-\\d{2}|\\b\\d{1,2}[/.]\\d{1,2}([/.]\\d{2,4})?\\b)`, "i");
 
   function labelText(el) {
     const bits = [el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("title"), el.getAttribute("name"),
@@ -275,12 +280,15 @@
       const native = tag === "input" && ["date", "datetime-local"].includes(el.type);
       const text = labelText(el);
       if (!native && !DATEISH.test(text)) continue;
+      const dated = native || el.hasAttribute("data-date") || DATED.test(text);
+      if (!dated && PLACE.test(text)) continue;
       if (["div", "span", "label"].includes(tag) && getComputedStyle(el).cursor !== "pointer" && !el.querySelector("input")) continue;
       const role = START.test(text) && !END.test(text) ? "start" : END.test(text) && !START.test(text) ? "end" : "";
-      out.push({ el, role, text: clean(text, 120), native });
+      out.push({ el, role, text: clean(text, 120), native, dated });
     }
-    // the innermost of nested matches
-    return out.filter((a) => !out.some((b) => b !== a && a.el.contains(b.el) && b.role === a.role));
+    // the innermost of nested matches; fields that say "date" (or show one) first
+    const inner = out.filter((a) => !out.some((b) => b !== a && a.el.contains(b.el) && b.role === a.role));
+    return inner.filter((f) => f.dated).concat(inner.filter((f) => !f.dated));
   }
 
   function markDateField(role) {

@@ -152,3 +152,19 @@ the date field is opened first, as when no calendar is open. Test:
 later step (within six) types into or chooses in the same field again, the earlier typing is left to those steps.
 Test: `test_typing_repeated_later_in_the_recording_does_not_pause` (fails without the fix).
 
+
+## Your live check of 15 Nov, 13:34 (`SkyGuard_LiveCheck_20261115-133402.zip`)
+
+Both searches (Dubai > New Delhi, London > Manila) passed Open, From and To on trip.com and failed at the departure
+date with "No open calendar could be read on the page".
+
+Cause: on trip.com the calendar did not open by itself after the arrival city. The engine then looked for the
+departure date field by its name, and "Departure airport or city" (it contains "depart") came first on the page. It
+clicked the city box, which opened the city list instead of the calendar. The engine view saved with the failure
+shows it: the focused field is the departure city combobox with its list open, and the date fields listed start with
+"Departure airport or city" and "Switch departure airport or city ...", before "Choose date" (`search_date_depart0`).
+
+Fix: a field named for a place (airport, city, destination, location, station ...) counts as a date field only when
+it says or shows a date ("date", a weekday, "Nov 17", an ISO date or a `data-date`); fields that say date are tried
+first. The test page now has a live mode that behaves as trip.com did; the live check fails there with the same
+message without the fix and passes with it.

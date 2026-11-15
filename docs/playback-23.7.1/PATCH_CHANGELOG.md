@@ -68,6 +68,9 @@ On 14 Nov 2026 your PC had 23.7.0. 23.7.0 was built on 23.6.0, so it did not hav
 - **Live flight-search check (`VERIFY_LIVE_SITE.cmd`)** for your PC: searches trip.com by itself twice with different
   values using the playback engine's handlers (From, To, both dates, Adults, Search), verifies the results page, stops
   there (nothing booked), and saves `REPORT.md` with every step's result plus evidence of any failure in one ZIP.
+- **Departure date vs departure city** (your live check of 15 Nov): when the calendar does not open by itself, the
+  date field is no longer confused with "Departure airport or city"; a field named for a place counts as a date field
+  only when it says or shows a date.
 - Package renamed `SkyGuard_Guided_Browser_Automation_Advanced_Locator_Fix.zip` (still application version 23.7.1,
   cumulative, installs over 23.7.1 too).
 
