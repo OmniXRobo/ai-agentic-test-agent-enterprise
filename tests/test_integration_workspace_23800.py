@@ -321,7 +321,14 @@ def test_07_three_screenshots_ocr_and_compare(client, tmp_path):
     assert row_of(cfg, L["A"], "Total Sales")["members"][L["C"]]["field"] == "Revenue"
     save(client, pid, approve_all(cfg))
     r = run(client, pid)
-    assert r["result"] == "PASS", [x for x in r["detail"]["rows"] if x["result"] != "PASS"]
+    # what the engine read and which rules it found, so that a failure on another OCR engine can be read in the log
+    why = {"engine": [s.get("engine") for a in an["apps"] for s in a.get("screens") or []],
+           "rules": [(x["app"][-4:], x["field"], x["expression"]) for x in cfg["rules"]],
+           "rows": [(x["field"], x["record_key"], x["result"], x["category"],
+                     {k[-4:]: (v or {}).get("value") for k, v in x["values"].items()}, x["explanation"][:160])
+                    for x in r["detail"]["rows"] if x["result"] not in ("PASS", "ACCEPTED")],
+           "A": prev["A"]["tables"][0].get("rows"), "C": [t.get("rows") for t in prev["C"]["tables"]]}
+    assert r["result"] == "PASS", json.dumps(why, default=str)[:6000]
     assert all("screenshot" in x["sources"] for x in r["detail"]["rows"] if x["sources"])
     assert rows(r, "Sales by Month (chart)", "PASS")
 
