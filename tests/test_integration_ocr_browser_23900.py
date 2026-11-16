@@ -529,7 +529,7 @@ def test_a_cell_read_again_counts_only_when_the_copies_agree():
     assert ocr._cell_number(rect, [at(0, "0"), at(2, "0")])["text"] == "0"  # one copy missed
     assert ocr._cell_number(rect, [at(1, "0")]) is None  # one copy only: not enough
     assert ocr._cell_number(rect, [at(0, "0"), at(1, "8"), at(2, "0")]) is None  # the copies disagree
-    assert ocr._cell_number(rect, [at(0, "O"), at(1, "O"), at(2, "O")]) is None  # not a number
+    assert ocr._cell_number(rect, [at(0, "x"), at(1, "x"), at(2, "x")]) is None  # not a number
     run = {"text": "000", "box": [pad + 30, pad + 6, 2 * (cw + gap) + 40, 40]}  # copies read as one word
     assert ocr._cell_number(rect, [run])["text"] == "0"
     assert ocr._cell_number(rect, [dict(run, text="080")]) is None
@@ -543,3 +543,16 @@ def test_a_failed_cell_reread_is_reported_not_hidden():
         raise QAError("OCR_FAILED", "Windows OCR could not read the table cells again.", details="Add-Type failed")
     out = ocr._fill_empty_cells(Path("shot.png"), _orders_page(cancelled_1002=""), None, reader=failing)
     assert out["cell_rereads"]["read"] == 0 and "Add-Type failed" in out["cell_rereads"]["error"]
+
+
+def test_a_cell_read_again_as_letters_like_digits_is_that_number_and_what_was_seen_is_kept():
+    from qa_platform.comparison import ocr
+
+    rect = [100, 200, 40, 20]
+    cw, gap, pad = 40 * ocr.CELL_SCALE, 20 * ocr.CELL_SCALE, ocr.CELL_PAD
+    words = [{"text": "O", "box": [pad + k * (cw + gap) + 30, pad + 6, 30, 40]} for k in range(3)]
+    got = ocr._cell_number(rect, words)
+    assert got["text"] == "0" and got["read_as"] == "O"
+    out = ocr._fill_empty_cells(Path("shot.png"), _orders_page(cancelled_1002=""), None,
+                                reader=lambda *a, **k: [{"seen": ["Ø", "~"]}])
+    assert out["cell_rereads"] == {"cells": 1, "read": 0, "unread": [["Ø", "~"]]}

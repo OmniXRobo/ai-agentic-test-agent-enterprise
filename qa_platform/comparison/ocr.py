@@ -60,6 +60,7 @@ $stream.Dispose()
 # white page (System.Drawing, part of Windows): the copies form a line that the engine reads. Python maps each word
 # back to its copy and accepts a number only when the copies agree.
 CELL_SCALE, CELL_PAD, CELL_COPIES = 3, 40, 3
+CELL_SCALES = (3, 2, 1)  # tried in this order: the first that gives an agreeing number counts
 WINDOWS_OCR_CELLS = r"""
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -73,12 +74,14 @@ function Await($op, $type) { $t = $asTask.MakeGenericMethod($type).Invoke($null,
 $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if ($null -eq $engine) { throw 'No OCR language is installed in Windows.' }
 $spec = Get-Content -Raw -LiteralPath $env:QA_OCR_RECTS | ConvertFrom-Json
-$scale = [int]$spec.scale; $pad = [int]$spec.pad; $copies = [int]$spec.copies
+$pad = [int]$spec.pad; $copies = [int]$spec.copies
 $src = [System.Drawing.Bitmap]::FromFile($env:QA_OCR_FILE)
 $cells = @(); $i = 0
 foreach ($r in @($spec.rects)) {
   $x = [Math]::Max(0, [int]$r.x); $y = [Math]::Max(0, [int]$r.y)
   $w = [Math]::Min([int]$r.w, $src.Width - $x); $h = [Math]::Min([int]$r.h, $src.Height - $y)
+  foreach ($scale in @($spec.scales)) {
+  $scale = [int]$scale
   $words = @()
   if ($w -gt 2 -and $h -gt 2) {
     $cw = $w * $scale; $ch = $h * $scale; $gap = $ch
@@ -91,7 +94,7 @@ foreach ($r in @($spec.rects)) {
                    (New-Object System.Drawing.Rectangle($x, $y, $w, $h)), [System.Drawing.GraphicsUnit]::Pixel)
     }
     $g.Dispose()
-    $tmp = Join-Path $env:QA_OCR_TMP ("cell-" + $i + ".png")
+    $tmp = Join-Path $env:QA_OCR_TMP ("cell-" + $i + "-" + $scale + ".png")
     $canvas.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Png)
     $canvas.Dispose()
     $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($tmp)) ([Windows.Storage.StorageFile])
@@ -104,7 +107,8 @@ foreach ($r in @($spec.rects)) {
       $words += @{ text = $wd.Text; box = @($b.X, $b.Y, $b.Width, $b.Height) } } }
     $stream.Dispose()
   }
-  $cells += ,@{ index = $i; x = $x; y = $y; w = $w; h = $h; words = $words }
+  $cells += ,@{ index = $i; scale = $scale; x = $x; y = $y; w = $w; h = $h; words = $words }
+  }
   $i++
 }
 $src.Dispose()
@@ -116,11 +120,11 @@ def _as_list(v: Any) -> list[Any]:
     return [v] if isinstance(v, dict) else list(v or [])
 
 
-def _cell_number(rect: list[float], words: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _cell_number(rect: list[float], words: list[dict[str, Any]], scale: int = CELL_SCALE) -> dict[str, Any] | None:
     """The number read in the copies of one cell (see WINDOWS_OCR_CELLS), with its box on the screenshot; None
     unless at least two copies show the same number and no copy shows another one."""
     w, h = rect[2], rect[3]
-    cw, gap = w * CELL_SCALE, h * CELL_SCALE
+    cw, gap = w * scale, h * scale
     reads: dict[int, str] = {}
     boxes: dict[int, list[float]] = {}
     for wd in words:
@@ -143,8 +147,8 @@ def _cell_number(rect: list[float], words: list[dict[str, Any]]) -> dict[str, An
             else:
                 reads[k] = unit
                 off = CELL_PAD + k * (cw + gap)
-                boxes[k] = [rect[0] + max(0.0, b[0] - off) / CELL_SCALE, rect[1] + (b[1] - CELL_PAD) / CELL_SCALE,
-                            min(w, b[2] / len(span) / CELL_SCALE), b[3] / CELL_SCALE]
+                boxes[k] = [rect[0] + max(0.0, b[0] - off) / scale, rect[1] + (b[1] - CELL_PAD) / scale,
+                            min(w, b[2] / len(span) / scale), b[3] / scale]
     from .screen_reader import is_number
 
     texts = {t for t in reads.values()}
@@ -152,9 +156,18 @@ def _cell_number(rect: list[float], words: list[dict[str, Any]]) -> dict[str, An
         return None
     text = texts.pop()
     agree = [k for k, t in reads.items() if t == text]
+    read_as = None
+    if not is_number(text):
+        # the cell belongs to a number column: O for 0 and I / l / | for 1, as in screen_reader._digit_lookalikes
+        from .screen_reader import LOOKALIKE, _DIGIT_OF
+        if LOOKALIKE.match(text) and is_number(text.translate(_DIGIT_OF)):
+            read_as, text = text, text.translate(_DIGIT_OF)
     if len(agree) < 2 or not is_number(text):
         return None
-    return {"text": text, "box": [round(v, 1) for v in boxes[agree[0]]], "copies": len(agree)}
+    out = {"text": text, "box": [round(v, 1) for v in boxes[agree[0]]], "copies": len(agree)}
+    if read_as:
+        out["read_as"] = read_as
+    return out
 
 
 def _windows_cells(path: Path, rects: list[list[float]], settings: Any = None) -> list[dict[str, Any]]:
@@ -167,7 +180,7 @@ def _windows_cells(path: Path, rects: list[list[float]], settings: Any = None) -
     tmp = Path(tempfile.mkdtemp(prefix="skyguard-ocr-cells-"))
     try:
         spec = tmp / "rects.json"
-        spec.write_text(json.dumps({"scale": CELL_SCALE, "pad": CELL_PAD, "copies": CELL_COPIES,
+        spec.write_text(json.dumps({"scales": list(CELL_SCALES), "pad": CELL_PAD, "copies": CELL_COPIES,
                                     "rects": [{"x": int(r[0]), "y": int(r[1]), "w": int(r[2]), "h": int(r[3])}
                                               for r in rects]}), encoding="utf-8")
         env = dict(os.environ, QA_OCR_FILE=str(Path(path).resolve()), QA_OCR_RECTS=str(spec), QA_OCR_TMP=str(tmp))
@@ -180,14 +193,24 @@ def _windows_cells(path: Path, rects: list[list[float]], settings: Any = None) -
         cells = _as_list(json.loads(proc.stdout or "{}").get("cells"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    out = []
+    by_cell: dict[int, list[dict[str, Any]]] = {}
     for c in cells:
         i = int(c.get("index", -1))
         if 0 <= i < len(rects):
+            by_cell.setdefault(i, []).append(c)
+    out = []
+    for i, tries in sorted(by_cell.items()):
+        found, seen = None, []
+        for c in sorted(tries, key=lambda c: CELL_SCALES.index(int(c.get("scale") or CELL_SCALE))
+                        if int(c.get("scale") or CELL_SCALE) in CELL_SCALES else 99):
             used = [int(c.get(k, rects[i][n])) for n, k in enumerate(("x", "y", "w", "h"))]  # clipped to the image
-            found = _cell_number(used, _as_list(c.get("words")))
+            words = _as_list(c.get("words"))
+            seen.append(f"x{c.get('scale')}: " + " ".join(str(w.get("text") or "")[:12] for w in words[:6]))
+            found = _cell_number(used, words, int(c.get("scale") or CELL_SCALE))
             if found:
-                out.append(found)
+                break
+        # what the engine saw is kept, so that a cell that is still empty can be explained
+        out.append(found or {"seen": seen})
     return out
 
 
@@ -213,7 +236,10 @@ def _fill_empty_cells(path: Path, data: dict[str, Any], settings: Any = None, re
         return data
     have = [w["box"] for w in words_of(data)]
     added = []
+    seen = [w["seen"] for w in found if "seen" in w]
     for w in found:
+        if "text" not in w:
+            continue
         text = str(w["text"]).strip()
         box = [float(v) for v in w["box"]]
         if not screen_reader.is_number(text) or any(_overlaps(box, b) for b in have):
@@ -227,6 +253,8 @@ def _fill_empty_cells(path: Path, data: dict[str, Any], settings: Any = None, re
         data["lines"] = list(data.get("lines") or []) + [{"text": w["text"], "words": [w], "box": w["box"],
                                                           "confidence": w["confidence"]} for w in added]
     data["cell_rereads"] = {"cells": len(rects), "read": len(added)}
+    if seen:
+        data["cell_rereads"]["unread"] = seen[:10]
     return data
 
 def _text_confidence(text: str) -> float:

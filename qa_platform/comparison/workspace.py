@@ -665,7 +665,8 @@ class Workspace:
                     parsed["cell_rereads"] = rr
                     parsed.setdefault("issues", []).append(
                         f"{rr['cells']} empty number cell(s) read again: {rr['read']} read"
-                        + (f" ({rr['error']})" if rr.get("error") else ""))
+                        + (f" ({rr['error']})" if rr.get("error") else "")
+                        + (f"; seen in the cells still empty: {rr['unread']}" if rr.get("unread") else ""))
                 status, error = parsed["status"], None
                 if status == "FAILED":
                     error = "; ".join(parsed.get("issues") or []) or "nothing could be read"
