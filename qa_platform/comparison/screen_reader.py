@@ -454,10 +454,43 @@ def _decimals(text: str) -> int:
     return len(m.group(1))
 
 
+LOOKALIKE = re.compile(r"^[(\-+]?[\dOoIl|]+(?:[.,][\dOoIl|]+)*%?\)?$")
+_DIGIT_OF = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1"})
+
+
+def _digit_lookalikes(t: dict[str, Any]) -> int:
+    """In a column whose other cells are all numbers, a cell made only of digits and the letters an OCR engine
+    confuses with them (O for 0, I / l / | for 1: Windows OCR reads "10" as "IO") is that number. The cell keeps
+    what was read (``read_as``) and a confidence at the review threshold, so the report shows the correction."""
+    fixed = 0
+    for h in t["headers"]:
+        vals = [(r.get(h) or {}).get("value") for r in t["rows"]]
+        vals = [str(v).strip() for v in vals if str(v or "").strip()]
+        nums = sum(1 for v in vals if is_number(v))
+        odd = [v for v in vals if not is_number(v)]
+        if nums < 2 or not odd or not all(LOOKALIKE.match(v) for v in odd):
+            continue
+        for r in t["rows"]:
+            c = r.get(h)
+            text = str((c or {}).get("value") or "").strip()
+            if not text or is_number(text):
+                continue
+            digits = text.translate(_DIGIT_OF)
+            if not is_number(digits):
+                continue
+            c.update(value=digits, read_as=text, confidence=min(float(c.get("confidence") or 0), LOW),
+                     method="ocr (letters read as digits)")
+            fixed += 1
+    return fixed
+
+
 def _validate(t: dict[str, Any], span_warnings: list[str]) -> dict[str, Any]:
     headers, recs = t["headers"], t["rows"]
     issues: list[str] = []
     review: list[str] = []
+    fixed = _digit_lookalikes(t)
+    if fixed:
+        review.append(f"{fixed} number(s) were read with letters in place of digits (O for 0, I for 1) and corrected")
     filled = {h: sum(1 for r in recs if str((r.get(h) or {}).get("value") or "").strip()) for h in headers}
     numeric = {h: sum(1 for r in recs if is_number((r.get(h) or {}).get("value") or "")) for h in headers}
     num_cols = [h for h in headers if filled[h] and numeric[h] >= 0.7 * filled[h]]
@@ -1020,3 +1053,32 @@ def read_screen(ocr_result: dict[str, Any], graphics: dict[str, Any] | None = No
         issues.append("text was found but no table, labelled value or chart could be recognised")
     return {"tables": tables, "values": values, "charts": charts, "texts": texts[:60], "low_confidence": low,
             "status": status, "issues": issues, "graphics": bool(g)}
+
+
+def empty_number_cells(parsed: dict[str, Any], limit: int = 40) -> list[list[float]]:
+    """Where a table has a number column and a row shows nothing in it: the box of that cell (the column's width
+    from the other rows, the row's height), for a second, closer reading. Windows OCR drops a lone digit such as
+    "0" that stands alone in a cell; the box tells the caller where to look again. Nothing is filled in here."""
+    out: list[list[float]] = []
+    for t in parsed.get("tables") or []:
+        for h in t.get("numeric_columns") or []:
+            boxes = [(r.get(h) or {}).get("box") for r in t["rows"]]
+            boxes = [b for b in boxes if b]
+            if len(boxes) < 2:
+                continue
+            x0 = min(b[0] for b in boxes)
+            x1 = max(b[0] + b[2] for b in boxes)
+            for r in t["rows"]:
+                if str((r.get(h) or {}).get("value") or "").strip():
+                    continue
+                rb = [c["box"] for c in r.values() if c.get("box")]
+                if not rb:
+                    continue
+                y0 = min(b[1] for b in rb)
+                y1 = max(b[1] + b[3] for b in rb)
+                pad = (y1 - y0) * 0.6
+                out.append([round(max(0.0, x0 - pad), 1), round(max(0.0, y0 - pad / 2), 1),
+                            round(x1 - x0 + 2 * pad, 1), round(y1 - y0 + pad, 1)])
+                if len(out) >= limit:
+                    return out
+    return out

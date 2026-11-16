@@ -55,6 +55,120 @@ $stream.Dispose()
 """
 
 
+# 23.9.0: a second, closer reading of table cells that came back empty. Each cell is cut out, enlarged three times
+# and set on a white margin (System.Drawing, part of Windows), then read on its own. Boxes are mapped back.
+WINDOWS_OCR_CELLS = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+function Await($op, $type) { $t = $asTask.MakeGenericMethod($type).Invoke($null, @($op)); $t.Wait(-1) | Out-Null; $t.Result }
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) { throw 'No OCR language is installed in Windows.' }
+$src = [System.Drawing.Bitmap]::FromFile($env:QA_OCR_FILE)
+$rects = @((Get-Content -Raw -LiteralPath $env:QA_OCR_RECTS | ConvertFrom-Json).rects)
+$scale = 3; $pad = 40; $cells = @(); $i = 0
+foreach ($r in $rects) {
+  $x = [Math]::Max(0, [int]$r.x); $y = [Math]::Max(0, [int]$r.y)
+  $w = [Math]::Min([int]$r.w, $src.Width - $x); $h = [Math]::Min([int]$r.h, $src.Height - $y)
+  $words = @()
+  if ($w -gt 2 -and $h -gt 2) {
+    $canvas = New-Object System.Drawing.Bitmap(($w * $scale + 2 * $pad), ($h * $scale + 2 * $pad))
+    $g = [System.Drawing.Graphics]::FromImage($canvas)
+    $g.Clear([System.Drawing.Color]::White)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.DrawImage($src, (New-Object System.Drawing.Rectangle($pad, $pad, ($w * $scale), ($h * $scale))),
+                 (New-Object System.Drawing.Rectangle($x, $y, $w, $h)), [System.Drawing.GraphicsUnit]::Pixel)
+    $g.Dispose()
+    $tmp = Join-Path $env:QA_OCR_TMP ("cell-" + $i + ".png")
+    $canvas.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Png)
+    $canvas.Dispose()
+    $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($tmp)) ([Windows.Storage.StorageFile])
+    $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+    foreach ($l in $result.Lines) { foreach ($wd in $l.Words) {
+      $b = $wd.BoundingRect
+      $words += @{ text = $wd.Text; box = @(($x + ($b.X - $pad) / $scale), ($y + ($b.Y - $pad) / $scale),
+                                             ($b.Width / $scale), ($b.Height / $scale)) } } }
+    $stream.Dispose()
+  }
+  $cells += ,@{ index = $i; words = $words }
+  $i++
+}
+$src.Dispose()
+ConvertTo-Json -InputObject @{ cells = $cells } -Depth 6 -Compress
+"""
+
+
+def _windows_cells(path: Path, rects: list[list[float]], settings: Any = None) -> list[dict[str, Any]]:
+    """Words read by Windows OCR inside the given boxes (image pixels), each box read on its own."""
+    import tempfile
+
+    ps = _powershell()
+    if not ps or not rects:
+        return []
+    tmp = Path(tempfile.mkdtemp(prefix="skyguard-ocr-cells-"))
+    try:
+        spec = tmp / "rects.json"
+        spec.write_text(json.dumps({"rects": [{"x": r[0], "y": r[1], "w": r[2], "h": r[3]} for r in rects]}),
+                        encoding="utf-8")
+        env = dict(os.environ, QA_OCR_FILE=str(Path(path).resolve()), QA_OCR_RECTS=str(spec), QA_OCR_TMP=str(tmp))
+        proc = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", WINDOWS_OCR_CELLS],
+                              capture_output=True, text=True, timeout=120, env=env,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if proc.returncode != 0:
+            return []
+        cells = json.loads(proc.stdout or "{}").get("cells") or []
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if isinstance(cells, dict):
+        cells = [cells]
+    out = []
+    for c in cells:
+        words = c.get("words") or []
+        out += [words] if isinstance(words, dict) else words
+    return [w for w in out if isinstance(w, dict) and w.get("text") and len(w.get("box") or []) == 4]
+
+
+def _fill_empty_cells(path: Path, data: dict[str, Any], settings: Any = None, reader: Any = None) -> dict[str, Any]:
+    """Windows OCR drops a digit that stands alone in a table cell (a "0" between other numbers). The cells of
+    number columns that came back empty are read again, one by one and enlarged. Only a number read inside such a
+    cell is added, with a confidence at the review threshold; a cell that still reads as nothing stays empty."""
+    import copy
+
+    from . import screen_reader
+
+    rects = screen_reader.empty_number_cells(screen_reader.read_screen(copy.deepcopy(data)))
+    if not rects:
+        return data
+    try:
+        found = (reader or _windows_cells)(path, rects, settings)
+    except (QAError, OSError, ValueError, subprocess.SubprocessError):
+        return data
+    have = [w["box"] for w in words_of(data)]
+    added = []
+    for w in found:
+        text = str(w["text"]).strip()
+        box = [float(v) for v in w["box"]]
+        if not screen_reader.is_number(text) or any(_overlaps(box, b) for b in have):
+            continue
+        if not any(_overlaps(box, r) for r in rects):
+            continue
+        word = {"text": text, "box": box, "confidence": min(_text_confidence(text), screen_reader.LOW)}
+        added.append(word)
+        have.append(box)
+    if added:
+        data["lines"] = list(data.get("lines") or []) + [{"text": w["text"], "words": [w], "box": w["box"],
+                                                          "confidence": w["confidence"]} for w in added]
+    data["cell_rereads"] = {"cells": len(rects), "read": len(added)}
+    return data
+
 def _text_confidence(text: str) -> float:
     """A plausibility score for an OCR word without engine confidence (Windows OCR)."""
     t = text.strip()
@@ -459,11 +573,14 @@ def _grow(b: list[float], d: float) -> list[float]:
 
 
 def read_for_layout(path: Path, settings: Any = None) -> dict[str, Any]:
-    """OCR for the workspace's screen reader. With Tesseract, two page modes are merged: sparse text (finds labels
+    """OCR for the workspace's screen reader. With Windows OCR, empty cells of number columns are read again one by
+    one (``_fill_empty_cells``). With Tesseract, two page modes are merged: sparse text (finds labels
     and chart values anywhere) and a uniform block (finds single digits in table rows that sparse mode misses).
     A word of the second pass is added only where the first pass found nothing."""
     eng = engines(settings)
     first = read(path, settings)
+    if first.get("engine") == "windows":
+        return _fill_empty_cells(path, first, settings)
     if first.get("engine") != "tesseract" or not eng["tesseract"]:
         return first
     try:

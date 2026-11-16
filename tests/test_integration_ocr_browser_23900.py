@@ -447,3 +447,68 @@ def test_14b_equivalent_filters_sync_scope_and_filter_sets(client, site):
     assert done["status"] == "done" and [x["set"] for x in done["results"]] == ["North paid"]
     for x in (a, b):
         client.post(f"{W}/applications/{x}/filters/close")
+
+
+# ---- Windows OCR readings (found on the Windows CI runners) -------------------------------------------------------
+
+def _word(t, x, y, c=0.9):
+    return {"text": t, "box": [x, y, 9 * len(t), 14], "confidence": c}
+
+
+def _orders_page(cancelled_1002="0", pending_1003="10"):
+    words = [_word("Customer", 10, 10), _word("ID", 90, 10), _word("Completed", 200, 10), _word("Pending", 320, 10),
+             _word("Cancelled", 440, 10)]
+    rows = [("1001", "100", "20", "5"), ("1002", "45", "5", cancelled_1002), ("1003", "30", pending_1003, "10"),
+            ("1004", "12", "3", "5")]
+    for i, (k, c, p, x) in enumerate(rows):
+        y = 40 + 30 * i
+        words += [_word(k, 10, y), _word(c, 200, y), _word(p, 320, y)]
+        if x:
+            words.append(_word(x, 440, y))
+    return {"engine": "windows", "lines": [{"words": words}]}
+
+
+def test_digits_read_as_letters_in_a_number_column_are_corrected_and_flagged():
+    from qa_platform.comparison import screen_reader
+
+    t = screen_reader.read_screen(_orders_page(pending_1003="IO"))["tables"][0]
+    cell = t["rows"][2]["Pending"]
+    assert cell["value"] == "10" and cell["read_as"] == "IO"
+    assert cell["confidence"] <= screen_reader.LOW and "letters read as digits" in cell["method"]
+    assert t["status"] == "NEEDS_REVIEW" and any("letters in place of digits" in x for x in t["issues"])
+    assert "Pending" in t["numeric_columns"]
+    # a text column is left alone
+    page = _orders_page()
+    page["lines"][0]["words"] += [_word("Name", 560, 10)] + [_word(n, 560, 40 + 30 * i)
+                                                             for i, n in enumerate(["Io", "Ola", "Il", "Lo"])]
+    t = screen_reader.read_screen(page)["tables"][0]
+    assert [r["Name"]["value"] for r in t["rows"]] == ["Io", "Ola", "Il", "Lo"]
+
+
+def test_an_empty_number_cell_is_read_again_and_only_a_number_inside_it_is_used():
+    from qa_platform.comparison import ocr, screen_reader
+
+    page = _orders_page(cancelled_1002="")
+    gaps = screen_reader.empty_number_cells(screen_reader.read_screen(page))
+    assert len(gaps) == 1
+    x, y, w, h = gaps[0]
+    assert x <= 440 <= x + w and y <= 70 <= y + h  # the Cancelled cell of 1002
+    seen = []
+
+    def reader(path, rects, settings=None):
+        seen.append(rects)
+        return [_word("0", 441, 70), _word("Total", 20, 400), _word("abc", 442, 71)]
+
+    out = ocr._fill_empty_cells(Path("shot.png"), page, None, reader=reader)
+    assert seen == [gaps] and out["cell_rereads"] == {"cells": 1, "read": 1}
+    t = screen_reader.read_screen(out)["tables"][0]
+    assert t["rows"][1]["Cancelled"]["value"] == "0"
+    assert t["rows"][1]["Cancelled"]["confidence"] <= screen_reader.LOW
+    # nothing read: the cell stays empty, nothing is invented
+    out = ocr._fill_empty_cells(Path("shot.png"), _orders_page(cancelled_1002=""), None, reader=lambda *a, **k: [])
+    assert screen_reader.read_screen(out)["tables"][0]["rows"][1].get("Cancelled", {}).get("value") in (None, "")
+    # an engine failure keeps the first reading
+    def broken(*a, **k):
+        raise OSError("powershell missing")
+    assert "cell_rereads" not in ocr._fill_empty_cells(Path("shot.png"), _orders_page(cancelled_1002=""), None,
+                                                       reader=broken)
