@@ -293,7 +293,7 @@ def refine_with_ai(ai: Any, source: dict[str, dict[str, Any]], target: dict[str,
         except Exception as exc:  # AI_OUTPUT_INVALID / TRUNCATED / unreachable: deterministic suggestions stand
             if log is not None:
                 log.append({"batch": start // AI_BATCH + 1, "fields": len(batch),
-                            "error": getattr(exc, "code", type(exc).__name__),
+                            "error": getattr(exc, "error_code", None) or type(exc).__name__,
                             "message": str(getattr(exc, "message", exc))[:200]})
             continue
         accepted = rejected = 0
