@@ -222,3 +222,161 @@ def test_04_horizontal_bar_and_donut(shots, shot, kind):
     assert vals == truth, vals
     if kind == "donut":
         assert ch["type"] in ("donut", "doughnut") and ch["status"] == "COMPLETE"
+
+
+# ---- Test 5 / 6: live URL capture ------------------------------------------------------------------------------------
+
+def _extract(site, page, **cfg):
+    from qa_platform.comparison.extract_web import WebExtractor
+
+    conf = {"base_url": f"{site}/integration_live/{page}", "auth_method": "none", **cfg}
+    with WebExtractor(conf) as ex:
+        ex.login()
+        ex.wait_for_data()
+        r = ex.table({})
+        return r, ex.charts(), list(ex.other_tables), int(ex.canvases), list(ex.blocked)
+
+
+def _values(r, field):
+    return [x["fields"][field]["value"] for x in r["records"]]
+
+
+@pytest.mark.parametrize("page,method,count", [
+    ("js_table.html", "html table", 25),            # JavaScript table, library from another host, 3 pages + Next
+    ("grid.html", "aria grid", 25),                 # virtualized ARIA grid: only 9 rows exist at a time
+    ("frames.html", "html table", 12),              # report inside an iframe, rowspan/colspan headers, tfoot total
+    ("shadow.html", "html table", 8),               # web component (open shadow root)
+    ("divgrid.html", "div grid", 15),               # div layout without table or ARIA roles
+    ("datatables.html", "datatables api", 25),      # DataTables API: every filtered row, 5 drawn
+])
+def test_05_live_capture_layers(site, page, method, count):
+    pytest.importorskip("playwright")
+    r, _, _, _, blocked = _extract(site, page)
+    st = r["stats"]
+    assert st["records"] == count and st["complete"], st
+    assert st["method"].startswith(method)
+    ids = _values(r, "Invoice No")
+    assert len(set(ids)) == count and ids[0] == "INV-001"  # no duplicates from scrolling or pages
+    if page == "frames.html":
+        assert st["headers"] == ["Invoice No", "Billing City", "Billing Status", "Amount"]
+        assert st["totals"][0]["values"]["Amount"] == "10,725.00"  # the total row is a total, not a record
+    if page == "js_table.html":
+        assert st["expected_total"] == 25 and st["pages_visited"] == 3
+
+
+def test_05b_old_host_rule_gave_zero_records(site):
+    """The 23.8.0 cause, reproduced: with only the application's own host allowed, the table library (served from
+    another host, as from a CDN) is blocked and the table never renders."""
+    pytest.importorskip("playwright")
+    r, _, _, _, blocked = _extract(site, "js_table.html", strict_hosts=True, data_timeout_ms=3000)
+    assert r["stats"]["records"] == 0 and any("localhost" in b for b in blocked)
+
+
+def test_05c_blocked_addresses_and_redirects():
+    from qa_platform.comparison import extract_web as xw
+
+    assert xw.site_of("www.shop.example.com") == "example.com" and xw.site_of("a.b.co.uk") == "b.co.uk"
+    assert xw.private_host("127.0.0.1") and xw.private_host("10.1.2.3") and xw.private_host("intranet.local")
+    assert not xw.host_allowed("http://169.254.169.254/latest/meta-data", {"169.254.169.254"})
+
+
+def test_06_chart_libraries_and_canvas_fallback(site):
+    pytest.importorskip("playwright")
+    r, charts, _, canvases, _ = _extract(site, "charts.html")
+    by = {c["title"]: c["series_values"][0]["values"] for c in charts}
+    assert by["Sales by City (d3)"] == {"Dubai": 12512.5, "Sharjah": 9900, "Abu Dhabi": 10725, "Ajman": 11550}
+    assert by["Invoices by Status"] == {"Paid": "9", "Pending": "8", "Cancelled": "8"}
+    assert canvases == 1 and r["stats"]["records"] == 0  # the canvas chart has no data in the page code
+
+
+def _wait_jobs(client, jobs):
+    import time
+
+    for j in jobs:
+        for _ in range(600):
+            if client.get(f"/api/comparison/jobs/{j['job']}").json()["status"] != "running":
+                break
+            time.sleep(0.2)
+
+
+@needs_ocr
+def test_06b_workspace_capture_reads_canvas_chart_by_ocr(client, site):
+    """'Connect' a page whose chart is a canvas: one browser session; the library charts come from the page code,
+    the canvas chart from the offline OCR of the page screenshot (marked as such)."""
+    pytest.importorskip("playwright")
+    pid, apps = new(client, "Charts page", "Other")
+    client.patch(f"{W}/applications/{apps[0]['id']}", json={"url": f"{site}/integration_live/charts.html"})
+    jobs = client.post(f"{W}/applications/{apps[0]['id']}/capture", json={}).json()["jobs"]
+    assert len(jobs) == 1  # one session for table, KPI cards and charts
+    _wait_jobs(client, jobs)
+    an = analyze(client, pid)
+    a = an["apps"][0]
+    titles = {c["title"]: c for c in a["charts"]}
+    assert "Sales by City (d3)" in titles
+    canvas = next(c for t, c in titles.items() if "Amount by City" in t)
+    vals = {k: num(v["value"]) for k, v in canvas["points"].items()}
+    assert vals == {"Dubai": Decimal("12512.50"), "Sharjah": Decimal("9900.00"), "Abu Dhabi": Decimal("10725.00"),
+                    "Ajman": Decimal("11550.00")}
+
+
+def test_06c_workspace_capture_paginated_js_table(client, site):
+    pytest.importorskip("playwright")
+    pid, apps = new(client, "Invoices", "Other")
+    client.patch(f"{W}/applications/{apps[0]['id']}", json={"url": f"{site}/integration_live/js_table.html"})
+    jobs = client.post(f"{W}/applications/{apps[0]['id']}/capture", json={}).json()["jobs"]
+    _wait_jobs(client, jobs)
+    an = analyze(client, pid)
+    a = an["apps"][0]
+    assert a["coverage"]["complete"] and a["coverage"]["scope"] == "verified"
+    assert a["tables"][0]["total_rows"] == 25
+    inp = a["coverage"]["inputs"][0]
+    assert inp["records"] == 25 and inp["expected_total"] == 25 and inp["status"] == "COMPLETE"
+
+
+# ---- Part 14: filters ------------------------------------------------------------------------------------------------
+
+def _filters_app(client, site, page, name):
+    pid, apps = new(client, name, "Sales portal")
+    client.patch(f"{W}/applications/{apps[0]['id']}", json={"url": f"{site}/integration_live/{page}"})
+    client.patch(f"{W}/applications/{apps[1]['id']}", json={"url": f"{site}/integration_live/filters_b.html"})
+    return pid, apps
+
+
+def test_14_discover_classify_and_fetch_filtered(client, site):
+    pytest.importorskip("playwright")
+    pid, apps = _filters_app(client, site, "filters.html", "Invoices")
+    a = apps[0]["id"]
+    r = client.post(f"{W}/applications/{a}/filters/discover", json={}).json()
+    assert r["ok"], r
+    ctl = {c["label"]: c for c in r["filters"]["controls"]}
+    Path("/tmp/claude-0/-home-user/5ee8e6ae-ff35-51c7-a15f-4825f6af04e2/scratchpad/filters.json").write_text(json.dumps(r, indent=1))
+    is_f = {k: v["is_filter"] for k, v in ctl.items()}
+    assert is_f["Region"] and is_f["City"] and is_f["Status"] and is_f["Date From"] and is_f["Date To"] and is_f["Search"]
+    assert not is_f["Language"] and not any(v for k, v in is_f.items() if "entries" in k.lower() or k == "Show")
+    assert ctl["City"]["depends_on"] == ctl["Region"]["id"]          # cascading dropdown found
+    assert ctl["Date From"].get("range", {}).get("role") == "from"
+    assert r["filters"]["buttons"]["apply"]["text"].startswith("Apply")
+    vals = {ctl["Region"]["id"]: "North", ctl["City"]["id"]: "Dubai", ctl["Status"]["id"]: "Paid"}
+    j = client.post(f"{W}/applications/{a}/filters/apply", json={"values": vals}).json()
+    import time
+
+    for _ in range(600):
+        st = client.get(f"/api/comparison/jobs/{j['job']}").json()
+        if st["status"] != "running":
+            break
+        time.sleep(0.2)
+    assert st["status"] == "done", st
+    want = [x for x in TRUTH_INVOICES() if x["city"] == "Dubai" and x["status"] == "Paid"]
+    ds = client.get(f"/api/comparison/datasets/{st['dataset_id']}").json()
+    assert st["run"]["records"] == len(want) and st["run"]["complete"], ds.get("dataset", ds).get("stats")
+    assert st["run"]["filters"] == {"Region": "North", "City": "Dubai", "Status": "Paid"}
+    assert all(v["ok"] for v in st["verified"].values())
+    fs = client.get(f"{W}/applications/{a}/filters").json()
+    assert fs["applied"]["City"] == "Dubai" and fs["runs"][-1]["dataset"] == st["dataset_id"]
+    client.post(f"{W}/applications/{a}/filters/close")
+
+
+def TRUTH_INVOICES():
+    cities, status = ["Dubai", "Sharjah", "Abu Dhabi", "Ajman"], ["Paid", "Pending", "Cancelled"]
+    return [{"id": f"INV-{n:03d}", "city": cities[(n - 1) % 4], "status": status[(n - 1) % 3],
+             "amount": Decimal(n) * Decimal("137.5")} for n in range(1, 26)]

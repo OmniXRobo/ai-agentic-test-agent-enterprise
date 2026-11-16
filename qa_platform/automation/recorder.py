@@ -15,7 +15,8 @@ from ..clock import now
 from ..errors import QAError
 from ..events import names
 from . import visual
-from .browser import context_options, js, launch, start_playwright
+from .browser import js, launch, start_playwright
+from .browser import new_context as bm_new_context
 from . import date_rules
 from .dsl import Step, Target
 from .files import safe_name
@@ -544,8 +545,8 @@ class RecordingSession:
                 pw = start_playwright()
                 try:
                     browser = launch(pw, self.browser, headless=self.headless)
-                    context = browser.new_context(**context_options(self.headless, ignore_https_errors=True),
-                                                  accept_downloads=True)
+                    context = bm_new_context(browser, self.headless, ignore_https_errors=True,
+                                             accept_downloads=True)  # 23.9.0: one window policy
                     context.expose_binding("__qaRecord", self._on_record)
                     context.on("page", self._on_page)
                     context.add_init_script(js("fingerprint"))

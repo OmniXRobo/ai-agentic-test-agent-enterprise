@@ -9,6 +9,15 @@ cannot start, the error says which browser, why, and what to change.
 Visible windows (recording, playback, debugging previews) open maximized; with two or more monitors they open on the
 second monitor (Preferences > Browser > Monitor), otherwise on the primary one. Headless runs keep the fixed
 1366 x 768 viewport, so screenshots and benchmarks are comparable between runs.
+
+23.9.0 window policy (one place for every module): ``new_context`` creates the browser context of every visible
+browser and maximizes each of its windows through the browser itself (CDP ``Browser.setWindowBounds``,
+``windowState: maximized``), because ``--start-maximized`` alone does not apply to windows of a new context in every
+Chromium build. Maximized means the work area of the chosen monitor (the taskbar stays visible) at the monitor's own
+DPI; the page viewport is the window (``no_viewport``), never a hardcoded size. The window is maximized once, when it
+opens, so its size does not change during a recording. Preferences > Browser > Window: ``maximized`` (default),
+``fixed`` (a fixed viewport, ``viewport_width`` x ``viewport_height``, for comparable screenshots) or ``default``.
+Headless browsers are never maximized.
 """
 
 from __future__ import annotations
@@ -121,7 +130,7 @@ def placement(playback: dict[str, Any] | None = None) -> dict[str, Any]:
     """Where a visible browser window opens: maximized, on the monitor chosen in Preferences ("auto": the second
     monitor when there are two or more, else the primary one)."""
     pb = playback if playback is not None else _playback()
-    maximize = pb.get("window_mode", "maximized") != "default"
+    maximize = window_mode(pb) == "maximized"
     choice = str(pb.get("monitor", "auto") or "auto")
     screens = monitors()
     target = None
@@ -137,17 +146,34 @@ def placement(playback: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"maximize": maximize, "monitor": target, "monitors": len(screens), "choice": choice}
 
 
+def window_mode(playback: dict[str, Any] | None = None) -> str:
+    pb = playback if playback is not None else _playback()
+    mode = str(pb.get("window_mode") or "maximized").lower()
+    return mode if mode in ("maximized", "fixed", "default") else "maximized"
+
+
+def fixed_viewport(playback: dict[str, Any] | None = None) -> dict[str, int]:
+    pb = playback if playback is not None else _playback()
+    try:
+        w = max(320, min(int(pb.get("viewport_width") or DEFAULT_VIEWPORT["width"]), 7680))
+        h = max(240, min(int(pb.get("viewport_height") or DEFAULT_VIEWPORT["height"]), 4320))
+    except (TypeError, ValueError):
+        return dict(DEFAULT_VIEWPORT)
+    return {"width": w, "height": h}
+
+
 def launch_args(headless: bool, playback: dict[str, Any] | None = None) -> list[str]:
     args = ["--autoplay-policy=no-user-gesture-required"]  # the playback cursor's quiet click sound
     if headless:
         return args
     where = placement(playback)
+    mode = window_mode(playback)
     mon = where["monitor"]
     if mon:
         args.append(f"--window-position={mon['x']},{mon['y']}")
-        if not where["maximize"]:
+        if mode == "default":
             args.append(f"--window-size={min(1366, mon['width'])},{min(900, mon['height'])}")
-    if where["maximize"]:
+    if mode == "maximized":
         args.append("--start-maximized")
     return args
 
@@ -155,14 +181,81 @@ def launch_args(headless: bool, playback: dict[str, Any] | None = None) -> list[
 def context_options(headless: bool, playback: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
     """new_context options: a maximized visible window uses the window's real size (no fixed viewport); headless
     and non-maximized runs keep 1366 x 768."""
-    pb = playback if playback is not None else _playback()
+    mode = window_mode(playback)
     opts: dict[str, Any] = dict(extra)
-    if not headless and pb.get("window_mode", "maximized") != "default":
+    if not headless and mode == "maximized":
         opts.pop("viewport", None)
-        opts["no_viewport"] = True
+        opts["no_viewport"] = True  # the viewport is the maximized window, whatever the screen and DPI
+    elif not headless and mode == "fixed":
+        opts["viewport"] = fixed_viewport(playback)
     else:
         opts.setdefault("viewport", dict(DEFAULT_VIEWPORT))
     return opts
+
+
+def maximize(page: Any, headless: bool = False, playback: dict[str, Any] | None = None) -> bool:
+    """Maximize the window that shows ``page`` (Chromium, Edge, Chrome through CDP). Headless pages, the 'fixed'
+    and 'default' window modes and windows already maximized are left as they are. Never raises."""
+    if headless or window_mode(playback) != "maximized":
+        return False
+    try:
+        cdp = page.context.new_cdp_session(page)
+        try:
+            win = cdp.send("Browser.getWindowForTarget")
+            state = (win.get("bounds") or {}).get("windowState")
+            if state != "maximized":
+                if state in ("minimized", "fullscreen"):
+                    cdp.send("Browser.setWindowBounds", {"windowId": win["windowId"], "bounds": {"windowState": "normal"}})
+                cdp.send("Browser.setWindowBounds", {"windowId": win["windowId"], "bounds": {"windowState": "maximized"}})
+                after = (cdp.send("Browser.getWindowForTarget").get("bounds") or {}).get("windowState")
+                if after != "maximized":
+                    # no window manager answered (kiosk session, some RDP shells): fill the monitor's work area,
+                    # which excludes the taskbar, at the screen's own scale
+                    area = page.evaluate("() => [screen.availLeft || 0, screen.availTop || 0, screen.availWidth, "
+                                         "screen.availHeight]")
+                    cdp.send("Browser.setWindowBounds", {"windowId": win["windowId"], "bounds": {
+                        "left": int(area[0]), "top": int(area[1]), "width": int(area[2]), "height": int(area[3]),
+                        "windowState": "normal"}})
+            return True
+        finally:
+            try:
+                cdp.detach()
+            except Exception:
+                pass
+    except Exception:
+        return False  # a browser without CDP window control keeps --start-maximized
+
+
+def new_context(browser: Any, headless: bool = False, playback: dict[str, Any] | None = None, **extra: Any) -> Any:
+    """THE way every module opens a browser context (recording, playback, guided automation, learning, live capture,
+    discovery, performance recording, Ops agent). Visible windows open maximized, popups and new tabs too."""
+    ctx = browser.new_context(**context_options(headless, playback, **extra))
+    if not headless and window_mode(playback) == "maximized":
+        opened: set[int] = set()
+        plain_new_page = ctx.new_page
+
+        def new_page_maximized(*a: Any, **k: Any) -> Any:
+            page = plain_new_page(*a, **k)
+            opened.add(id(page))
+            maximize(page, headless, playback)  # explicitly: an event handler may run too late for the first window
+            return page
+
+        def on_popup(page: Any) -> None:
+            if id(page) not in opened:  # windows the page opens itself (target=_blank, window.open)
+                maximize(page, headless, playback)
+
+        try:
+            ctx.new_page = new_page_maximized
+        except AttributeError:  # pragma: no cover - a Playwright object that refuses attributes
+            pass
+        ctx.on("page", on_popup)
+    return ctx
+
+
+def new_page(browser: Any, headless: bool = False, playback: dict[str, Any] | None = None, **extra: Any) -> Any:
+    """A context and its first page, maximized when visible."""
+    ctx = new_context(browser, headless, playback, **extra)
+    return ctx.new_page()
 
 
 # ---- launch and diagnostics -------------------------------------------------------------------------------------

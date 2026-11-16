@@ -88,8 +88,9 @@ class OpsAgentService:
         browser = None
         try:
             browser = browser_manager.launch(pw, cfg.get("browser"), headless=bool(cfg.get("headless")))
-            job.driver = PlaywrightDriver(browser, context_options=browser_manager.context_options(
-                bool(cfg.get("headless"))), evidence_dir=self.folder / "evidence")
+            headless = bool(cfg.get("headless"))
+            job.driver = PlaywrightDriver(browser, context_options={}, evidence_dir=self.folder / "evidence",
+                                          context_factory=lambda **o: browser_manager.new_context(browser, headless, **o))
             job.result = body(job)
         except Exception as exc:  # reported on the run / session; the API never crashes
             job.error = str(getattr(exc, "message", exc))[:300]

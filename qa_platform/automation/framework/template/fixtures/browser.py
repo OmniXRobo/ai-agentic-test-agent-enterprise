@@ -79,9 +79,28 @@ def browser_context(browser: Any, request: pytest.FixtureRequest) -> Iterator[An
     context.close()
 
 
+def maximize(page: Any) -> None:
+    """Visible runs: maximize the window through the browser (CDP), filling the monitor's work area when no window
+    manager answers. Headless and fixed-viewport runs are left as they are."""
+    if config.HEADLESS or not config.MAXIMIZED:
+        return
+    try:
+        cdp = page.context.new_cdp_session(page)
+        win = cdp.send("Browser.getWindowForTarget")
+        cdp.send("Browser.setWindowBounds", {"windowId": win["windowId"], "bounds": {"windowState": "maximized"}})
+        if (cdp.send("Browser.getWindowForTarget").get("bounds") or {}).get("windowState") != "maximized":
+            a = page.evaluate("() => [screen.availLeft || 0, screen.availTop || 0, screen.availWidth, screen.availHeight]")
+            cdp.send("Browser.setWindowBounds", {"windowId": win["windowId"], "bounds": {
+                "left": int(a[0]), "top": int(a[1]), "width": int(a[2]), "height": int(a[3]), "windowState": "normal"}})
+        cdp.detach()
+    except Exception:
+        pass  # --start-maximized still applies
+
+
 @pytest.fixture()
 def page(browser_context: Any) -> Iterator[Any]:
     instance = browser_context.new_page()
+    maximize(instance)
     instance.set_default_timeout(max(config.TIMEOUT_MS, 15000))
     _listen(instance)
     reporting.state.page = instance

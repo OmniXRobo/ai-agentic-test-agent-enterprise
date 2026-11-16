@@ -137,13 +137,29 @@ def _launch(playwright):
     options = {{"headless": HEADLESS}}
     if BROWSER in ("msedge", "chrome"):
         options["channel"] = BROWSER
+    if not HEADLESS:
+        options["args"] = ["--start-maximized"]  # visible runs open maximized
     return getattr(playwright, kind).launch(**options)
+
+
+def _maximize(page):
+    try:
+        cdp = page.context.new_cdp_session(page)
+        win = cdp.send("Browser.getWindowForTarget")
+        cdp.send("Browser.setWindowBounds", {{"windowId": win["windowId"], "bounds": {{"windowState": "maximized"}}}})
+        cdp.detach()
+    except Exception:
+        pass
 
 
 def _open_page():
     playwright = sync_playwright().start()
     browser = _launch(playwright)
-    page = browser.new_page()
+    if HEADLESS:
+        page = browser.new_page()
+    else:
+        page = browser.new_context(no_viewport=True).new_page()  # the viewport is the maximized window
+        _maximize(page)
 
     def close():
         browser.close()

@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Sales portal</title><script src="data.js"></script><script src="filters_common.js"></script>
+<style>body{font-family:Arial;margin:20px}td,th{border:1px solid #ccc;padding:3px 6px}</style></head>
+<body><h2>Sales portal</h2>
+<form id="criteria" class="filter-bar" onsubmit="return false">
+  <label>Territory <select id="territory"><option value="">Any</option><option>North</option><option>South</option></select></label>
+  <label>Order State <select id="state"><option value="">Any</option><option>Paid</option><option>Pending</option><option>Cancelled</option></select></label>
+  <button id="go">Search</button>
+</form>
+<div id="host"></div><div id="pager"></div>
+<script>
+let rows = INVOICES.slice();
+function show(p) { renderTable(rows, p, 8, document.getElementById("host"), document.getElementById("pager"), show); }
+document.getElementById("go").onclick = () => setTimeout(() => { const t = document.getElementById("territory").value, s = document.getElementById("state").value;
+  rows = INVOICES.filter(x => (!t || REGION[x.city] === t) && (!s || x.status === s)); show(0); }, 300);
+show(0);
+</script></body></html>

@@ -74,7 +74,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "performance": {"jmeter_home": "", "java_home": "", "min_free_disk_mb": 1024},
     # Visible playback: the tactical cursor moves to each element, the element is highlighted, then Playwright acts.
     "playback": {"visual_cursor": True, "highlight": True, "cursor_speed_ms": 450, "click_sound": True,
-                 "click_volume": 0.35},
+                 "click_volume": 0.35,
+                 # 23.9.0: every visible browser window: maximized | fixed (viewport below) | default
+                 "window_mode": "maximized", "viewport_width": 1366, "viewport_height": 768},
+    # 23.9.0 Integration Comparison: the offline OCR engine and live capture
+    "comparison": {"ocr_engine": "auto",  # auto | rapidocr | windows | tesseract
+                   "ocr_runtime_path": "", "tesseract_path": "", "tessdata_path": "", "ocr_timeout_seconds": 180,
+                   "headless": True, "data_timeout_ms": 15000},
     "voice": {
         # builtin = the bundled offline recognizer (Vosk model in runtime/speech, works offline);
         # local = a whisper.cpp / OpenAI-compatible speech server on this PC or network (works offline);

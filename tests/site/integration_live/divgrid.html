@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Div grid</title><script src="data.js"></script>
+<style>.r{display:flex}.r>div{width:140px;padding:3px}.head{font-weight:bold}</style></head>
+<body><h2>Invoices (div layout)</h2><div id="list"></div>
+<script>
+document.getElementById("list").innerHTML = '<div class="r head"><div>Invoice No</div><div>Customer</div><div>City</div><div>Amount</div></div>' +
+  INVOICES.slice(0, 15).map(r => `<div class="r"><div>${r.id}</div><div>${r.customer}</div><div>${r.city}</div><div>${fmt(r.amount)}</div></div>`).join("");
+</script></body></html>

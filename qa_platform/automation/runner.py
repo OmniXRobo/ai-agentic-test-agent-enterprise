@@ -21,6 +21,7 @@ from . import healing
 from . import semantic
 from . import visual as visual_fx
 from .browser import context_options, default_headless, js, launch, start_playwright
+from .browser import new_context as bm_new_context
 from . import files as filekit
 from .dsl import describe, FILE_CHECKS, NEEDS_TARGET, Script, Step, Target, ValueResolver
 from .store import CredentialProfiles, ScriptStore
@@ -254,7 +255,7 @@ class Runner:
                 pwd = resolver.credentials(script.credential_role, "password")
                 if user and pwd:
                     ctx_opts["http_credentials"] = {"username": user, "password": pwd}
-            context = browser.new_context(**ctx_opts)
+            context = bm_new_context(browser, headless, **ctx_opts)  # 23.9.0: maximized through CDP
             context.add_init_script(js("fingerprint"))
             context.add_init_script(js("calendar"))
             context.add_init_script(js("components"))  # 23.6.0: universal component recognition

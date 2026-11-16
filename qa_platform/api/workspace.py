@@ -196,3 +196,119 @@ def report_xlsx(exe: str, rt: Runtime = Depends(runtime)) -> Response:
     return Response(_ws(rt).report_xlsx(exe),
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="integration-comparison-{exe}.xlsx"'})
+
+
+# ---- 23.9.0: filters (Part 14) and OCR diagnostics -------------------------------------------------------------------
+
+class DiscoverIn(BaseModel):
+    visible: bool | None = None
+
+
+class FiltersIn(BaseModel):
+    controls: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+
+
+class ApplyIn(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+    set_name: str | None = Field(default=None, max_length=80)
+
+
+class LinksIn(BaseModel):
+    links: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+
+
+class SyncIn(BaseModel):
+    source_app: str = Field(max_length=40)
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class SetsIn(BaseModel):
+    sets: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+
+
+def _editor(ws: Any) -> Any:
+    from ..comparison.workspace import _user
+
+    if getattr(_user(), "view_only", False):
+        raise QAError("CMP_FORBIDDEN", "Your role can view comparisons but not change them.", status=403)
+    return ws
+
+
+@router.get("/applications/{aid}/filters")
+def filters_status(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_ws(rt).filter_status(aid)}
+
+
+@router.post("/applications/{aid}/filters/discover")
+def filters_discover(aid: str, body: DiscoverIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "filters": _editor(_ws(rt)).discover_filters(aid, body.visible)}
+
+
+@router.put("/applications/{aid}/filters")
+def filters_save(aid: str, body: FiltersIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "filters": _editor(_ws(rt)).save_filters(aid, body.controls)}
+
+
+@router.post("/applications/{aid}/filters/apply")
+def filters_apply(aid: str, body: ApplyIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_editor(_ws(rt)).apply_fetch(aid, body.values, set_name=body.set_name)}
+
+
+@router.post("/applications/{aid}/filters/reset")
+def filters_reset(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_editor(_ws(rt)).reset_filters(aid)}
+
+
+@router.post("/applications/{aid}/filters/preview")
+def filters_preview(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_ws(rt).preview_filters(aid)}
+
+
+@router.post("/applications/{aid}/filters/resume")
+def filters_resume(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "session": _ws(rt).resume_filters(aid)}
+
+
+@router.post("/applications/{aid}/filters/close")
+def filters_close(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    _ws(rt).close_filters(aid)
+    return {"ok": True}
+
+
+@router.get("/{pid}/filter-links")
+def filter_links(pid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_ws(rt).filter_links(pid)}
+
+
+@router.put("/{pid}/filter-links")
+def filter_links_save(pid: str, body: LinksIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "links": _editor(_ws(rt)).save_filter_links(pid, body.links)}
+
+
+@router.post("/{pid}/filters/sync")
+def filters_sync(pid: str, body: SyncIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_ws(rt).sync_filters(pid, body.source_app, body.values)}
+
+
+@router.get("/{pid}/filter-sets")
+def filter_sets(pid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    ws = _ws(rt)
+    return {"ok": True, "sets": ws._psettings(pid).get("ws_filter_sets") or []}
+
+
+@router.put("/{pid}/filter-sets")
+def filter_sets_save(pid: str, body: SetsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "sets": _editor(_ws(rt)).save_filter_sets(pid, body.sets)}
+
+
+@router.post("/{pid}/filter-sets/run")
+def filter_sets_run(pid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_editor(_ws(rt)).run_filter_sets(pid)}
+
+
+@router.get("/ocr/diagnostics")
+def ocr_diagnostics(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Which offline OCR engines this PC has, which one is used and why the others are not (Part 1)."""
+    from ..comparison import ocr
+
+    return {"ok": True, **ocr.diagnose(rt.settings)}

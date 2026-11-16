@@ -323,8 +323,8 @@ def to_playwright_python(script: Script) -> str:
         "",
         'if __name__ == "__main__":',
         "    with sync_playwright() as p:",
-        "        browser = p.chromium.launch(headless=False)",
-        "        run(browser.new_page())",
+        "        browser = p.chromium.launch(headless=False, args=[\"--start-maximized\"])",
+        "        run(browser.new_context(no_viewport=True).new_page())  # opens maximized",
         "        browser.close()",
         "",
     ]

@@ -26,6 +26,8 @@ import html
 import itertools
 import json
 import re
+import threading
+import time
 from collections import Counter, defaultdict
 from decimal import Decimal
 from typing import Any
@@ -34,6 +36,7 @@ from .. import aura, auth, branding
 from ..clock import now_iso
 from ..errors import QAError
 from ..storage.db import dumps, loads
+from . import filters as filt
 from . import formula, investigate, mapping, ocr, reports, screen_reader, semantics
 from .normalize import clean_text, equal, infer_type, is_null, normalize, parse_number, to_json
 
@@ -98,6 +101,12 @@ def _legacy_status(parsed: dict[str, Any]) -> str:
     if parsed.get("low_confidence") or any(not c.get("extracted", True) for c in parsed.get("charts") or []):
         return "NEEDS_REVIEW"
     return "COMPLETE"
+
+
+def extract_web_safe(url: str) -> str:
+    from .extract_web import _safe_url
+
+    return _safe_url(url)
 
 
 def _id(prefix: str) -> str:
@@ -306,13 +315,288 @@ class Workspace:
         if not app.get("base_url"):
             raise QAError("WS_URL_REQUIRED", "Enter the application's page address first.", status=422)
         steps = data.get("steps") or []
-        jobs = []
-        for kind in ("table", "dashboard"):
-            j = self.svc.start_extraction(aid, {"kind": kind, "steps": steps, "screenshots": True,
-                                                "screen_name": data.get("page_name") or app["name"]})
-            jobs.append(j)
+        # 23.9.0: one browser session reads the whole page (table, other tables, KPI cards, charts, OCR fallback)
+        spec = {"kind": "page", "steps": steps, "screenshots": True,
+                "screen_name": data.get("page_name") or app["name"], "target": data.get("target") or {}}
+        if data.get("filters_spec"):
+            spec.update(data["filters_spec"])
+        jobs = [self.svc.start_extraction(aid, spec)]
         self._set_config(aid, ws_datasets=(app["config"].get("ws_datasets") or []) + [j["dataset_id"] for j in jobs])
         return {"jobs": jobs}
+
+    # ---- 23.9.0 filters: discover, configure, apply & fetch, sync, filter sets -------------------------------
+    def _sessions(self) -> dict[str, Any]:
+        if not hasattr(self, "_filter_sessions"):
+            self._filter_sessions: dict[str, Any] = {}
+            self._filter_lock = threading.Lock()
+        return self._filter_sessions
+
+    def _session(self, aid: str, visible: bool | None = None, start: bool = True) -> Any:
+        app = self._app(aid)
+        if not app.get("base_url"):
+            raise QAError("WS_URL_REQUIRED", "Enter the application's page address first.", status=422)
+        sessions = self._sessions()
+        with self._filter_lock:
+            s = sessions.get(aid)
+            if s is not None and (s.state in ("closed", "failed") or (visible is not None and s.visible != visible)):
+                if s.state not in ("closed", "failed"):
+                    s.close()
+                s = None
+            if s is None:
+                if not start:
+                    return None
+                play = self.rt.settings.section("comparison") or {}
+                show = bool(visible) if visible is not None else not bool(play.get("headless", True))
+                row = self.svc._app_row(aid)
+
+                def make() -> Any:
+                    ex = self.svc._extractor(row, _id("NS"))
+                    ex.headless = not show
+                    return ex
+                s = sessions[aid] = filt.FilterSession(make, aid, show)
+        for _ in range(300):  # until the page is open (or the session asks for help)
+            if s.state != "starting":
+                break
+            time.sleep(0.1)
+        return s
+
+    def filter_status(self, aid: str) -> dict[str, Any]:
+        s = self._sessions().get(aid)
+        app = self._app(aid)
+        return {"session": s.status() if s else {"state": "none"}, "filters": app["config"].get("ws_filters"),
+                "applied": app["config"].get("ws_applied_filters") or {},
+                "runs": (app["config"].get("ws_filter_runs") or [])[-20:]}
+
+    def discover_filters(self, aid: str, visible: bool | None = None) -> dict[str, Any]:
+        """Find the filter controls of the application's page (Discover & Configure Filters)."""
+        app = self._app(aid)
+        s = self._session(aid, visible)
+
+        def work(ex: Any) -> dict[str, Any]:
+            raw = ex.page.evaluate(filt.FILTERS_JS)
+            controls = filt.classify(raw)
+            filt.dependencies(ex, controls)
+            return {"controls": controls, "buttons": filt.buttons(raw), "rows": raw.get("rows"),
+                    "url": extract_web_safe(ex.page.url)}
+        found = s.call(work)
+        old = {c["label"]: c for c in (app["config"].get("ws_filters") or {}).get("controls") or []}
+        for c in found["controls"]:  # the tester's corrections survive a new discovery
+            prev = old.get(c["label"])
+            if prev and prev.get("edited"):
+                c.update({k: prev[k] for k in ("is_filter", "default", "edited", "display") if k in prev})
+        cfg = {**found, "discovered_at": now_iso()}
+        self._set_config(aid, ws_filters=cfg)
+        self.svc.audit("workspace.filters.discover", app["project_id"], aid,
+                       filters=sum(1 for c in found["controls"] if c["is_filter"]), controls=len(found["controls"]))
+        return cfg
+
+    def save_filters(self, aid: str, controls: list[dict[str, Any]]) -> dict[str, Any]:
+        """The tester's configuration: which controls are filters, their names and default values."""
+        app = self._app(aid)
+        cur = app["config"].get("ws_filters") or {}
+        by_id = {c["id"]: c for c in cur.get("controls") or []}
+        for c in controls:
+            if c.get("id") in by_id:
+                t = by_id[c["id"]]
+                if "is_filter" in c:
+                    t["is_filter"] = bool(c["is_filter"])
+                if c.get("display"):
+                    t["display"] = str(c["display"])[:80]
+                if "default" in c:
+                    t["default"] = c["default"]
+                t["edited"] = True
+        self._set_config(aid, ws_filters=cur)
+        self.svc.audit("workspace.filters.save", app["project_id"], aid)
+        return cur
+
+    def reset_filters(self, aid: str) -> dict[str, Any]:
+        """Clear the page's filters (its own Reset / Clear button) and forget the applied values."""
+        app = self._app(aid)
+        btn = ((app["config"].get("ws_filters") or {}).get("buttons") or {}).get("reset")
+        s = self._session(aid)
+
+        def work(ex: Any) -> None:
+            if btn:
+                ex.page.locator(btn["css"]).first.click()
+            else:
+                ex.page.reload()
+            ex._settle()
+            ex.wait_for_data(8)
+        s.call(work)
+        self._set_config(aid, ws_applied_filters={})
+        return {"reset": True}
+
+    def preview_filters(self, aid: str) -> dict[str, Any]:
+        """A screenshot of the page as it is now in the session (after applying)."""
+        app = self._app(aid)
+        s = self._session(aid)
+        png = s.call(lambda ex: ex.screenshot())
+        ev = self.svc._save_evidence(app, png, source="filter preview", screen=app["name"])
+        return {"evidence": ev["id"]}
+
+    def resume_filters(self, aid: str) -> dict[str, Any]:
+        s = self._sessions().get(aid)
+        if s is None:
+            raise QAError("FILTER_SESSION_CLOSED", "There is no browser session to resume.", status=409)
+        s.resume()
+        return s.status()
+
+    def close_filters(self, aid: str) -> None:
+        s = self._sessions().pop(aid, None)
+        if s is not None:
+            s.close()
+
+    def apply_fetch(self, aid: str, values: dict[str, Any], *, set_name: str | None = None,
+                    wait: bool = False) -> dict[str, Any]:
+        """Apply Filters & Fetch Data: through the real page, in the application's own session. Runs in the
+        background; the job reports progress, a pause for the tester, and the new dataset."""
+        app = self._app(aid)
+        conf = app["config"].get("ws_filters") or {}
+        controls = [c for c in conf.get("controls") or [] if c.get("is_filter")]
+        known = {c["id"] for c in controls}
+        values = {k: v for k, v in (values or {}).items() if k in known or k.startswith("local:")}
+        local = {k[6:]: v for k, v in values.items() if k.startswith("local:")}
+        ui_values = {k: v for k, v in values.items() if not k.startswith("local:")}
+        job = _id("JOB")
+        state = {"id": job, "dataset_id": None, "status": "running", "progress": "opening the application",
+                 "error": None, "set": set_name}
+        self.svc.jobs[job] = state
+        user = _user()
+
+        def body() -> None:
+            token = auth.set_current_user(user)
+            try:
+                s = self._session(aid)
+                if s.state == "paused":
+                    state["progress"] = "paused: " + ((s.paused or {}).get("message") or "the tester must help")
+                labels = {c["id"]: c.get("display") or c["label"] for c in controls}
+
+                def work(ex: Any) -> dict[str, Any]:
+                    state["progress"] = "setting the filters"
+                    res = filt.apply(ex, controls, ui_values, conf.get("buttons"),
+                                     log=lambda m: state.__setitem__("progress", m))
+                    applied = {labels.get(k, k): v for k, v in ui_values.items() if v not in (None, "", [])}
+                    applied.update({f"local:{f}": v for f, v in local.items()})
+                    ds = self.svc._new_dataset(self.svc._app_row(aid), "page", "dom", applied)
+                    state["dataset_id"] = ds
+                    spec = {"kind": "page", "screenshots": True, "screen_name": app["name"],
+                            "target": conf.get("target") or {}}
+                    self.svc._capture_page(self.svc._app_row(aid), ds, ex, spec, state, applied)
+                    return {"dataset": ds, "applied": applied, "verified": res["verified"]}
+                out = s.call(work, timeout=3600)
+                d = self.svc.dataset(out["dataset"])
+                st = d.get("stats") or {}
+                run = {"at": now_iso(), "dataset": out["dataset"], "filters": out["applied"], "set": set_name,
+                       "records": st.get("records"), "expected_total": st.get("expected_total"),
+                       "complete": bool(st.get("complete")), "method": st.get("method"), "by": user.username}
+                cur = self._app(aid)["config"]
+                self._set_config(aid, ws_datasets=[out["dataset"]],
+                                 ws_dataset_history=(cur.get("ws_dataset_history") or []) + (cur.get("ws_datasets") or []),
+                                 ws_applied_filters=out["applied"],
+                                 ws_filter_runs=(cur.get("ws_filter_runs") or [])[-49:] + [run])
+                state.update(status="done", progress=f"{st.get('records') or 0} record(s) fetched", run=run,
+                             verified=out["verified"])
+                self.svc.audit("workspace.filters.fetch", app["project_id"], aid, dataset=out["dataset"],
+                               filters=list(out["applied"]), records=st.get("records"), set=set_name)
+            except QAError as exc:
+                state.update(status="failed", error=exc.message, code=exc.code)
+            except Exception as exc:
+                state.update(status="failed", error=str(exc).splitlines()[0][:300])
+            finally:
+                auth.reset_current_user(token)
+
+        if wait:
+            body()
+        else:
+            threading.Thread(target=body, daemon=True, name=f"cmp-filter-fetch-{aid}").start()
+        return {"job": job}
+
+    # cross-application filter links and filter sets (kept in the comparison's settings)
+    def _psettings(self, pid: str) -> dict[str, Any]:
+        return self.svc.project(pid)["settings"] or {}
+
+    def _save_psettings(self, pid: str, **values: Any) -> None:
+        cur = self._psettings(pid)
+        cur.update(values)
+        self.db.execute("UPDATE cmp_projects SET settings = ?, updated_at = ? WHERE id = ?", (dumps(cur), now_iso(), pid))
+
+    def filter_links(self, pid: str) -> dict[str, Any]:
+        apps = self._apps(pid)
+        saved = self._psettings(pid).get("ws_filter_links") or []
+        info = [{"id": a["id"], "name": a["name"], "filters": (a["config"].get("ws_filters") or {}).get("controls") or []}
+                for a in apps]
+        suggested = filt.suggest_links(info)
+        have = {l_["name"] for l_ in saved}
+        return {"links": saved + [l_ for l_ in suggested if l_["name"] not in have], "saved": bool(saved),
+                "fields": {a["id"]: [f["name"] for f in self.app_data(a)["fields"] if f["kind"] == "column"]
+                           for a in apps}}
+
+    def save_filter_links(self, pid: str, links: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        apps = {a["id"] for a in self._apps(pid)}
+        clean = []
+        for l_ in links:
+            members = {aid: {k: str(v)[:120] for k, v in (m or {}).items() if k in ("filter", "label", "local_field")}
+                       for aid, m in (l_.get("members") or {}).items() if aid in apps and m}
+            if len(members) < 2:
+                continue
+            clean.append({"name": str(l_.get("name") or "Filter")[:80], "members": members,
+                          "status": "approved" if l_.get("approve") or l_.get("status") == "approved" else "suggested",
+                          "value_map": {aid: {str(a)[:120]: str(b)[:120] for a, b in (vm or {}).items()}
+                                        for aid, vm in (l_.get("value_map") or {}).items() if aid in apps}})
+        self._save_psettings(pid, ws_filter_links=clean)
+        self.svc.audit("workspace.filters.links", pid, pid, approved=sum(1 for x in clean if x["status"] == "approved"))
+        return clean
+
+    def sync_filters(self, pid: str, source_app: str, values: dict[str, Any]) -> dict[str, Any]:
+        """Sync Equivalent Filters: the values for the other applications, for the tester to check and apply."""
+        apps = {a["id"]: {"name": a["name"], "filters": (a["config"].get("ws_filters") or {}).get("controls") or []}
+                for a in self._apps(pid)}
+        if source_app not in apps:
+            raise QAError("WS_APP_NOT_FOUND", "Unknown application.", status=404)
+        links = self.filter_links(pid)["links"]
+        return filt.sync_values(links, apps, source_app, values or {})
+
+    def save_filter_sets(self, pid: str, sets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        apps = {a["id"] for a in self._apps(pid)}
+        clean = [{"id": s_.get("id") or _id("FS"), "name": str(s_.get("name") or "Filter set")[:80],
+                  "values": {aid: dict(v or {}) for aid, v in (s_.get("values") or {}).items() if aid in apps},
+                  "approved": bool(s_.get("approved"))} for s_ in sets[:50]]
+        self._save_psettings(pid, ws_filter_sets=clean)
+        return clean
+
+    def run_filter_sets(self, pid: str) -> dict[str, Any]:
+        """Run All Filter Sets: only the scenarios the tester saved and approved, never every combination. Each set
+        fetches every application with its values and compares the filtered data."""
+        sets = [s_ for s_ in self._psettings(pid).get("ws_filter_sets") or [] if s_.get("approved")]
+        if not sets:
+            raise QAError("WS_NO_FILTER_SETS", "Save and approve at least one filter set first.", status=422)
+        job = _id("JOB")
+        state = {"id": job, "status": "running", "progress": "starting", "error": None, "results": []}
+        self.svc.jobs[job] = state
+        user = _user()
+
+        def body() -> None:
+            token = auth.set_current_user(user)
+            try:
+                for s_ in sets:
+                    for aid, vals in s_["values"].items():
+                        state["progress"] = f"{s_['name']}: fetching {self._app(aid)['name']}"
+                        j = self.apply_fetch(aid, vals, set_name=s_["name"], wait=True)
+                        r = self.svc.jobs[j["job"]]
+                        if r["status"] != "done":
+                            raise QAError("FILTER_SET_FAILED", f"{s_['name']}: {r.get('error')}", status=409)
+                    state["progress"] = f"{s_['name']}: comparing"
+                    run_ = self.run(pid, label=s_["name"])
+                    state["results"].append({"set": s_["name"], "run": run_["id"], "result": run_["result"]})
+                state.update(status="done", progress=f"{len(sets)} filter set(s) compared")
+            except QAError as exc:
+                state.update(status="failed", error=exc.message)
+            except Exception as exc:
+                state.update(status="failed", error=str(exc).splitlines()[0][:300])
+            finally:
+                auth.reset_current_user(token)
+        threading.Thread(target=body, daemon=True, name=f"cmp-filter-sets-{pid}").start()
+        return {"job": job, "sets": len(sets)}
 
     def correct(self, pid: str, evidence_id: str, where: dict[str, Any], value: str) -> dict[str, Any]:
         """A tester corrects a value read from a screenshot. The OCR reading is kept next to it."""
@@ -796,7 +1080,7 @@ class Workspace:
         return self.latest_config(pid) or {}
 
     # ---- run ----------------------------------------------------------------------------------------------------
-    def run(self, pid: str) -> dict[str, Any]:
+    def run(self, pid: str, label: str | None = None) -> dict[str, Any]:
         proj = self.svc.project(pid)
         saved = self.latest_config(pid)
         if not saved:
@@ -805,14 +1089,35 @@ class Workspace:
         for a in apps:
             self._read_screens(a)
         data = [self.app_data(a) for a in self._apps(pid)]
+        # 23.9.0 Compare Filtered Data: local filters for applications without the filter, then the scope check
+        links = [l_ for l_ in (proj["settings"] or {}).get("ws_filter_links") or [] if l_.get("status") == "approved"]
+        by_id = {d["app_id"]: d for d in data}
+        for l_ in links:
+            src_val = None
+            for aid, m in l_["members"].items():
+                if not m.get("local_field") and aid in by_id:
+                    v = filt._applied(by_id[aid]).get(m.get("label"))
+                    if v not in (None, "", []):
+                        src_val = v
+                        break
+            for aid, m in l_["members"].items():
+                if m.get("local_field") and aid in by_id and src_val is not None:
+                    kept = filt.local_filter(by_id[aid], m["local_field"], src_val)
+                    by_id[aid]["filters"] = {**(by_id[aid].get("filters") or {}), f"local:{m['local_field']}": src_val}
+                    by_id[aid]["coverage"]["notes"].append(f"Filtered locally on {m['local_field']} = {src_val} "
+                                                           f"({kept} record(s) kept).")
+        scope = filt.scope_check(data, links)
         decisions = self.decisions(pid)
         rules = (proj["settings"] or {}).get("rules") or {}
-        out = compare(data, saved["config"], decisions=decisions, rules=rules)
+        out = compare(data, saved["config"], decisions=decisions, rules=rules, scope=scope)
         out["mapping_version"] = saved["version"]
+        out["label"] = label
+        out["filters"] = {d["app_id"]: filt._applied(d) for d in data}
         exe, at = _id("CX"), now_iso()
         self.db.execute("INSERT INTO cmp_executions (id, project_id, mode, status, result, config, summary, detail, "
                         "created_by, started_at, finished_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                        (exe, pid, "workspace", "done", out["result"], dumps({"mapping_version": saved["version"]}),
+                        (exe, pid, "workspace", "done", out["result"], dumps({"mapping_version": saved["version"],
+                                                                        "label": label, "filters": out["filters"]}),
                          dumps(out["summary"]), dumps(out), _user().username, at, now_iso()))
         for r in out["rows"]:
             if r["result"] == "FAIL":
@@ -1628,7 +1933,7 @@ def _fmt_like(v: Any, shown: Any) -> Any:
 
 
 def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[dict[str, Any]] | None = None,
-            rules: dict[str, Any] | None = None) -> dict[str, Any]:
+            rules: dict[str, Any] | None = None, scope: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     by_id = {d["app_id"]: d for d in data}
     names = {d["app_id"]: d["name"] for d in data}
     letter = {d["app_id"]: d["letter"] for d in data}
@@ -1690,6 +1995,15 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
         out = {k: c.get(k) for k in ("value", "confidence", "source", "evidence", "method", "box", "where")}
         out.update(extra or {})
         return out
+
+    # 0. 23.9.0: filtered datasets must cover the same scope (Region = East in one, Territory = East in the other)
+    for p_ in scope or []:
+        add(f"Filter scope: {p_['filter']}", None, None,
+            {aid: {"value": ", ".join(map(str, v)) if isinstance(v, list) else v} for aid, v in p_["values"].items()},
+            "NOT_COMPARABLE", "scope_mismatch",
+            f"The applications were not filtered the same way on '{p_['filter']}' ({p_['why']}): their data cover "
+            "different scopes. Apply the equivalent filter (Sync Equivalent Filters) or a local filter, then compare "
+            "again.", pair=list(p_["values"]))
 
     # 1. records: missing and duplicate (each application against every other)
     unique_keys = set()

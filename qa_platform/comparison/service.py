@@ -409,8 +409,8 @@ class ComparisonService:
     def start_extraction(self, app_id: str, spec: dict[str, Any]) -> dict[str, Any]:
         app = self._app_row(app_id)
         kind = spec.get("kind") or "table"
-        if kind not in ("table", "kpis", "charts", "dashboard"):
-            raise QAError("CMP_KIND", "Extraction kind must be table, kpis, charts or dashboard.", status=422)
+        if kind not in ("table", "kpis", "charts", "dashboard", "page"):
+            raise QAError("CMP_KIND", "Extraction kind must be table, kpis, charts, dashboard or page.", status=422)
         ds = self._new_dataset(app, kind, {"web": "dom", "desktop": "uia", "rdp": "ocr"}.get(app["app_type"], "file"),
                                screen_id=spec.get("screen_id"))
         job = _id("JOB")
@@ -450,9 +450,15 @@ class ComparisonService:
             state["progress"] = "signing in"
             ex.login()
             filters = ex.run_steps(spec.get("steps") or [])
+            filters.update(spec.get("applied_filters") or {})
+            state["progress"] = "waiting for the page's data"
+            ex.wait_for_data()
             aggregates: dict[str, Any] = {}
             stats: dict[str, Any] = {"complete": True, "method": "dom"}
             kind = spec.get("kind") or "table"
+            if kind == "page":
+                self._capture_page(app, ds, ex, spec, state, filters)
+                return
             if kind in ("kpis", "dashboard"):
                 aggregates["kpis"] = ex.kpis()
             if kind in ("charts", "dashboard"):
@@ -491,6 +497,108 @@ class ComparisonService:
             stats["blocked_requests"] = sorted(set(ex.blocked))[:20]
             self._finish_dataset(ds, "complete" if stats.get("complete", True) else "incomplete", stats,
                                  aggregates or None, filters)
+
+    def _capture_page(self, app: dict[str, Any], ds: str, ex: Any, spec: dict[str, Any], state: dict[str, Any],
+                      filters: dict[str, Any]) -> None:
+        """23.9.0 live capture of one page in ONE browser session, in layers: the table through the page code (HTML
+        table, ARIA grid, div grid, DataTables API, every page / scroll position), further tables, KPI cards and
+        chart-library data; then, for what the page code does not give (a canvas chart, a table drawn as an image),
+        the offline OCR on the page's screenshot. The dataset says which method gave what and how complete it is."""
+        from . import screen_reader
+
+        seq = [0]
+
+        def on_page(n: int, data: dict[str, Any], png: bytes | None) -> None:
+            state["progress"] = f"table page {n}: {len(data['rows'])} rows"
+            ev_id = self._save_evidence(app, png, source="web capture", screen=spec.get("screen_name"),
+                                        sequence=n)["id"] if png else None
+            recs = [{"page": n, "screenshot": ev_id,
+                     "fields": {h or f"Column {j + 1}": {"value": v, "method": data.get("method") or "dom",
+                                                         "confidence": 1.0, "screenshot": ev_id}
+                                for j, (h, v) in enumerate(zip(data["headers"], row))}} for row in data["rows"]]
+            self._store_records(ds, recs, seq[0])
+            seq[0] += len(recs)
+
+        target = dict(spec.get("target") or {})
+        result = ex.table(target, on_page=on_page, screenshots=spec.get("screenshots", True))
+        stats = result["stats"]
+        layers = []
+        if result["records"]:
+            layers.append(f"table: {stats.get('method')}")
+        aggregates: dict[str, Any] = {"tables": [{"headers": t["headers"], "rows": t["rows"], "method": t.get("method"),
+                                                  "totals": t.get("totals")} for t in getattr(ex, "other_tables", [])
+                                                 if t.get("rows")]}
+        state["progress"] = "reading KPI cards and charts"
+        aggregates["kpis"] = ex.kpis()
+        aggregates["charts"] = ex.charts()
+        if aggregates["charts"]:
+            layers.append("charts: " + ", ".join(sorted({c.get("lib") or "?" for c in aggregates["charts"]})))
+        png = ex.screenshot()
+        ev = self._save_evidence(app, png, source="web capture", screen=spec.get("screen_name"))
+        aggregates["screenshot"] = ev["id"]
+        canvases = int(getattr(ex, "canvases", 0) or 0)
+        need_ocr = (not result["records"] and not aggregates["tables"]) or canvases > len(
+            [c for c in aggregates["charts"] if c.get("lib") == "chartjs"])
+        if need_ocr and spec.get("ocr_fallback", True):
+            state["progress"] = "reading the screenshot (offline OCR)"
+            path = self.evidence.path(app["project_id"], ev["file"])
+            try:
+                res = ocr.read_for_layout(path, self.rt.settings)
+                g = res.pop("graphics", None) or ocr.graphics(path, self.rt.settings)
+                parsed = screen_reader.read_screen(res, g)
+                self.db.execute("UPDATE cmp_evidence SET ocr = ? WHERE id = ?", (dumps(res), ev["id"]))
+            except QAError as exc:
+                parsed = None
+                stats.setdefault("warnings", []).append(f"OCR fallback not possible: {exc.message}")
+            if parsed:
+                ocr_tables = parsed["tables"]
+                if not result["records"] and ocr_tables:
+                    t0 = ocr_tables.pop(0)
+                    recs = [{"page": 1, "screenshot": ev["id"],
+                             "fields": {h: {"value": c.get("value"), "raw": c.get("raw"), "method": "ocr fallback",
+                                            "confidence": c.get("confidence"), "box": c.get("box"),
+                                            "screenshot": ev["id"]} for h, c in r.items()}} for r in t0["rows"]]
+                    self._store_records(ds, recs, 0)
+                    stats.update(headers=t0["headers"], records=len(recs), method="ocr fallback", complete=False,
+                                 reason="the page code has no readable table (canvas or image): read from a "
+                                        "screenshot of the visible part of the page", units=t0.get("units"),
+                                 totals=[{"label": x.get("label"), "kind": x.get("kind"),
+                                          "values": {h: (v or {}).get("value") for h, v in (x.get("cells") or
+                                                                                            x.get("values") or {}).items()}}
+                                         for x in t0.get("totals") or []])
+                    layers.append("table: OCR of the screenshot")
+                for t in ocr_tables:
+                    aggregates["tables"].append({"headers": t["headers"], "method": "ocr fallback",
+                                                 "rows": [[(r.get(h) or {}).get("value") for h in t["headers"]]
+                                                          for r in t["rows"]]})
+                lib_titles = {str(c.get("title") or "").strip().lower() for c in aggregates["charts"]}
+                for ch in parsed["charts"]:
+                    if str(ch["title"]).strip().lower() in lib_titles:
+                        continue
+                    aggregates["charts"].append({"lib": "ocr", "title": ch["title"], "type": ch.get("type"),
+                                                 "method": "ocr fallback", "status": ch.get("status"),
+                                                 "confidence": min([float(p.get("confidence") or 0) for p in
+                                                                    ch["points"].values()] or [0]),
+                                                 "approximate": bool(ch.get("approximate")),
+                                                 "series_values": [{"name": ch.get("series"), "type": ch.get("type"),
+                                                                    "values": {k: p.get("value") for k, p in
+                                                                               ch["points"].items()}}]})
+                    layers.append(f"chart '{ch['title']}': OCR of the screenshot")
+                known = {str(k.get("label")).lower() for k in aggregates["kpis"]}
+                for v in parsed["values"]:
+                    if str(v["label"]).lower() not in known:
+                        aggregates["kpis"].append({"label": v["label"], "value": v["value"], "method": "ocr fallback",
+                                                   "confidence": v.get("confidence")})
+        stats["layers"] = layers
+        stats["blocked_requests"] = sorted(set(ex.blocked))[:20]
+        stats["redirects"] = sorted(set(getattr(ex, "redirected", [])))[:10]
+        found = bool(stats.get("records")) or any(aggregates.get(k) for k in ("tables", "kpis", "charts"))
+        if not found:
+            stats["complete"] = False
+            stats["reason"] = ("nothing readable was found on the page" + (
+                f"; {len(ex.blocked)} request(s) were blocked by the security policy" if ex.blocked else ""))
+        status = "complete" if stats.get("complete", True) and found else "incomplete"
+        self._finish_dataset(ds, status, stats, aggregates, filters)
 
     def _extract_desktop(self, app: dict[str, Any], ds: str, spec: dict[str, Any], state: dict[str, Any]) -> None:
         from . import desktop
