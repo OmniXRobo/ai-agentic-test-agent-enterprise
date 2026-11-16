@@ -44,7 +44,27 @@ DECISIONS = {"valid_business_difference": "Valid business difference",
              "false_positive": "False positive", "actual_defect": "Actual defect",
              "investigate": "Requires further investigation"}
 ACCEPTING = {"valid_business_difference", "expected_calculation_difference", "false_positive"}
-ORDER = ["FAIL", "WARNING", "ACCEPTED", "PASS*", "PASS"]
+ORDER = ["FAIL", "NOT_COMPARABLE", "NEEDS_REVIEW", "INCOMPLETE", "WARNING", "ACCEPTED", "PASS*", "PASS"]
+OPEN_RESULTS = ("FAIL", "NOT_COMPARABLE", "NEEDS_REVIEW", "INCOMPLETE", "WARNING")
+# 23.9.0: a check that is not a clear pass or fail says WHY it is not: the data was incomplete, a person must look
+# (low OCR confidence, unapproved mapping, chart without labels), or the values cannot be compared (units, scope)
+CATEGORY_RESULT = {
+    "value_not_read": "INCOMPLETE", "source_missing": "INCOMPLETE", "partial_data": "INCOMPLETE",
+    "not_on_screenshots": "INCOMPLETE", "field_not_found": "INCOMPLETE", "extraction_incomplete": "INCOMPLETE",
+    "mapping_not_approved": "NEEDS_REVIEW", "rule_not_approved": "NEEDS_REVIEW", "status_not_mapped": "NEEDS_REVIEW",
+    "ocr_uncertainty": "NEEDS_REVIEW", "visual_check": "NEEDS_REVIEW",
+    "calculation_not_possible": "NOT_COMPARABLE", "unit_mismatch": "NOT_COMPARABLE", "scope_mismatch": "NOT_COMPARABLE",
+}
+# the tester's classification of a difference (Part 7)
+CLASSIFICATION = {"actual_defect": "Genuine defect", "valid_business_difference": "Expected difference",
+                  "expected_calculation_difference": "Expected difference", "false_positive": "False positive",
+                  "investigate": "Further review"}
+SUGGESTED = {"value_mismatch": "actual_defect", "date_mismatch": "actual_defect", "calculation_mismatch": "actual_defect",
+             "chart_mismatch": "actual_defect", "status_mismatch": "actual_defect", "missing_record": "actual_defect",
+             "duplicate_record": "actual_defect", "rounding_difference": "expected_calculation_difference",
+             "approximate_match": "investigate", "ocr_uncertainty": "investigate", "visual_check": "investigate",
+             "unit_mismatch": "investigate", "scope_mismatch": "investigate",
+             "different_business_rules": "valid_business_difference"}
 EXTRA_SYNONYMS = [
     {"sales", "revenue", "turnover", "income", "sale"},
     {"completed", "complete", "completion", "successful", "success", "fulfilled", "done", "closed"},
@@ -633,6 +653,7 @@ class Workspace:
             return {"used": False, "note": "The local AI is not available."}
         anchor = data[0]
         added = 0
+        log: list[dict[str, Any]] = []
         try:
             for other in data[1:]:
                 sp = {f["name"]: {"type": f["type"], "samples": f["samples"]} for f in anchor["fields"]
@@ -645,7 +666,7 @@ class Workspace:
                     continue
                 sug = [{"source_field": r["members"][anchor["app_id"]]["field"], "target_field": None,
                         "confidence": 0.0, "status": "unmapped"} for r in rows]
-                sug = mapping.refine_with_ai(ai, sp, tp, sug, context="integration comparison")
+                sug = mapping.refine_with_ai(ai, sp, tp, sug, context="integration comparison", log=log)
                 for s in sug:
                     if s.get("origin") != "ai" or not s.get("target_field"):
                         continue
@@ -661,8 +682,17 @@ class Workspace:
                     cfg["fields"].remove(orphan)
                     added += 1
         except Exception as exc:  # the rules' suggestions stand without the AI
-            return {"used": False, "note": f"The local AI could not help: {str(exc)[:160]}"}
-        return {"used": True, "added": added}
+            return {"used": False, "note": f"The local AI could not help: {str(exc)[:160]}", "log": log}
+        failed = [x for x in log if x.get("error")]
+        if failed and len(failed) == len(log):
+            return {"used": False, "added": 0, "log": log,
+                    "note": "The local AI did not return a usable answer (" + failed[0]["error"] + "). The mapping "
+                            "below comes from the deterministic rules; review the unmapped fields yourself."}
+        note = None
+        if failed:
+            note = f"{len(failed)} of {len(log)} AI request(s) gave no usable answer; their fields keep the rule-based " \
+                   "suggestion."
+        return {"used": True, "added": added, "log": log, "note": note}
 
     # ---- saved mapping configuration --------------------------------------------------------------------------
     def latest_config(self, pid: str) -> dict[str, Any] | None:
@@ -686,10 +716,16 @@ class Workspace:
             raise QAError("CMP_FORBIDDEN", "Your role cannot approve mappings.", status=403)
         apps = {a["id"]: a for a in self._apps(pid)}
         letters = {a["letter"]: a["id"] for a in apps.values()}
+        state = self.db.query_one("SELECT analysis FROM cmp_ws_state WHERE project_id = ?", (pid,))
+        seen: dict[tuple[str, str], dict[str, Any]] = {}
+        for ap in (loads(state["analysis"]) if state else {}).get("apps") or []:
+            for f in ap.get("fields") or []:
+                seen[(ap["app_id"], f["name"])] = _signature(f)
         clean_fields = []
         for r in config.get("fields") or []:
             members = {aid: {"field": str(m.get("field") or "")[:200], "kind": m.get("kind") or "column",
-                             "confidence": float(m.get("confidence") or 0), "origin": m.get("origin") or "tester"}
+                             "confidence": float(m.get("confidence") or 0), "origin": m.get("origin") or "tester",
+                             "signature": seen.get((aid, str(m.get("field") or "")[:200]))}
                        for aid, m in (r.get("members") or {}).items() if aid in apps and m and m.get("field")}
             st = r.get("status") or "needs_review"
             if st not in ("auto_mapped", "needs_review", "unmapped", "approved", "rejected"):
@@ -740,7 +776,9 @@ class Workspace:
             charts.append({"id": c.get("id") or _id("G"), "app": c["app"], "chart": str(c.get("chart"))[:200],
                            "source_app": c["source_app"], "category_field": c.get("category_field"),
                            "value_field": c.get("value_field"),
-                           "aggregate": c.get("aggregate") if c.get("aggregate") in ("sum", "count", "avg") else "sum",
+                           "aggregate": c.get("aggregate") if c.get("aggregate") in ("sum", "count", "avg", "share")
+                           else "sum", "kind": c.get("kind") if c.get("kind") in ("chart", "table") else "chart",
+                           "tolerance": c.get("tolerance"),
                            "status": st, "confidence": c.get("confidence")})
         clean = {"fields": clean_fields, "rules": rules, "statuses": statuses, "charts": charts}
         last = self.db.query_one("SELECT MAX(version) AS v FROM cmp_ws_configs WHERE project_id = ?", (pid,))
@@ -862,7 +900,7 @@ class Workspace:
         decisions = [d for d in self.decisions(e["project_id"]) if d["execution_id"] == exe]
         shots = {}
         for r in e["detail"]["rows"]:
-            if r["result"] in ("FAIL", "WARNING"):
+            if r["result"] in OPEN_RESULTS:
                 for ev in r.get("evidence") or []:
                     if ev not in shots and len(shots) < 12:
                         shots[ev] = self._data_uri(e["project_id"], ev)
@@ -933,7 +971,18 @@ def _preview(d: dict[str, Any]) -> dict[str, Any]:
                         "points": {k: cell(v) for k, v in c["points"].items()}, "extracted": c["extracted"],
                         "note": c.get("note"), "source": c["source"], "evidence": c.get("evidence")}
                        for c in d["charts"]],
-            "fields": [{k: f[k] for k in ("name", "kind", "type", "family", "source")} for f in d["fields"]]}
+            "fields": [{**{k: f[k] for k in ("name", "kind", "type", "family", "source")},
+                        "unit": f.get("unit"), "concept": (f.get("concept") or {}).get("concept"),
+                        "role": (f.get("concept") or {}).get("role")} for f in d["fields"]]}
+
+
+def _signature(f: dict[str, Any] | None) -> dict[str, Any]:
+    """What a saved mapping remembers of a field, to notice when the application changed it (23.9.0)."""
+    f = f or {}
+    c = f.get("concept")
+    if isinstance(c, dict):
+        c = c.get("concept")
+    return {"type": f.get("type"), "unit": f.get("unit"), "concept": c}
 
 
 def _field(d: dict[str, Any], name: str) -> dict[str, Any] | None:
@@ -1066,10 +1115,19 @@ def _pair_score(a: dict[str, Any], fa: dict[str, Any], b: dict[str, Any], fb: di
         if not any(key_norm(_cv(side["values"].get(k))) for k in [key.get(side["app_id"])] if k):
             return 0.0, []
     ls = _label_score(fa["name"], fb["name"])
+    # 23.9.0: business meaning (City ~ Territory, Orders ~ Order Volume, Share % ~ Contribution %, a quantity is
+    # never an amount, a unit price is not a final amount)
+    sm, sm_why = semantics.same_meaning(fa.get("concept") or {}, fb.get("concept") or {})
+    concept_a = (fa.get("concept") or {}).get("concept")
+    if sm >= 1.0 and concept_a not in (None, "text", "number"):
+        ls = max(ls, 0.72)
+    elif sm >= 0.8:
+        ls = max(ls, 0.6)
     fam_ok = fa["family"] == fb["family"] or {fa["family"], fb["family"]} <= {"text", "status"}
     agree, n = _agreement(a, fa, b, fb, key)
     ev = [f"names '{fa['name']}' / '{fb['name']}' similarity {ls:.2f}",
-          f"kinds of data {fa['family']} / {fb['family']}" + ("" if fam_ok else " (different)")]
+          f"kinds of data {fa['family']} / {fb['family']}" + ("" if fam_ok else " (different)"),
+          f"meaning: {sm_why}"]
     if agree is None:
         vo = mapping.value_overlap(fa["samples"], fb["samples"], _ntype(fa["family"]))
         score = 0.70 * ls + 0.20 * vo + (0.10 if fam_ok else -0.3)
@@ -1083,6 +1141,16 @@ def _pair_score(a: dict[str, Any], fa: dict[str, Any], b: dict[str, Any], fb: di
             score = min(score, 0.40)  # names alike but the values never match: not the same field
         elif n == 1 and agree == 0:
             score = min(score, 0.60)
+    values_agree = agree is not None and n >= 3 and agree >= 0.95
+    if sm == 0.0:
+        score = min(score, 0.30)  # different business meaning
+    elif sm <= 0.1:
+        score = min(score, 0.35)  # different units (AED / USD, % / amount)
+    elif sm <= 0.25 and not values_agree:
+        score = min(score, 0.40)  # different kinds of amount (unit price / final amount): not suggested
+    elif sm == 0.8 and not (agree is not None and n >= 2 and agree >= 0.95):
+        score = min(score, 0.70)  # Total ~ Final Amount: only the same when the values agree (tax may differ)
+        ev.append("needs review: one amount may include tax or discount and the other not")
     if {fa["family"], fb["family"]} == {"num", "pct"}:
         score = min(score, 0.35)  # a count is not a percentage
     if not fam_ok:
@@ -1109,11 +1177,26 @@ def suggest_config(data: list[dict[str, Any]], saved: dict[str, Any] | None = No
         members = {aid: m for aid, m in r["members"].items() if aid in by_id}
         missing = [f"{by_id[aid]['name']} › {m['field']}" for aid, m in members.items()
                    if _field(by_id[aid], m["field"]) is None]
+        changed = []
+        for aid, m in members.items():
+            old_sig, cur = m.get("signature"), _field(by_id[aid], m["field"])
+            if not old_sig or cur is None:
+                continue
+            now_sig = _signature(cur)
+            diff = [f"{k} {old_sig.get(k) or '-'} → {now_sig.get(k) or '-'}" for k in ("type", "unit", "concept")
+                    if old_sig.get(k) and now_sig.get(k) and old_sig.get(k) != now_sig.get(k)
+                    and not (k == "type" and {old_sig[k], now_sig[k]} <= {"number", "currency"})]
+            if diff:
+                changed.append(f"{by_id[aid]['name']} › {m['field']} ({', '.join(diff)})")
         row = {**r, "members": {aid: {**m, "origin": "saved"} for aid, m in members.items()}}
         if missing:
             row["status"] = "needs_review"
             row["evidence"] = [f"saved mapping: not found in this analysis: {', '.join(missing)}"]
             notes.append(f"Saved mapping '{r['name']}' uses fields that were not found now: {', '.join(missing)}.")
+        elif changed:
+            row["status"] = "needs_review"
+            row["evidence"] = [f"saved mapping: the field changed since it was approved: {'; '.join(changed)}"]
+            notes.append(f"Saved mapping '{r['name']}' needs review: {'; '.join(changed)}.")
         else:
             row["evidence"] = ["approved earlier (saved mapping)"]
         for aid, m in row["members"].items():
@@ -1178,7 +1261,7 @@ def suggest_config(data: list[dict[str, Any]], saved: dict[str, Any] | None = No
         if len(row["members"]) < 2 and not row.get("is_key"):
             row["status"] = "unmapped"
     rules = _suggest_rules(data, fields, key, saved.get("rules") or [], letters)
-    charts = _suggest_charts(data, saved.get("charts") or [])
+    charts = _suggest_charts(data, saved.get("charts") or [], key)
     statuses = _suggest_statuses(data, fields, key, saved.get("statuses") or [])
     return {"fields": fields, "rules": rules, "charts": charts, "statuses": statuses, "notes": notes,
             "key": key, "letters": letters}
@@ -1208,13 +1291,17 @@ def _suggest_rules(data: list[dict[str, Any]], fields: list[dict[str, Any]], key
             if f is None or f["family"] not in ("num", "pct"):
                 continue
             best: list[dict[str, Any]] = []
+            derived = (f.get("concept") or {}).get("role") in ("final", "total", "subtotal", "sales") or \
+                (f.get("concept") or {}).get("concept") == "percent"
             for src in data:
-                if src["app_id"] == aid:
-                    continue
+                same_app = src["app_id"] == aid  # 23.9.0: Final Amount = Subtotal - Discount + Tax on one screen
+                if same_app and not derived:
+                    continue  # a discount or a unit price is an input, not a calculation of the same screen
                 lt = src["letter"]
                 if f["kind"] == "column" and key.get(aid) and key.get(src["app_id"]):
                     tk, sk = _keys(by_id[aid], key[aid]), _keys(src, key[src["app_id"]])
-                    cand = [x for x in _numeric_fields(src, ("column", "value")) if x["name"] != key[src["app_id"]]]
+                    cand = [x for x in _numeric_fields(src, ("column", "value")) if x["name"] != key[src["app_id"]]
+                            and not (same_app and x["name"] == f["name"])]
                     samples = []
                     for k in set(tk) & set(sk):
                         shown = _cv(tk[k]["fields"].get(f["name"]))
@@ -1223,26 +1310,32 @@ def _suggest_rules(data: list[dict[str, Any]], fields: list[dict[str, Any]], key
                         vals = {(lt, x["name"]): _cv(sk[k]["fields"].get(x["name"]) if x["kind"] == "column"
                                                     else src["values"].get(x["name"])) for x in cand}
                         samples.append({"shown": shown, "values": vals})
-                    found = formula.suggest(f["name"], samples, [(lt, x["name"]) for x in cand])
+                    found = formula.suggest(f["name"], samples, [(lt, x["name"]) for x in cand],
+                                            concepts={(lt, x["name"]): x.get("concept") for x in cand},
+                                            target=f.get("concept"))
                     for s in found:
                         s.update(scope="record", source=src["app_id"])
                     best += found
                 elif f["kind"] == "value":
                     shown = _cv(by_id[aid]["values"].get(f["name"]))
-                    vals = [x for x in _numeric_fields(src, ("value",))]
+                    vals = [x for x in _numeric_fields(src, ("value",)) if not (same_app and x["name"] == f["name"])
+                            and not (same_app and x.get("summary"))]
                     if vals:
                         found = formula.suggest(f["name"], [{"shown": shown, "values": {
                             (lt, x["name"]): _cv(src["values"].get(x["name"])) for x in vals}}],
-                            [(lt, x["name"]) for x in vals])
+                            [(lt, x["name"]) for x in vals],
+                            concepts={(lt, x["name"]): x.get("concept") for x in vals}, target=f.get("concept"))
                         for s in found:
                             s.update(scope="total", source=src["app_id"])
                         best += found
                     cols = {}
+                    cons = {}
                     for x in src["fields"]:
                         if x["kind"] == "column":
                             t = next(t for t in src["tables"] if t["id"] == x["table"])
                             cols[(lt, x["name"])] = [_cv(r["fields"].get(x["name"])) for r in t["records"]]
-                    found = formula.suggest_total(f["name"], shown, cols)
+                            cons[(lt, x["name"])] = x.get("concept")
+                    found = formula.suggest_total(f["name"], shown, cols, cons)
                     for s in found:
                         s.update(scope="total", source=src["app_id"])
                     best += found
@@ -1261,21 +1354,93 @@ def _suggest_rules(data: list[dict[str, Any]], fields: list[dict[str, Any]], key
     return out
 
 
-def _suggest_charts(data: list[dict[str, Any]], saved: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """A chart's bars against a table of another application: which column gives the categories, which the values."""
+def _series(d: dict[str, Any], key_field: str | None = None) -> list[dict[str, Any]]:
+    """Everything of one application that shows a value per category (23.9.0): chart series, the shares of a pie
+    chart and the numeric columns of an aggregated table (Territory / Sales Amount / Share %). The detailed table
+    that holds the record key is not a series: its records are compared one by one."""
+    out = []
+    for ch in d["charts"]:
+        pct_only = ch.get("value_kind") == "percent"
+        concept = {"concept": "percent", "unit": "%"} if pct_only else \
+            semantics.concept(ch["title"], "number", [], ch.get("unit"))
+        out.append({"name": ch["name"], "kind": "chart", "title": ch["title"], "categories": ch["categories"],
+                    "points": ch["points"], "concept": concept, "chart_type": ch.get("type") or "bar",
+                    "approximate": bool(ch.get("approximate")), "source": ch["source"],
+                    "evidence": ch.get("evidence"), "extracted": ch["extracted"], "note": ch.get("note")})
+        if ch.get("percentages") and not pct_only:
+            out.append({"name": f"{ch['name']} — share %", "kind": "chart", "title": f"{ch['title']} (share %)",
+                        "categories": list(ch["percentages"]), "points": ch["percentages"],
+                        "concept": {"concept": "percent", "unit": "%"}, "chart_type": ch.get("type") or "pie",
+                        "approximate": False, "source": ch["source"], "evidence": ch.get("evidence"),
+                        "extracted": True, "note": None})
+    for t in d["tables"]:
+        if key_field and key_field in t["headers"]:
+            continue
+        fl = {f["name"]: f for f in d["fields"] if f.get("table") == t["id"]}
+        cat = None
+        for h in t["headers"]:
+            f = fl.get(h)
+            vals = [cat_norm(_cv(r["fields"].get(h))) for r in t["records"]]
+            vals = [v for v in vals if v]
+            if f and f["family"] in ("text", "status") and len(vals) >= 2 and len(set(vals)) == len(vals):
+                cat = h
+                break
+        if cat is None:
+            continue
+        cats = [str(_cv(r["fields"].get(cat))) for r in t["records"] if _cv(r["fields"].get(cat)) not in (None, "")]
+        for h in t["headers"]:
+            f = fl.get(h)
+            if h == cat or f is None or f["family"] not in ("num", "pct"):
+                continue
+            pts = {str(_cv(r["fields"].get(cat))): {**(r["fields"].get(h) if isinstance(r["fields"].get(h), dict)
+                                                       else {"value": r["fields"].get(h)})}
+                   for r in t["records"] if _cv(r["fields"].get(cat)) not in (None, "")}
+            out.append({"name": f"{h} by {cat}", "kind": "table", "title": f"{h} by {cat}", "categories": cats,
+                        "points": pts, "concept": f.get("concept") or {}, "chart_type": "table",
+                        "approximate": False, "source": t["source"], "evidence": t.get("evidence"),
+                        "extracted": True, "note": None, "table": t["id"], "field": h})
+    return out
+
+
+def group_expected(records: list[dict[str, Any]], cat_field: str, value_field: str,
+                   aggregate: str = "sum") -> dict[str, Decimal]:
+    """The value per category: SUM / COUNT / AVG of a column, or its SHARE of the total in percent
+    (city sales / total sales x 100). Decimal arithmetic; the comparison rounds like the application shows."""
+    if aggregate != "share":
+        return chart_expected(records, cat_field, value_field, aggregate)
+    sums = chart_expected(records, cat_field, value_field, "sum")
+    total = sum(sums.values(), Decimal(0))
+    if not total:
+        return {}
+    return {k: v / total * 100 for k, v in sums.items()}
+
+
+def _suggest_charts(data: list[dict[str, Any]], saved: list[dict[str, Any]],
+                    key: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """A chart's bars or slices, or an aggregated table, against the detailed records of another application:
+    which column gives the categories, which column and aggregate give the values (23.9.0: the value column must
+    mean what the chart shows: sales amounts for a sales chart, never the quantity because some numbers agree;
+    a percentage is the share of the total)."""
+    key = key or {}
     by_id = {d["app_id"]: d for d in data}
     out = [c for c in saved if c.get("status") == "approved" and c.get("app") in by_id]
     done = {(c["app"], c["chart"]) for c in out}
     for d in data:
-        for ch in d["charts"]:
+        for ch in _series(d, key.get(d["app_id"])):
             if (d["app_id"], ch["name"]) in done:
                 continue
             cats = {cat_norm(c) for c in ch["categories"]}
+            if not cats:
+                continue
+            want = (ch.get("concept") or {}).get("concept")
             best = None
             for src in data:
                 if src["app_id"] == d["app_id"]:
                     continue
                 for t in src["tables"]:
+                    if ch["kind"] == "table" and (key.get(src["app_id"]) and key[src["app_id"]] not in t["headers"]
+                                                  or len(t["records"]) < len(cats)):
+                        continue  # an aggregated table is checked against detailed records
                     for cf in t["headers"]:
                         vals = [cat_norm(_cv(r["fields"].get(cf))) for r in t["records"]]
                         ov = len(cats & set(vals)) / max(1, len(cats))
@@ -1285,24 +1450,53 @@ def _suggest_charts(data: list[dict[str, Any]], saved: list[dict[str, Any]]) -> 
                             fld = _field(src, vf)
                             if vf == cf or fld is None or fld["family"] not in ("num", "pct"):
                                 continue
-                            for agg in ("sum", "count"):
-                                exp = chart_expected(t["records"], cf, vf, agg)
+                            vc = (fld.get("concept") or {}).get("concept")
+                            if vc in ("id", "date", "percent"):
+                                continue
+                            aggs = ["share"] if want == "percent" else ["sum", "count"]
+                            for agg in aggs:
+                                exp = group_expected(t["records"], cf, vf, agg)
                                 hits = sum(1 for c, p in ch["points"].items() if cat_norm(c) in exp and
-                                           formula.same(exp[cat_norm(c)], p.get("value"))[0])
+                                           formula.same(exp[cat_norm(c)], p.get("value"),
+                                                        tolerance=_approx_tol(p, exp[cat_norm(c)]))[0])
                                 hint = _label_score(ch["title"], vf)
-                                sc = 0.5 * ov + 0.4 * (hits / max(1, len(ch["points"])) if ch["points"] else 0) + \
-                                    0.1 * hint - (0.05 if agg == "count" else 0)
+                                fit = hits / max(1, len(ch["points"])) if ch["points"] else 0
+                                meaning = 0.0
+                                if want and want not in ("number", "text", "percent") and vc:
+                                    meaning = 0.15 if vc == want else -0.3
+                                if agg == "count" and want in ("money",):
+                                    meaning = -0.3
+                                if agg == "count" and want == "quantity" and vc != "quantity":
+                                    meaning = max(meaning, 0.0)
+                                detail = 0.04 if len(t["records"]) > len(cats) else 0.0  # the records, not a summary
+                                sc = 0.45 * ov + 0.35 * fit + 0.1 * hint + meaning + detail - \
+                                    (0.05 if agg == "count" else 0)
                                 if best is None or sc > best[0]:
-                                    best = (sc, src["app_id"], cf, vf, agg, hits)
+                                    best = (sc, src["app_id"], cf, vf, agg, hits, fld)
             if best:
-                sc, src_id, cf, vf, agg, hits = best
-                out.append({"id": _id("G"), "app": d["app_id"], "chart": ch["name"], "source_app": src_id,
-                            "category_field": cf, "value_field": vf, "aggregate": agg, "status": "suggested",
-                            "confidence": round(min(sc, 0.95), 3),
-                            "review": "auto_mapped" if sc >= mapping.AUTO_MAP else "needs_review",
-                            "explanation": f"categories found in {by_id[src_id]['name']} › {cf}; "
-                                           f"{hits} of {len(ch['points'])} bar value(s) equal the {agg} of {vf}"})
+                sc, src_id, cf, vf, agg, hits, fld = best
+                sc = max(0.0, sc)
+                how = "share of the total of" if agg == "share" else f"{agg} of"
+                expl = (f"categories found in {by_id[src_id]['name']} › {cf}; {hits} of {len(ch['points'])} value(s) "
+                        f"equal the {how} {vf}")
+                if want and (fld.get("concept") or {}).get("concept") not in (want, None) and want not in \
+                        ("number", "text", "percent"):
+                    expl += f" (note: {vf} is a {(fld.get('concept') or {}).get('concept')}, the chart shows {want})"
+                out.append({"id": _id("G"), "app": d["app_id"], "chart": ch["name"], "kind": ch["kind"],
+                            "source_app": src_id, "category_field": cf, "value_field": vf, "aggregate": agg,
+                            "status": "suggested", "confidence": round(min(sc, 0.95), 3),
+                            "review": "auto_mapped" if sc >= mapping.AUTO_MAP and not ch["approximate"]
+                            else "needs_review", "explanation": expl,
+                            "tolerance": None})
     return out
+
+
+def _approx_tol(p: dict[str, Any] | None, expected: Decimal) -> Decimal | None:
+    """A value estimated from the drawing (no label) agrees within 2 % of the expected value; anything else must
+    match as the application rounds it."""
+    if p and p.get("approximate"):
+        return abs(expected) * Decimal("0.02")
+    return None
 
 
 def _suggest_statuses(data: list[dict[str, Any]], fields: list[dict[str, Any]], key: dict[str, str],
@@ -1421,6 +1615,14 @@ def _fmt(v: Any) -> Any:
     return v
 
 
+def _fmt_like(v: Any, shown: Any) -> Any:
+    """An expected value written with the decimals the application shows (9,450.00 next to 9,450.00)."""
+    if isinstance(v, Decimal) and shown not in (None, ""):
+        places = formula.decimals_of(shown)
+        return f"{v.quantize(Decimal(1).scaleb(-places)):,.{places}f}"
+    return _fmt(v)
+
+
 def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[dict[str, Any]] | None = None,
             rules: dict[str, Any] | None = None) -> dict[str, Any]:
     by_id = {d["app_id"]: d for d in data}
@@ -1440,6 +1642,11 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
             category: str, explanation: str, *, expected: Any = None, actual: Any = None, difference: Any = None,
             checks: list[dict[str, Any]] | None = None, calculation: str | None = None, mapping_used: str | None = None,
             pair: list[str] | None = None) -> None:
+        if result == "WARNING":
+            result = CATEGORY_RESULT.get(category, result)
+        normalized = result == "PASS*"
+        if normalized:
+            result = "PASS"  # same value after normalization (AED 1,200.00 = 1200)
         apps_in = sorted(values)
         sig_src = json.dumps([field_id or field, record_key, apps_in,
                               [str((values[a] or {}).get("value")) for a in apps_in], str(expected)], default=str)
@@ -1451,8 +1658,14 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
                "checks": checks or [], "calculation": calculation, "mapping": mapping_used,
                "pairs": pair or [], "evidence": sorted({(v or {}).get("evidence") for v in values.values()
                                                        if (v or {}).get("evidence")}),
-               "sources": sorted({(v or {}).get("source") for v in values.values() if (v or {}).get("source")})}
-        if result in ("FAIL", "WARNING") and sig in accepted:
+               "sources": sorted({(v or {}).get("source") for v in values.values() if (v or {}).get("source")}),
+               "normalized": normalized, "source_app": names.get((pair or apps_in or [None])[0]),
+               "target_app": names.get((pair or apps_in or [None, None])[-1]) if len(pair or apps_in) > 1 else None,
+               "rule": calculation or mapping_used,
+               "suggested_classification": SUGGESTED.get(category) if result in OPEN_RESULTS else None}
+        if row["suggested_classification"]:
+            row["suggested_label"] = CLASSIFICATION[row["suggested_classification"]]
+        if result in OPEN_RESULTS and sig in accepted:
             d = accepted[sig]
             row["decision"] = {"decision": d["decision"], "label": DECISIONS[d["decision"]], "by": d["decided_by"],
                                "at": d["decided_at"], "note": d.get("note")}
@@ -1462,6 +1675,8 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
             d = flagged[sig]
             row["decision"] = {"decision": d["decision"], "label": DECISIONS[d["decision"]], "by": d["decided_by"],
                                "at": d["decided_at"], "note": d.get("note")}
+        if row.get("decision"):
+            row["decision"]["classification"] = CLASSIFICATION.get(row["decision"]["decision"])
         rows.append(row)
 
     def vcell(c: Any, extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -1506,6 +1721,15 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
                 "This field mapping was not approved, so it was not compared.")
             continue
         fam = row.get("family") or "text"
+        units = {aid: (_field(by_id[aid], m["field"]) or {}).get("unit") for aid, m in members.items()}
+        known_units = {u for u in units.values() if u}
+        if len(known_units) > 1 and fam in ("num", "pct"):
+            add(row["name"], row["id"], None, {aid: {"value": None, "unit": u} for aid, u in units.items()},
+                "NOT_COMPARABLE", "unit_mismatch",
+                "The applications show this field in different units (" + " / ".join(
+                    f"{names[a]}: {u}" for a, u in units.items() if u) + "). Add a conversion rule or correct the "
+                "mapping; the values were not compared.", pair=list(members))
+            continue
         calc_apps = {r["app"] for r in cfg.get("rules") or [] if r.get("status") == "approved" and
                      r["field"] == members.get(r["app"], {}).get("field")}
         keys: list[str | None]
@@ -1633,27 +1857,43 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
                 mapping_used=f"{letter[rule['app']]} › {rule['field']} = {rule['expression']}",
                 pair=sorted({rule["app"], *[letter_to_id[x] for x in src_letters if x in letter_to_id]}))
 
-    # 4. charts against their source table
+    # 4. charts, pie shares and aggregated tables against the detailed records they summarize
     for ch_rule in cfg.get("charts") or []:
         if ch_rule["app"] not in by_id or ch_rule["source_app"] not in by_id:
             continue
         d = by_id[ch_rule["app"]]
-        ch = next((c for c in d["charts"] if c["name"] == ch_rule["chart"]), None)
-        label = f"{ch_rule['chart']} (chart)"
+        ch = next((c for c in _series(d, key.get(d["app_id"])) if c["name"] == ch_rule["chart"]), None)
+        is_table = (ch or {}).get("kind") == "table" or ch_rule.get("kind") == "table"
+        label = f"{ch_rule['chart']} ({'summary table' if is_table else 'chart'})"
+        pair = [ch_rule["app"], ch_rule["source_app"]]
         if ch_rule.get("status") != "approved":
             add(label, None, None, {ch_rule["app"]: None}, "WARNING", "rule_not_approved",
                 "The chart rule was not approved, so the chart was not checked.")
             continue
         if ch is None:
             add(label, None, None, {ch_rule["app"]: None}, "WARNING", "field_not_found",
-                f"The chart '{ch_rule['chart']}' was not found in {names[ch_rule['app']]} in this run.")
+                f"'{ch_rule['chart']}' was not found in {names[ch_rule['app']]} in this run.")
             continue
         src = by_id[ch_rule["source_app"]]
-        t = next((t for t in src["tables"] if ch_rule["category_field"] in t["headers"]), None)
-        exp = chart_expected(t["records"] if t else [], ch_rule["category_field"], ch_rule["value_field"],
-                             ch_rule.get("aggregate") or "sum")
-        how = (f"{ch_rule.get('aggregate', 'sum').upper()} of {names[src['app_id']]} › {ch_rule['value_field']} by "
-               f"{ch_rule['category_field']}")
+        t = next((t for t in src["tables"] if ch_rule["category_field"] in t["headers"]
+                  and ch_rule["value_field"] in t["headers"]), None)
+        agg = ch_rule.get("aggregate") or "sum"
+        exp = group_expected(t["records"] if t else [], ch_rule["category_field"], ch_rule["value_field"], agg)
+        vf = _field(src, ch_rule["value_field"]) or {}
+        unit_s, unit_c = vf.get("unit"), (ch.get("concept") or {}).get("unit")
+        if agg == "share":
+            how = (f"{names[src['app_id']]} › SUM({ch_rule['value_field']}) per {ch_rule['category_field']} ÷ "
+                   f"SUM({ch_rule['value_field']}) × 100")
+        else:
+            how = (f"{agg.upper()} of {names[src['app_id']]} › {ch_rule['value_field']} by "
+                   f"{ch_rule['category_field']}")
+        if unit_s and unit_c and unit_s != unit_c and "%" not in (unit_s, unit_c) and agg != "count":
+            add(label, None, None, {ch_rule["app"]: {"value": None, "source": ch["source"]}}, "NOT_COMPARABLE",
+                "unit_mismatch", f"The {'table' if is_table else 'chart'} shows {unit_c} and "
+                f"{ch_rule['value_field']} is in {unit_s}: the values cannot be compared without a conversion rule.",
+                calculation=how, pair=pair)
+            continue
+        noun = "table" if is_table else "slice" if ch.get("chart_type") in ("pie", "donut", "doughnut") else "bar"
         for cat in ch["categories"] or list(ch["points"]):
             p = ch["points"].get(cat)
             e = exp.get(cat_norm(cat))
@@ -1663,30 +1903,59 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
                     src["app_id"]: {"value": _fmt(e) if e is not None else None, "source": t["source"] if t else None}}
             if p is None or p.get("value") in (None, ""):
                 add(label, None, cat, vals, "WARNING", "visual_check",
-                    f"The value of '{cat}' could not be read from the chart: verify it visually against "
-                    f"{_fmt(e) if e is not None else 'the source'}.", expected=e, calculation=how, pair=[ch_rule['app'], src['app_id']])
+                    f"The value of '{cat}' could not be read: verify it visually against "
+                    f"{_fmt(e) if e is not None else 'the source'}.", expected=e, calculation=how, pair=pair)
                 continue
             if e is None:
-                add(label, None, cat, vals, "FAIL" if src["coverage"]["complete"] else "WARNING", "missing_record",
-                    f"'{cat}' is on the chart but not in {names[src['app_id']]}.", actual=p.get("value"),
-                    calculation=how, pair=[ch_rule['app'], src['app_id']])
+                add(label, None, cat, vals, "FAIL" if src["coverage"]["complete"] else "WARNING",
+                    "missing_record" if src["coverage"]["complete"] else "not_on_screenshots",
+                    f"'{cat}' is shown but not found in {names[src['app_id']]}.", actual=p.get("value"),
+                    calculation=how, pair=pair)
                 continue
-            ok, diff = formula.same(e, p.get("value"))
-            low_c = float(p.get("confidence") or 1) < LOW
-            if ok:
-                add(label, None, cat, vals, "PASS", "match", f"The bar shows {p.get('value')}; {how} = {_fmt(e)}.",
-                    expected=e, actual=p.get("value"), calculation=how, pair=[ch_rule['app'], src['app_id']])
+            tol = ch_rule.get("tolerance") if ch_rule.get("tolerance") not in (None, "") else _approx_tol(p, e)
+            ok, diff = formula.same(e, p.get("value"), tolerance=tol)
+            low_c = float(p.get("confidence") or 1) < LOW and not p.get("approximate")
+            partial = not src["coverage"]["complete"]
+            if ok and p.get("approximate"):
+                add(label, None, cat, vals, "WARNING", "approximate_match",
+                    f"The {noun} has no value label; estimated {p.get('value')} from the drawing, which agrees with "
+                    f"{how} = {_fmt_like(e, p.get('value') if p else None)} within 2 %. Not an exact check.", expected=e, actual=p.get("value"),
+                    difference=diff, calculation=how, pair=pair)
+            elif ok and partial:
+                add(label, None, cat, vals, "WARNING", "partial_data",
+                    f"The {noun} shows {p.get('value')}; {how} = {_fmt_like(e, p.get('value') if p else None)} over the records that were read. The "
+                    "source may not show every record.", expected=e, actual=p.get("value"), calculation=how, pair=pair)
+            elif ok:
+                add(label, None, cat, vals, "PASS", "match", f"The {noun} shows {p.get('value')}; {how} = {_fmt_like(e, p.get('value') if p else None)}.",
+                    expected=e, actual=p.get("value"), calculation=how, pair=pair)
+            elif p.get("approximate"):
+                add(label, None, cat, vals, "WARNING", "visual_check",
+                    f"The {noun} has no value label; the drawing suggests about {p.get('value')} but {how} = "
+                    f"{_fmt_like(e, p.get('value') if p else None)}. Check the chart visually.", expected=e, actual=p.get("value"), difference=diff,
+                    calculation=how, pair=pair)
+            elif _rounding_only(e, p.get("value")):
+                add(label, None, cat, vals, "WARNING", "rounding_difference",
+                    f"The {noun} shows {p.get('value')}; {how} = {_fmt_like(e, p.get('value') if p else None)}. The difference is within the last "
+                    "displayed digit (rounding), not a defect.", expected=e, actual=p.get("value"), difference=diff,
+                    calculation=how, pair=pair)
+            elif partial:
+                add(label, None, cat, vals, "WARNING", "partial_data",
+                    f"The {noun} shows {p.get('value')} but {how} over the records that were read = {_fmt_like(e, p.get('value') if p else None)}. The "
+                    "source may not show every record.", expected=e, actual=p.get("value"), difference=diff,
+                    calculation=how, pair=pair)
             else:
                 add(label, None, cat, vals, "WARNING" if low_c else "FAIL",
                     "ocr_uncertainty" if low_c else "chart_mismatch",
-                    f"The bar shows {p.get('value')} but {how} = {_fmt(e)}." + (
-                        " The bar label was read with low confidence." if low_c else ""),
-                    expected=e, actual=p.get("value"), difference=diff, calculation=how, pair=[ch_rule['app'], src['app_id']])
+                    f"The {noun} shows {p.get('value')} but {how} = {_fmt_like(e, p.get('value') if p else None)}." + (
+                        " The value was read with low confidence." if low_c else ""),
+                    expected=e, actual=p.get("value"), difference=diff, calculation=how, pair=pair)
+        shown_cats = {cat_norm(c) for c in (ch["categories"] or list(ch["points"]))}
+        p = None
         for c_norm, e in exp.items():
-            if c_norm not in {cat_norm(c) for c in ch["categories"]}:
+            if c_norm not in shown_cats:
                 add(label, None, c_norm, {src["app_id"]: {"value": _fmt(e)}, ch_rule["app"]: None}, "WARNING",
-                    "visual_check", f"'{c_norm}' has data in {names[src['app_id']]} but was not found on the chart.",
-                    expected=e, calculation=how, pair=[ch_rule['app'], src['app_id']])
+                    "visual_check", f"'{c_norm}' has data in {names[src['app_id']]} but was not found in "
+                    f"'{ch['title']}'.", expected=e, calculation=how, pair=pair)
     # 5. charts nobody could read
     for d in data:
         for ch in d["charts"]:
@@ -1757,42 +2026,66 @@ def _check(x: str, y: str, cx: dict[str, Any], cy: dict[str, Any], fam: str, row
                                                                          is not None else ".")}
 
 
+def _rounding_only(expected: Decimal, shown: Any) -> bool:
+    """The shown value differs from the expected one by at most one unit of its last displayed digit (40.17 % shown
+    as 40.2 % by one application and 40.1 % by another): a rounding difference, not a defect."""
+    d = formula.to_decimal(shown)
+    if d is None:
+        return False
+    unit = Decimal(1).scaleb(-formula.decimals_of(shown))
+    return abs(d - expected) <= unit
+
+
 def _summarize(rows: list[dict[str, Any]], data: list[dict[str, Any]], cfg: dict[str, Any]) -> dict[str, Any]:
     c = Counter(r["result"] for r in rows)
-    cats = Counter(r["category"] for r in rows if r["result"] in ("FAIL", "WARNING"))
+    cats = Counter(r["category"] for r in rows if r["result"] in OPEN_RESULTS)
     names = {d["app_id"]: d["name"] for d in data}
     pairs = {}
     for x, y in itertools.combinations([d["app_id"] for d in data], 2):
         sel = [r for r in rows if x in r["pairs"] and y in r["pairs"]]
         cnt = Counter(r["result"] for r in sel)
         pairs[f"{x}|{y}"] = {"apps": [x, y], "label": f"{names[x]} vs {names[y]}", "total": len(sel),
-                             "passed": cnt["PASS"] + cnt["PASS*"] + cnt["ACCEPTED"], "failed": cnt["FAIL"],
-                             "warnings": cnt["WARNING"]}
+                             "passed": cnt["PASS"] + cnt["ACCEPTED"], "failed": cnt["FAIL"],
+                             "warnings": cnt["WARNING"], "needs_review": cnt["NEEDS_REVIEW"],
+                             "not_comparable": cnt["NOT_COMPARABLE"], "incomplete": cnt["INCOMPLETE"]}
     anchor = data[0]["app_id"]
     consistency = {}
     for d in data[1:]:
         sel = [r for r in rows if anchor in r["pairs"] and d["app_id"] in r["pairs"]]
         bad = sum(1 for r in sel if r["result"] == "FAIL")
-        warn = sum(1 for r in sel if r["result"] == "WARNING")
+        warn = sum(1 for r in sel if r["result"] in ("WARNING", "NEEDS_REVIEW", "INCOMPLETE", "NOT_COMPARABLE"))
         consistency[d["app_id"]] = {"name": d["name"], "checked": len(sel), "failed": bad, "warnings": warn,
                                     "consistent": bad == 0 and len(sel) > 0}
     partial = [d["name"] for d in data if not d["coverage"]["complete"]]
+    failed_extraction = [d["name"] for d in data if d["coverage"].get("extraction") == "FAILED"]
     summary = {
         "total_comparisons": len(rows),
-        "passed": c["PASS"] + c["PASS*"] + c["ACCEPTED"],
-        "failed": c["FAIL"], "warnings": c["WARNING"], "accepted": c["ACCEPTED"],
+        "passed": c["PASS"] + c["ACCEPTED"],
+        "failed": c["FAIL"], "warnings": c["WARNING"], "needs_review": c["NEEDS_REVIEW"],
+        "not_comparable": c["NOT_COMPARABLE"], "incomplete": c["INCOMPLETE"], "accepted": c["ACCEPTED"],
+        "normalized_matches": sum(1 for r in rows if r.get("normalized")),
         "records_checked": len({r["record_key"] for r in rows if r.get("record_key")}),
         "missing_records": cats["missing_record"] + cats["not_on_screenshots"],
         "duplicate_records": cats["duplicate_record"],
         "field_mismatches": cats["value_mismatch"] + cats["date_mismatch"],
         "calculation_mismatches": cats["calculation_mismatch"] + cats["chart_mismatch"],
         "status_mismatches": cats["status_mismatch"],
-        "unverified_visual": cats["visual_check"],
+        "unverified_visual": cats["visual_check"] + cats["approximate_match"],
         "low_confidence": cats["ocr_uncertainty"],
+        "rounding_differences": cats["rounding_difference"],
     }
-    result = "FAIL" if c["FAIL"] else "WARNING" if (c["WARNING"] or partial) else "PASS"
-    if not rows:
+    if c["FAIL"]:
+        result = "FAIL"
+    elif c["INCOMPLETE"] or failed_extraction:
+        result = "INCOMPLETE"
+    elif c["NEEDS_REVIEW"] or c["NOT_COMPARABLE"]:
+        result = "NEEDS_REVIEW"
+    elif c["WARNING"] or partial:
         result = "WARNING"
+    else:
+        result = "PASS"
+    if not rows:
+        result = "INCOMPLETE"
     rows.sort(key=lambda r: (ORDER.index(r["result"]), r["field"], str(r.get("record_key") or "")))
     return {"result": result, "summary": summary, "rows": rows, "pairs": pairs, "consistency": consistency,
             "apps": [{"app_id": d["app_id"], "letter": d["letter"], "name": d["name"], "coverage": d["coverage"]}
@@ -1830,7 +2123,8 @@ def _e(v: Any) -> str:
     return html.escape("" if v is None else str(v))
 
 
-COLORS = {"PASS": "#1f9d55", "PASS*": "#2b8a3e", "ACCEPTED": "#3b82f6", "FAIL": "#d64545", "WARNING": "#d9822b"}
+COLORS = {"PASS": "#1f9d55", "PASS*": "#2b8a3e", "ACCEPTED": "#3b82f6", "FAIL": "#d64545", "WARNING": "#d9822b",
+          "NEEDS_REVIEW": "#7c3aed", "NOT_COMPARABLE": "#475569", "INCOMPLETE": "#b45309"}
 
 
 def workspace_report(project: dict[str, Any], e: dict[str, Any], cfg: dict[str, Any], cfg_row: dict[str, Any] | None,

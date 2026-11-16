@@ -125,7 +125,9 @@ def test_01_table_vs_table(client):
     r = run(client, pid)
     s = r["detail"]["summary"]
     assert r["result"] == "PASS" and s["failed"] == 0 and s["records_checked"] == 4
-    assert {x["result"] for x in rows(r, "Total Sales")} == {"PASS*"}  # 50,000 = 50000.00 after normalization
+    # 50,000 = 50000.00 after normalization (23.9.0: PASS, marked as a normalized match)
+    assert {x["result"] for x in rows(r, "Total Sales")} == {"PASS"}
+    assert all(x["normalized"] for x in rows(r, "Total Sales"))
 
 
 # ---- TEST 2 ------------------------------------------------------------------------------------------------------
@@ -155,7 +157,8 @@ def test_02b_unapproved_rule_is_a_warning(client):
     cfg = analyze(client, pid)["config"]
     save(client, pid, approve_all(cfg, rules=False))
     r = run(client, pid)
-    assert rows(r, "Order Completion (calculated)", "WARNING") and r["result"] == "WARNING"
+    # 23.9.0: an unapproved rule needs the tester's review (was WARNING)
+    assert rows(r, "Order Completion (calculated)", "NEEDS_REVIEW") and r["result"] == "NEEDS_REVIEW"
 
 
 # ---- TEST 3 ------------------------------------------------------------------------------------------------------
@@ -239,7 +242,8 @@ def test_05_status_codes_vs_descriptions(client):
     save(client, pid, approve_all(cfg))
     r = run(client, pid)
     st = {x["record_key"]: x for x in rows(r, "Status")}
-    assert st["1001"]["result"] == "PASS*" and st["1002"]["result"] == "PASS*"
+    assert st["1001"]["result"] == "PASS" and st["1002"]["result"] == "PASS"
+    assert st["1001"]["normalized"] and st["1002"]["normalized"]
     assert st["1004"]["result"] == "FAIL" and st["1004"]["category"] == "status_mismatch"
     assert r["detail"]["summary"]["status_mismatches"] == 1
 
@@ -251,7 +255,7 @@ def test_05b_unapproved_status_mapping_never_passes(client):
     cfg = analyze(client, pid)["config"]
     save(client, pid, approve_all(cfg, statuses=False))
     r = run(client, pid)
-    assert {x["result"] for x in rows(r, "Status")} == {"WARNING"}
+    assert {x["result"] for x in rows(r, "Status")} == {"NEEDS_REVIEW"}
 
 
 # ---- TEST 6 ------------------------------------------------------------------------------------------------------
@@ -358,7 +362,7 @@ def test_08_tester_corrects_a_mapping(client):
     assert row["status"] == "approved" and row["members"][L["B"]]["origin"] == "tester"
     r = run(client, pid)
     res = {x["record_key"]: x["result"] for x in rows(r, "Sales")}
-    assert res == {"1001": "PASS*", "1002": "PASS*", "1003": "PASS*", "1004": "FAIL"}
+    assert res == {"1001": "PASS", "1002": "PASS", "1003": "PASS", "1004": "FAIL"}
 
 
 # ---- TEST 9 ------------------------------------------------------------------------------------------------------
@@ -471,10 +475,10 @@ def test_13_incomplete_screenshots_give_warnings_not_pass(client, rt):
     r = run(client, pid)
     assert r["result"] != "PASS"
     miss = [x for x in rows(r) if x["category"] == "not_on_screenshots"]
-    assert {x["record_key"] for x in miss} == {"1003", "1004"} and {x["result"] for x in miss} == {"WARNING"}
+    assert {x["record_key"] for x in miss} == {"1003", "1004"} and {x["result"] for x in miss} == {"INCOMPLETE"}
     low = [x for x in rows(r, "Total Sales") if x["record_key"] == "1002"][0]
-    assert low["result"] == "WARNING" and low["category"] == "ocr_uncertainty"
-    assert rows(r, result="WARNING") and r["detail"]["summary"]["unverified_visual"] >= 1
+    assert low["result"] == "NEEDS_REVIEW" and low["category"] == "ocr_uncertainty"
+    assert rows(r, result="NEEDS_REVIEW") and r["detail"]["summary"]["unverified_visual"] >= 1
     assert r["detail"]["coverage_note"] and "Sales Portal" in r["detail"]["coverage_note"]
     assert not rows(r, result="FAIL")
 

@@ -196,8 +196,39 @@ def is_ratio(label: str, shown: list[Any]) -> bool:
                                                                        "share", "growth", "margin"))
 
 
+def _ops(tpl: str) -> list[str]:
+    body = tpl.replace("* 100", "")
+    return [o for o in ("+", "-", "*", "/") if f" {o} " in body]
+
+
+def _meaningful(tpl: str, refs_: list[tuple[str, str]], concepts: dict[tuple[str, str], dict[str, Any]] | None,
+                target: dict[str, Any] | None) -> bool:
+    """23.9.0: a formula is only suggested when its fields can be combined (no identifier + amount, no city sales +
+    percentage) and its result is the kind of value the target shows."""
+    if not concepts:
+        return True
+    from . import semantics
+
+    cs = [concepts.get(r) or {} for r in refs_]
+    if any(c.get("concept") in ("id", "date", "text", "status", "location", "customer", "product", "employee",
+                                "department") for c in cs):
+        return False
+    if tpl == "{a} - {b} + {c}" and not (cs[1].get("role") == "discount" and cs[2].get("role") == "tax"):
+        return False  # only subtotal - discount + tax
+    for op in _ops(tpl):
+        if not semantics.can_combine(cs[:2] if op != "+" else cs, op):
+            return False
+    if target and target.get("concept"):
+        kind = "ratio" if "* 100" in tpl else "product" if " * " in tpl else "sum"
+        if not semantics.compatible_target(target, semantics.result_kind(kind, cs)):
+            return False
+    return True
+
+
 def suggest(target_label: str, samples: list[dict[str, Any]], fields: list[tuple[str, str]],
-            *, letters: dict[str, str] | None = None, limit: int = 3) -> list[dict[str, Any]]:
+            *, letters: dict[str, str] | None = None, limit: int = 3,
+            concepts: dict[tuple[str, str], dict[str, Any]] | None = None,
+            target: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Formulas that could produce a displayed value from other fields of the same record (or the same screen).
 
     samples: [{"shown": "83.33%", "values": {(letter, field): value}}] aligned by record key.
@@ -222,9 +253,13 @@ def suggest(target_label: str, samples: list[dict[str, Any]], fields: list[tuple
         templates += [("{a} - {b}", p) for p in itertools.permutations(range(n), 2)]
         templates += [("{a} + {b} + {c}", p) for p in itertools.combinations(range(n), 3)]
         templates += [("{a} * {b}", p) for p in itertools.combinations(range(n), 2)]
+        # subtotal - discount + tax = final amount
+        templates += [("{a} - {b} + {c}", (a, b, c)) for a, b, c in itertools.permutations(range(n), 3) if a < c]
     out = []
     for tpl, idx in templates:
         refs_ = [fields[i] for i in idx]
+        if not _meaningful(tpl, refs_, concepts, target):
+            continue
         names = dict(zip("abc", (f"[{lt}:{f}]" for lt, f in refs_)))
         expr = tpl.format(**names)
         matches, mism, usable = 0, [], 0
@@ -245,8 +280,10 @@ def suggest(target_label: str, samples: list[dict[str, Any]], fields: list[tuple
         if ratio and "{a} / ({a}" not in tpl and "- {b}" not in tpl:
             hint *= 0.9
         fit = matches / usable
-        if fit == 1:
+        if fit == 1 and usable >= 2:
             conf = 0.80 + 0.15 * hint
+        elif fit == 1:
+            conf = 0.62 + 0.15 * hint  # one sample fits many formulas by chance: needs review
         elif hint >= 0.5 and fit >= 0:
             conf = 0.45 + 0.2 * hint * (0.5 + fit / 2) - 0.05 * (len(idx) - 2)
         else:
@@ -270,11 +307,20 @@ def suggest(target_label: str, samples: list[dict[str, Any]], fields: list[tuple
     return best
 
 
-def suggest_total(target_label: str, shown: Any, columns: dict[tuple[str, str], list[Any]]) -> list[dict[str, Any]]:
-    """A summary card (KPI) from a column of another application: SUM, COUNT, AVG, MIN or MAX."""
+def suggest_total(target_label: str, shown: Any, columns: dict[tuple[str, str], list[Any]],
+                  concepts: dict[tuple[str, str], dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """A summary card (KPI) from a column of another application: SUM, COUNT, AVG, MIN or MAX.
+
+    23.9.0: the aggregate must fit the label (a grand total is a SUM, never a MAX that happens to be equal; MIN/MAX
+    only for 'lowest/highest', AVG only for averages) and the column must be of a kind that can be aggregated."""
+    from . import semantics
+
     out = []
     for (lt, f), vals in list(columns.items())[:40]:
+        src = (concepts or {}).get((lt, f))
         for fn in ("SUM", "COUNT", "AVG", "MAX", "MIN"):
+            if not semantics.aggregate_allowed(target_label, fn, src):
+                continue
             expr = f"{fn}([{lt}:{f}])"
             try:
                 v = evaluate(expr, lambda *_: None, lambda *_a, vals=vals: vals)

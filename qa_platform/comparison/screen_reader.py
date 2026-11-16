@@ -81,10 +81,31 @@ def _clean_words(words: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], flo
     # chart bars, borders and icons read as "I", "|", "l": one tall non-digit character is not text
     words = [w for w in words if not (len(str(w["text"]).strip()) == 1 and not str(w["text"]).strip().isdigit()
                                       and w["box"][3] > h * 1.8)]
+    # legend swatches and bullets read as "■", "●", "•": a word without a letter or digit is decoration
+    words = [w for w in words if re.search(r"[A-Za-z0-9\u0600-\u06FF%]", str(w["text"]))]
     for w in words:
         w["text"] = str(w["text"]).strip()
         w["confidence"] = float(w.get("confidence", 1.0) or 0.0)
     return words, h
+
+
+def _off_shapes(words: list[dict[str, Any]], g: dict[str, Any], h: float) -> list[dict[str, Any]]:
+    """Words the OCR 'read' inside a chart drawing (a pie read as 'O', a bar as 'I') that are mostly covered by a
+    filled shape and are not numbers are not text. Labels printed on a bar or a slice are kept (numbers, or a word
+    with good confidence)."""
+    shapes = [r["box"] for r in g.get("rects") or [] if r["box"][2] > h * 1.2 and r["box"][3] > h * 1.2]
+    shapes += [p["box"] for p in g.get("pies") or []]
+
+    def covered(b: list[float]) -> float:
+        area = max(1.0, b[2] * b[3])
+        best = 0.0
+        for s in shapes:
+            ix = max(0.0, min(b[0] + b[2], s[0] + s[2]) - max(b[0], s[0]))
+            iy = max(0.0, min(b[1] + b[3], s[1] + s[3]) - max(b[1], s[1]))
+            best = max(best, ix * iy / area)
+        return best
+    return [w for w in words if not (covered(w["box"]) > 0.6 and w["confidence"] < 0.7 and not is_number(w["text"])
+                                     and len(w["text"]) <= 2)]
 
 
 def lines_of(words: list[dict[str, Any]], h: float) -> list[dict[str, Any]]:
@@ -965,6 +986,9 @@ def read_screen(ocr_result: dict[str, Any], graphics: dict[str, Any] | None = No
     g = graphics or ocr_result.get("graphics") or {}
     if g.get("error"):
         g = {}
+    if g:
+        words = _off_shapes(words, g, h)
+        lines = lines_of(words, h)
     charts = []
     if g:
         charts += _pie_charts(lines, g, h)
