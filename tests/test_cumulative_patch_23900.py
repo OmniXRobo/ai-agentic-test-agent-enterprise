@@ -150,6 +150,7 @@ def test_patch_contents(built):
     assert "previous-23.6.1/ROOT_CAUSE_REPORT.md" in sums and "previous-23.7.1/ROOT_CAUSE_REPORT.md" in sums
     assert "PATCH_CHANGELOG.md" in sums and "USER_GUIDE.md" in sums and "tests/site/saucedemo/checkout-step-two.html" in sums
     assert "previous-23.8.0/PATCH_CHANGELOG.md" in sums and "ROOT_CAUSE_REPORT.md" in sums
+    assert "evidence/lineage-4-dubai-fail-detail.png" in sums and "evidence/filters-3-fetched.png" in sums
     assert "KNOWN_LIMITATIONS.md" in sums and "SECURITY_REVIEW.md" in sums and "TEST_REPORT.md" in sums
     assert "tests/site/integration_live/filters.html" in sums and "tests/site/integration_ocr/truth.json" in sums
     assert any(k.startswith("ocr-runtime/wheels/rapidocr-") for k in sums)
@@ -244,12 +245,12 @@ def test_apply_verify_rollback_and_apply_again(built, tmp_path, version):
     rb = _run(built, "rollback", "--app", str(app), "--data", str(data))
     assert rb.returncode == 0, rb.stdout + rb.stderr
     assert _version(app) == version
-    assert (app / "skyguard_agent" / "understanding.py").exists() == (version in ("23.7.0", "23.7.1", "23.7.2"))
+    assert (app / "skyguard_agent" / "understanding.py").exists() == (version in ("23.7.0", "23.7.1", "23.7.2", "23.8.0"))
     assert (app / "skyguard_agent").exists() == (version in AGENT)
     assert (app / "qa_platform" / "automation" / "components.py").exists() == (version in ("23.6.0", "23.6.1", "23.7.0",
-                                                                                             "23.7.1", "23.7.2"))
-    assert ("_counter_row_click" in (app / "qa_platform" / "automation" / "runner.py").read_text()) is (version in ("23.7.1", "23.7.2"))
-    assert (app / "qa_platform" / "automation" / "framework" / "steps.py").exists() == (version == "23.7.2")
+                                                                                             "23.7.1", "23.7.2", "23.8.0"))
+    assert ("_counter_row_click" in (app / "qa_platform" / "automation" / "runner.py").read_text()) is (version in ("23.7.1", "23.7.2", "23.8.0"))
+    assert (app / "qa_platform" / "automation" / "framework" / "steps.py").exists() == (version in ("23.7.2", "23.8.0"))
     assert (app / "qa_platform" / "comparison" / "workspace.py").exists() == (version == "23.8.0")
     assert not (app / "qa_platform" / "comparison" / "filters.py").exists()
     assert _knowledge(data)[0] == 2  # data is never deleted by a rollback
