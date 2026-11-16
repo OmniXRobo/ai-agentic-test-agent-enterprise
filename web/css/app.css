@@ -766,3 +766,14 @@ table.data.compact th, table.data.compact td { padding: 4px 8px; font-size: 13px
 .ws-dec { gap: 6px; flex-wrap: wrap; }
 .ws-log summary { cursor: pointer; font-weight: 600; }
 @media (max-width: 640px) { .ws-apps { grid-template-columns: 1fr; } .ws-pick select { min-width: 0; width: 100%; } }
+/* 23.9.0 filters */
+.ws-flt { display: grid; gap: 8px; align-content: start; }
+.ws-flt-table select, .ws-flt-table input[type="text"], .ws-flt-table input[type="date"] { max-width: 220px; }
+.ws-flt-table tr.muted td { opacity: .65; }
+.ws-note { margin: 0; padding: 6px 10px; border-radius: 6px; background: var(--warn-bg, rgba(255, 170, 0, .12)); }
+.ws-preview-img { max-width: 100%; height: auto; border: 1px solid var(--border, #ccc); }
+.ws-flts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr)); gap: 12px; margin-bottom: 12px; }
+.ws-flt { min-width: 0; overflow-x: auto; }
+.ws-flt-table { width: 100%; table-layout: auto; }
+.ws-flt-table td { vertical-align: middle; }
+.ws-why { font-size: 12px; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

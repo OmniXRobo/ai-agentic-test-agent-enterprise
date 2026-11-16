@@ -349,7 +349,6 @@ def test_14_discover_classify_and_fetch_filtered(client, site):
     r = client.post(f"{W}/applications/{a}/filters/discover", json={}).json()
     assert r["ok"], r
     ctl = {c["label"]: c for c in r["filters"]["controls"]}
-    Path("/tmp/claude-0/-home-user/5ee8e6ae-ff35-51c7-a15f-4825f6af04e2/scratchpad/filters.json").write_text(json.dumps(r, indent=1))
     is_f = {k: v["is_filter"] for k, v in ctl.items()}
     assert is_f["Region"] and is_f["City"] and is_f["Status"] and is_f["Date From"] and is_f["Date To"] and is_f["Search"]
     assert not is_f["Language"] and not any(v for k, v in is_f.items() if "entries" in k.lower() or k == "Show")
