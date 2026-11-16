@@ -1,16 +1,24 @@
 <#
-  SkyGuard QA - 23.8.0 cumulative patch (Integration Comparison Workspace, complete AI-Driven Automation scripts, guided playback of suggestion lists, calendars and counters, and
-  Autonomous Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1 and 23.7.2), for 23.3.35, 23.4.0,
-  23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1 or 23.7.2. No administrator rights needed; works offline.
+  SkyGuard QA - 23.9.0 cumulative patch: Integration Comparison, offline OCR and browser final patch (offline OCR runtime
+  and table extraction statuses, live URL capture in layers, meaning-based field mapping, Decimal calculations, chart
+  checks, the six result statuses with tester decisions, application filters with equivalent-filter sync and filter
+  sets, and every visible browser window maximized; includes 23.4.0 to 23.8.0), for 23.3.35 to 23.8.0.
+  No administrator rights needed; works offline.
 
   Finds the installation, stops it, and runs install_patch.py with the application's own Python:
-  verify the patch files (SHA-256), check disk space and permissions, back up the files it replaces, the database
-  and settings.json, copy the files, migrate the main database (19 migrations) and create or migrate the agent's own
-  knowledge database, verify, and restore everything automatically if any step fails. Then starts the application and checks /api/health.
+  verify the patch files and the OCR wheels (SHA-256), check disk space and permissions, back up the files it replaces,
+  the database and settings.json, copy the files, install the OCR runtime into runtime\ocr (or the per-user folder),
+  migrate the databases, verify (including an OCR engine probe), and restore everything automatically if any step
+  fails. Then starts the application and checks /api/health.
+
+  A protected application folder (one this user cannot write, e.g. a machine-wide programs folder) is never forced: the patch
+  stops and explains. -SideBySide installs a patched copy in %LOCALAPPDATA%\SkyGuardQA\app-23.9.0 instead (or the
+  folder given), with START_SKYGUARD_23.9.0.cmd; the original installation and the data are not changed.
 
   Usage (PowerShell, in the extracted patch folder):
     powershell -ExecutionPolicy Bypass -File .\APPLY_PATCH.ps1
     powershell -ExecutionPolicy Bypass -File .\APPLY_PATCH.ps1 -InstallDir "D:\Apps\AIAgenticTestAgent"
+    powershell -ExecutionPolicy Bypass -File .\APPLY_PATCH.ps1 -SideBySide [-SideBySideDir "D:\Me\SkyGuard"]
     powershell -ExecutionPolicy Bypass -File .\APPLY_PATCH.ps1 -VerifyOnly
     powershell -ExecutionPolicy Bypass -File .\APPLY_PATCH.ps1 -Rollback [-RestoreDatabase]
 #>
@@ -20,16 +28,18 @@ param(
     [switch]$NoStart,
     [switch]$VerifyOnly,
     [switch]$Rollback,
-    [switch]$RestoreDatabase
+    [switch]$RestoreDatabase,
+    [switch]$SideBySide,
+    [string]$SideBySideDir = ""
 )
 $ErrorActionPreference = "Stop"
-$PatchVersion = "23.8.0"
+$PatchVersion = "23.9.0"
 $Here = $PSScriptRoot
 function Say([string]$msg) { Write-Host $msg }
 function Step([string]$msg) { Write-Host ""; Write-Host "== $msg" -ForegroundColor Cyan }
 function Fail([string]$msg) { Write-Host ""; Write-Host "PATCH FAILED: $msg" -ForegroundColor Red; exit 1 }
 
-Say "SkyGuard QA ${PatchVersion}: Integration Comparison Workspace, guided playback fixes and Autonomous Application Learning (cumulative)"
+Say "SkyGuard QA ${PatchVersion}: Integration Comparison, offline OCR and browser final patch (cumulative)"
 $roots = @()
 if ($InstallDir) { $roots += $InstallDir }
 $roots += (Join-Path $env:LOCALAPPDATA "Programs\AIAgenticTestAgent")
@@ -49,7 +59,8 @@ if (-not (Test-Path $Py)) { Fail "The application's Python was not found in $App
 
 $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $LogDir = Join-Path $Root "logs"
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+try { New-Item -ItemType Directory -Force -Path $LogDir -ErrorAction Stop | Out-Null }
+catch { $LogDir = Join-Path $env:LOCALAPPDATA "SkyGuardQA\logs"; New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
 $Log = Join-Path $LogDir "patch-$PatchVersion-$Stamp.txt"
 try { Start-Transcript -Path $Log -Append | Out-Null } catch { }
 
@@ -81,7 +92,9 @@ if ($Rollback) {
     if ($RestoreDatabase) { $rbArgs += "--restore-database" }
     & $Py -E -s $Installer @rbArgs
 } else {
-    & $Py -E -s $Installer apply --app $App --data $Data --python $Py
+    $apArgs = @("apply", "--app", $App, "--data", $Data, "--python", $Py)
+    if ($SideBySide -or $SideBySideDir) { $apArgs += "--side-by-side"; if ($SideBySideDir) { $apArgs += $SideBySideDir } }
+    & $Py -E -s $Installer @apArgs
 }
 $rc = $LASTEXITCODE
 if ($rc -ne 0) { try { Stop-Transcript | Out-Null } catch { }; Fail "See the messages above. Log: $Log" }
@@ -90,6 +103,10 @@ $Health = $null
 if (-not $NoStart) {
     Step "Starting SkyGuard QA"
     $launcher = Join-Path $Root "START_QA_PLATFORM.cmd"
+    if ($SideBySide -or $SideBySideDir) {
+        $sbs = if ($SideBySideDir) { $SideBySideDir } else { Join-Path $env:LOCALAPPDATA "SkyGuardQA\app-$PatchVersion" }
+        $launcher = Join-Path $sbs "START_SKYGUARD_$PatchVersion.cmd"
+    }
     if (-not (Test-Path $launcher)) { $launcher = Join-Path $App "START_QA_PLATFORM.cmd" }
     if (Test-Path $launcher) {
         Start-Process -FilePath $launcher -WorkingDirectory (Split-Path $launcher -Parent)

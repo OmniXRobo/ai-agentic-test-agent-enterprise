@@ -225,3 +225,26 @@ def test_saved_mapping_is_flagged_when_the_unit_changes_and_units_never_compare(
     um = [x for x in r2["detail"]["rows"] if x["category"] == "unit_mismatch"]
     assert um and um[0]["result"] == "NOT_COMPARABLE"
     assert not [x for x in r2["detail"]["rows"] if x["field"] == "Amount" and x["result"] in ("PASS", "FAIL")]
+
+
+# ---- Preferences: window mode, OCR engine, business vocabulary -------------------------------------------------------
+
+def test_preferences_accept_the_23900_settings_and_vocabulary_is_used(client):
+    from qa_platform.comparison import semantics
+
+    ok = client.patch("/api/settings", json={
+        "playback": {"window_mode": "fixed", "viewport_width": 1600, "viewport_height": 900},
+        "comparison": {"ocr_engine": "rapidocr", "data_timeout_ms": 20000, "concept_words": {"location": ["depot"]}}})
+    assert ok.json()["ok"], ok.json()
+    s = client.get("/api/settings").json()["settings"]
+    assert s["playback"]["window_mode"] == "fixed" and s["comparison"]["ocr_engine"] == "rapidocr"
+    for bad in ({"playback": {"window_mode": "kiosk"}}, {"playback": {"viewport_width": 10}},
+                {"comparison": {"ocr_engine": "cloud"}}, {"comparison": {"concept_words": "depot"}},
+                {"comparison": {"api_key": "x"}}):
+        assert client.patch("/api/settings", json=bad).status_code == 400, bad
+    try:
+        assert semantics.concept("Depot", None, ["Jebel Ali", "Al Quoz"])["concept"] != "location"
+        semantics.configure(s["comparison"]["concept_words"])
+        assert semantics.concept("Depot", None, ["Jebel Ali", "Al Quoz"])["concept"] == "location"
+    finally:
+        semantics.configure(None)

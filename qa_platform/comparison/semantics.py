@@ -55,6 +55,20 @@ STATUS_WORDS = {"completed", "complete", "pending", "cancelled", "canceled", "op
                 "approved", "rejected", "paid", "unpaid", "draft", "new", "in progress", "shipped", "delivered",
                 "successful", "failed", "waiting", "on hold", "void"}
 ARITH_OK = {("money", "money"), ("quantity", "quantity"), ("percent", "percent")}
+_EXTRA: dict[str, list[str]] = {}  # the tester's own words (Preferences > Comparison > concept_words)
+
+
+def configure(words: Any) -> dict[str, list[str]]:
+    """Extra business words per concept, e.g. {"location": ["depot"], "money": ["takings"]}. Unknown concepts and
+    non-text entries are ignored. Returns what is in use."""
+    global _EXTRA
+    clean: dict[str, list[str]] = {}
+    if isinstance(words, dict):
+        for k, v in words.items():
+            if k in CONCEPTS and isinstance(v, list):
+                clean[k] = [str(w).strip().lower()[:60] for w in v[:50] if isinstance(w, str) and w.strip()]
+    _EXTRA = clean
+    return clean
 
 
 def _words(label: str) -> list[str]:
@@ -95,6 +109,7 @@ def concept(label: str, ftype: str | None = None, samples: list[Any] | None = No
     """{'concept': id|location|date|status|quantity|money|percent|customer|product|employee|department|text,
         'role': money role or None, 'unit': unit, 'why': short reason}."""
     samples = samples or []
+    extra = extra if extra is not None else _EXTRA
     vocab = {k: list(v) + list((extra or {}).get(k, [])) for k, v in CONCEPTS.items()}
     unit = unit or unit_of(label, samples)
     texts = [clean_text(v).lower() for v in samples if v not in (None, "")][:50]

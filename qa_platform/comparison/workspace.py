@@ -678,6 +678,10 @@ class Workspace:
 
     def app_data(self, app: dict[str, Any]) -> dict[str, Any]:
         """The common structure every comparison works on, whatever the source of the data."""
+        try:
+            semantics.configure((self.rt.settings.section("comparison") or {}).get("concept_words"))
+        except Exception:  # a broken setting never stops the comparison: the built-in vocabulary is used
+            semantics.configure(None)
         tables: list[dict[str, Any]] = []
         values: dict[str, dict[str, Any]] = {}
         charts: list[dict[str, Any]] = []

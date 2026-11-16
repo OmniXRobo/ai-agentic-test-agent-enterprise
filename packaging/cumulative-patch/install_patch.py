@@ -1,43 +1,46 @@
-"""SkyGuard QA 23.8.0 cumulative patch (one Integration Comparison Workspace: applications, screenshots, analysis,
-mapping, run and results on one page; AI-Driven Automation writes every Test Case step, from the sign-in to the
-last step; guided playback of suggestion lists, calendars and counters on sites such as Trip.com, and Autonomous
-Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1 and 23.7.2): offline
-installer, verifier and rollback. No administrator rights are needed: everything is written inside the installation
-folder of the user who installed SkyGuard QA.
+r"""SkyGuard QA 23.9.0 cumulative patch: Integration Comparison, offline OCR and browser final patch (offline OCR
+runtime with table extraction statuses, live URL capture in layers, semantic field mapping, Decimal calculations,
+chart checks, PASS / FAIL / WARNING / NEEDS REVIEW / NOT COMPARABLE / INCOMPLETE results with tester decisions,
+application filters with equivalent-filter sync and filter sets, and one maximized-window policy for every visible
+browser; includes 23.4.0 to 23.8.0): offline installer, verifier and rollback. No administrator rights are needed.
 
 Runs with the application's own Python (no packages beyond the standard library are needed for the installer itself).
 Every step is printed; nothing is downloaded.
 
     python install_patch.py apply    --app <app folder> [--data <data folder>] [--python <app python>]
+                                     [--side-by-side <folder>]
     python install_patch.py verify   --app <app folder> [--data <data folder>] [--python <app python>]
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1
-     or 23.7.2; 23.8.0 to apply again),
-  2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256),
-  3. checks free disk space and that the application and data folders can be written,
+  1. detects the installation and its version (23.3.35 to 23.8.0; 23.9.0 to apply again),
+  2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
+  3. checks free disk space and that the application and data folders can be written. A protected application folder
+     (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
+     explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
+     %LOCALAPPDATA%\SkyGuardQA\app-23.9.0), patches that copy and writes START_SKYGUARD_23.9.0.cmd next to it; the
+     original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
      backup) and settings.json,
   6. copies the new files (each written to a temporary name, then renamed),
-  7. migrates: the main database is brought to 19 migrations (from 23.3.35 this applies the 23.4.0 migrations; 23.5.0
-     to 23.7.2 add none; 23.8.0 adds migration 19: four new tables for the Integration Comparison Workspace,
-     nothing existing is changed); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
-     separate file) is created or migrated to schema 2 (23.7.0 adds the observation journal and the learned
-     application model: two new tables, nothing existing is changed),
-  8. verifies: the new version loads, the agent core, its API and the passive learning engine load, every migration
-     is recorded, PRAGMA integrity_check is ok for both databases and no table has fewer rows than before,
-  9. on any failure restores the previous files and the database copy taken in step 5 (the half-migrated database is
-     kept next to it, renamed, never deleted).
+  7. installs the offline OCR runtime (RapidOCR, ONNX Runtime, OpenCV, NumPy, Pillow: wheels for 64-bit Windows and
+     Python 3.13, carried in the patch) into runtime\ocr\site-packages, or into %LOCALAPPDATA%\SkyGuardQA\ocr when
+     the application folder cannot be written. The wheels are unpacked into a staging folder first; the folder in use
+     is replaced only when the staging folder is complete, and the previous runtime is kept for rollback. Nothing is
+     installed into the system Python and no registry key or PATH is changed,
+  8. migrates: the main database is brought to 19 migrations (23.9.0 adds none; filters and filter sets are kept in
+     the comparison's settings); the Operations Agent's knowledge database is created or migrated to schema 2,
+  9. verifies: the new version loads, the agent core, the comparison workspace with filters and semantics, the OCR
+     engine probe (on Windows with Python 3.13), every migration, PRAGMA integrity_check for both databases and no
+     table has fewer rows than before,
+ 10. on any failure restores the previous files, the previous OCR runtime and the database copy taken in step 5 (the
+     half-migrated database is kept next to it, renamed, never deleted).
 
-rollback (after a successful apply): restores the previous application files and removes the files the patch added.
-The databases are kept as they are by default: 23.5.0 to 23.7.2 do not change the main database and 23.8.0 only
-adds four new cmp_ws_* tables, which older versions ignore; the knowledge
-database keeps its two 23.7.0 tables, which 23.5.0 and 23.6.0 ignore, and older versions do not use it, so nothing
-created after the upgrade is lost. Rolling back to 23.3.35: the 23.4.0 migrations stay in the database (23.3.35
-ignores the added tables and columns); use --restore-database for the exact pre-upgrade copy. --restore-database puts
-back the copy taken before the upgrade instead (the current database is kept next to it, renamed).
+rollback (after a successful apply): restores the previous application files, removes the files the patch added and
+puts back the OCR runtime that was there before (or removes the one the patch installed). The databases are kept as
+they are by default (23.9.0 does not change the schema); --restore-database puts back the copy taken before the
+upgrade instead (the current database is kept next to it, renamed).
 """
 
 from __future__ import annotations
@@ -52,11 +55,13 @@ import sqlite3
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.8.0"
-BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1 or 23.7.2"
-BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", PATCH_VERSION)
+PATCH_VERSION = "23.9.0"
+BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2 or 23.8.0"
+BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", PATCH_VERSION)
+OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 AGENT_SCHEMA = 2
 MIGRATION_COUNT = 19
 MARGIN_MB = 300
@@ -196,6 +201,133 @@ def run_py(python: str, app: Path, data: Path, code: str) -> str:
     return r.stdout.strip()
 
 
+# ---- 23.9.0: the offline OCR runtime -----------------------------------------------------------------------------------
+
+def user_dir() -> Path:
+    """The per-user folder the application also looks in (qa_platform.comparison.ocr._user_dir)."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
+    return Path(base) / "SkyGuardQA"
+
+
+def ocr_wheels(patch_dir: Path) -> list[Path]:
+    return sorted((patch_dir / "ocr-runtime" / "wheels").glob("*.whl"))
+
+
+def check_ocr_wheels(patch_dir: Path) -> None:
+    listed = patch_dir / "ocr-runtime" / "WHEELS.json"
+    if not listed.exists():
+        return
+    want = json.loads(listed.read_text(encoding="utf-8"))
+    have = {p.name: p for p in ocr_wheels(patch_dir)}
+    bad = [n for n, d in want.items() if n not in have or sha256(have[n]) != d] + sorted(set(have) - set(want))
+    if bad:
+        raise PatchError("The OCR runtime files are damaged or changed: " + ", ".join(bad[:5]) + ". Extract the zip again.")
+
+
+def python_tag(python: str) -> str:
+    try:
+        out = subprocess.run([python, "-E", "-s", "-c", "import sys, struct; print(sys.platform, sys.version_info[0], "
+                              "sys.version_info[1], struct.calcsize('P') * 8)"], capture_output=True, text=True,
+                             timeout=60).stdout.split()
+        return f"{out[0]}-cp{out[1]}{out[2]}-{out[3]}bit"
+    except (OSError, IndexError, subprocess.SubprocessError):
+        return "unknown"
+
+
+def extract_wheel(whl: Path, target: Path) -> None:
+    """Unpacks a wheel the way an installer does (purelib/platlib of *.data go to the top). Scripts are not needed."""
+    root = target.resolve()
+    with zipfile.ZipFile(whl) as z:
+        for info in z.infolist():
+            name = info.filename
+            if info.is_dir():
+                continue
+            parts = name.split("/")
+            if parts[0].endswith(".data"):
+                if len(parts) < 3 or parts[1] not in ("purelib", "platlib"):
+                    continue
+                parts = parts[2:]
+            dst = (root / Path(*parts)).resolve()
+            if root not in dst.parents:  # never outside the runtime folder
+                raise PatchError(f"{whl.name}: unsafe path {name}")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(info) as src, dst.open("wb") as out:
+                shutil.copyfileobj(src, out)
+
+
+def ocr_base(app: Path) -> Path:
+    runtime = app / "runtime"
+    return runtime / "ocr" if writable(runtime) else user_dir() / "ocr"
+
+
+def install_ocr(patch_dir: Path, app: Path, python: str, stamp: str, force: bool = False) -> dict:
+    """Unpack the OCR wheels into a staging folder, then swap it in. Returns what rollback needs."""
+    wheels = ocr_wheels(patch_dir)
+    if not wheels:
+        say("No OCR runtime in this patch folder; the OCR engine is left as it is.")
+        return {"installed": False, "reason": "no wheels"}
+    tag = python_tag(python)
+    if tag != "win32-cp313-64bit" and not force:
+        say(f"The bundled OCR runtime is for 64-bit Windows with Python 3.13; the application's Python is {tag}. "
+            "OCR runtime not installed (Windows OCR or Tesseract can still be chosen in Preferences > Comparison).")
+        return {"installed": False, "reason": f"python {tag}"}
+    base = ocr_base(app)
+    base.mkdir(parents=True, exist_ok=True)
+    staging = base / f"site-packages.staging-{stamp}"
+    if staging.exists():
+        shutil.rmtree(staging)
+    say(f"Unpacking {len(wheels)} wheels into {staging}")
+    for w in wheels:
+        extract_wheel(w, staging)
+    missing = [p for p in OCR_PACKAGES if not (staging / p).is_dir()]
+    if missing:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise PatchError(f"The OCR runtime is incomplete after unpacking (missing {', '.join(missing)}).")
+    (staging / "SKYGUARD_OCR_RUNTIME.json").write_text(json.dumps(
+        {"patch": PATCH_VERSION, "python": tag, "wheels": [w.name for w in wheels]}, indent=1), encoding="utf-8")
+    live = base / "site-packages"
+    previous = None
+    if live.exists():
+        previous = base / f"site-packages.before-{PATCH_VERSION}-{stamp}"
+        os.replace(live, previous)
+    os.replace(staging, live)
+    say(f"OCR runtime installed: {live}" + (f" (previous runtime kept as {previous.name})" if previous else ""))
+    return {"installed": True, "site": str(live), "previous": str(previous) if previous else None}
+
+
+def restore_ocr(info: dict | None) -> None:
+    if not info or not info.get("installed"):
+        return
+    live = Path(info["site"])
+    if live.exists():
+        shutil.rmtree(live, ignore_errors=True)
+    if info.get("previous") and Path(info["previous"]).exists():
+        os.replace(info["previous"], live)
+        say(f"Previous OCR runtime restored: {live}")
+    else:
+        say(f"OCR runtime removed: {live}")
+
+
+def side_by_side(app: Path, data: Path, target: Path, python: str) -> Path:
+    """A protected application folder: copy the application into a folder of the user and patch the copy."""
+    if target.exists() and any(target.iterdir()):
+        raise PatchError(f"{target} is not empty. Choose an empty folder for the side-by-side copy.")
+    step(f"Copying the application to {target} (the original folder is not changed)")
+    top = app.resolve()
+
+    def skip(folder: str, names: list[str]) -> list[str]:  # the data folder and backups only at the top level
+        out = [n for n in names if n == "__pycache__" or n.endswith(".pyc")]
+        if Path(folder).resolve() == top:
+            out += [n for n in names if n in ("data", "patch-backups", "logs")]
+        return out
+    shutil.copytree(app, target, ignore=skip)
+    launcher = target / f"START_SKYGUARD_{PATCH_VERSION}.cmd"
+    lines = ["@echo off", f'set "QA_HOME={data}"', f'cd /d "{target}"', f'"{python}" -m qa_platform']
+    launcher.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+    say(f"Start the patched copy with {launcher.name}; it uses the same data folder {data}.")
+    return target
+
+
 MIGRATE = ("import sys; sys.path.insert(0, '.'); from qa_platform.config import Paths; "
            "from qa_platform.storage.db import Database; p = Paths().ensure(); d = Database(p.db_file); "
            "print(d.query_one('SELECT MAX(version) AS v FROM schema_version')['v']); d.close()")
@@ -228,6 +360,20 @@ WORKSPACE_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.compari
                   "and hasattr(workspace.Workspace, 'run') and hasattr(screen_reader, 'read_screen') "
                   "and any(r.path == '/api/comparison/workspace/{pid}/run' for r in api.router.routes) "
                   "else 'workspace incomplete')")
+WORKSPACE_239_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.comparison import filters, semantics, workspace; "
+                      "c = semantics.concept('Order Volume', 'number', ['12', '8']); "
+                      "print('ok' if c['concept'] == 'quantity' and not semantics.can_combine([{'concept': 'money'}, "
+                      "{'concept': 'percent'}], '+') and hasattr(filters, 'FilterSession') "
+                      "and hasattr(workspace.Workspace, 'apply_fetch') and 'NOT_COMPARABLE' in workspace.ORDER "
+                      "else 'comparison 23.9.0 incomplete')")
+BROWSER_POLICY_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automation import browser as b; "
+                       "pb = {'window_mode': 'maximized'}; "
+                       "print('ok' if '--start-maximized' in b.launch_args(False, pb) and "
+                       "'--start-maximized' not in b.launch_args(True, pb) and "
+                       "b.context_options(False, pb).get('no_viewport') else 'browser policy incomplete')")
+OCR_PROBE = ("import sys; sys.path.insert(0, '.'); from qa_platform.comparison import ocr; d = ocr.diagnose(); "
+             "e = next(x for x in d['engines'] if x['engine'] == 'rapidocr'); print(e['status'] + ': ' + "
+             "str(e.get('detail'))[:200])")
 AGENT_MIGRATE = ("import sys; sys.path.insert(0, '.'); from pathlib import Path; from qa_platform.config import Paths; "
                  "from skyguard_agent.store import Store; p = Paths().ensure(); s = Store(Path(p.root) / 'opsagent' / "
                  "'knowledge.sqlite3'); print(s.schema_version); s.close()")
@@ -267,6 +413,25 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("Integration Comparison (23.8.0)", ws == "ok", ws)
     except PatchError as exc:
         check("Integration Comparison (23.8.0)", False, str(exc))
+    try:
+        ws9 = run_py(python, app, data, WORKSPACE_239_LOAD).splitlines()[-1]
+        check("Comparison 23.9.0 (filters, meaning)", ws9 == "ok", ws9)
+    except PatchError as exc:
+        check("Comparison 23.9.0 (filters, meaning)", False, str(exc))
+    try:
+        bp = run_py(python, app, data, BROWSER_POLICY_LOAD).splitlines()[-1]
+        check("Maximized browser policy", bp == "ok", bp)
+    except PatchError as exc:
+        check("Maximized browser policy", False, str(exc))
+    tag = python_tag(python)
+    if tag == "win32-cp313-64bit":
+        try:
+            ocr_state = run_py(python, app, data, OCR_PROBE).splitlines()[-1]
+            check("Offline OCR engine", ocr_state.startswith("ready"), ocr_state)
+        except PatchError as exc:
+            check("Offline OCR engine", False, str(exc))
+    else:
+        say(f"  {'Offline OCR engine':<34} SKIP  bundled runtime is for Windows / Python 3.13 (this is {tag})")
     try:
         learn = run_py(python, app, data, LEARNING_LOAD).splitlines()[-1]
         check("Passive learning engine (23.7.0)", learn == "ok", learn)
@@ -341,10 +506,21 @@ def restore_files(app: Path, backup: Path, added: list[str]) -> None:
 def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
-    step(f"SkyGuard QA {PATCH_VERSION}: Integration Comparison Workspace, complete AI-Driven Automation scripts and "
-         "Autonomous Application Learning (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0)")
+    step(f"SkyGuard QA {PATCH_VERSION}: Integration Comparison, offline OCR and browser final patch "
+         "(cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
+    if not writable(app):
+        if args.side_by_side is None:
+            raise PatchError(f"The application folder {app} cannot be written by this user (a protected folder such "
+                             "as the machine-wide programs folder). Nothing was changed. Either ask the person who installed SkyGuard QA "
+                             "to apply the patch, or run the patch with --side-by-side to install a patched copy in "
+                             f"{user_dir() / ('app-' + PATCH_VERSION)} (your original installation stays as it is).")
+        if before not in BASELINES:
+            raise PatchError(f"This patch installs on {BASELINE} (found {before}).")
+        target = Path(args.side_by_side or (user_dir() / f"app-{PATCH_VERSION}")).expanduser().resolve()
+        app = side_by_side(app, data, target, python)
+        root = app
     say(f"Application folder : {app}\nData folder        : {data}  (kept)\nInstalled version  : {before} -> {PATCH_VERSION}")
     if before not in BASELINES:
         raise PatchError(f"This patch installs on {BASELINE} (found {before}). Bring the installation to 23.3.35 "
@@ -352,11 +528,13 @@ def apply(args: argparse.Namespace) -> int:
 
     step("Checking the patch files (SHA-256)")
     files = check_payload(patch_dir)
-    say(f"{len(files)} files verified.")
+    check_ocr_wheels(patch_dir)
+    say(f"{len(files)} files and {len(ocr_wheels(patch_dir))} OCR runtime wheels verified.")
 
     step("Checking disk space, permissions and that the application is stopped")
     db = data / "qa_platform.sqlite3"
-    need = tree_mb([patch_dir / "app"]) + tree_mb([app / rel for rel in files]) + tree_mb([db]) + MARGIN_MB
+    need = tree_mb([patch_dir / "app"]) + tree_mb([app / rel for rel in files]) + tree_mb([db]) + MARGIN_MB + \
+        3 * tree_mb(ocr_wheels(patch_dir))  # unpacked runtime + the previous one kept for rollback
     have = free_mb(root)
     say(f"Free space: {have} MB, needed: {need:.0f} MB")
     if have < need:
@@ -395,6 +573,7 @@ def apply(args: argparse.Namespace) -> int:
     (backup / "BACKUP.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
     say(f"Backup: {backup}  ({len(replaced)} files replaced, {len(added)} new, database {'copied' if db.exists() else 'not present yet'})")
 
+    ocr_info: dict | None = None
     try:
         step("Copying the new files")
         for pkg in ("qa_platform", "skyguard_agent"):
@@ -413,6 +592,11 @@ def apply(args: argparse.Namespace) -> int:
         if args.fail_after_copy:  # test hook: proves the automatic rollback
             raise PatchError("simulated failure after copying (--fail-after-copy)")
 
+        step("Installing the offline OCR runtime")
+        ocr_info = install_ocr(patch_dir, app, python, stamp, force=args.force_ocr)
+        info["ocr"] = ocr_info
+        (backup / "BACKUP.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+
         step("Migrating the database")
         v = run_py(python, app, data, MIGRATE).splitlines()[-1]
         say(f"Main database schema version {v} (expected {MIGRATION_COUNT}).")
@@ -426,6 +610,7 @@ def apply(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 - every failure rolls back
         step("Restoring the previous version")
         restore_files(app, backup, added)
+        restore_ocr(ocr_info)
         (app / f"PATCH_FILES_{PATCH_VERSION}.json").unlink(missing_ok=True)
         if db.exists() and (backup / "qa_platform.sqlite3").exists():
             kept = db.with_name(f"qa_platform.failed-upgrade-{stamp}.sqlite3")
@@ -469,6 +654,7 @@ def rollback(args: argparse.Namespace) -> int:
         raise PatchError(f"SkyGuard QA is still running (port {port} answers). Close it first.")
     step(f"Rolling back {PATCH_VERSION} -> {info['from']} from {backup}")
     restore_files(app, backup, info["added"])
+    restore_ocr(info.get("ocr"))
     (app / f"PATCH_FILES_{PATCH_VERSION}.json").unlink(missing_ok=True)
     db = data / "qa_platform.sqlite3"
     if args.restore_database and (backup / "qa_platform.sqlite3").exists():
@@ -495,7 +681,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backup")
     ap.add_argument("--restore-database", action="store_true")
     ap.add_argument("--skip-running-check", action="store_true")
+    ap.add_argument("--side-by-side", nargs="?", const="", default=None,
+                    help="protected application folder: patch a copy in this folder (default %%LOCALAPPDATA%%\\SkyGuardQA)")
     ap.add_argument("--fail-after-copy", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--force-ocr", action="store_true", help=argparse.SUPPRESS)  # tests: unpack on another platform
     args = ap.parse_args(argv)
     try:
         if args.command == "apply":
