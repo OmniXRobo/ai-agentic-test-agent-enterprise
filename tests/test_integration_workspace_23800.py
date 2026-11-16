@@ -297,7 +297,8 @@ def _shots(tmp_path):
     return out
 
 
-@pytest.mark.skipif(not shutil.which("tesseract"), reason="needs an offline OCR engine (Tesseract)")
+@pytest.mark.skipif(not any(__import__("qa_platform.comparison.ocr", fromlist=["x"]).engines({}).values()),
+                    reason="needs an offline OCR engine (bundled RapidOCR, Windows OCR or Tesseract)")
 def test_07_three_screenshots_ocr_and_compare(client, tmp_path):
     pytest.importorskip("playwright")
     shots = _shots(tmp_path)

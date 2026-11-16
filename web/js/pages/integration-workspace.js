@@ -9,11 +9,13 @@ import { canEdit } from "../auth.js";
 
 const BASE = "/api/comparison/workspace";
 const KEY = "qa.ws.comparison";
-const RESULT_CLASS = { PASS: "PASS", "PASS*": "PASS", ACCEPTED: "ACC", FAIL: "FAIL", WARNING: "WARN" };
-const RESULT_TEXT = { PASS: "PASS", "PASS*": "PASS*", ACCEPTED: "EXPECTED", FAIL: "FAIL", WARNING: "WARNING" };
+const RESULT_CLASS = { PASS: "PASS", "PASS*": "PASS", ACCEPTED: "ACC", FAIL: "FAIL", WARNING: "WARN", NEEDS_REVIEW: "REVIEW", NOT_COMPARABLE: "NC", INCOMPLETE: "INC" };
+const RESULT_TEXT = { PASS: "PASS", "PASS*": "PASS*", ACCEPTED: "EXPECTED", FAIL: "FAIL", WARNING: "WARNING", NEEDS_REVIEW: "NEEDS REVIEW", NOT_COMPARABLE: "NOT COMPARABLE", INCOMPLETE: "INCOMPLETE" };
+const OPEN = ["FAIL", "WARNING", "NEEDS_REVIEW", "NOT_COMPARABLE", "INCOMPLETE"];
+const EXTRACTION_TEXT = { COMPLETE: "Read completely", PARTIAL: "Partly read", FAILED: "Could not be read", NEEDS_REVIEW: "Read, needs review" };
 const STATUS_TEXT = { auto_mapped: "Auto-mapped", needs_review: "Needs review", unmapped: "Unmapped", approved: "Approved", rejected: "Not the same" };
-const DECISIONS = [["valid_business_difference", "Valid business difference"], ["expected_calculation_difference", "Expected calculation difference"],
-  ["false_positive", "False positive"], ["actual_defect", "Actual defect"], ["investigate", "Requires further investigation"]];
+const DECISIONS = [["actual_defect", "Genuine defect"], ["valid_business_difference", "Expected difference"], ["expected_calculation_difference", "Expected calculation difference"],
+  ["false_positive", "False positive"], ["investigate", "Further review"]];
 const SOURCE_TEXT = { screenshot: "Screenshot", live: "Live application", file: "Exported file" };
 
 let st = null; // { id, data, cfg, run, filter }
@@ -261,11 +263,14 @@ function renderPreview() {
         return ch.source === "screenshot" && ch.evidence ? `<td class="ws-low ws-edit" data-ev="${esc(ch.evidence)}" data-where='${esc(JSON.stringify({ kind: "chart", chart: an.apps.find((x) => x.app_id === a.app_id).charts.filter((y) => y.source === "screenshot" && y.evidence === ch.evidence).indexOf(ch), category: c }))}' title="Not readable: click to enter the value you see">?</td>` : "<td>?</td>";
       }).join("")}</tr></tbody></table>${ch.note ? `<p class="muted">${esc(ch.note)}</p>` : ""}</div>`).join("");
     return `<details class="card ws-prev" open><summary><span class="ws-letter">${esc(a.letter)}</span> <b>${esc(a.name)}</b> · ${esc(src)}
-      ${cov.low_confidence ? `<span class="pill WARN">${cov.low_confidence} value(s) to check</span>` : ""} ${cov.complete ? '<span class="pill PASS">complete</span>' : '<span class="pill WARN">partial</span>'}</summary>
+      ${cov.low_confidence ? `<span class="pill WARN">${cov.low_confidence} value(s) to check</span>` : ""} ${cov.complete ? '<span class="pill PASS">complete</span>' : '<span class="pill WARN">partial</span>'}
+      ${cov.extraction ? `<span class="pill ${cov.extraction === "COMPLETE" ? "PASS" : cov.extraction === "FAILED" ? "FAIL" : "WARN"}" title="Extraction status">${esc(EXTRACTION_TEXT[cov.extraction] || cov.extraction)}</span>` : ""}
+      ${cov.scope ? `<span class="muted" title="Scope of the data">${esc({ verified: "all records verified", declared: "all records (declared by you)", visible: "visible records only" }[cov.scope] || cov.scope)}</span>` : ""}</summary>
+      ${(cov.inputs || []).filter((i) => i.status !== "COMPLETE" && (i.issues || []).length).map((i) => `<p class="muted">${esc(i.kind || "input")}: ${esc(EXTRACTION_TEXT[i.status] || i.status)}: ${esc((i.issues || []).join("; "))}</p>`).join("")}
       ${cov.notes.length ? `<ul class="ws-notes">${cov.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
       ${tables}${values}${charts || ""}${!tables && !values && !charts ? '<p class="muted">Nothing was detected.</p>' : ""}</details>`;
   }).join("") + (an.config.notes?.length ? `<div class="card ws-warn">${an.config.notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>` : "")
-    + (an.config.ai ? `<p class="muted">Local AI: ${esc(an.config.ai.used ? `${an.config.ai.added} extra suggestion(s), all marked for review` : an.config.ai.note)}</p>` : "");
+    + (an.config.ai ? `<p class="muted">Local AI: ${esc(an.config.ai.used ? `${an.config.ai.added} extra suggestion(s), all marked for review${an.config.ai.note ? `. ${an.config.ai.note}` : ""}` : an.config.ai.note)}</p>` : "");
   if (!canEdit()) return;
   host.querySelectorAll(".ws-edit").forEach((td) => td.addEventListener("click", () => correct(td)));
 }
@@ -449,10 +454,11 @@ function renderResults() {
   const run = st.run, d = run.detail, s = d.summary;
   const apps = d.apps;
   const tiles = [["Total comparisons", s.total_comparisons], ["Passed", s.passed, "ok"], ["Failed", s.failed, "fail"], ["Warnings", s.warnings, "warn"],
+    ["Needs review", s.needs_review ?? 0, "warn"], ["Not comparable", s.not_comparable ?? 0], ["Incomplete", s.incomplete ?? 0, "warn"],
     ["Records checked", s.records_checked], ["Missing records", s.missing_records], ["Field mismatches", s.field_mismatches],
     ["Calculation mismatches", s.calculation_mismatches], ["Status mismatches", s.status_mismatches], ["Unverified visual values", s.unverified_visual]];
-  const filters = [["all", "All"], ["FAIL", "Failed"], ["WARNING", "Warnings"], ...Object.entries(d.pairs).map(([k, p]) => [k, `${letterOf(p.apps[0])} vs ${letterOf(p.apps[1])}`])];
-  const rows = d.rows.filter((r) => st.filter === "all" ? true : st.filter === "FAIL" || st.filter === "WARNING" ? r.result === st.filter : (() => { const [x, y] = st.filter.split("|"); return r.pairs.includes(x) && r.pairs.includes(y); })());
+  const filters = [["all", "All"], ["FAIL", "Failed"], ["WARNING", "Warnings"], ["NEEDS_REVIEW", "Needs review"], ["NOT_COMPARABLE", "Not comparable"], ["INCOMPLETE", "Incomplete"], ...Object.entries(d.pairs).map(([k, p]) => [k, `${letterOf(p.apps[0])} vs ${letterOf(p.apps[1])}`])];
+  const rows = d.rows.filter((r) => st.filter === "all" ? true : OPEN.includes(st.filter) ? r.result === st.filter : (() => { const [x, y] = st.filter.split("|"); return r.pairs.includes(x) && r.pairs.includes(y); })());
   host.innerHTML = `<h3>Step 5 · Results ${pill(run.result)}</h3>
     ${d.coverage_note ? `<p class="ws-warn">${esc(d.coverage_note)}</p>` : ""}
     <div class="ws-tiles">${tiles.map(([t, v, k]) => `<div class="card ws-tile ${k || ""}"><b>${esc(v)}</b><span>${esc(t)}</span></div>`).join("")}</div>
@@ -506,6 +512,9 @@ function detail(r) {
       ${r.expected !== null && r.expected !== undefined ? `<tr><th>Expected</th><td>${esc(r.expected)}</td><td></td></tr>` : ""}
       ${r.actual !== null && r.actual !== undefined ? `<tr><th>Actual</th><td>${esc(r.actual)}</td><td></td></tr>` : ""}
       ${r.difference !== null && r.difference !== undefined ? `<tr><th>Difference</th><td>${esc(r.difference)}</td><td></td></tr>` : ""}
+      ${r.source_app ? `<tr><th>Source / target application</th><td colspan="2">${esc(r.source_app)}${r.target_app ? ` → ${esc(r.target_app)}` : ""}</td></tr>` : ""}
+      ${r.suggested_label ? `<tr><th>Suggested classification</th><td colspan="2">${esc(r.suggested_label)} <span class="muted">(your decision below is what counts)</span></td></tr>` : ""}
+      ${r.normalized ? `<tr><th>Normalization</th><td colspan="2">Equal after normalization (currency, separators, case or date format)</td></tr>` : ""}
       ${r.mapping ? `<tr><th>Field mapping used</th><td colspan="2">${esc(r.mapping)}</td></tr>` : ""}
       ${r.calculation ? `<tr><th>Calculation used</th><td colspan="2">${esc(r.calculation)}</td></tr>` : ""}
     </tbody></table>
@@ -515,7 +524,7 @@ function detail(r) {
     ${r.decision && !r.original_result ? `<p class="muted">Decision: ${esc(r.decision.label)} by ${esc(r.decision.by)}, ${esc(dateTimeOf(r.decision.at))}</p>` : ""}
     ${edit ? `<h4>Your decision</h4><div class="row ws-dec">${DECISIONS.map(([k, t]) => `<button class="btn" data-dec="${k}">${esc(t)}</button>`).join("")}</div>
     <label class="grid">Note <input id="wsNote" maxlength="1000"></label>
-    <div class="row">${r.result === "FAIL" || r.result === "WARNING" ? '<button class="btn primary" id="wsDefect">CREATE DEFECT / REVIEW</button>' : ""}
+    <div class="row">${OPEN.includes(r.result) ? '<button class="btn primary" id="wsDefect">CREATE DEFECT / REVIEW</button>' : ""}
       <button class="btn" id="wsExplain">Explain with AI</button></div>` : ""}`, { wide: true });
   placeBoxes(el);
   el.querySelectorAll("[data-dec]").forEach((b) => b.addEventListener("click", async () => {

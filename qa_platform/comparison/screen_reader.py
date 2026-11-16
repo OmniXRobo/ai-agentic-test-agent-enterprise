@@ -332,9 +332,16 @@ def _table_from_run(run: list[dict[str, Any]], h: float, pitch: float) -> dict[s
         if not head_idx:
             return None
         # header lines must be close together and close to the first data line
+        def line_h(ln: dict[str, Any]) -> float:
+            return median(w["box"][3] for w in ln["words"]) if ln.get("words") else h
+
         while len(head_idx) > 1 and (run[head_idx[1]]["y"] - run[head_idx[0]]["y"] > pitch * 1.6 or
                                      (len(run[head_idx[0]]["cells"]) == 1 and
-                                      run[head_idx[1]]["y"] - run[head_idx[0]]["y"] >= pitch * 0.85)):
+                                      run[head_idx[1]]["y"] - run[head_idx[0]]["y"] >= pitch * 0.85) or
+                                     # a wrapped header ("Unit Price" / "(AED)") is set tight; a heading above
+                                     # the table is larger and has a margin
+                                     run[head_idx[1]]["y"] - run[head_idx[0]]["y"] > h * 1.9 or
+                                     line_h(run[head_idx[0]]) > line_h(run[head_idx[1]]) * 1.25):
             head_idx = head_idx[1:]  # a title above the table, not a header line
     else:
         head_idx = [0]

@@ -936,6 +936,9 @@ class Workspace:
         res = [[r["field"], r.get("record_key") or ""] + [str((r["values"].get(i) or {}).get("value") or "")
                                                             for i in ids]
                + [str(r.get("expected") or ""), str(r.get("difference") or ""), r["result"], r["category"],
+                  r.get("source_app") or "", r.get("target_app") or "", r.get("rule") or "",
+                  r.get("suggested_label") or "",
+                  ((r.get("decision") or {}).get("classification") or (r.get("decision") or {}).get("label") or ""),
                   r.get("calculation") or "", r.get("explanation") or ""] for r in d["rows"]]
         summ = [[k.replace("_", " ").capitalize(), v] for k, v in d["summary"].items()]
         apps_ = [[a["letter"], a["name"], ", ".join(f"{k}: {v}" for k, v in a["coverage"].items()
@@ -947,7 +950,8 @@ class Workspace:
             ("Summary", ["Item", "Value"], summ),
             ("Applications", ["Letter", "Application", "Sources"], apps_),
             ("Results", ["Field", "Record"] + [f"Application {x}" for x in letters]
-             + ["Expected", "Difference", "Result", "Category", "Calculation", "Explanation"], res),
+             + ["Expected", "Difference", "Result", "Category", "Source application", "Target application", "Rule",
+                "Suggested classification", "Tester decision", "Calculation", "Explanation"], res),
             ("Decisions", ["When", "Tester", "Field", "Decision", "Note"], dec),
         ])
 
@@ -2143,6 +2147,7 @@ def workspace_report(project: dict[str, Any], e: dict[str, Any], cfg: dict[str, 
         f"<tr><td>{_e(a['letter'])}</td><td>{_e(a['name'])}</td><td>{a['coverage']['screenshots']}</td>"
         f"<td>{a['coverage']['live']}</td><td>{a['coverage']['files']}</td>"
         f"<td>{'yes' if a['coverage']['complete'] else 'partial'}</td>"
+        f"<td>{_e(a['coverage'].get('extraction') or '')}</td><td>{_e(a['coverage'].get('scope') or '')}</td>"
         f"<td>{_e('; '.join(a['coverage']['notes']))}</td></tr>" for a in apps)
     map_rows = "".join(
         f"<tr><td>{_e(r['name'])}{' (key)' if r.get('is_key') else ''}</td>"
@@ -2159,8 +2164,10 @@ def workspace_report(project: dict[str, Any], e: dict[str, Any], cfg: dict[str, 
         f"<tr><td>{_e(r['field'])}</td><td>{_e(r.get('record_key'))}</td>"
         + "".join(f"<td>{_e((r['values'].get(i) or {}).get('value') if r['values'].get(i) else '—')}</td>"
                   for i in ids)
-        + f"<td>{_e(r.get('expected'))}</td><td>{badge(r['result'])}</td><td>{_e(r['explanation'])}"
-        f"{'<br><i>Tester: ' + _e(r['decision']['label']) + '</i>' if r.get('decision') else ''}</td></tr>"
+        + f"<td>{_e(r.get('expected'))}</td><td>{_e(r.get('difference'))}</td><td>{badge(r['result'])}</td>"
+        f"<td>{_e(r['explanation'])}{'<br><small>Rule: ' + _e(r['rule']) + '</small>' if r.get('rule') else ''}"
+        f"{'<br><small>Suggested: ' + _e(r['suggested_label']) + '</small>' if r.get('suggested_label') else ''}"
+        f"{'<br><i>Tester: ' + _e(r['decision'].get('classification') or r['decision']['label']) + '</i>' if r.get('decision') else ''}</td></tr>"
         for r in d["rows"][:3000])
     calc_rows = "".join(
         f"<tr><td>{_e(r['field'])}</td><td>{_e(r.get('record_key'))}</td><td>{_e(r.get('calculation'))}</td>"
@@ -2190,15 +2197,15 @@ overall {badge(e['result'])} · mapping version {_e((cfg_row or {}).get('version
 {_e((cfg_row or {}).get('approved_by'))}</p>
 {f'<p class="note">{_e(d["coverage_note"])}</p>' if d.get("coverage_note") else ''}
 <h2>1. Applications compared</h2><table><tr><th>Letter</th><th>Application</th><th>Screenshots</th><th>Live captures</th>
-<th>Files</th><th>Complete</th><th>Notes</th></tr>{apps_rows}</table>
+<th>Files</th><th>Complete</th><th>Extraction</th><th>Scope</th><th>Notes</th></tr>{apps_rows}</table>
 <h2>2. Scope and summary</h2><div class="tiles">{tiles}</div>
 <h2>3. Mapping configuration</h2><table><tr><th>Business field</th>{head_apps}<th>Status</th></tr>{map_rows}</table>
 {f'<h3>Status values</h3><table><tr><th>Meaning</th>{head_apps}<th>Status</th></tr>{status_rows}</table>' if status_rows else ''}
 {f'<h3>Calculations</h3><table><tr><th>Displayed value</th><th>Calculation</th><th>Status</th></tr>{rule_rows}</table>' if rule_rows else ''}
-<h2>4. Results</h2><table><tr><th>Field</th><th>Record</th>{head_apps}<th>Expected</th><th>Result</th><th>Explanation</th></tr>
+<h2>4. Results</h2><table><tr><th>Field</th><th>Record</th>{head_apps}<th>Expected</th><th>Difference</th><th>Result</th><th>Explanation</th></tr>
 {res_rows}</table>
 <h2>5. Calculation validation</h2>{f'<table><tr><th>Field</th><th>Record</th><th>Calculation</th><th>Expected</th><th>Shown</th><th>Difference</th><th>Result</th></tr>{calc_rows}</table>' if calc_rows else '<p>No calculations in this run.</p>'}
-<h2>6. Screenshot evidence</h2>{shot_html or '<p>No screenshots behind failed or warning results.</p>'}
+<h2>6. Screenshot evidence</h2>{shot_html or '<p>No screenshots behind open results.</p>'}
 <h2>7. Defects</h2>{f'<table><tr><th>Id</th><th>Title</th><th>Status</th><th>TFS</th></tr>{def_rows}</table>' if def_rows else '<p>None created.</p>'}
 <h2>8. Tester decisions</h2>{f'<table><tr><th>When</th><th>Tester</th><th>Result</th><th>Decision</th><th>Note</th></tr>{dec_rows}</table>' if dec_rows else '<p>None.</p>'}
 <p style="color:#6b7280;margin-top:24px">Results were decided by deterministic comparison and calculation rules.
