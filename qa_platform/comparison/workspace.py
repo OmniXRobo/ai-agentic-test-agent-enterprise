@@ -34,7 +34,7 @@ from .. import aura, auth, branding
 from ..clock import now_iso
 from ..errors import QAError
 from ..storage.db import dumps, loads
-from . import formula, investigate, mapping, ocr, reports, screen_reader
+from . import formula, investigate, mapping, ocr, reports, screen_reader, semantics
 from .normalize import clean_text, equal, infer_type, is_null, normalize, parse_number, to_json
 
 LOW = 0.80
@@ -62,6 +62,22 @@ STATUS_GROUPS = [
 ]
 MONTHS = {m[:3]: m for m in ("january", "february", "march", "april", "may", "june", "july", "august",
                              "september", "october", "november", "december")}
+
+
+STATUS_RANK = {"FAILED": 0, "PARTIAL": 1, "NEEDS_REVIEW": 2, "COMPLETE": 3}
+
+
+def _worst_status(items: list[str]) -> str:
+    return min(items, key=lambda s: STATUS_RANK.get(s, 0)) if items else "FAILED"
+
+
+def _legacy_status(parsed: dict[str, Any]) -> str:
+    """A screenshot read by 23.8.0 (no status stored): COMPLETE only when everything was read with confidence."""
+    if not (parsed.get("tables") or parsed.get("values") or parsed.get("charts")):
+        return "FAILED"
+    if parsed.get("low_confidence") or any(not c.get("extracted", True) for c in parsed.get("charts") or []):
+        return "NEEDS_REVIEW"
+    return "COMPLETE"
 
 
 def _id(prefix: str) -> str:
@@ -331,14 +347,20 @@ class Workspace:
                 continue
             ev = self.db.query_one("SELECT * FROM cmp_evidence WHERE id = ?", (shot["id"],))
             try:
-                res = ocr.read_for_layout(self.svc.evidence.path(app["project_id"], ev["file"]), self.rt.settings)
-                parsed = screen_reader.read_screen(res)
+                path = self.svc.evidence.path(app["project_id"], ev["file"])
+                res = ocr.read_for_layout(path, self.rt.settings)
+                g = res.pop("graphics", None)
+                if g is None:  # Windows OCR / Tesseract: chart shapes from the bundled runtime when it is there
+                    g = ocr.graphics(path, self.rt.settings)
+                parsed = screen_reader.read_screen(res, g)
                 parsed["engine"] = res.get("engine")
-                status, error = ("read" if (parsed["tables"] or parsed["values"] or parsed["charts"])
-                                 else "nothing_found"), None
+                parsed["attempts"] = res.get("attempts") or []
+                status, error = parsed["status"], None
+                if status == "FAILED":
+                    error = "; ".join(parsed.get("issues") or []) or "nothing could be read"
                 self.db.execute("UPDATE cmp_evidence SET ocr = ? WHERE id = ?", (dumps(res), shot["id"]))
             except QAError as exc:
-                parsed, status, error = None, "unreadable", exc.message
+                parsed, status, error = None, "FAILED", exc.message
             at = now_iso()
             if row:
                 self.db.execute("UPDATE cmp_ws_screens SET parsed = ?, status = ?, error = ?, updated_at = ? WHERE "
@@ -360,13 +382,17 @@ class Workspace:
         complete_live = []
 
         def add_table(headers: list[str], recs: list[dict[str, Any]], source: str, evidence: str | None,
-                      complete: bool, origin: dict[str, Any] | None = None) -> None:
+                      complete: bool, origin: dict[str, Any] | None = None, units: dict[str, str] | None = None,
+                      status: str | None = None) -> None:
             sig = tuple(h.strip().lower() for h in headers)
             same = next((t for t in tables if t["sig"] == sig and t["source"] == source), None)
             if same is None:
                 same = {"id": f"T{len(tables) + 1}", "sig": sig, "headers": list(headers), "records": [],
-                        "source": source, "evidence": [], "complete": complete, "origins": []}
+                        "source": source, "evidence": [], "complete": complete, "origins": [],
+                        "units": dict(units or {}), "statuses": []}
                 tables.append(same)
+            if status:
+                same["statuses"].append(status)
             seen = {json.dumps({k: str(_cv(v)) for k, v in r["fields"].items()}, sort_keys=True)
                     for r in same["records"]}
             for r in recs:
@@ -380,23 +406,40 @@ class Workspace:
             if origin:
                 same["origins"].append(origin)
 
+        inputs: list[dict[str, Any]] = []
         for shot in app["inputs"]["screenshots"]:
             row = self.db.query_one("SELECT parsed, status, error FROM cmp_ws_screens WHERE evidence_id = ?",
                                     (shot["id"],))
+            label = shot.get("original_name") or shot["id"]
             if not row or not row["parsed"]:
-                if row and row["status"] == "unreadable":
-                    notes.append(f"Screenshot {shot.get('original_name') or shot['id']} could not be read: "
-                                 f"{row['error']}")
+                if row and row["status"] in ("unreadable", "FAILED"):
+                    notes.append(f"Screenshot {label} could not be read: {row['error']}")
+                    inputs.append({"id": shot["id"], "kind": "screenshot", "name": label, "status": "FAILED",
+                                   "issues": [row["error"]]})
                 continue
             sources["screenshot"] += 1
             p = loads(row["parsed"])
+            inputs.append({"id": shot["id"], "kind": "screenshot", "name": label,
+                           "status": p.get("status") or _legacy_status(p), "issues": p.get("issues") or [],
+                           "engine": p.get("engine")})
             for ti, t in enumerate(p["tables"]):
                 recs = [{"fields": {h: {**c, "source": "screenshot", "evidence": shot["id"],
                                         "where": {"kind": "table", "table": ti, "row": ri, "field": h}}
                                     for h, c in r.items()}, "source": "screenshot", "evidence": shot["id"]}
                         for ri, r in enumerate(t["rows"])]
                 low += sum(1 for r in recs for c in r["fields"].values() if c.get("confidence", 1) < LOW)
-                add_table(t["headers"], recs, "screenshot", shot["id"], False, {"evidence": shot["id"], "table": ti})
+                add_table(t["headers"], recs, "screenshot", shot["id"], False, {"evidence": shot["id"], "table": ti},
+                          units=t.get("units"), status=t.get("status"))
+                for tot in t.get("totals") or []:  # TOTAL / GRAND TOTAL rows: summary values, never records
+                    kind = tot.get("kind", "total").replace("_", " ")
+                    for h, c in tot["values"].items():
+                        if h == next(iter(tot["values"])) or not screen_reader.is_number(str(c.get("value") or "")):
+                            continue
+                        check = next((x for x in t.get("total_checks") or [] if x["column"] == h and
+                                      x["row"] == tot["label"]), None)
+                        values.setdefault(f"{h} ({kind})", {**c, "source": "screenshot", "evidence": shot["id"],
+                                                            "summary": True, "row_label": tot["label"],
+                                                            "total_check": check, "unit": (t.get("units") or {}).get(h)})
             for vi, v in enumerate(p["values"]):
                 label = v["label"].strip()
                 cell = {**v, "source": "screenshot", "evidence": shot["id"], "where": {"kind": "value", "index": vi}}
@@ -410,32 +453,61 @@ class Workspace:
                 charts.append({"title": c["title"], "categories": c.get("categories") or list(c["points"]),
                                "points": {k: {**pt, "where": {"kind": "chart", "chart": ci, "category": k}}
                                           for k, pt in c["points"].items()},
+                               "percentages": c.get("percentages") or {}, "type": c.get("type") or "bar",
+                               "value_kind": c.get("value_kind") or "amount", "approximate": bool(c.get("approximate")),
+                               "status": c.get("status") or ("COMPLETE" if c["extracted"] else "PARTIAL"),
+                               "unit": c.get("unit"), "series": c.get("series"),
                                "extracted": c["extracted"], "note": c.get("note"), "source": "screenshot",
                                "evidence": shot["id"], "box": c.get("box")})
         for ds in app["inputs"]["datasets"]:
+            kind_label = "file" if ds.get("method") == "file" else "live capture"
             if ds["status"] in ("running",):
                 notes.append("A capture is still running; analyze again when it has finished.")
+                inputs.append({"id": ds["id"], "kind": kind_label, "status": "PARTIAL",
+                               "issues": ["still running"]})
                 continue
             if ds["status"] in ("failed", "needs_manual"):
-                if ds["kind"] != "table" or "table" not in str(ds.get("reason") or "").lower():
-                    notes.append(f"A capture failed: {ds.get('reason') or ds['status']}.")
+                reason = ds.get("reason") or ds["status"]
+                notes.append(f"A {kind_label} failed: {reason}.")
+                inputs.append({"id": ds["id"], "kind": kind_label, "status": "FAILED", "issues": [reason]})
                 continue
             d = self.svc.dataset(ds["id"], True)
             source = "file" if d["method"] == "file" else "live"
             sources[source] += 1
+            st = d.get("stats") or {}
+            agg = d.get("aggregates") or {}
+            got_any = bool(d["records"]) or bool(agg.get("kpis")) or bool(agg.get("charts")) or bool(agg.get("tables"))
+            complete = bool(st.get("complete", True)) and d["status"] == "complete"
+            inputs.append({"id": ds["id"], "kind": kind_label, "status": "FAILED" if not got_any else
+                           "COMPLETE" if complete else "PARTIAL",
+                           "issues": ([st.get("reason")] if st.get("reason") else []) + list(st.get("warnings") or []),
+                           "records": len(d["records"]), "expected_total": st.get("expected_total"),
+                           "method": st.get("method"), "filters": d.get("filters") or {},
+                           "captured_at": d.get("updated_at")})
+            if not got_any:
+                notes.append(f"The {kind_label} found no data: {st.get('reason') or 'nothing was detected'}.")
             if d["records"]:
-                headers = d["stats"].get("headers") or list(dict.fromkeys(k for r in d["records"]
-                                                                           for k in r["fields"]))
+                headers = st.get("headers") or list(dict.fromkeys(k for r in d["records"] for k in r["fields"]))
                 recs = [{"fields": {h: {**(c if isinstance(c, dict) else {"value": c}), "source": source}
                                     for h, c in r["fields"].items()}, "source": source, "page": r.get("page")}
                         for r in d["records"]]
-                complete = bool(d["stats"].get("complete", True)) and d["status"] == "complete"
                 complete_live.append(complete)
                 if not complete:
                     notes.append(f"The {source} table was not read completely: "
-                                 f"{d['stats'].get('reason') or 'not every page was read'}.")
-                add_table(headers, recs, source, None, complete)
-            agg = d.get("aggregates") or {}
+                                 f"{st.get('reason') or 'not every page was read'}.")
+                add_table(headers, recs, source, None, complete, units=st.get("units"))
+                for tot in st.get("totals") or []:
+                    for h, v in (tot.get("values") or {}).items():
+                        if screen_reader.is_number(str(v)):
+                            values.setdefault(f"{h} ({tot.get('kind', 'total').replace('_', ' ')})",
+                                              {"value": v, "confidence": 1.0, "method": "dom", "source": source,
+                                               "summary": True, "row_label": tot.get("label")})
+            for extra in agg.get("tables") or []:  # further tables of the same page (summary tables)
+                if extra.get("rows"):
+                    recs = [{"fields": {h: {"value": v, "method": extra.get("method") or "dom", "confidence": 1.0,
+                                            "source": source} for h, v in zip(extra["headers"], row)},
+                             "source": source} for row in extra["rows"]]
+                    add_table(extra["headers"], recs, source, None, complete, units=extra.get("units"))
             for k in agg.get("kpis") or []:
                 label = str(k.get("label") or "").strip()
                 if label:
@@ -443,12 +515,25 @@ class Workspace:
                                               "method": k.get("method") or "dom", "source": source,
                                               "evidence": agg.get("screenshot")})
             for ch in agg.get("charts") or []:
-                for s in ch.get("series_values") or []:
-                    pts = {str(lbl): {"value": v, "confidence": float(ch.get("confidence") or 1), "method": "dom"}
-                           for lbl, v in (s.get("values") or {}).items()}
-                    title = str(ch.get("title") or "Chart") + (f" — {s['name']}" if s.get("name") and
-                                                                len(ch.get("series_values") or []) > 1 else "")
+                multi = len(ch.get("series_values") or []) > 1
+                for s_ in ch.get("series_values") or []:
+                    pts = {str(lbl): {"value": v, "confidence": float(ch.get("confidence") or 1),
+                                      "method": ch.get("method") or "dom"}
+                           for lbl, v in (s_.get("values") or {}).items() if v not in (None, "")}
+                    title = str(ch.get("title") or "Chart") + (f" — {s_['name']}" if s_.get("name") and multi else "")
+                    ctype = str(s_.get("type") or ch.get("type") or "bar")
+                    pie = ctype in ("pie", "doughnut", "donut")
+                    pct = {}
+                    if pie and pts:  # a chart library gives the amounts; the shares follow from them exactly
+                        tot_ = sum((formula.to_decimal(p_["value"]) or Decimal(0)) for p_ in pts.values())
+                        if tot_:
+                            pct = {k: {"value": f"{(formula.to_decimal(p_['value']) or Decimal(0)) / tot_ * 100:.2f}%",
+                                       "confidence": 1.0, "method": "computed from the chart data", "derived": True}
+                                   for k, p_ in pts.items()}
                     charts.append({"title": title, "categories": list(pts), "points": pts, "extracted": bool(pts),
+                                   "percentages": pct, "type": ctype, "value_kind": "amount",
+                                   "approximate": False, "status": "COMPLETE" if pts else "FAILED",
+                                   "unit": None, "series": s_.get("name") if multi else None,
                                    "note": None if pts else "The chart's values could not be read.",
                                    "source": source, "evidence": agg.get("screenshot")})
         # field list (unique names within the application)
@@ -473,9 +558,11 @@ class Workspace:
                 rename[h] = nm
                 vals = [_cv(r["fields"].get(h)) for r in t["records"]]
                 ft = infer_type([v for v in vals if v is not None])
+                unit = (t.get("units") or {}).get(h) or semantics.unit_of(h, vals)
                 fields.append({"name": nm, "kind": "column", "table": t["id"], "type": ft,
                                "family": _family(ft, h, vals), "samples": [v for v in vals if v not in (None, "")][:50],
-                               "source": t["source"]})
+                               "source": t["source"], "unit": unit,
+                               "concept": semantics.concept(h, ft, vals, unit)})
             if any(k != v for k, v in rename.items()):
                 for r in t["records"]:
                     r["fields"] = {rename.get(k, k): v for k, v in r["fields"].items()}
@@ -485,12 +572,16 @@ class Workspace:
             nm = uniq(label, "summary")
             renamed_values[nm] = cell
             ft = infer_type([cell.get("value")])
+            unit = cell.get("unit") or semantics.unit_of(label, [cell.get("value")])
             fields.append({"name": nm, "kind": "value", "type": ft, "family": _family(ft, label, [cell.get("value")]),
-                           "samples": [cell.get("value")], "source": cell.get("source")})
+                           "samples": [cell.get("value")], "source": cell.get("source"), "unit": unit,
+                           "summary": bool(cell.get("summary")),
+                           "concept": semantics.concept(label, ft, [cell.get("value")], unit)})
         for i, ch in enumerate(charts):
             ch["name"] = uniq(ch["title"], f"chart {i + 1}")
             fields.append({"name": ch["name"], "kind": "chart", "type": "number", "family": "chart",
-                           "samples": [p.get("value") for p in ch["points"].values()][:20], "source": ch["source"]})
+                           "samples": [p.get("value") for p in ch["points"].values()][:20], "source": ch["source"],
+                           "unit": ch.get("unit"), "concept": semantics.concept(ch["title"], "number", [], ch.get("unit"))})
         only_screens = bool(sources["screenshot"]) and not (sources["live"] or sources["file"])
         complete = (all(complete_live) and bool(complete_live)) or app["screens_complete"]
         if only_screens and not app["screens_complete"]:
@@ -499,12 +590,19 @@ class Workspace:
         for ch in charts:
             if not ch["extracted"]:
                 notes.append(f"Chart '{ch['title']}': {ch.get('note') or 'values could not be read'}")
+        extraction = _worst_status([i["status"] for i in inputs]) if inputs else "FAILED"
+        if complete_live and all(complete_live):
+            scope = "verified"  # a live capture read every page and its row count matched the application's total
+        elif app["screens_complete"] and only_screens:
+            scope = "declared"  # the tester declared that the screenshots show every record
+        else:
+            scope = "visible"
         return {"app_id": app["id"], "letter": app["letter"], "name": app["name"],
                 "tables": [{k: v for k, v in t.items() if k != "sig"} for t in tables], "values": renamed_values,
-                "charts": charts, "fields": fields,
+                "charts": charts, "fields": fields, "filters": app["config"].get("ws_applied_filters") or {},
                 "coverage": {"screenshots": sources["screenshot"], "live": sources["live"], "files": sources["file"],
                              "complete": complete, "only_screenshots": only_screens, "low_confidence": low,
-                             "notes": notes}}
+                             "notes": notes, "extraction": extraction, "scope": scope, "inputs": inputs}}
 
     def analyze(self, pid: str, use_ai: bool = False, reread: bool = False) -> dict[str, Any]:
         apps = self._apps(pid)
