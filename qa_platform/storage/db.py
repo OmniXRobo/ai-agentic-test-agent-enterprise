@@ -700,6 +700,49 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE app_credentials ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'form';
     """,
+    # 19 (23.8.0): Integration Comparison Workspace. New tables only (rollback-safe): the screenshot reading of each
+    # uploaded screenshot (with tester corrections), the latest analysis, the approved mapping configurations
+    # (versioned) and the tester decisions on results.
+    """
+    CREATE TABLE IF NOT EXISTS cmp_ws_screens (
+        evidence_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        application_id TEXT NOT NULL,
+        parsed TEXT,
+        status TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_ws_screens_app ON cmp_ws_screens(application_id);
+    CREATE TABLE IF NOT EXISTS cmp_ws_state (
+        project_id TEXT PRIMARY KEY REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        analysis TEXT,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cmp_ws_configs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        config TEXT NOT NULL,
+        approved_by TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (project_id, version)
+    );
+    CREATE TABLE IF NOT EXISTS cmp_ws_decisions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES cmp_projects(id) ON DELETE CASCADE,
+        execution_id TEXT,
+        signature TEXT NOT NULL,
+        row TEXT,
+        decision TEXT NOT NULL,
+        note TEXT,
+        decided_by TEXT,
+        decided_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_cmp_ws_decisions ON cmp_ws_decisions(project_id, signature);
+    """,
 ]
 
 

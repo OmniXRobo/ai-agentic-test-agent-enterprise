@@ -1,6 +1,7 @@
-"""SkyGuard QA 23.7.2 cumulative patch (AI-Driven Automation writes every Test Case step, from the sign-in to the
+"""SkyGuard QA 23.8.0 cumulative patch (one Integration Comparison Workspace: applications, screenshots, analysis,
+mapping, run and results on one page; AI-Driven Automation writes every Test Case step, from the sign-in to the
 last step; guided playback of suggestion lists, calendars and counters on sites such as Trip.com, and Autonomous
-Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 and 23.7.1): offline
+Application Learning; includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1 and 23.7.2): offline
 installer, verifier and rollback. No administrator rights are needed: everything is written inside the installation
 folder of the user who installed SkyGuard QA.
 
@@ -12,16 +13,17 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 or 23.7.1;
-     23.7.2 to apply again),
+  1. detects the installation and its version (23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1
+     or 23.7.2; 23.8.0 to apply again),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256),
   3. checks free disk space and that the application and data folders can be written,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
      backup) and settings.json,
   6. copies the new files (each written to a temporary name, then renamed),
-  7. migrates: the main database is brought to 18 migrations (from 23.3.35 this applies the 23.4.0 migrations; 23.5.0,
-     23.6.0, 23.6.1, 23.7.0, 23.7.1 and 23.7.2 add none); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
+  7. migrates: the main database is brought to 19 migrations (from 23.3.35 this applies the 23.4.0 migrations; 23.5.0
+     to 23.7.2 add none; 23.8.0 adds migration 19: four new tables for the Integration Comparison Workspace,
+     nothing existing is changed); the Operations Agent's own knowledge database (data\\opsagent\\knowledge.sqlite3, a
      separate file) is created or migrated to schema 2 (23.7.0 adds the observation journal and the learned
      application model: two new tables, nothing existing is changed),
   8. verifies: the new version loads, the agent core, its API and the passive learning engine load, every migration
@@ -30,7 +32,8 @@ apply:
      kept next to it, renamed, never deleted).
 
 rollback (after a successful apply): restores the previous application files and removes the files the patch added.
-The databases are kept as they are by default: 23.5.0 to 23.7.2 do not change the main database; the knowledge
+The databases are kept as they are by default: 23.5.0 to 23.7.2 do not change the main database and 23.8.0 only
+adds four new cmp_ws_* tables, which older versions ignore; the knowledge
 database keeps its two 23.7.0 tables, which 23.5.0 and 23.6.0 ignore, and older versions do not use it, so nothing
 created after the upgrade is lost. Rolling back to 23.3.35: the 23.4.0 migrations stay in the database (23.3.35
 ignores the added tables and columns); use --restore-database for the exact pre-upgrade copy. --restore-database puts
@@ -51,11 +54,11 @@ import sys
 import time
 from pathlib import Path
 
-PATCH_VERSION = "23.7.2"
-BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0 or 23.7.1"
-BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", PATCH_VERSION)
+PATCH_VERSION = "23.8.0"
+BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1 or 23.7.2"
+BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", PATCH_VERSION)
 AGENT_SCHEMA = 2
-MIGRATION_COUNT = 18
+MIGRATION_COUNT = 19
 MARGIN_MB = 300
 
 
@@ -219,6 +222,12 @@ LEARNING_LOAD = ("import sys; sys.path.insert(0, '.'); from skyguard_agent impor
                  "print('ok' if canonical('who authorises trips') == 'who authorize trips' and "
                  "hasattr(understanding, 'Miner') and hasattr(journal, 'Journal') and hasattr(learning, '_guided_only') "
                  "else 'learning engine incomplete')")
+WORKSPACE_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.comparison import workspace, formula, screen_reader; "
+                  "from qa_platform.api import workspace as api; "
+                  "print('ok' if formula.evaluate('[B:A] / [B:T] * 100', lambda l, f: {'A': 1, 'T': 4}[f]) == 25 "
+                  "and hasattr(workspace.Workspace, 'run') and hasattr(screen_reader, 'read_screen') "
+                  "and any(r.path == '/api/comparison/workspace/{pid}/run' for r in api.router.routes) "
+                  "else 'workspace incomplete')")
 AGENT_MIGRATE = ("import sys; sys.path.insert(0, '.'); from pathlib import Path; from qa_platform.config import Paths; "
                  "from skyguard_agent.store import Store; p = Paths().ensure(); s = Store(Path(p.root) / 'opsagent' / "
                  "'knowledge.sqlite3'); print(s.schema_version); s.close()")
@@ -254,6 +263,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
     except PatchError as exc:
         check("Step reader (23.7.2)", False, str(exc))
     try:
+        ws = run_py(python, app, data, WORKSPACE_LOAD).splitlines()[-1]
+        check("Integration Comparison (23.8.0)", ws == "ok", ws)
+    except PatchError as exc:
+        check("Integration Comparison (23.8.0)", False, str(exc))
+    try:
         learn = run_py(python, app, data, LEARNING_LOAD).splitlines()[-1]
         check("Passive learning engine (23.7.0)", learn == "ok", learn)
     except PatchError as exc:
@@ -285,8 +299,8 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
             conn.close()
         check("Database migrations", ver == MIGRATION_COUNT, f"schema version {ver} (expected {MIGRATION_COUNT})")
         check("Database integrity", integrity == "ok", integrity)
-        check("Comparison tables", {"cmp_projects", "cmp_records", "cmp_audit"} <= tables,
-              "present" if {"cmp_projects", "cmp_records", "cmp_audit"} <= tables else "missing")
+        cmp = {"cmp_projects", "cmp_records", "cmp_audit", "cmp_ws_screens", "cmp_ws_state", "cmp_ws_configs", "cmp_ws_decisions"}
+        check("Comparison tables", cmp <= tables, "present" if cmp <= tables else "missing: " + ", ".join(sorted(cmp - tables)))
         check("Login sign-in method column", "auth_method" in cols, "present" if "auth_method" in cols else "missing")
         if before_counts is not None:
             after = row_counts(db)
@@ -327,8 +341,8 @@ def restore_files(app: Path, backup: Path, added: list[str]) -> None:
 def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
-    step(f"SkyGuard QA {PATCH_VERSION}: complete AI-Driven Automation scripts, guided playback fixes and Autonomous "
-         "Application Learning (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2)")
+    step(f"SkyGuard QA {PATCH_VERSION}: Integration Comparison Workspace, complete AI-Driven Automation scripts and "
+         "Autonomous Application Learning (cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     say(f"Application folder : {app}\nData folder        : {data}  (kept)\nInstalled version  : {before} -> {PATCH_VERSION}")

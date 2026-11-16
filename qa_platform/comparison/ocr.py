@@ -222,3 +222,32 @@ def kpis_from_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
                             "confidence": min(ln.get("confidence", 0.0), lines[i + 1].get("confidence", 0.0)),
                             "box": _union([ln["box"], lines[i + 1]["box"]]), "method": "ocr"})
     return out
+
+
+# ---- 23.8.0 Integration Comparison Workspace -----------------------------------------------------------------------
+
+def _overlaps(a: list[float], b: list[float]) -> bool:
+    return not (a[0] + a[2] <= b[0] or b[0] + b[2] <= a[0] or a[1] + a[3] <= b[1] or b[1] + b[3] <= a[1])
+
+
+def read_for_layout(path: Path, settings: Any = None) -> dict[str, Any]:
+    """OCR for the workspace's screen reader. With Tesseract, two page modes are merged: sparse text (finds labels
+    and chart values anywhere) and a uniform block (finds single digits in table rows that sparse mode misses).
+    A word of the second pass is added only where the first pass found nothing."""
+    eng = engines(settings)
+    if eng["windows"] or not eng["tesseract"]:
+        return read(path, settings)
+    first = _tesseract(path, eng["tesseract"])
+    try:
+        proc = subprocess.run([eng["tesseract"], str(path), "stdout", "--psm", "6", "tsv"], capture_output=True,
+                              text=True, timeout=180, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        second = parse_tesseract_tsv(proc.stdout) if proc.returncode == 0 else {"lines": []}
+    except (OSError, subprocess.SubprocessError):
+        return first
+    have = [w["box"] for w in words_of(first)]
+    extra = [w for w in words_of(second) if not any(_overlaps(w["box"], b) for b in have)]
+    if extra:
+        first["lines"] = list(first["lines"]) + [{"text": w["text"], "words": [w], "box": w["box"],
+                                                  "confidence": w["confidence"]} for w in extra]
+        first["confidence_source"] = "Tesseract (two page modes)"
+    return first

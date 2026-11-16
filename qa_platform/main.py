@@ -64,6 +64,10 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app.include_router(aura_api.router)  # final patch: AURA learning memory
     from .api import comparison as comparison_api
 
+    from .api import workspace as workspace_api
+
+    # 23.8.0: the Integration Comparison Workspace (before the older routes: "/api/comparison/workspace/..." )
+    app.include_router(workspace_api.router)
     app.include_router(comparison_api.router)  # final patch: Application Data Comparison Agent
     app.include_router(opsagent_api.router)  # 23.5.0: Adaptive AI Application Learning & Operations Agent
     opsagent_api.install(app)
