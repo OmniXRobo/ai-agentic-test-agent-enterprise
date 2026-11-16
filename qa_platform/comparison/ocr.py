@@ -80,17 +80,29 @@ $cells = @(); $i = 0
 foreach ($r in @($spec.rects)) {
   $x = [Math]::Max(0, [int]$r.x); $y = [Math]::Max(0, [int]$r.y)
   $w = [Math]::Min([int]$r.w, $src.Width - $x); $h = [Math]::Min([int]$r.h, $src.Height - $y)
+  # dark pixels in the cell, to tell an empty cell from one the engine could not read
+  $ink = 0
+  for ($py = $y; $py -lt ($y + $h); $py += 1) { for ($px = $x; $px -lt ($x + $w); $px += 1) {
+    $c = $src.GetPixel($px, $py); if (($c.R + $c.G + $c.B) -lt 384) { $ink++ } } }
+  $left = $pad
   foreach ($scale in @($spec.scales)) {
   $scale = [int]$scale
   $words = @()
   if ($w -gt 2 -and $h -gt 2) {
     $cw = $w * $scale; $ch = $h * $scale; $gap = $ch
-    $canvas = New-Object System.Drawing.Bitmap(($pad * 2 + $copies * $cw + ($copies - 1) * $gap), ($ch + 2 * $pad))
+    # a printed word in front of the copies gives the engine a line of text to work from; its words are ignored
+    $font = New-Object System.Drawing.Font('Arial', [single]([Math]::Max(8, $ch * 0.35)), [System.Drawing.GraphicsUnit]::Pixel)
+    $probe = New-Object System.Drawing.Bitmap(1, 1); $pg = [System.Drawing.Graphics]::FromImage($probe)
+    $labelW = [int]$pg.MeasureString('Value', $font).Width; $pg.Dispose(); $probe.Dispose()
+    $left = $pad + $labelW + $gap
+    $canvas = New-Object System.Drawing.Bitmap(($left + $pad + $copies * $cw + ($copies - 1) * $gap), ($ch + 2 * $pad))
     $g = [System.Drawing.Graphics]::FromImage($canvas)
     $g.Clear([System.Drawing.Color]::White)
     $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.DrawString('Value', $font, [System.Drawing.Brushes]::Black, [single]$pad, [single]($pad + ($ch - $font.Height) / 2))
+    $font.Dispose()
     for ($k = 0; $k -lt $copies; $k++) {
-      $g.DrawImage($src, (New-Object System.Drawing.Rectangle(($pad + $k * ($cw + $gap)), $pad, $cw, $ch)),
+      $g.DrawImage($src, (New-Object System.Drawing.Rectangle(($left + $k * ($cw + $gap)), $pad, $cw, $ch)),
                    (New-Object System.Drawing.Rectangle($x, $y, $w, $h)), [System.Drawing.GraphicsUnit]::Pixel)
     }
     $g.Dispose()
@@ -107,7 +119,7 @@ foreach ($r in @($spec.rects)) {
       $words += @{ text = $wd.Text; box = @($b.X, $b.Y, $b.Width, $b.Height) } } }
     $stream.Dispose()
   }
-  $cells += ,@{ index = $i; scale = $scale; x = $x; y = $y; w = $w; h = $h; words = $words }
+  $cells += ,@{ index = $i; scale = $scale; x = $x; y = $y; w = $w; h = $h; left = $left; ink = $ink; words = $words }
   }
   $i++
 }
@@ -120,7 +132,8 @@ def _as_list(v: Any) -> list[Any]:
     return [v] if isinstance(v, dict) else list(v or [])
 
 
-def _cell_number(rect: list[float], words: list[dict[str, Any]], scale: int = CELL_SCALE) -> dict[str, Any] | None:
+def _cell_number(rect: list[float], words: list[dict[str, Any]], scale: int = CELL_SCALE,
+                 left: float = CELL_PAD) -> dict[str, Any] | None:
     """The number read in the copies of one cell (see WINDOWS_OCR_CELLS), with its box on the screenshot; None
     unless at least two copies show the same number and no copy shows another one."""
     w, h = rect[2], rect[3]
@@ -132,8 +145,10 @@ def _cell_number(rect: list[float], words: list[dict[str, Any]], scale: int = CE
         b = [float(v) for v in (wd.get("box") or [])]
         if not text or len(b) != 4:
             continue
-        first = int((b[0] - CELL_PAD) // (cw + gap))
-        last = int((b[0] + b[2] - 1 - CELL_PAD) // (cw + gap))
+        if b[0] + b[2] <= left:
+            continue  # the printed label in front of the copies
+        first = int((b[0] - left) // (cw + gap))
+        last = int((b[0] + b[2] - 1 - left) // (cw + gap))
         span = [k for k in range(max(first, 0), min(last, CELL_COPIES - 1) + 1)]
         if not span:
             continue
@@ -146,7 +161,7 @@ def _cell_number(rect: list[float], words: list[dict[str, Any]], scale: int = CE
                 reads[k] = "\x00"  # two different readings in one copy
             else:
                 reads[k] = unit
-                off = CELL_PAD + k * (cw + gap)
+                off = left + k * (cw + gap)
                 boxes[k] = [rect[0] + max(0.0, b[0] - off) / scale, rect[1] + (b[1] - CELL_PAD) / scale,
                             min(w, b[2] / len(span) / scale), b[3] / scale]
     from .screen_reader import is_number
@@ -205,8 +220,9 @@ def _windows_cells(path: Path, rects: list[list[float]], settings: Any = None) -
                         if int(c.get("scale") or CELL_SCALE) in CELL_SCALES else 99):
             used = [int(c.get(k, rects[i][n])) for n, k in enumerate(("x", "y", "w", "h"))]  # clipped to the image
             words = _as_list(c.get("words"))
-            seen.append(f"x{c.get('scale')}: " + " ".join(str(w.get("text") or "")[:12] for w in words[:6]))
-            found = _cell_number(used, words, int(c.get("scale") or CELL_SCALE))
+            seen.append(f"x{c.get('scale')} ink {c.get('ink')}: "
+                        + " ".join(str(w.get("text") or "")[:12] for w in words[:8]))
+            found = _cell_number(used, words, int(c.get("scale") or CELL_SCALE), float(c.get("left") or CELL_PAD))
             if found:
                 break
         # what the engine saw is kept, so that a cell that is still empty can be explained

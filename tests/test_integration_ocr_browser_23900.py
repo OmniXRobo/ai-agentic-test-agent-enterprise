@@ -556,3 +556,14 @@ def test_a_cell_read_again_as_letters_like_digits_is_that_number_and_what_was_se
     out = ocr._fill_empty_cells(Path("shot.png"), _orders_page(cancelled_1002=""), None,
                                 reader=lambda *a, **k: [{"seen": ["Ø", "~"]}])
     assert out["cell_rereads"] == {"cells": 1, "read": 0, "unread": [["Ø", "~"]]}
+
+
+def test_a_printed_label_in_front_of_the_cell_copies_is_ignored():
+    from qa_platform.comparison import ocr
+
+    rect, left = [100, 200, 40, 20], 250
+    cw, gap = 40 * ocr.CELL_SCALE, 20 * ocr.CELL_SCALE
+    words = [{"text": "Value", "box": [40, 50, 90, 30]}] + [
+        {"text": "0", "box": [left + k * (cw + gap) + 30, ocr.CELL_PAD + 6, 30, 40]} for k in range(3)]
+    got = ocr._cell_number(rect, words, ocr.CELL_SCALE, left)
+    assert got["text"] == "0" and got["copies"] == 3 and got["box"][0] == 110
