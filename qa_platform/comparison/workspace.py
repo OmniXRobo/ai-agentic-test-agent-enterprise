@@ -660,6 +660,12 @@ class Workspace:
                 parsed = screen_reader.read_screen(res, g)
                 parsed["engine"] = res.get("engine")
                 parsed["attempts"] = res.get("attempts") or []
+                rr = res.get("cell_rereads")
+                if rr:  # 23.9.0: empty cells of number columns read again (Windows OCR)
+                    parsed["cell_rereads"] = rr
+                    parsed.setdefault("issues", []).append(
+                        f"{rr['cells']} empty number cell(s) read again: {rr['read']} read"
+                        + (f" ({rr['error']})" if rr.get("error") else ""))
                 status, error = parsed["status"], None
                 if status == "FAILED":
                     error = "; ".join(parsed.get("issues") or []) or "nothing could be read"
@@ -730,7 +736,7 @@ class Workspace:
             p = loads(row["parsed"])
             inputs.append({"id": shot["id"], "kind": "screenshot", "name": label,
                            "status": p.get("status") or _legacy_status(p), "issues": p.get("issues") or [],
-                           "engine": p.get("engine")})
+                           "engine": p.get("engine"), "cell_rereads": p.get("cell_rereads")})
             for ti, t in enumerate(p["tables"]):
                 recs = [{"fields": {h: {**c, "source": "screenshot", "evidence": shot["id"],
                                         "where": {"kind": "table", "table": ti, "row": ri, "field": h}}

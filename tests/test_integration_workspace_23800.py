@@ -322,7 +322,8 @@ def test_07_three_screenshots_ocr_and_compare(client, tmp_path):
     save(client, pid, approve_all(cfg))
     r = run(client, pid)
     # what the engine read and which rules it found, so that a failure on another OCR engine can be read in the log
-    why = {"engine": [s.get("engine") for a in an["apps"] for s in a.get("screens") or []],
+    why = {"inputs": [(s.get("engine"), s.get("status"), s.get("cell_rereads"), s.get("issues"))
+                      for a in an["apps"] for s in (a.get("coverage") or {}).get("inputs") or []],
            "rules": [(x["app"][-4:], x["field"], x["expression"]) for x in cfg["rules"]],
            "rows": [(x["field"], x["record_key"], x["result"], x["category"],
                      {k[-4:]: (v or {}).get("value") for k, v in x["values"].items()}, x["explanation"][:160])

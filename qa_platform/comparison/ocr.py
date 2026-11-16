@@ -55,8 +55,11 @@ $stream.Dispose()
 """
 
 
-# 23.9.0: a second, closer reading of table cells that came back empty. Each cell is cut out, enlarged three times
-# and set on a white margin (System.Drawing, part of Windows), then read on its own. Boxes are mapped back.
+# 23.9.0: a second, closer reading of table cells that came back empty. Windows OCR skips a character that stands
+# alone (a "0" in a cell), so each cell is cut out, enlarged three times and drawn COPIES times side by side on a
+# white page (System.Drawing, part of Windows): the copies form a line that the engine reads. Python maps each word
+# back to its copy and accepts a number only when the copies agree.
+CELL_SCALE, CELL_PAD, CELL_COPIES = 3, 40, 3
 WINDOWS_OCR_CELLS = r"""
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -69,20 +72,24 @@ $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
 function Await($op, $type) { $t = $asTask.MakeGenericMethod($type).Invoke($null, @($op)); $t.Wait(-1) | Out-Null; $t.Result }
 $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 if ($null -eq $engine) { throw 'No OCR language is installed in Windows.' }
+$spec = Get-Content -Raw -LiteralPath $env:QA_OCR_RECTS | ConvertFrom-Json
+$scale = [int]$spec.scale; $pad = [int]$spec.pad; $copies = [int]$spec.copies
 $src = [System.Drawing.Bitmap]::FromFile($env:QA_OCR_FILE)
-$rects = @((Get-Content -Raw -LiteralPath $env:QA_OCR_RECTS | ConvertFrom-Json).rects)
-$scale = 3; $pad = 40; $cells = @(); $i = 0
-foreach ($r in $rects) {
+$cells = @(); $i = 0
+foreach ($r in @($spec.rects)) {
   $x = [Math]::Max(0, [int]$r.x); $y = [Math]::Max(0, [int]$r.y)
   $w = [Math]::Min([int]$r.w, $src.Width - $x); $h = [Math]::Min([int]$r.h, $src.Height - $y)
   $words = @()
   if ($w -gt 2 -and $h -gt 2) {
-    $canvas = New-Object System.Drawing.Bitmap(($w * $scale + 2 * $pad), ($h * $scale + 2 * $pad))
+    $cw = $w * $scale; $ch = $h * $scale; $gap = $ch
+    $canvas = New-Object System.Drawing.Bitmap(($pad * 2 + $copies * $cw + ($copies - 1) * $gap), ($ch + 2 * $pad))
     $g = [System.Drawing.Graphics]::FromImage($canvas)
     $g.Clear([System.Drawing.Color]::White)
     $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $g.DrawImage($src, (New-Object System.Drawing.Rectangle($pad, $pad, ($w * $scale), ($h * $scale))),
-                 (New-Object System.Drawing.Rectangle($x, $y, $w, $h)), [System.Drawing.GraphicsUnit]::Pixel)
+    for ($k = 0; $k -lt $copies; $k++) {
+      $g.DrawImage($src, (New-Object System.Drawing.Rectangle(($pad + $k * ($cw + $gap)), $pad, $cw, $ch)),
+                   (New-Object System.Drawing.Rectangle($x, $y, $w, $h)), [System.Drawing.GraphicsUnit]::Pixel)
+    }
     $g.Dispose()
     $tmp = Join-Path $env:QA_OCR_TMP ("cell-" + $i + ".png")
     $canvas.Save($tmp, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -94,11 +101,10 @@ foreach ($r in $rects) {
     $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
     foreach ($l in $result.Lines) { foreach ($wd in $l.Words) {
       $b = $wd.BoundingRect
-      $words += @{ text = $wd.Text; box = @(($x + ($b.X - $pad) / $scale), ($y + ($b.Y - $pad) / $scale),
-                                             ($b.Width / $scale), ($b.Height / $scale)) } } }
+      $words += @{ text = $wd.Text; box = @($b.X, $b.Y, $b.Width, $b.Height) } } }
     $stream.Dispose()
   }
-  $cells += ,@{ index = $i; words = $words }
+  $cells += ,@{ index = $i; x = $x; y = $y; w = $w; h = $h; words = $words }
   $i++
 }
 $src.Dispose()
@@ -106,8 +112,53 @@ ConvertTo-Json -InputObject @{ cells = $cells } -Depth 6 -Compress
 """
 
 
+def _as_list(v: Any) -> list[Any]:
+    return [v] if isinstance(v, dict) else list(v or [])
+
+
+def _cell_number(rect: list[float], words: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The number read in the copies of one cell (see WINDOWS_OCR_CELLS), with its box on the screenshot; None
+    unless at least two copies show the same number and no copy shows another one."""
+    w, h = rect[2], rect[3]
+    cw, gap = w * CELL_SCALE, h * CELL_SCALE
+    reads: dict[int, str] = {}
+    boxes: dict[int, list[float]] = {}
+    for wd in words:
+        text = str(wd.get("text") or "").strip()
+        b = [float(v) for v in (wd.get("box") or [])]
+        if not text or len(b) != 4:
+            continue
+        first = int((b[0] - CELL_PAD) // (cw + gap))
+        last = int((b[0] + b[2] - 1 - CELL_PAD) // (cw + gap))
+        span = [k for k in range(max(first, 0), min(last, CELL_COPIES - 1) + 1)]
+        if not span:
+            continue
+        unit = text
+        if len(span) > 1:  # copies run together into one word ("000"): the repeated part, if it repeats exactly
+            n = len(span)
+            unit = text[: len(text) // n] if len(text) % n == 0 and text[: len(text) // n] * n == text else ""
+        for k in span:
+            if k in reads and reads[k] != unit:
+                reads[k] = "\x00"  # two different readings in one copy
+            else:
+                reads[k] = unit
+                off = CELL_PAD + k * (cw + gap)
+                boxes[k] = [rect[0] + max(0.0, b[0] - off) / CELL_SCALE, rect[1] + (b[1] - CELL_PAD) / CELL_SCALE,
+                            min(w, b[2] / len(span) / CELL_SCALE), b[3] / CELL_SCALE]
+    from .screen_reader import is_number
+
+    texts = {t for t in reads.values()}
+    if len(texts) != 1:
+        return None
+    text = texts.pop()
+    agree = [k for k, t in reads.items() if t == text]
+    if len(agree) < 2 or not is_number(text):
+        return None
+    return {"text": text, "box": [round(v, 1) for v in boxes[agree[0]]], "copies": len(agree)}
+
+
 def _windows_cells(path: Path, rects: list[list[float]], settings: Any = None) -> list[dict[str, Any]]:
-    """Words read by Windows OCR inside the given boxes (image pixels), each box read on its own."""
+    """The number Windows OCR reads in each box (image pixels), each box read on its own (see _cell_number)."""
     import tempfile
 
     ps = _powershell()
@@ -116,30 +167,35 @@ def _windows_cells(path: Path, rects: list[list[float]], settings: Any = None) -
     tmp = Path(tempfile.mkdtemp(prefix="skyguard-ocr-cells-"))
     try:
         spec = tmp / "rects.json"
-        spec.write_text(json.dumps({"rects": [{"x": r[0], "y": r[1], "w": r[2], "h": r[3]} for r in rects]}),
-                        encoding="utf-8")
+        spec.write_text(json.dumps({"scale": CELL_SCALE, "pad": CELL_PAD, "copies": CELL_COPIES,
+                                    "rects": [{"x": int(r[0]), "y": int(r[1]), "w": int(r[2]), "h": int(r[3])}
+                                              for r in rects]}), encoding="utf-8")
         env = dict(os.environ, QA_OCR_FILE=str(Path(path).resolve()), QA_OCR_RECTS=str(spec), QA_OCR_TMP=str(tmp))
         proc = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", WINDOWS_OCR_CELLS],
                               capture_output=True, text=True, timeout=120, env=env,
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if proc.returncode != 0:
-            return []
-        cells = json.loads(proc.stdout or "{}").get("cells") or []
+            raise QAError("OCR_FAILED", "Windows OCR could not read the table cells again.", status=500,
+                          details=(proc.stderr or proc.stdout or "")[-400:])
+        cells = _as_list(json.loads(proc.stdout or "{}").get("cells"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if isinstance(cells, dict):
-        cells = [cells]
     out = []
     for c in cells:
-        words = c.get("words") or []
-        out += [words] if isinstance(words, dict) else words
-    return [w for w in out if isinstance(w, dict) and w.get("text") and len(w.get("box") or []) == 4]
+        i = int(c.get("index", -1))
+        if 0 <= i < len(rects):
+            used = [int(c.get(k, rects[i][n])) for n, k in enumerate(("x", "y", "w", "h"))]  # clipped to the image
+            found = _cell_number(used, _as_list(c.get("words")))
+            if found:
+                out.append(found)
+    return out
 
 
 def _fill_empty_cells(path: Path, data: dict[str, Any], settings: Any = None, reader: Any = None) -> dict[str, Any]:
     """Windows OCR drops a digit that stands alone in a table cell (a "0" between other numbers). The cells of
-    number columns that came back empty are read again, one by one and enlarged. Only a number read inside such a
-    cell is added, with a confidence at the review threshold; a cell that still reads as nothing stays empty."""
+    number columns that came back empty are read again, enlarged (``_windows_cells``). Only a number read inside
+    such a cell is added, with a confidence at the review threshold; a cell that still reads as nothing stays
+    empty. What happened is kept in ``cell_rereads`` for the analysis."""
     import copy
 
     from . import screen_reader
@@ -149,7 +205,11 @@ def _fill_empty_cells(path: Path, data: dict[str, Any], settings: Any = None, re
         return data
     try:
         found = (reader or _windows_cells)(path, rects, settings)
-    except (QAError, OSError, ValueError, subprocess.SubprocessError):
+    except QAError as exc:
+        data["cell_rereads"] = {"cells": len(rects), "read": 0, "error": f"{exc.message} {exc.details or ''}"[:500]}
+        return data
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        data["cell_rereads"] = {"cells": len(rects), "read": 0, "error": f"{type(exc).__name__}: {exc}"[:300]}
         return data
     have = [w["box"] for w in words_of(data)]
     added = []

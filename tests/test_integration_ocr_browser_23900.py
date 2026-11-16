@@ -510,5 +510,36 @@ def test_an_empty_number_cell_is_read_again_and_only_a_number_inside_it_is_used(
     # an engine failure keeps the first reading
     def broken(*a, **k):
         raise OSError("powershell missing")
-    assert "cell_rereads" not in ocr._fill_empty_cells(Path("shot.png"), _orders_page(cancelled_1002=""), None,
-                                                       reader=broken)
+    out = ocr._fill_empty_cells(Path("shot.png"), _orders_page(cancelled_1002=""), None, reader=broken)
+    assert out["cell_rereads"]["read"] == 0 and "powershell missing" in out["cell_rereads"]["error"]
+
+
+def test_a_cell_read_again_counts_only_when_the_copies_agree():
+    from qa_platform.comparison import ocr
+
+    rect = [100, 200, 40, 20]  # x, y, w, h on the screenshot
+    cw, gap, pad = 40 * ocr.CELL_SCALE, 20 * ocr.CELL_SCALE, ocr.CELL_PAD
+
+    def at(k, text, dx=30):
+        return {"text": text, "box": [pad + k * (cw + gap) + dx, pad + 6, 30, 40]}
+
+    got = ocr._cell_number(rect, [at(0, "0"), at(1, "0"), at(2, "0")])
+    assert got["text"] == "0" and got["copies"] == 3
+    assert got["box"][0] == 110 and got["box"][1] == 202  # mapped back onto the screenshot
+    assert ocr._cell_number(rect, [at(0, "0"), at(2, "0")])["text"] == "0"  # one copy missed
+    assert ocr._cell_number(rect, [at(1, "0")]) is None  # one copy only: not enough
+    assert ocr._cell_number(rect, [at(0, "0"), at(1, "8"), at(2, "0")]) is None  # the copies disagree
+    assert ocr._cell_number(rect, [at(0, "O"), at(1, "O"), at(2, "O")]) is None  # not a number
+    run = {"text": "000", "box": [pad + 30, pad + 6, 2 * (cw + gap) + 40, 40]}  # copies read as one word
+    assert ocr._cell_number(rect, [run])["text"] == "0"
+    assert ocr._cell_number(rect, [dict(run, text="080")]) is None
+
+
+def test_a_failed_cell_reread_is_reported_not_hidden():
+    from qa_platform.comparison import ocr
+    from qa_platform.errors import QAError
+
+    def failing(*a, **k):
+        raise QAError("OCR_FAILED", "Windows OCR could not read the table cells again.", details="Add-Type failed")
+    out = ocr._fill_empty_cells(Path("shot.png"), _orders_page(cancelled_1002=""), None, reader=failing)
+    assert out["cell_rereads"]["read"] == 0 and "Add-Type failed" in out["cell_rereads"]["error"]
