@@ -45,7 +45,9 @@ See [TEST_REPORT.md](TEST_REPORT.md) for the commands and the counts.
 
 ## Not verified (see KNOWN_LIMITATIONS.md)
 
-Windows itself was not available here, so these were not run: the PowerShell wrappers, the Windows OCR wheels and
-Windows OCR, maximizing on a real Windows desktop, and a standard-user Windows install. Public websites and the real
+The full test suite also ran on GitHub's Windows runners (Python 3.11 to 3.13): 865 passed, 0 failed, with Windows
+OCR reading real screenshots. Those runs found two Windows OCR misreads, which are now handled. A Windows desktop was
+not available, so these were not run: the PowerShell wrappers, the bundled Windows OCR wheels, maximizing on a real
+Windows desktop, and a standard-user Windows install. Public websites and the real
 DataTables library were also not tested. Your original screenshots were not in the project files, so representative
 fixtures were generated and read by the real OCR engine.

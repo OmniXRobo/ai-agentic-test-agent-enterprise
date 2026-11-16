@@ -2,7 +2,7 @@
 
 This list keeps to what was actually run. Anything not checked here is stated as not checked.
 
-## Not verified (no Windows machine in this environment)
+## Not verified (no Windows desktop in this environment; GitHub's Windows runners ran the test suite)
 
 * **Windows install as a standard user.** `install_patch.py` apply / verify / rollback, the automatic rollback, the
   OCR runtime staging and swap, and the side-by-side install were run on Linux against real 23.3.35 to 23.8.0 trees
@@ -11,8 +11,10 @@ This list keeps to what was actually run. Anything not checked here is stated as
 * **The bundled OCR runtime on Windows.** The same RapidOCR 3.10.0, ONNX Runtime and OpenCV versions were run here on
   Linux wheels. The Windows `win_amd64` wheels in the patch were checked by hash and by unpacking, but not executed.
   The installer's OCR engine probe is the first check on Windows. If it fails, the patch rolls back.
-* **Windows OCR (`Windows.Media.Ocr`).** Not executed. The code path is the 23.8.0 one, made more robust (PowerShell
-  location, no execution-policy flag, image-size and language messages).
+* **Windows OCR (`Windows.Media.Ocr`).** Executed on GitHub's Windows runners (Windows Server), where it read the
+  three test screenshots and the comparison passed after two fixes it made necessary ("IO" read for 10, a lone "0"
+  not read). That is a server image with one language; Windows 10/11 desktops with other display languages were not
+  tested. A cell that Windows OCR still cannot read stays empty and is reported as needing review.
 * **Window maximize on a real Windows desktop.** Tested under Xvfb without a window manager: the CDP request and the
   work-area fallback fill the screen for the first page and for a popup. The fixed size and headless modes were also
   checked. Windows 10/11 with several monitors and DPI scaling was not tested.

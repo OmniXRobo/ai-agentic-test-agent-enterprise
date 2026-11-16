@@ -3,7 +3,7 @@
 Environment: Linux container, Python 3.13, Playwright 1.63 with Chromium, Xvfb (no window manager), RapidOCR 3.10.0 /
 ONNX Runtime on Linux wheels. No Windows machine. Every result below comes from a run that actually happened here.
 
-## Full suite on the final commit
+## Full suite in this container (commit 46dfb49; the final commit ran in CI, below)
 
     xvfb-run -a -s "-screen 0 1600x1000x24" python -m pytest -q -rs tests/
 
@@ -15,6 +15,17 @@ ONNX Runtime on Linux wheels. No Windows machine. Every result below comes from 
 | 17 | JMeter / Java not installed (performance tests) |
 | 13 | Windows only |
 | 1 | the host name resolves to loopback |
+
+## Windows (GitHub Actions, on the final commit)
+
+The repository's CI ran the same suite on `windows-latest` with Python 3.11, 3.12 and 3.13: **865 passed, 80 skipped,
+0 failed** on each. On Ubuntu (3.11 to 3.13): 858 passed, 87 skipped, 0 failed. The offline-package and
+security-audit jobs passed.
+
+On Windows, `test_07_three_screenshots_ocr_and_compare` reads three screenshots with **Windows OCR**
+(`Windows.Media.Ocr`); in 23.8.0 it was skipped there. Its first runs failed, and the log showed why: Windows OCR read
+"10" as "IO" and returned nothing for a "0" alone in a cell. Both were fixed in the reader (see PATCH_CHANGELOG), each
+run in between was a real Windows run, and the final run passes with every value read and compared.
 
 ## 23.9.0 acceptance tests (Part 12)
 

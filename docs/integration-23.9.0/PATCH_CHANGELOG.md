@@ -10,6 +10,10 @@ Cumulative patch: 23.4.0 to 23.9.0. It installs on 23.3.35, 23.4.0, 23.5.0, 23.6
 * A new table reader: separate columns even when they are close together, multi-line headers with units (AED, %),
   empty cells, wrapped cells, and totals / subtotals / grand totals that are checked and never counted as records.
   Titles and KPI cards are kept apart from tables. Dark themes and large screenshots are handled.
+* Windows OCR (found on real Windows runners): a number read with letters in a number column ("IO" for 10) is
+  corrected and flagged for review, keeping what was read; an empty cell of a number column (Windows OCR skips a "0"
+  that stands alone) is read again, enlarged, as copies that must agree. A cell that still reads as nothing stays
+  empty and is reported. Nothing is guessed.
 * Charts in screenshots: bar, horizontal bar, multi-series, pie and donut. Values read from an axis are approximate
   and need review. Pie shares are checked against 100%.
 * Every table, chart and input has a status: COMPLETE, PARTIAL, FAILED or NEEDS REVIEW, with the reasons.
