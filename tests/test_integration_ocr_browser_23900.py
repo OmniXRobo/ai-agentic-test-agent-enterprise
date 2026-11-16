@@ -380,3 +380,71 @@ def TRUTH_INVOICES():
     cities, status = ["Dubai", "Sharjah", "Abu Dhabi", "Ajman"], ["Paid", "Pending", "Cancelled"]
     return [{"id": f"INV-{n:03d}", "city": cities[(n - 1) % 4], "status": status[(n - 1) % 3],
              "amount": Decimal(n) * Decimal("137.5")} for n in range(1, 26)]
+
+
+def _wait(client, job):
+    import time
+
+    for _ in range(900):
+        st = client.get(f"/api/comparison/jobs/{job}").json()
+        if st["status"] != "running":
+            return st
+        time.sleep(0.2)
+    return st
+
+
+def test_14b_equivalent_filters_sync_scope_and_filter_sets(client, site):
+    pytest.importorskip("playwright")
+    pid, apps = _filters_app(client, site, "filters.html", "Invoices")
+    a, b = apps[0]["id"], apps[1]["id"]
+    fa = {c["label"]: c for c in client.post(f"{W}/applications/{a}/filters/discover", json={}).json()["filters"]["controls"]}
+    fb = {c["label"]: c for c in client.post(f"{W}/applications/{b}/filters/discover", json={}).json()["filters"]["controls"]}
+    assert fb["Territory"]["is_filter"] and fb["Order State"]["is_filter"]
+    links = client.get(f"{W}/{pid}/filter-links").json()["links"]
+    by = {l_["name"]: l_ for l_ in links}
+    # Region ~ Territory (same meaning and the same options); Status ~ Order State; City has no equivalent
+    assert by["Region"]["members"][b]["label"] == "Territory"
+    assert by["Status"]["members"][b]["label"] == "Order State"
+    assert b not in by["City"]["members"]
+    # the tester approves Region and Status; the portal has no City filter: filter its data locally on City
+    approved = [{**by["Region"], "approve": True}, {**by["Status"], "approve": True},
+                {"name": "City", "members": {a: {"filter": fa["City"]["id"], "label": "City"},
+                                             b: {"local_field": "City"}}, "approve": True}]
+    saved = client.put(f"{W}/{pid}/filter-links", json={"links": approved}).json()["links"]
+    assert {x["status"] for x in saved} == {"approved"}
+    va = {fa["Region"]["id"]: "North", fa["City"]["id"]: "Dubai", fa["Status"]["id"]: "Paid"}
+    sync = client.post(f"{W}/{pid}/filters/sync", json={"source_app": a, "values": va}).json()
+    assert sync["values"][b] == {fb["Territory"]["id"]: "North", fb["Order State"]["id"]: "Paid", "local:City": "Dubai"}
+    # scope mismatch first: the portal filtered on another state -> NOT COMPARABLE, never PASS/FAIL
+    assert _wait(client, client.post(f"{W}/applications/{a}/filters/apply", json={"values": va}).json()["job"])["status"] == "done"
+    wrong = {fb["Territory"]["id"]: "North", fb["Order State"]["id"]: "Pending"}
+    assert _wait(client, client.post(f"{W}/applications/{b}/filters/apply", json={"values": wrong}).json()["job"])["status"] == "done"
+    an = analyze(client, pid)
+    # the two scopes hold different invoices: the identifier is suggested by name, for review, not auto-approved
+    kf = next(f for f in an["config"]["fields"] if f.get("is_key"))
+    assert kf["name"] == "Invoice No" and kf["status"] == "needs_review" and "by name" in kf["evidence"][0]
+    unkeyed = [dict(f, is_key=False) if f.get("is_key") else f for f in an["config"]["fields"]]
+    save(client, pid, approve_all({**an["config"], "fields": unkeyed}))
+    nokey = run(client, pid)
+    assert rows(nokey, "Record key")[0]["result"] == "INCOMPLETE" and nokey["result"] != "PASS"
+    save(client, pid, approve_all(an["config"]))
+    r = run(client, pid)
+    scope = rows(r, "Filter scope: Status")
+    assert scope and scope[0]["result"] == "NOT_COMPARABLE" and scope[0]["category"] == "scope_mismatch"
+    # synced values: same scope; the portal's City is filtered locally, so both hold the 3 Dubai/Paid invoices
+    assert _wait(client, client.post(f"{W}/applications/{b}/filters/apply", json={"values": sync["values"][b]}).json()["job"])["status"] == "done"
+    r = run(client, pid)
+    assert not rows(r, "Filter scope: Status") and not rows(r, result="FAIL")
+    assert r["detail"]["filters"][b]["local:City"] == "Dubai"
+    assert any(x.get("record_key") and x["result"] == "PASS" for x in r["detail"]["rows"])
+    assert {x["record_key"] for x in r["detail"]["rows"] if x.get("record_key")} <= {"inv-001", "inv-013", "inv-025"}
+    # filter sets: only the approved ones run
+    sets = [{"name": "North paid", "approved": True, "values": {a: va, b: sync["values"][b]}},
+            {"name": "Not approved", "approved": False, "values": {a: {fa["Region"]["id"]: "South"}}}]
+    client.put(f"{W}/{pid}/filter-sets", json={"sets": sets})
+    j = client.post(f"{W}/{pid}/filter-sets/run").json()
+    assert j["sets"] == 1
+    done = _wait(client, j["job"])
+    assert done["status"] == "done" and [x["set"] for x in done["results"]] == ["North paid"]
+    for x in (a, b):
+        client.post(f"{W}/applications/{x}/filters/close")

@@ -54,6 +54,7 @@ OPEN_RESULTS = ("FAIL", "NOT_COMPARABLE", "NEEDS_REVIEW", "INCOMPLETE", "WARNING
 CATEGORY_RESULT = {
     "value_not_read": "INCOMPLETE", "source_missing": "INCOMPLETE", "partial_data": "INCOMPLETE",
     "not_on_screenshots": "INCOMPLETE", "field_not_found": "INCOMPLETE", "extraction_incomplete": "INCOMPLETE",
+    "key_missing": "INCOMPLETE",
     "mapping_not_approved": "NEEDS_REVIEW", "rule_not_approved": "NEEDS_REVIEW", "status_not_mapped": "NEEDS_REVIEW",
     "ocr_uncertainty": "NEEDS_REVIEW", "visual_check": "NEEDS_REVIEW",
     "calculation_not_possible": "NOT_COMPARABLE", "unit_mismatch": "NOT_COMPARABLE", "scope_mismatch": "NOT_COMPARABLE",
@@ -1365,6 +1366,24 @@ def _pick_key(data: list[dict[str, Any]]) -> dict[str, str]:
     return best
 
 
+def _pick_key_by_name(data: list[dict[str, Any]]) -> dict[str, str]:
+    """Fallback when no identifier values overlap (the applications hold different records now, e.g. filtered on
+    different scopes): an identifier-like, unique column with the same name in every application. The mapping is
+    only suggested for review, never auto-approved."""
+    cands = {d["app_id"]: _key_candidates(d) for d in data}
+    for ka in cands[data[0]["app_id"]]:
+        if not re.search(r"(?i)\b(id|code|ref|reference|no|number|key)\b|#", ka):
+            continue
+        chosen = {data[0]["app_id"]: ka}
+        for d in data[1:]:
+            kb = max(cands[d["app_id"]], key=lambda c: _label_score(ka, c), default=None)
+            if kb and _label_score(ka, kb) >= 0.9:
+                chosen[d["app_id"]] = kb
+        if len(chosen) > 1:
+            return chosen
+    return {}
+
+
 def _agreement(a: dict[str, Any], fa: dict[str, Any], b: dict[str, Any], fb: dict[str, Any],
                key: dict[str, str]) -> tuple[float | None, int]:
     """Share of key-aligned records where the two fields hold the same value (None: cannot tell)."""
@@ -1517,13 +1536,19 @@ def suggest_config(data: list[dict[str, Any]], saved: dict[str, Any] | None = No
         key = {aid: m["field"] for aid, m in saved_key["members"].items()}
     else:
         key = _pick_key(data)
+        by_name = False
+        if not key:
+            key, by_name = _pick_key_by_name(data), True
         if key:
             kname = key[data[0]["app_id"]] if data[0]["app_id"] in key else next(iter(key.values()))
             fields.insert(0, {"id": _id("F"), "name": kname, "family": "text", "is_key": True,
-                              "members": {aid: {"field": f, "kind": _field(by_id[aid], f)["kind"], "confidence": 0.95,
+                              "members": {aid: {"field": f, "kind": _field(by_id[aid], f)["kind"],
+                                                "confidence": 0.6 if by_name else 0.95,
                                                 "origin": "rules"} for aid, f in key.items()},
-                              "status": "auto_mapped" if len(key) == len(data) else "needs_review",
-                              "evidence": ["the record identifier: values overlap between the applications"]})
+                              "status": "auto_mapped" if len(key) == len(data) and not by_name else "needs_review",
+                              "evidence": ["the record identifier by name: no identifier values overlap in the "
+                                           "current data (different records or scopes), confirm it"] if by_name else
+                                          ["the record identifier: values overlap between the applications"]})
             for aid, f in key.items():
                 taken[aid].add(f)
     # every other field: greedy best matches, anchored on the first application, then the next ones
@@ -2004,6 +2029,17 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
             f"The applications were not filtered the same way on '{p_['filter']}' ({p_['why']}): their data cover "
             "different scopes. Apply the equivalent filter (Sync Equivalent Filters) or a local filter, then compare "
             "again.", pair=list(p_["values"]))
+
+    # 0b. no approved record key: record-level fields cannot be lined up; say so instead of an empty result
+    record_fields = [r for r in cfg.get("fields") or [] if not r.get("is_key") and r["status"] in
+                     ("approved", "auto_mapped") and sum(1 for m in r["members"].values()
+                                                         if m.get("kind", "column") == "column") >= 2]
+    if len(key) < 2 and record_fields:
+        add("Record key", None, None, {d["app_id"]: {"value": key.get(d["app_id"])} for d in data},
+            "INCOMPLETE", "key_missing",
+            "No record identifier is approved for at least two applications, so the records and their fields "
+            f"({', '.join(r['name'] for r in record_fields[:6])}) were not compared. Choose the identifier column "
+            "(for example Invoice No) in the mapping review and save it.")
 
     # 1. records: missing and duplicate (each application against every other)
     unique_keys = set()
