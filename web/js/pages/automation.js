@@ -10,6 +10,7 @@ import { confirmDelete } from "../confirm-delete.js";
 import { mountAiReport, openShots } from "../ai-report.js";
 import { hasRule, openRuleBuilder, previewRule, ruleLabel } from "../date-rules.js";
 import { bulkWaits, editWait, waitLabel, waitSettings } from "../smart-wait-ui.js";
+import { mountPythonEditor } from "../python-editor.js";
 
 const ACTIONS = ["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover", "wait",
   "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
@@ -546,7 +547,7 @@ function healingHtml(items) {
 async function renderEditor(view, scriptId) {
   dataCtx.columns = []; dataCtx.row = {};
   const sid = encodeURIComponent(scriptId);
-  const [{ script, python, python_file, versions, files: attached = [], date_suggestions: suggestions = {}, converted = [] },
+  const [{ script, python, python_state, python_versions, python_file, versions, files: attached = [], date_suggestions: suggestions = {}, converted = [] },
     { items: results }, { items: healing }, data, { items: dataRuns = [] }] = await Promise.all([
     api(`/api/automation/scripts/${sid}`),
     api(`/api/automation/results?script_id=${sid}&limit=20`),
@@ -600,18 +601,17 @@ async function renderEditor(view, scriptId) {
       <div class="card"><h3>Self-healing</h3><div id="healing">${healingHtml(healing)}</div></div>
     </div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(360px,1fr));margin-top:12px">
-      <div class="card"><div class="row"><h3 style="margin:0">Python test (pytest + Playwright)</h3><span class="spacer"></span>
-        <a class="btn" href="/api/automation/scripts/${esc(script.id)}/export">Download ${esc(python_file)}</a>
-        <button class="btn" id="zipOne" title="With pytest.ini, requirements.txt, README.txt and RUN_TESTS.cmd">Download ready-to-run .zip</button></div>
-        <p class="muted">Runs with <code>pytest</code> (one test per data set of the Test Case) or with <code>python ${esc(python_file)}</code>. Passwords are read from environment variables, never stored in the file.</p>
-        <pre class="code">${esc(python)}</pre></div>
+      <div class="card" id="pyCard"></div>
       <div class="card"><h3>Version history</h3>
         <table class="data"><tbody>${versions.slice().reverse().map((v) => `<tr><td>v${v.version}</td><td>${esc(v.reason)}</td><td>${esc(dateTimeOf(v.timestamp))}</td>
           <td>${v.version < script.version ? `<button class="link-btn" data-restore="${v.version}">Restore</button>` : '<span class="muted">current</span>'}</td></tr>`).join("")}</tbody></table>
         <p><button class="btn danger" id="archive">Delete this script</button></p></div>
     </div>`;
 
-  view.querySelector("#zipOne").addEventListener("click", () => downloadTests({ script_ids: [script.id] }, python_file.replace(/\.py$/, ".zip")));
+  // 23.11.0: the editable Python test (Edit Script, Save, Validate, Run, Format, Revert, Version History, Download)
+  mountPythonEditor(view.querySelector("#pyCard"), { script, python, python_state, python_versions, python_file,
+    downloadZip: () => downloadTests({ script_ids: [script.id] }, python_file.replace(/\.py$/, ".zip")) }, {
+    onRun: (id) => { runId = id; view.querySelector("#runBox").hidden = false; view.querySelector("#feed").innerHTML = ""; } });
   const table = view.querySelector("#steps");
   const dataCard = view.querySelector("#dataCard");
   renderFiles(view.querySelector("#filesCard"), script, attached);

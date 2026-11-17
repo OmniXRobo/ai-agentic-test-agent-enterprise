@@ -777,3 +777,12 @@ table.data.compact th, table.data.compact td { padding: 4px 8px; font-size: 13px
 .ws-flt-table { width: 100%; table-layout: auto; }
 .ws-flt-table td { vertical-align: middle; }
 .ws-why { font-size: 12px; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 23.11.0: editable Python test */
+.pyed { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; max-height: 620px; overflow: auto; }
+.pyed pre, .pyed .pyed-ta { margin: 0; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; line-height: 1.5; padding: 10px; tab-size: 4; white-space: pre; }
+.pyed .gutter { color: var(--muted); text-align: right; user-select: none; border-right: 1px solid var(--border); background: var(--surface); border-radius: 0; border-top: 0; border-bottom: 0; border-left: 0; }
+.pyed-stack { position: relative; min-width: 0; }
+.pyed-stack .pyed-hl { border: 0; background: transparent; max-height: none; overflow: visible; }
+.pyed-stack .pyed-ta { position: absolute; inset: 0; border: 0; outline: none; resize: none; overflow: hidden; background: transparent; color: transparent; caret-color: var(--text); min-height: 100%; }
+.pyed-stack .pyed-ta::selection { background: rgba(80, 140, 255, .35); color: transparent; }
