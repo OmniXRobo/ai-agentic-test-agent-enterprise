@@ -147,18 +147,23 @@ def test_automatic_mode_skips_likely_duplicates_and_links(env, site):
     run = rt.automation.run_script(script.id, headless=True, background=False)
     draft = _wait_draft(rt, run["run_id"])
     assert draft["duplicates"][0]["id"] == 1500 and draft["duplicates"][0]["score"] >= 0.85
-    assert draft["status"] == "draft" and "likely duplicate of #1500" in draft["note"]
+    assert draft["status"] == "draft" and "likely duplicate of #1500" in draft["note"].lower()
     linked = c.post(f"/api/defects/drafts/{draft['id']}/link", json={"tfs_id": 1500}).json()["draft"]
     assert linked["status"] == "linked" and ado.items[1500]["_comments"]
 
 
 @needs_browser
-def test_automatic_mode_creates_product_defects_only(env, site):
+def test_automatic_mode_drafts_but_never_publishes_without_approval(env, site):
+    """23.11.0 (changed requirement): automatic mode used to file product defects in TFS right away. Now nothing is
+    published to TFS without a person's approval: the draft is made, classified and marked "Approval required"."""
     c, ado, rt = env
     c.put("/api/defects/mode", json={"creation_mode": "automatic"})
+    before = set(ado.items)
     run = rt.automation.run_script(_failing_script(rt, site).id, headless=True, background=False)
     draft = _wait_draft(rt, run["run_id"])
-    assert draft["status"] == "created" and draft["tfs_id"] in ado.items
+    assert draft["status"] == "draft" and draft["tfs_id"] is None and "Approval required" in draft["note"]
+    assert draft["classification"] == "application_defect" and draft["status_label"] == "Draft"
+    assert set(ado.items) == before and not ado.attachments
     # a test setup problem (no saved credential) is never filed automatically
     rt.automation.creds.delete("shop|admin")
     run2 = rt.automation.run_script(_failing_script(rt, site, "Welcome alice").id, headless=True, background=False)

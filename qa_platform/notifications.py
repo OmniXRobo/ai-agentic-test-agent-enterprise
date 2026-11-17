@@ -20,6 +20,7 @@ RULES: dict[str, tuple[str, str, str]] = {
     names.DEFECT_CREATED: ("defect", "info", "Defect created"),
     names.DEFECT_DUPLICATE_FOUND: ("defect", "warning", "Existing defect detected"),
     names.DEFECT_FAILED: ("defect", "error", "Defect creation failed"),
+    names.DEFECT_DRAFTED: ("defect", "warning", "Defect draft needs review"),
     names.AUTOMATION_GENERATION_COMPLETED: ("automation", "success", "Automation generation completed"),
     names.SELFHEALING_COMPLETED: ("selfhealing", "warning", "Self-healing occurred"),
     names.REPORT_COMPLETED: ("report", "success", "Report ready"),

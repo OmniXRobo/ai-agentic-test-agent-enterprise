@@ -108,8 +108,19 @@ def functional_draft(execution: dict[str, Any], script: dict[str, Any], healing:
         "repro_steps": repro,
         "facts": {"error": error, "failed_step": failed_index, "action": (failed or {}).get("action"),
                   "selector": target.get("selector"), "finding": finding, "healing": healing_facts,
-                  "script_id": script.get("id"), "base_url": execution.get("base_url")},
-        "evidence": [{"kind": "screenshot", "path": p} for p in shots],
+                  "script_id": script.get("id"), "base_url": execution.get("base_url"),
+                  # 23.11.0: the evidence the Defect Review shows (only what the run recorded; nothing is invented)
+                  "failed_step_description": what, "script_version": script.get("version"),
+                  "run_id": execution.get("run_id"), "test_case_id": tc, "browser": execution.get("browser"),
+                  "locator": target.get("description") or target.get("selector"), "frame": target.get("frame"),
+                  "expected": (failed.get("value") if failed and str(failed.get("action", "")).startswith("expect")
+                               else None),
+                  "actual": (failed_entry or {}).get("actual"), "previous_step": passed[-1] if passed else None,
+                  "dataset": (execution.get("evidence") or {}).get("dataset"),
+                  "traceback": (execution.get("evidence") or {}).get("traceback"),
+                  "healing_failed": heal_failed, "wait_uncertain": (failed_entry or {}).get("wait_uncertain")},
+        "evidence": [{"kind": "screenshot", "path": p} for p in shots]
+                    + [{"kind": "trace", "path": p} for p in [(execution.get("evidence") or {}).get("trace")] if p],
         "test_case_id": tc,
         "user_story_id": execution.get("user_story_id"),
     }

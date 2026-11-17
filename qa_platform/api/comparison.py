@@ -145,6 +145,7 @@ class TfsIn(BaseModel):
     iteration_path: str | None = None
     assigned_to: str | None = None
     force: bool = False
+    fields: dict[str, Any] | None = None  # 23.11.0: values for mandatory fields TFS Preferences cannot complete
 
 
 class AggregatesIn(BaseModel):
@@ -439,9 +440,15 @@ def investigate(did: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 @router.post("/defects/{did}/tfs")
 def create_tfs(did: str, body: TfsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "defect": _svc(rt).create_in_tfs(did, body.area_path, body.iteration_path, body.assigned_to,
-                                                         body.force)}
+                                                         body.force, body.fields)}
 
 
 @router.post("/tfs-sync")
 def tfs_sync(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, **_svc(rt).sync_queue()}
+
+
+@router.post("/defects/{did}/review")
+def review_draft(did: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.11.0: open this comparison defect in the one Defect Review (approve, edit, send to TFS there)."""
+    return {"ok": True, "draft": _svc(rt).review_draft(did)}

@@ -38,6 +38,8 @@ class FakeAzureDevOps:
         self.next_id = 2000
         self.requests: list[httpx.Request] = []
         self.unreachable = False
+        self.lose_next_create = False  # 23.11.0: the item is created, then the response is lost (timeout)
+        self.fail_next_create: int | None = None  # 23.11.0: the next create answers this HTTP status
         self.hierarchy = hierarchy
         self.recycled: dict[int, dict] = {}
         self.deleted_test_cases: list[int] = []
@@ -218,6 +220,9 @@ class FakeAzureDevOps:
             if request.url.params.get("validateOnly") == "true":
                 self.validated.append(sent)
                 return httpx.Response(200, json={"id": -1, "rev": 0, "fields": sent})
+            if self.fail_next_create:
+                status, self.fail_next_create = self.fail_next_create, None
+                return httpx.Response(status, json={"message": "Internal server error (fake)"})
             i = self.next_id
             self.next_id += 1
             self.items[i] = {"System.WorkItemType": m.group(1), "System.State": "New"}
@@ -226,6 +231,9 @@ class FakeAzureDevOps:
                     self._relate(i, op["value"])
                     continue
                 self.items[i][op["path"].split("/")[-1]] = op["value"]
+            if self.lose_next_create:
+                self.lose_next_create = False
+                raise httpx.ReadTimeout("the response was lost", request=request)
             return httpx.Response(200, json=self._wi(i))
         test = self._test_management(request, path, proj)
         if test is not None:
@@ -344,6 +352,9 @@ class FakeAzureDevOps:
             path = f.get("System.IterationPath", "").lower()
             if not (path == m.group(1).lower() or path.startswith(m.group(1).lower() + "\\")):
                 return False
+        m = re.search(r"\[System.Tags\] CONTAINS '([^']*)'", query)
+        if m and m.group(1).lower() not in [t.strip().lower() for t in str(f.get("System.Tags") or "").split(";")]:
+            return False
         m = re.search(r"\[System.State\] NOT IN \(([^)]*)\)", query)
         if m and f["System.State"] in re.findall(r"'([^']*)'", m.group(1)):
             return False

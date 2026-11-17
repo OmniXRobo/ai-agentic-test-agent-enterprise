@@ -641,7 +641,7 @@ class Workspace:
                 self.svc.audit("workspace.filters.fetch", app["project_id"], aid, dataset=out["dataset"],
                                filters=list(out["applied"]), records=st.get("records"), set=set_name)
             except QAError as exc:
-                state.update(status="failed", error=exc.message, code=exc.code)
+                state.update(status="failed", error=exc.message, code=exc.error_code)
             except Exception as exc:
                 state.update(status="failed", error=str(exc).splitlines()[0][:300])
             finally:

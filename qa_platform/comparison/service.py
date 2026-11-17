@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import html
 import io
 import json
 import re
@@ -1191,58 +1192,153 @@ class ComparisonService:
         self.audit("defect.investigate", cur["project_id"], did, origin=out.get("origin"))
         return self.defect(did)
 
+    # ---- 23.11.0: Integration Comparison defects go through the one Defect Review and TFS publishing service -----
+
+    def _cmp_facts(self, cur: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        """What the comparison recorded for this defect, in either shape (workspace rows keyed by application id, or
+        the earlier source/target defects). Nothing is added that the run did not record."""
+        d = cur["data"] or {}
+        row = d.get("row") or {}
+        names = d.get("names") or {}
+        apps = list(d.get("applications") or [])
+        if not apps:
+            apps = [names[k] for k in ("source", "target") if names.get(k)] or [v for v in names.values() if v]
+        rule = row.get("rule")
+        rule_status = rule.get("status") if isinstance(rule, dict) else None
+        if rule_status is None and isinstance(row.get("mapping"), dict):
+            rule_status = row["mapping"].get("status")
+        result = row.get("result") or ("FAIL" if cur["status"] in ("confirmed", "new", "under_review") and
+                                       d.get("category") not in ("needs_review", "incomplete") else None)
+        facts = {
+            "result": result, "applications": apps, "record_key": d.get("record_key") or row.get("record_key"),
+            "field": d.get("field") or row.get("field"),
+            "expected": d.get("expected", d.get("source_value")), "actual": d.get("actual", d.get("target_value",
+                                                                                          d.get("displayed"))),
+            "difference": d.get("difference"), "calculation": d.get("calculation") or row.get("calculation"),
+            "mapping": row.get("mapping") if isinstance(row.get("mapping"), (str, dict)) else None,
+            "rule_status": rule_status, "explanation": d.get("explanation") or row.get("explanation"),
+            "category_detail": d.get("category"), "comparison_defect": cur["id"],
+            "execution_id": cur.get("execution_id"), "application": apps[-1] if apps else None,
+        }
+        evidence_ids = [e for e in (d.get("screenshots") or row.get("evidence") or []) if isinstance(e, str)]
+        return facts, evidence_ids
+
+    def _cmp_html(self, cur: dict[str, Any], facts: dict[str, Any], tri: dict[str, Any],
+                  evidence: list[dict[str, Any]], missing: list[str]) -> str:
+        def e(v: Any) -> str:
+            return html.escape("" if v is None else str(v))
+
+        result = facts.get("result") or "unknown"
+        status = ("Confirmed mismatch (deterministic comparison)" if result == "FAIL" else
+                  {"INCOMPLETE": "Not confirmed: extraction did not complete",
+                   "NEEDS_REVIEW": "Not confirmed: mapping or rule uncertain or not approved",
+                   "NOT_COMPARABLE": "Not confirmed: values not comparable",
+                   "WARNING": "Not confirmed: a value was not read or a status is not mapped"}.get(
+                      result, f"Not confirmed ({result})"))
+        rows = [("Result", status), ("Applications", ", ".join(facts.get("applications") or [])),
+                ("Record key", facts.get("record_key") or "missing: the record cannot be identified in both applications"),
+                ("Field", facts.get("field")), ("Expected", facts.get("expected")), ("Actual", facts.get("actual")),
+                ("Difference", facts.get("difference")), ("Calculation / chart rule", facts.get("calculation")),
+                ("Rule status", facts.get("rule_status")),
+                ("Mapping", facts["mapping"] if isinstance(facts.get("mapping"), str) else
+                 (facts.get("mapping") or {}).get("name") if isinstance(facts.get("mapping"), dict) else None),
+                ("Classification", f"{tri['label']} ({int(tri['confidence'] * 100)}%)"),
+                ("Comparison run", facts.get("execution_id")), ("Comparison defect", cur["id"])]
+        table = "".join(f"<tr><td><b>{e(k)}</b></td><td>{e(v)}</td></tr>" for k, v in rows if v not in (None, "", []))
+        steps = "".join(f"<li>{e(s)}</li>" for s in cur.get("repro_steps") or [])
+        reasons = "".join(f"<li>{e(r)}</li>" for r in tri.get("evidence") or [])
+        files = ", ".join(e(Path(x["path"]).name) for x in evidence) or "none captured"
+        return (f"<p><b>Integration Comparison discrepancy</b></p><table border='1' cellpadding='4'>{table}</table>"
+                f"<p><b>Steps to reproduce</b></p><ol>{steps}</ol><p><b>Why</b></p><ul>{reasons}</ul>"
+                + (f"<p><b>Explanation</b>: {e(facts.get('explanation'))}</p>" if facts.get("explanation") else "")
+                + f"<p><b>Evidence attached</b>: {files}"
+                + (f" (not available: {e(', '.join(missing))})" if missing else "") + "</p>")
+
+    def review_draft(self, did: str) -> dict[str, Any]:
+        """The Defect Review draft of a comparison defect (made once, then the same one)."""
+        from ..defects import triage
+
+        cur = self.defect(did)
+        row = self.db.query_one("SELECT id FROM defect_drafts WHERE source = 'comparison' AND source_ref = ? "
+                                "ORDER BY id DESC LIMIT 1", (did,))
+        if row:
+            return self.rt.defects.get(row["id"])
+        facts, evidence_ids = self._cmp_facts(cur)
+        evidence, missing = [], []
+        for ev in evidence_ids:
+            try:
+                path = self.evidence_file(ev)
+                if path.is_file():
+                    evidence.append({"kind": "screenshot", "path": str(path), "evidence_id": ev})
+                else:
+                    missing.append(ev)
+            except QAError as exc:
+                missing.append(f"{ev} ({exc.message})")
+        tri = triage.rules_classify("comparison", facts)
+        draft = {"source": "comparison", "source_run_id": cur.get("execution_id") or did, "source_ref": did,
+                 "signature": f"comparison:{did}", "category": "comparison",
+                 "product_defect": tri["classification"] in triage.PRODUCT_CLASSES, "title": cur["title"][:250],
+                 "severity": int(cur.get("severity") or 3), "priority": int(cur.get("priority") or 3),
+                 "repro_steps": self._cmp_html(cur, facts, tri, evidence, missing), "facts": facts,
+                 "evidence": evidence, "triage": tri}
+        saved = self.rt.defects._store(draft)
+        return self.rt.defects.get(saved["id"])
+
+    def on_review_published(self, draft: dict[str, Any]) -> None:
+        """A comparison defect published from the Defect Review: link the work item back to the comparison."""
+        if draft.get("source") != "comparison" or not draft.get("source_ref"):
+            return
+        did = draft["source_ref"]
+        row = self.db.query_one("SELECT id, project_id, tfs_id FROM cmp_defects WHERE id = ?", (did,))
+        if not row or row["tfs_id"]:
+            return
+        self.db.execute("UPDATE cmp_defects SET tfs_id = ?, status = 'created_in_tfs', tfs_sync = ?, updated_at = ? "
+                        "WHERE id = ?", (draft["tfs_id"], dumps({"created_at": draft.get("published_at") or now_iso(),
+                                                                  "url": draft.get("tfs_url"),
+                                                                  "review_draft": draft["id"]}), now_iso(), did))
+        self._history(did, "created in TFS", {"tfs_id": draft["tfs_id"], "status": "created_in_tfs",
+                                               "url": draft.get("tfs_url")})
+        self.audit("defect.tfs", row["project_id"], did, tfs_id=draft["tfs_id"])
+
     def create_in_tfs(self, did: str, area_path: str | None = None, iteration_path: str | None = None,
-                      assigned_to: str | None = None, force: bool = False) -> dict[str, Any]:
+                      assigned_to: str | None = None, force: bool = False,
+                      fields: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Create in TFS (an explicit action by a person allowed to approve and publish). 23.11.0: goes through the
+        Defect Review service, so mandatory fields come from TFS Preferences, the evidence is attached, a lost
+        response is reconciled, and the result is the work item TFS returned."""
         cur = self.defect(did)
         if cur.get("tfs_id"):
             raise QAError("CMP_DEFECT_IN_TFS", f"Already created as #{cur['tfs_id']}.", status=409)
         if cur["status"] not in ("confirmed", "under_review", "new"):
             raise QAError("CMP_DEFECT_STATUS", "Only open defects can be created in TFS.", status=422)
-        names = cur["data"].get("names") or {"source": "A", "target": "B"}
-        draft = {"title": cur["title"], "repro_steps": "\n".join(cur["repro_steps"]), "facts": {}}
+        draft = self.review_draft(did)
+        if draft["status"] == "created" and draft.get("tfs_id"):
+            self.on_review_published(draft)
+            return self.defect(did)
         if not force:
-            try:
-                from ..defects.service import POSSIBLE_DUPLICATE, similarity
-
-                dups = []
-                for bug in self.rt.defects._open_bugs():
-                    score, reasons = similarity(draft, bug)
-                    if score >= POSSIBLE_DUPLICATE:
-                        dups.append({"id": bug["id"], "title": bug["title"], "score": round(score, 2), "reasons": reasons})
-                if dups:
-                    dups.sort(key=lambda d: -d["score"])
-                    self.db.execute("UPDATE cmp_defects SET tfs_sync = ? WHERE id = ?",
-                                    (dumps({"duplicates": dups[:5], "at": now_iso()}), did))
-                    raise QAError("CMP_POSSIBLE_DUPLICATE", f"A similar open defect exists (#{dups[0]['id']}). "
-                                  "Review it, or create anyway.", status=409, details={"duplicates": dups[:5]})
-            except QAError as exc:
-                if exc.code == "CMP_POSSIBLE_DUPLICATE":
-                    raise
-                if exc.code in OFFLINE_CODES:
-                    return self._queue_tfs(did, exc.message)
-                raise
-        bug_type = (self.rt.tfs.types_for("bug") or ["Bug"])[0]
-        values = {"title": cur["title"], "repro_steps": investigate.bug_html(cur, names),
-                  "priority": cur["priority"], "area_path": area_path,
-                  "iteration_path": iteration_path, "assigned_to": assigned_to,
-                  "tags": "DataComparison; " + str(cur["data"].get("category") or ""),
-                  "Microsoft.VSTS.TCM.SystemInfo": f"{branding.name()} Data Comparison Agent; execution "
-                                                   f"{cur.get('execution_id')}; {names['source']} vs {names['target']}"}
+            dups = [d for d in self.rt.defects.check_duplicates(draft["id"])]
+            if dups:
+                self.db.execute("UPDATE cmp_defects SET tfs_sync = ? WHERE id = ?",
+                                (dumps({"duplicates": dups, "at": now_iso()}), did))
+                raise QAError("CMP_POSSIBLE_DUPLICATE", f"A similar open defect exists (#{dups[0]['id']}). "
+                              "Review it, or create anyway.", status=409, details={"duplicates": dups})
+        names = [n for n in (draft["facts"].get("applications") or [])]
+        extra = {"area_path": area_path, "iteration_path": iteration_path, "assigned_to": assigned_to,
+                 "Microsoft.VSTS.TCM.SystemInfo": f"{branding.name()} Integration Comparison; execution "
+                                                  f"{cur.get('execution_id')}; {' vs '.join(names)}"}
         try:
-            created = self.rt.tfs.create(bug_type, values)
+            if draft["status"] in ("draft", "needs_review") or not draft.get("approved_by"):
+                self.rt.defects.approve(draft["id"], "Create in TFS from Integration Comparison")
+            out = self.rt.defects.publish(draft["id"], fields=fields, allow_duplicate=True, extra=extra)
         except QAError as exc:
-            if exc.code in OFFLINE_CODES:
+            if exc.error_code in OFFLINE_CODES:
                 return self._queue_tfs(did, exc.message)
             raise
-        tfs_id = created["item"]["id"]
-        self.db.execute("UPDATE cmp_defects SET tfs_id = ?, status = 'created_in_tfs', tfs_sync = ?, updated_at = ? "
-                        "WHERE id = ?", (tfs_id, dumps({"created_at": now_iso(), "fields": created.get("fields_report")}),
-                                         now_iso(), did))
-        self._history(did, "created in TFS", {"tfs_id": tfs_id, "status": "created_in_tfs"})
-        aura.learn("known_defect", names.get("target"), f"tfs:{tfs_id}", {"title": cur["title"],
-                   "category": cur["data"].get("category")}, source="data comparison", agent="comparison")
-        self.audit("defect.tfs", cur["project_id"], did, tfs_id=tfs_id)
-        return self.defect(did)
+        self.on_review_published(out)
+        aura.learn("known_defect", names[-1] if names else None, f"tfs:{out['tfs_id']}", {
+            "title": cur["title"], "category": cur["data"].get("category")}, source="data comparison", agent="comparison")
+        return {**self.defect(did), "review_draft": out["id"], "tfs_url": out.get("tfs_url"),
+                "correlation_id": out.get("correlation_id")}
 
     def _queue_tfs(self, did: str, reason: str) -> dict[str, Any]:
         """TFS cannot be reached: kept in the sync queue and sent by ``sync_queue`` later (nothing is lost)."""

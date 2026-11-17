@@ -138,6 +138,7 @@ def build_runtime(
     performance = PerformanceService(paths, settings, bus, db, runs, ai, automation.discovery)
     performance.secrets = secrets  # 23.3.24: secrets of recorded scripts
     defects = DefectService(settings, bus, db, tfs, automation, performance)
+    defects.ai = ai  # 23.11.0: the local AI's validated view of a failure (defects/triage.py)
     voice = VoiceService(settings, bus, db, runs, state, tfs, ai, design, automation, performance, defects,
                          transport=stt_transport)
     analytics = AnalyticsService(db, tfs, automation)
@@ -218,5 +219,6 @@ def _final_patch(rt: Runtime, ai_transport: Any) -> None:
         from .comparison.service import ComparisonService
 
         rt.comparison = ComparisonService(rt)
+        rt.defects.on_published.append(rt.comparison.on_review_published)  # 23.11.0
     except Exception as exc:
         log.warning(f"Data Comparison Agent did not start: {exc}")

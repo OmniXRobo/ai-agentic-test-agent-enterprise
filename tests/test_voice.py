@@ -200,8 +200,11 @@ def test_voice_run_reports_failure_and_new_defect(env, site):
     talk = spoken(rt, r["command_id"])
     assert talk and talk[0].startswith("The test execution failed at step 8") and "unexpected result" in talk[0], (done, talk)
     assert "I am checking for an existing functional defect." in talk
-    assert done["final_reply"].startswith("I found no duplicate defect. A new functional defect ")
-    tfs_id = int(re.search(r"functional defect (\d+) has been created", done["final_reply"]).group(1))
+    # 23.11.0: nothing is sent to TFS without a person's approval, even in automatic mode
+    assert done["final_reply"].startswith("I found no duplicate defect. A new functional defect draft is waiting for "
+                                          "your approval"), done
+    draft_id = rt.defects.list(status="open")[0]["id"]
+    tfs_id = c.post(f"/api/defects/drafts/{draft_id}/create").json()["draft"]["tfs_id"]
     assert ado.items[tfs_id]["System.WorkItemType"] == "Bug"
     # follow-up: "run it again" reruns the same script; the failure is recognised as the same defect
     r = say(c, "run it again")
