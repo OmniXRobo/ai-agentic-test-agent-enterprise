@@ -50,8 +50,11 @@ def wrt(rt):
 
 @needs_browser
 def test_without_waits_the_ajax_steps_fail(wrt, ajax):
-    run = _run(wrt, _script(ajax))
-    assert run["status"] == "FAILED" and run["failed_step"] == 4  # the table had not refreshed yet
+    script = _script(ajax)
+    script.steps[0].value = ajax + "/?delay=5000"  # slow enough that no runner is fast or slow enough to pass by luck
+    run = _run(wrt, script)
+    # the cities or the table had not loaded yet (which one depends on how long the dropdown step keeps retrying)
+    assert run["status"] == "FAILED" and run["failed_step"] in (2, 4), (run["failed_step"], run["error"])
 
 
 @needs_browser
