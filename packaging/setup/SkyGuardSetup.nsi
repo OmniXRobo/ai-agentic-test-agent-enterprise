@@ -38,6 +38,7 @@ SetCompressorDictSize 64
 !include "FileFunc.nsh"
 !include "WinMessages.nsh"
 !include "TextFunc.nsh"
+!include "WordFunc.nsh"
 
 Name "SkyGuard QA ${VERSION} Upgrade"
 Caption "SkyGuard QA ${VERSION} Upgrade"
@@ -74,6 +75,7 @@ Var Result        ; ok | failed
 Var FinishTitle
 Var FinishText
 Var Launcher
+Var Warnings      ; WARN lines of the verification (an optional part that does not work, for example the OCR engine)
 Var TargetApp     ; the application folder that was patched (the side-by-side copy when protected)
 ; Detect page controls
 Var hDir
@@ -423,6 +425,7 @@ Function VerifyPage
   ${If} $Result != "ok"
     StrCpy $3 "$LogFile"
   ${EndIf}
+  StrCpy $Warnings 0
   ClearErrors
   FileOpen $2 "$3" r
   ${IfNot} ${Errors}
@@ -435,6 +438,11 @@ Function VerifyPage
       ${TrimNewLines} $4 $4
       ${If} $4 != ""
         ${NSD_LB_AddString} $1 "$4"
+        ClearErrors
+        ${WordFind} "$4" " WARN " "E#" $5
+        ${IfNot} ${Errors}
+          IntOp $Warnings $Warnings + 1
+        ${EndIf}
       ${EndIf}
     ${Loop}
     FileClose $2
@@ -451,7 +459,11 @@ FunctionEnd
 Function FinishPre
   ${If} $Result == "ok"
     StrCpy $FinishTitle "SkyGuard QA ${VERSION} is installed"
-    StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION} and every check passed.$\r$\n$\r$\nIn the browser press Ctrl+F5 once. Open AI Agent in the menu to start.$\r$\n$\r$\nBackup: $RootDir\patch-backups$\r$\nTo undo: ROLLBACK_PATCH.cmd in $RootDir\patch-tools\${VERSION}"
+    ${If} $Warnings > 0
+      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION}. Every check passed except $Warnings warning(s) on the Verify page (see the log).$\r$\n$\r$\nIn the browser press Ctrl+F5 once. Open AI Agent in the menu to start. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
+    ${Else}
+      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION} and every check passed.$\r$\n$\r$\nIn the browser press Ctrl+F5 once. Open AI Agent in the menu to start. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
+    ${EndIf}
   ${Else}
     StrCpy $FinishTitle "The upgrade did not complete"
     StrCpy $FinishText "Nothing was lost: the previous version ($Version) was restored and your data was kept.$\r$\n$\r$\nOpen the log to see the step that failed, and send it to your SkyGuard contact.$\r$\n$\r$\nLog: $LogFile"

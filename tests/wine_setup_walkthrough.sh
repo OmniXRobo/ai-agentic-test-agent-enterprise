@@ -24,15 +24,16 @@ shot 1-welcome 3
 next; shot 2-detect 8
 next; shot 3-backup 4
 next; shot 4-install-running 6
-# wait for the install to finish: the Next button becomes active when the section ends
+# wait for the install to finish
 for i in $(seq 1 200); do
   sleep 3
-  if xdotool search --name "SkyGuard QA" getwindowname 2>/dev/null | grep -q "Upgrade finished\|stopped"; then break; fi
+  # the second verification (the Verify page) writes its own log as the last step of the install
+  if grep -qs "Patch files present" "$(winepath -u "$APPDIR" 2>/dev/null)"/logs/*verify*; then sleep 10; break; fi
   [ "$i" -eq 40 ] && shot 4b-install-progress 0
 done
-shot 5-install-done 2
-next; shot 6-verify 4
-next; shot 7-finish 3
+# the install page moves on by itself to Verify when it ends
+shot 5-verify 4
+next; shot 6-finish 4
 next; sleep 3
 kill $WPID $XPID 2>/dev/null
 wait $WPID 2>/dev/null

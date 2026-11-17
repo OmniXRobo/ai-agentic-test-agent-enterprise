@@ -377,7 +377,7 @@ def test_detect_reports_what_setup_shows(built, tmp_path, version):
     """The Setup wizard's Detect page: version, supported, folders, running; reads only."""
     app, data = _install(tmp_path / "inst", version)
     ini = tmp_path / "detect.ini"
-    r = subprocess.run([sys.executable, str(built / "install_patch.py"), "detect", "--app", str(app.parent),
+    r = subprocess.run([sys.executable, str(built / "install_patch.py"), "detect", "--app", str(app.parent), "--python", sys.executable,
                         "--ini", str(ini)], capture_output=True, text=True, env={**os.environ, "QA_HOME": str(data)})
     out = json.loads(r.stdout)
     assert r.returncode == 0 and out["supported"] and out["version"] == version and out["found"]
