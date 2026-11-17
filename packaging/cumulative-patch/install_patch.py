@@ -71,6 +71,14 @@ MIGRATION_COUNT = 19
 MARGIN_MB = 300
 
 
+def _copy(src, dst):
+    """Copy contents and timestamps. Unlike shutil.copy2 on Windows (CopyFile2), this does not carry alternate data
+    streams such as the downloaded-file mark, and it also works where CopyFile2 is missing (Wine)."""
+    shutil.copyfile(src, dst)
+    shutil.copystat(src, dst)
+    return dst
+
+
 class PatchError(Exception):
     pass
 
@@ -334,7 +342,7 @@ def side_by_side(app: Path, data: Path, target: Path, python: str) -> Path:
         if Path(folder).resolve() == top:
             out += [n for n in names if n in ("data", "patch-backups", "logs")]
         return out
-    shutil.copytree(app, target, ignore=skip)
+    shutil.copytree(app, target, ignore=skip, copy_function=_copy)
     launcher = target / f"START_SKYGUARD_{PATCH_VERSION}.cmd"
     lines = ["@echo off", f'set "QA_HOME={data}"', f'cd /d "{target}"', f'"{python}" -m qa_platform']
     launcher.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
@@ -537,7 +545,7 @@ def restore_files(app: Path, backup: Path, added: list[str]) -> None:
             if src.is_file():
                 dst = app / src.relative_to(files_dir)
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
+                _copy(src, dst)
     for rel in added:  # files this patch added (application code only, never data)
         p = app / rel
         if p.is_file():
@@ -602,7 +610,7 @@ def apply(args: argparse.Namespace) -> int:
         if src.exists():
             dst = backup / "files" / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            _copy(src, dst)
             replaced.append(rel)
         else:
             added.append(rel)
@@ -613,7 +621,7 @@ def apply(args: argparse.Namespace) -> int:
     if kdb.exists():  # an installation that already has 23.5.0 or later
         sqlite_copy(kdb, backup / "knowledge.sqlite3")
     if (data / "settings.json").exists():
-        shutil.copy2(data / "settings.json", backup / "settings.json")
+        _copy(data / "settings.json", backup / "settings.json")
     info = {"from": before, "to": PATCH_VERSION, "created": stamp, "app": str(app), "data": str(data),
             "replaced": replaced, "added": added, "database": db.exists(), "row_counts": before_counts}
     (backup / "BACKUP.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
@@ -630,7 +638,7 @@ def apply(args: argparse.Namespace) -> int:
             src, dst = patch_dir / "app" / rel, app / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             tmp = dst.with_name(dst.name + ".patch-tmp")
-            shutil.copy2(src, tmp)
+            _copy(src, tmp)
             os.replace(tmp, dst)
         (app / f"PATCH_FILES_{PATCH_VERSION}.json").write_text(json.dumps({"version": PATCH_VERSION, "files": files}, indent=1),
                                                      encoding="utf-8")
@@ -665,7 +673,7 @@ def apply(args: argparse.Namespace) -> int:
                 if side.exists():
                     os.replace(side, Path(str(kept) + suffix))
             os.replace(db, kept)
-            shutil.copy2(backup / "qa_platform.sqlite3", db)
+            _copy(backup / "qa_platform.sqlite3", db)
             say(f"Database restored from the backup; the database as it was after the failed step is kept as {kept.name}.")
         if kdb.exists() and not (backup / "knowledge.sqlite3").exists():
             kept = kdb.with_name(f"knowledge.failed-upgrade-{stamp}.sqlite3")
@@ -710,7 +718,7 @@ def rollback(args: argparse.Namespace) -> int:
             say(f"Current database kept as {kept.name}.")
         for suffix in ("-wal", "-shm"):
             Path(str(db) + suffix).unlink(missing_ok=True)
-        shutil.copy2(backup / "qa_platform.sqlite3", db)
+        _copy(backup / "qa_platform.sqlite3", db)
         say("Database restored from the copy taken before the upgrade.")
     else:
         say(f"Databases kept as they are ({info['from']} reads them as they are; nothing is lost).")

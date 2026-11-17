@@ -15,6 +15,7 @@
 ;   3 = version not supported (nothing changed), 4 = SkyGuard QA is running and /KEEPRUNNING was given
 
 Unicode true
+Target amd64-unicode     ; 64-bit, like the application (64-bit Windows 10 1909 or later)
 ManifestDPIAware true
 ManifestSupportedOS all
 RequestExecutionLevel user
@@ -235,12 +236,12 @@ Function DetectPage
   Pop $0
   ${NSD_CreateLabel} 0 0 100% 12u "SkyGuard QA installation folder:"
   Pop $0
-  ${NSD_CreateDirRequest} 0 14u 72% 13u "$AppDir"
+  ${NSD_CreateDirRequest} 0 14u 68% 13u "$AppDir"
   Pop $hDir
-  ${NSD_CreateBrowseButton} 74% 13u 12% 15u "Browse..."
+  ${NSD_CreateBrowseButton} 70% 13u 14% 15u "Browse..."
   Pop $0
   ${NSD_OnClick} $0 OnBrowse
-  ${NSD_CreateButton} 87% 13u 13% 15u "Detect"
+  ${NSD_CreateButton} 85% 13u 15% 15u "Detect"
   Pop $0
   ${NSD_OnClick} $0 OnDetect
   ${NSD_CreateLabel} 0 36u 100% 100u ""
@@ -333,7 +334,10 @@ FunctionEnd
 Section "Upgrade" SecUpgrade
   SetOutPath "$PLUGINSDIR\patch"
   DetailPrint "Unpacking the upgrade files..."
+  SetDetailsPrint textonly
   File /r "${PAYLOAD}\*.*"
+  SetDetailsPrint both
+  DetailPrint "Upgrade files unpacked."
   ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
   CreateDirectory "$RootDir\logs"
   StrCpy $LogFile "$RootDir\logs\setup-${VERSION}-$2$1$0-$4$5$6.txt"

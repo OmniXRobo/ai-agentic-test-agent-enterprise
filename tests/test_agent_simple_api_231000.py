@@ -80,3 +80,16 @@ def test_consequential_runs_need_the_confirmation_box(client, rt):
 def test_unknown_ids_are_clean_errors(client, path):
     r = client.post(path, json={"preview_hash": "0" * 64}) if path.endswith("confirm") else client.get(path)
     assert r.status_code in (404, 400) and r.json()["error_code"]
+
+
+def test_voice_becomes_text_then_a_command(client, rt):
+    """The microphone path: local speech to text (a stand-in recognizer here), then the same command endpoint."""
+    rt.opsagent.agent.transcriber = lambda audio, ctype: "show pending trips"
+    app = connect(client)["application"]
+    r = client.post("/api/ops/simple/voice", content=b"RIFF....WAVE", headers={"Content-Type": "audio/wav"})
+    assert r.status_code == 200 and r.json()["text"] == "show pending trips"
+    out = client.post("/api/ops/simple/command", json={"text": r.json()["text"], "app_id": app["id"],
+                                                       "source": "voice"}).json()
+    assert out["reply"]["text"]
+    big = client.post("/api/ops/simple/voice", content=b"0" * (30 * 1024 * 1024), headers={"Content-Type": "audio/wav"})
+    assert big.status_code == 413
