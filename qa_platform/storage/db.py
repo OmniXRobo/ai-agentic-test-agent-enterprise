@@ -743,6 +743,49 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_cmp_ws_decisions ON cmp_ws_decisions(project_id, signature);
     """,
+    # 20 (23.11.0): one Defect Review and TFS publishing workflow for every module, and the editable Python test.
+    # Columns are only added (older code ignores them) and the tables are new; the installer's backup restores the
+    # database on rollback. defect_events is the review trail (approval, rejection, each publishing attempt).
+    """
+    ALTER TABLE defect_drafts ADD COLUMN classification TEXT;
+    ALTER TABLE defect_drafts ADD COLUMN confidence REAL;
+    ALTER TABLE defect_drafts ADD COLUMN analysis TEXT;
+    ALTER TABLE defect_drafts ADD COLUMN approved_by TEXT;
+    ALTER TABLE defect_drafts ADD COLUMN approved_at TEXT;
+    ALTER TABLE defect_drafts ADD COLUMN correlation_id TEXT;
+    ALTER TABLE defect_drafts ADD COLUMN tfs_url TEXT;
+    ALTER TABLE defect_drafts ADD COLUMN published_at TEXT;
+    ALTER TABLE defect_drafts ADD COLUMN publish_attempts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE defect_drafts ADD COLUMN source_ref TEXT;
+    CREATE INDEX IF NOT EXISTS ix_drafts_source_ref ON defect_drafts(source_ref);
+    CREATE TABLE IF NOT EXISTS defect_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        draft_id INTEGER NOT NULL,
+        at TEXT NOT NULL,
+        by TEXT,
+        action TEXT NOT NULL,
+        detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_defect_events ON defect_events(draft_id, id);
+    CREATE TABLE IF NOT EXISTS script_python (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        script_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        steps_version INTEGER,
+        note TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (script_id, version)
+    );
+    CREATE TABLE IF NOT EXISTS script_python_state (
+        script_id TEXT PRIMARY KEY,
+        active_version INTEGER,
+        edited INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+    );
+    """,
 ]
 
 

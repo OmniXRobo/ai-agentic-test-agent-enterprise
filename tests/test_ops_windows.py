@@ -73,3 +73,18 @@ def test_scripts_found():
     names = {p.name for p in SCRIPTS}
     assert {"Install-SkyGuardAgent.ps1", "Uninstall-SkyGuardAgent.ps1", "Install-Models.ps1",
             "Check-Prerequisites.ps1", "APPLY_PATCH.ps1"} <= names
+
+
+def test_companion_installer_creates_runtime_folder_before_moving_python():
+    """Extension 1.2.0 installer fix: on a new installation runtime\\ did not exist, so moving the unpacked Python
+    into runtime\\python failed with "Could not find a part of the path" (Windows 10 1909 report). The runtime folder
+    is created first and Python is staged inside it (same drive), checked, then moved."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "browser-extension" / "scripts" / "Install-SkyGuardAgent.ps1").read_text()
+    make_rt = text.index('New-Item -ItemType Directory -Force -Path $rt')
+    move = text.index("Move-Item -LiteralPath $newPy -Destination $py")
+    assert make_rt < move
+    assert '$tmp = Join-Path $rt "staging-$Stamp"' in text  # not %TEMP%: no move across drives
+    assert "$env:TEMP" not in text
+    assert text.index('& (Join-Path $newPy "python.exe")') < text.index("Remove-Item -Recurse -Force $py")

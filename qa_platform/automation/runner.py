@@ -19,6 +19,8 @@ from ..storage.db import Database, dumps, loads
 from . import components
 from . import healing
 from . import semantic
+from . import smart_wait
+from .smart_wait import SmartWait
 from . import visual as visual_fx
 from .browser import context_options, default_headless, js, launch, start_playwright
 from .browser import new_context as bm_new_context
@@ -183,6 +185,8 @@ class Runner:
             "steps": [], "evidence": {"folder": str(evidence_dir), "screenshots": [], "video": None, "downloads": []},
             "failed_step": None, "error": None, "healed": [], "data_row": data_label,
         }
+        if data_label or dataset:  # 23.11.0: which data set this run used (names only, never values)
+            record["evidence"]["dataset"] = data_label or ", ".join(sorted(dataset or {})[:20])
         row_id = self.db.execute(
             "INSERT INTO execution_results (run_id, script_id, test_case_id, user_story_id, status, started_at, browser,"
             " base_url) VALUES (?,?,?,?,?,?,?,?)",
@@ -242,6 +246,7 @@ class Runner:
         step_shots = bool(playback.get("step_screenshots", True))  # 23.3.31
         pw = start_playwright()
         browser = context = page = None
+        tracing = False
         try:
             browser = launch(pw, script.browser, headless=headless)
             # final patch: a visible run opens maximized on the monitor chosen in Preferences (Browser Manager)
@@ -256,6 +261,14 @@ class Runner:
                 if user and pwd:
                     ctx_opts["http_credentials"] = {"username": user, "password": pwd}
             context = bm_new_context(browser, headless, **ctx_opts)  # 23.9.0: maximized through CDP
+            # 23.11.0: a Playwright trace, kept only when the run fails (Defect Review evidence). A run that typed a
+            # password or another secret keeps no trace: a trace records typed values.
+            tracing = bool(playback.get("trace_on_failure", True))
+            if tracing:
+                try:
+                    context.tracing.start(screenshots=True, snapshots=True, sources=False)
+                except Exception:
+                    tracing = False
             context.add_init_script(js("fingerprint"))
             context.add_init_script(js("calendar"))
             context.add_init_script(js("components"))  # 23.6.0: universal component recognition
@@ -264,6 +277,11 @@ class Runner:
                 context.add_init_script(js("overlay"))
             page = context.new_page()
             page.set_default_timeout(15000)
+            # 23.11.0: one Smart Wait service per run (the same code the exported Python tests use)
+            sw = SmartWait(context)
+            policy = smart_wait.clean_policy(script.wait_policy) if script.wait_policy else None
+            priors: dict[int, dict[str, Any]] = {}
+            last_uncertain: dict[str, Any] | None = None
             # 23.3.21: tabs a click opens, in the order they open; a step's ``tab`` picks one (0 = the first tab)
             pages = [page]
             context.on("page", lambda p: pages.append(p))
@@ -279,8 +297,33 @@ class Runner:
                 record["steps"].append(entry)
                 try:
                     page = self._tab(pages, step, page)
-                    outcome = self._step_with_help(page, script, step, index, act, resolver, record, evidence_dir,
-                                                   visual, delay, desc, stop, playback)
+                    nxt = script.steps[index + 1] if index + 1 < total else None
+                    if nxt is not None and nxt.action == "wait_until" and (nxt.wait or {}).get("kind") in (
+                            "text_change", "table_refresh", "network_response"):
+                        priors[index + 1] = sw.capture(page, nxt.wait)  # the state before this action
+                    if step.action == "wait_until":
+                        res = sw.wait(page, step.wait, priors.pop(index, None))
+                        entry["wait"] = res
+                        last_uncertain = None if res["ok"] else res
+                        if not res["ok"]:
+                            entry["wait_uncertain"] = True
+                            entry["warning"] = "Smart Wait timed out: " + "; ".join(res["reasons"][:3])
+                            if (step.wait or {}).get("strict"):
+                                raise StepFailed(index, f"{desc}: {entry['warning']}")
+                        outcome = None
+                    else:
+                        outcome = self._step_with_help(page, script, step, index, act, resolver, record, evidence_dir,
+                                                       visual, delay, desc, stop, playback)
+                        if smart_wait.policy_applies(policy, index, step.action) and not (
+                                nxt is not None and nxt.action == "wait_until"):
+                            res = smart_wait.policy_wait(sw, page, policy)
+                            entry["auto_wait"] = {k: res[k] for k in ("ok", "kind", "waited_ms", "reasons")}
+                            last_uncertain = None if res["ok"] else res
+                            if not res["ok"]:
+                                entry["wait_uncertain"] = True
+                                entry["warning"] = "Smart Wait timed out: " + "; ".join(res["reasons"][:3])
+                        else:
+                            last_uncertain = None
                     entry["status"] = outcome or "PASSED"
                     if step_shots:  # 23.3.31: the page after each step, shown next to the step in Recent Runs
                         shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}")
@@ -288,11 +331,18 @@ class Runner:
                             entry["screenshot"] = shot
                 except StepFailed as exc:
                     entry["status"] = "FAILED"
+                    _busy_at_failure(sw, page, entry)
+                    if last_uncertain and not entry.get("wait_uncertain"):
+                        entry["wait_uncertain"] = True  # the wait before this step could not confirm the page was ready
                     if not entry.get("diagnostics"):
                         self._diagnose(page, evidence_dir, index, step, record, resolver, str(exc)[:300])
                     raise
                 except Exception as exc:  # Playwright errors become a failed step with evidence
                     entry["status"] = "SKIPPED" if step.optional else "FAILED"
+                    if not step.optional:
+                        _busy_at_failure(sw, page, entry)
+                    if last_uncertain:
+                        entry["wait_uncertain"] = True
                     message = resolver.mask(str(exc).splitlines()[0][:400])
                     entry["error"] = message
                     if not step.optional:
@@ -320,6 +370,23 @@ class Runner:
                     video_path = page.video.path()
                 else:
                     video_path = None
+                if context is not None and tracing:
+                    failed = any(st.get("status") == "FAILED" for st in record["steps"]) or record["status"] == "FAILED"
+                    if failed and not resolver.secrets_used:
+                        trace = evidence_dir / "trace.zip"
+                        try:
+                            context.tracing.stop(path=str(trace))
+                            record["evidence"]["trace"] = str(trace)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            context.tracing.stop()
+                        except Exception:
+                            pass
+                        if failed:
+                            record["evidence"]["trace_note"] = ("No Playwright trace was kept: this run typed a "
+                                                                "password or another secret.")
                 if context is not None:
                     context.close()
                 if video_path:
@@ -1475,3 +1542,17 @@ class Runner:
             "healing_id": healing_id, "script_id": script.id}, source="self_healing.apply", approved=True,
             agent="self_healing")
         return saved
+
+
+def _busy_at_failure(sw: SmartWait, page: Any, entry: dict[str, Any]) -> None:
+    """23.11.0: was the page still loading when the step failed? (requests in flight, loaders, aria-busy). Recorded
+    as evidence for the failure classification (timing/synchronization); nothing is waited for here."""
+    try:
+        waiting, _long = sw.inflight()
+        probe = page.evaluate(smart_wait.SMART_WAIT_PROBE, None)
+        busy = ([f"{len(waiting)} request(s) still in flight"] if waiting else []) + list(probe.get("busy") or [])
+        if busy:
+            entry["page_busy"] = busy[:4]
+            entry["wait_uncertain"] = True
+    except Exception:
+        pass

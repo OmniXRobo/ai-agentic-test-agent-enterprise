@@ -30,7 +30,16 @@ class LinkIn(BaseModel):
 
 
 class DismissIn(BaseModel):
-    reason: str = ""
+    reason: str = Field(default="", max_length=2000)
+
+
+class ApproveIn(BaseModel):
+    note: str = Field(default="", max_length=2000)
+
+
+class PublishIn(BaseModel):
+    fields: dict[str, Any] | None = None  # values for mandatory fields TFS Preferences could not complete
+    allow_duplicate: bool = False
 
 
 class ModeIn(BaseModel):
@@ -77,6 +86,7 @@ def recheck(draft_id: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 
 @router.post("/drafts/{draft_id}/create")
 def create(draft_id: int, body: DraftIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Approve and send in one explicit action (the person must be allowed to do both)."""
     return {"ok": True, "draft": rt.defects.create(draft_id, body.model_dump(exclude_none=True) if body else None)}
 
 
@@ -88,3 +98,55 @@ def link(draft_id: int, body: LinkIn, rt: Runtime = Depends(runtime)) -> dict[st
 @router.post("/drafts/{draft_id}/dismiss")
 def dismiss(draft_id: int, body: DismissIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "draft": rt.defects.dismiss(draft_id, body.reason)}
+
+
+# ---- 23.11.0: one Defect Review for AI-Driven, Guided Browser and Integration Comparison -------------------------
+
+
+@router.post("/drafts/{draft_id}/approve")
+def approve(draft_id: int, body: ApproveIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "draft": rt.defects.approve(draft_id, body.note if body else "")}
+
+
+@router.post("/drafts/{draft_id}/reject")
+def reject(draft_id: int, body: DismissIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "draft": rt.defects.reject(draft_id, body.reason)}
+
+
+@router.post("/drafts/{draft_id}/publish")
+def publish(draft_id: int, body: PublishIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    body = body or PublishIn()
+    return {"ok": True, "draft": rt.defects.publish(draft_id, fields=body.fields, allow_duplicate=body.allow_duplicate)}
+
+
+@router.post("/drafts/{draft_id}/retry")
+def retry(draft_id: int, body: PublishIn | None = None, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "draft": rt.defects.retry(draft_id, fields=(body.fields if body else None))}
+
+
+@router.post("/drafts/{draft_id}/ai-analyze")
+def ai_analyze(draft_id: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, "draft": rt.defects.ai_analyze(draft_id)}
+
+
+@router.get("/drafts/{draft_id}/events")
+def events(draft_id: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    rt.defects.get(draft_id)
+    return {"ok": True, "events": rt.defects.events(draft_id)}
+
+
+@router.get("/drafts/{draft_id}/evidence/{index}")
+def evidence(draft_id: int, index: int, rt: Runtime = Depends(runtime)) -> Any:
+    """One evidence file of a draft (only files the draft itself lists; nothing else on disk can be read)."""
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+
+    from ..errors import QAError
+
+    items = rt.defects.get(draft_id)["evidence"] or []
+    if index < 0 or index >= len(items) or not Path(str(items[index].get("path") or "")).is_file():
+        raise QAError("EVIDENCE_NOT_FOUND", "This evidence file is not available.", status=404)
+    path = Path(items[index]["path"])
+    inline = path.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
+    return FileResponse(path, filename=path.name, content_disposition_type="inline" if inline else "attachment")

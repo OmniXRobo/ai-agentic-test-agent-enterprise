@@ -55,11 +55,14 @@ class ConfigIn(BaseModel):
     browser: Literal["chromium", "msedge", "chrome"] | None = None
     use_ai: bool | None = None
     max_discovery_pages: int | None = Field(default=None, ge=1, le=200)
+    auto_trust: bool | None = None  # 23.10.0
 
 
 @router.put("/config")
 def put_config(body: ConfigIn, rt: Runtime = Depends(runtime), svc: Any = Depends(ops)) -> dict[str, Any]:
     rt.settings.update({"opsagent": body.model_dump(exclude_none=True)})
+    if getattr(svc, "pilot", None) is not None:
+        svc.agent.after_digest = svc.pilot.trust if svc.config().get("auto_trust", True) else None
     return {"ok": True, "config": svc.config()}
 
 

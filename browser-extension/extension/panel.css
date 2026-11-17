@@ -43,3 +43,6 @@ th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--bord
 .list > div { padding: 6px 0; border-bottom: 1px dashed var(--border); }
 .err { color: var(--fail); font-size: 12px; min-height: 1em; }
 .hidden { display: none !important; }
+.suggest { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.chip { border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; color: inherit; }
+.chip:hover { border-color: var(--accent); }

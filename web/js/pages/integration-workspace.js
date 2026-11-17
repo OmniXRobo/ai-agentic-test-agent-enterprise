@@ -186,28 +186,119 @@ function renderApps() {
   host.querySelectorAll("[data-connect]").forEach((b) => b.addEventListener("click", () => connect(appsOf().find((a) => a.id === b.dataset.connect))));
 }
 
+// 23.10.0: Connect to Application = Guided Browser Automation. The tester signs in and goes to the report in a
+// maximized browser; SkyGuard records the navigation, keeps the filters editable, notices pagination (every page is
+// read automatically) and turns a click into a detail page into a parameterized address. Typed steps stay available
+// under Advanced (manual navigation).
 function connect(a) {
   const { el, close } = openModal(`Connect to ${a.name}`, `<form class="grid" id="cf" autocomplete="off">
-    <p class="muted">The page is opened in the browser and only read. Nothing is changed in the application.</p>
-    <label>Page address <input name="url" value="${esc(a.url || "")}" placeholder="https://reports.company.local/orders" required></label>
+    <p class="muted">The application is only read. Nothing is changed in it: a recorded click that looks like a change (Save, Delete, Approve…) is never kept.</p>
+    <label>Start address <input name="url" value="${esc(a.url || "")}" placeholder="https://reports.company.local/" required></label>
     <label>Sign-in <select name="auth_method">${[["none", "No sign-in"], ["form", "Login form (username and password)"], ["windows", "Windows sign-in"], ["basic", "Basic"], ["manual", "I sign in myself (SSO / MFA)"]]
       .map(([v, t]) => `<option value="${v}" ${v === a.auth_method ? "selected" : ""}>${t}</option>`).join("")}</select></label>
     <label>Username <input name="username" value="${esc(a.username || "")}" autocomplete="off"></label>
     <label>Password <input name="password" type="password" autocomplete="new-password" placeholder="${a.has_password ? "Saved. Leave blank to keep it" : "Kept in Windows Credential Manager"}"></label>
-    <details><summary>Advanced: steps to reach the page</summary>
-      <label>Steps (one per line: click Text, or fill Label = value) <textarea name="steps" rows="3" placeholder="click Reports\nclick Order Summary"></textarea></label></details>
-    <div class="row"><button class="btn primary" name="go" value="capture">Save and capture data</button><button class="btn" name="go" value="save">Save only</button></div></form>`, { wide: true });
-  el.querySelector("#cf").addEventListener("submit", async (e) => {
+    <div class="card" id="gr" style="margin:6px 0"><p class="muted">Loading the recording…</p></div>
+    <details><summary>Advanced (manual navigation)</summary>
+      <label>Steps (one per line: click Text, or fill Label = value) <textarea name="steps" rows="3" placeholder="click Reports\nclick Order Summary"></textarea></label>
+      <div class="row"><button class="btn" name="go" value="capture">Save and capture with these steps</button><button class="btn" name="go" value="save">Save only</button></div></details>
+    </form>`, { wide: true });
+  const form = el.querySelector("#cf");
+  const values = () => Object.fromEntries(new FormData(form));
+  const saveApp = async () => {
+    const f = values();
+    await api(`${BASE}/applications/${a.id}`, { method: "PATCH", body: { url: f.url, auth_method: f.auth_method, username: f.username || null, password: f.password || null } });
+  };
+  let timer = null;
+  const box = el.querySelector("#gr");
+  const stopTimer = () => { if (timer) clearInterval(timer); timer = null; };
+  const guard = (fn) => async (e) => { const b = e.currentTarget; b.disabled = true; try { await fn(); } catch (err) { toast(err.message, "error"); } finally { if (b.isConnected) b.disabled = false; } };
+  async function show() {
+    if (!box.isConnected) { stopTimer(); return; }
+    const g = await api(`${BASE}/applications/${a.id}/guided`);
+    const rec = g.saved;
+    if (g.recording) {
+      const live = g.live || {};
+      box.innerHTML = `<h4 style="margin-top:0">Guided recording ${'<span class="pill INFO">Recording</span>'}</h4>
+        <p>Use the browser window that opened: sign in, open the menus and the report, set its filters, go through a page or two and open one detail record if you need them.</p>
+        <p class="muted">${live.events || 0} action(s) seen${live.last ? ` · last: ${esc(live.last.kind)} ${esc(live.last.what || "")}` : ""}${g.session?.state === "paused" ? " · waiting for you to sign in" : ""}</p>
+        <div class="row"><button type="button" class="btn primary" data-g="stop">Stop &amp; Save</button></div>`;
+      if (!timer) timer = setInterval(() => show().catch(() => stopTimer()), 2000);
+    } else {
+      stopTimer();
+      box.innerHTML = rec ? `<h4 style="margin-top:0">Recorded navigation <span class="pill PASS">Saved</span></h4>
+        <p class="muted">${esc(dateTimeOf(rec.edited_at || rec.recorded_at))} · ${rec.steps.length} step(s)${rec.pagination_seen ? " · pagination noticed: every page is read automatically" : ""}${(rec.dropped || []).length ? ` · ${rec.dropped.length} action(s) left out` : ""}</p>
+        <label>Recorded steps (edit if needed) <textarea id="gSteps" rows="${Math.min(10, Math.max(3, rec.steps.length + 1))}">${esc(g.steps_text)}</textarea></label>
+        ${(rec.filters || []).length ? `<p><b>Filters</b> (change the values here; no new recording needed)</p>${rec.filters.map((f) => `<label>${esc(f.label)} <input data-fv="${esc(f.label)}" value="${esc(f.value ?? "")}"></label>`).join("")}` : '<p class="muted">No filters were set while recording.</p>'}
+        ${rec.detail ? `<p><b>Detail pages</b>: for every record, open <code>${esc(rec.detail.url_template)}</code> with its ${esc(rec.detail.key_column)}.
+          <label style="display:inline"><input type="checkbox" id="gDet" ${rec.detail_disabled ? "" : "checked"}> read the detail pages</label>
+          <label style="display:inline">at most <input id="gLim" type="number" min="1" max="2000" style="width:6em" value="${rec.detail.limit || 200}"> records</label></p>` : ""}
+        ${(rec.tables || []).length ? `<details><summary>View captured tables (${rec.tables.length})</summary>${rec.tables.map((t) => `<p class="muted">${esc(t.row_count)} row(s) on the page${t.method ? ` · ${esc(t.method)}` : ""}</p><div class="table-wrap"><table class="data"><thead><tr>${(t.headers || []).map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${(t.rows || []).map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`).join("")}</details>` : ""}
+        ${(rec.dropped || []).length ? `<details><summary>Left out of the recording</summary><ul>${rec.dropped.slice(0, 30).map((d) => `<li>${esc(d.what || "")}: ${esc(d.why)}</li>`).join("")}</ul></details>` : ""}
+        <div class="row"><button type="button" class="btn" data-g="save">Save edits</button><button type="button" class="btn primary" data-g="replay">Replay &amp; Verify</button><button type="button" class="btn" data-g="start">Re-record</button><button type="button" class="btn" data-g="import" title="A recording made with the SkyGuard Edge/Chrome extension (Record for Integration Comparison)">Import from browser extension</button><input type="file" accept=".json,application/json" data-g="file" hidden></div>`
+        : `<h4 style="margin-top:0">Guided recording</h4>
+        <p>Press Start, then sign in and go to the report as you always do: menus, the report, its filters, the next page, a detail record. SkyGuard records the way there; passwords are never recorded.</p>
+        <div class="row"><button type="button" class="btn primary" data-g="start">Start Guided Recording</button><button type="button" class="btn" data-g="import" title="A recording made with the SkyGuard Edge/Chrome extension (Record for Integration Comparison)">Import from browser extension</button><input type="file" accept=".json,application/json" data-g="file" hidden></div>
+        <p class="muted">Already recorded the way to the report in Edge or Chrome with the SkyGuard extension? Import its file instead.</p>`;
+    }
+    box.querySelector('[data-g="start"]')?.addEventListener("click", guard(async () => {
+      await saveApp();
+      await api(`${BASE}/applications/${a.id}/guided/start`, { method: "POST" });
+      toast("A browser window is opening. Sign in and go to the report.", "success", 7000);
+      await show();
+    }));
+    box.querySelector('[data-g="stop"]')?.addEventListener("click", guard(async () => {
+      const out = await api(`${BASE}/applications/${a.id}/guided/stop`, { method: "POST" });
+      if (out.auth_method === "manual") toast("You signed in by hand while recording. Save the login above for unattended runs, or keep 'I sign in myself'.", "info", 9000);
+      await show();
+    }));
+    const file = box.querySelector('[data-g="file"]');
+    box.querySelector('[data-g="import"]')?.addEventListener("click", () => file && file.click());
+    file?.addEventListener("change", async () => {
+      const f = file.files && file.files[0];
+      if (!f) return;
+      try {
+        if (f.size > 4 * 1024 * 1024) throw new Error("This file is too large for a navigation recording.");
+        let data;
+        try { data = JSON.parse(await f.text()); } catch (e) { throw new Error("This is not a SkyGuard navigation recording (not JSON)."); }
+        await saveApp();
+        const out = await api(`${BASE}/applications/${a.id}/guided/import`, { method: "POST", body: { recording: data.recording || data } });
+        toast(`Imported ${out.saved.steps.length} step(s) from the browser extension.`, "success");
+        if (out.auth_method === "manual") toast("The sign-in was done by hand while recording. Save the login above for unattended runs, or keep 'I sign in myself'.", "info", 9000);
+        await show();
+      } catch (err) { toast(err.message, "error"); } finally { file.value = ""; }
+    });
+    const edits = () => {
+      const fv = {};
+      box.querySelectorAll("[data-fv]").forEach((i) => { fv[i.dataset.fv] = i.value; });
+      const det = box.querySelector("#gDet");
+      return { steps_text: box.querySelector("#gSteps")?.value, filter_values: fv, detail_enabled: det ? det.checked : undefined, detail_limit: Number(box.querySelector("#gLim")?.value) || undefined };
+    };
+    box.querySelector('[data-g="save"]')?.addEventListener("click", guard(async () => {
+      await api(`${BASE}/applications/${a.id}/guided`, { method: "PUT", body: edits() });
+      toast("Recording updated.", "success"); await show();
+    }));
+    box.querySelector('[data-g="replay"]')?.addEventListener("click", guard(async () => {
+      await saveApp();
+      await api(`${BASE}/applications/${a.id}/guided`, { method: "PUT", body: edits() });
+      await api(`${BASE}/applications/${a.id}/guided/replay`, { method: "POST" });
+      toast("Replaying and reading every page… Analyze when it has finished.", "success", 7000);
+      close(); stopTimer(); await reload();
+      setTimeout(() => st && reload(), 6000);
+    }));
+  }
+  show().catch((err) => { box.innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`; });
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const go = e.submitter?.value || "capture";
-    const f = Object.fromEntries(new FormData(e.target));
+    const go = e.submitter?.value || "save";
+    const f = values();
     try {
-      await api(`${BASE}/applications/${a.id}`, { method: "PATCH", body: { url: f.url, auth_method: f.auth_method, username: f.username || null, password: f.password || null } });
+      await saveApp();
       if (go === "capture") {
         await api(`${BASE}/applications/${a.id}/capture`, { method: "POST", body: { steps: parseSteps(f.steps || "") } });
         toast("Capturing the page… Analyze when it has finished.", "success");
       }
-      close(); await reload();
+      stopTimer(); close(); await reload();
       if (go === "capture") setTimeout(() => st && reload(), 6000);
     } catch (err) { toast(err.message, "error"); }
   });
@@ -563,11 +654,15 @@ function showDefect(dft) {
     <tr><th>Steps to reproduce</th><td><ol>${(d.steps || []).map((s) => `<li>${esc(s)}</li>`).join("")}</ol></td></tr>
     <tr><th>Explanation</th><td>${esc(d.explanation || "")}</td></tr>
     <tr><th>Screenshots</th><td>${esc((d.screenshots || []).join(", ") || "none")}</td></tr></tbody></table>
-    <div class="row"><button class="btn primary" id="wsTfs">Send to TFS</button><span class="muted">It stays listed under "Defects and tester decisions" below the results.</span></div>`, { wide: true });
+    <div class="row"><button class="btn primary" id="wsTfs">Send to TFS</button><button class="btn" id="wsReview">Open in Defect Review</button><span class="muted">It stays listed under "Defects and tester decisions" below the results. Sending approves it in your name.</span></div>`, { wide: true });
+  el.querySelector("#wsReview").addEventListener("click", async () => {
+    try { const { draft } = await api(`/api/comparison/defects/${dft.id}/review`, { method: "POST", body: {} }); location.hash = `#/defect-review?id=${draft.id}`; }
+    catch (err) { toast(err.message, "error"); }
+  });
   el.querySelector("#wsTfs").addEventListener("click", async (e) => {
     e.target.disabled = true;
     const send = (force) => api(`/api/comparison/defects/${dft.id}/tfs`, { method: "POST", body: { force } });
-    try { const r = await send(false); toast(r.defect.tfs_id ? `Created TFS #${r.defect.tfs_id}` : "TFS is not reachable: queued", "success"); }
+    try { const r = await send(false); toast(r.defect.tfs_id ? `Created TFS #${r.defect.tfs_id}` : `TFS is not reachable: kept for retry${r.defect.tfs_sync?.reason ? ` (${r.defect.tfs_sync.reason})` : ""}`, r.defect.tfs_id ? "success" : "info"); }
     catch (err) {
       if (err.code === "CMP_POSSIBLE_DUPLICATE" && confirm(`${err.message}\n\nCreate it anyway?`)) { try { await send(true); } catch (e2) { toast(e2.message, "error"); } }
       else toast(err.message, "error");

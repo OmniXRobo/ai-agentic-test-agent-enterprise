@@ -563,8 +563,8 @@ class FilterSession:
                 try:
                     ex.login()
                 except QAError as exc:
-                    if exc.code in ("CMP_MANUAL_LOGIN", "CMP_LOGIN_FAILED") and self.visible:
-                        self._pause(exc.code, "Sign in in the browser window (MFA and CAPTCHA are never bypassed), "
+                    if exc.error_code in ("CMP_MANUAL_LOGIN", "CMP_LOGIN_FAILED") and self.visible:
+                        self._pause(exc.error_code, "Sign in in the browser window (MFA and CAPTCHA are never bypassed), "
                                               "then click Resume.")
                     else:
                         raise
@@ -600,9 +600,9 @@ class FilterSession:
         try:
             return fn(ex)
         except QAError as exc:
-            if exc.code not in ("FILTER_NEEDS_USER", "FILTER_NOT_VERIFIED") or not self.visible:
+            if exc.error_code not in ("FILTER_NEEDS_USER", "FILTER_NOT_VERIFIED") or not self.visible:
                 raise
-            self._pause(exc.code, exc.message)
+            self._pause(exc.error_code, exc.message)
             return fn(ex)
 
     def _pause(self, code: str, message: str) -> None:

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 import base64
 import binascii
 
-from ..automation import date_rules, pytest_export
+from ..automation import smart_wait, date_rules, pytest_export
 from ..automation import files as filekit
 from ..automation.dsl import DataTable, Script, Step, new_script_id, to_playwright_python
 from ..clock import now_iso
@@ -45,6 +45,7 @@ class ScriptIn(BaseModel):
     browser: str = "chromium"
     steps: list[Step] = []
     notes: str | None = None
+    wait_policy: dict[str, Any] | None = None  # 23.11.0: Execution Wait Settings (kept when not sent)
 
 
 @router.get("/scripts")
@@ -77,7 +78,10 @@ def _all_datasets(rt: Runtime, script: Script) -> list[dict[str, Any]]:
 @router.get("/scripts/{script_id}")
 def get_script(script_id: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     script = rt.automation.scripts.get(script_id)
-    return {"ok": True, "script": script.model_dump(), "python": pytest_export.to_pytest(script, _all_datasets(rt, script)),
+    py = _python(rt).current(script_id)
+    return {"ok": True, "script": script.model_dump(), "python": py["source"],
+            "python_state": {k: py[k] for k in ("edited", "version", "steps_version", "steps_changed", "sha256")},
+            "python_versions": rt.automation.python.versions(script_id),
             "python_file": pytest_export.file_name(script), "versions": rt.automation.scripts.versions(script_id),
             "files": rt.automation.scripts.list_files(script_id),
             "date_suggestions": {str(k): v for k, v in date_rules.suggestions(script.steps).items()},
@@ -91,7 +95,55 @@ def update_script(script_id: str, body: ScriptIn, rt: Runtime = Depends(runtime)
     script = Script.model_validate({**body.model_dump(), "id": script_id, "version": current.version,
                                     "created_at": current.created_at})
     script.data_table = current.data_table  # imported test data is changed with its own endpoints (23.3.17)
+    if "wait_policy" not in body.model_fields_set:
+        script.wait_policy = current.wait_policy
+    else:
+        script.wait_policy = smart_wait.clean_policy(body.wait_policy)
+    _check_waits(script)
     return {"ok": True, "script": rt.automation.scripts.save(script, reason="edited").model_dump()}
+
+
+# ---- 23.11.0: Smart Wait (Execution Wait Settings, Insert Wait After Steps, + Wait) -----------------------------
+
+
+def _check_waits(script: Script) -> None:
+    for i, st in enumerate(script.steps):
+        if st.action == "wait_until":
+            st.wait = smart_wait.clean_spec({**(st.wait or {}), "auto": (st.wait or {}).get("auto")})
+
+
+class WaitPolicyIn(BaseModel):
+    enabled: bool = False
+    mode: str = Field(default="smart", pattern="^(smart|fixed|smart_min)$")
+    timeout_ms: int = Field(default=30000, ge=500, le=300000)
+    minimum_ms: int = Field(default=500, ge=0, le=60000)
+    fixed_ms: int = Field(default=1000, ge=50, le=120000)
+    scope: str = Field(default="all", pattern="^(all|selected)$")
+    steps: list[int] = []
+    include_navigation: bool = True
+
+
+@router.put("/scripts/{script_id}/wait-policy")
+def set_wait_policy(script_id: str, body: WaitPolicyIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    script = rt.automation.scripts.get(script_id)
+    script.wait_policy = smart_wait.clean_policy(body.model_dump())
+    return {"ok": True, "script": rt.automation.scripts.save(script, reason="wait settings").model_dump()}
+
+
+class WaitBulkIn(BaseModel):
+    op: str = Field(pattern="^(insert|remove|update)$")
+    where: str = Field(default="all", pattern="^(all|selected|clicks|dropdowns|navigation|data)$")
+    steps: list[int] = []
+    wait: dict[str, Any] | None = None
+
+
+@router.post("/scripts/{script_id}/waits")
+def bulk_waits(script_id: str, body: WaitBulkIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    script = rt.automation.scripts.get(script_id)
+    steps, summary = smart_wait.bulk(script, body.op, body.where, body.steps, body.wait)
+    script.steps = steps
+    saved = rt.automation.scripts.save(script, reason=f"waits {body.op} ({body.where})")
+    return {"ok": True, "script": saved.model_dump(), **summary}
 
 
 # ---- 23.3.17: files for upload steps -------------------------------------------------------------
@@ -237,8 +289,79 @@ def export_script(script_id: str, format: str = Query("pytest", pattern="^(pytes
     if format == "playwright":
         return PlainTextResponse(to_playwright_python(script), headers={
             "Content-Disposition": f'attachment; filename="{script_id}.py"'})
-    return PlainTextResponse(pytest_export.to_pytest(script, _all_datasets(rt, script)), headers={
+    # 23.11.0: the saved (edited) Python when there is one, else the one generated from the steps
+    return PlainTextResponse(_python(rt).current(script_id)["source"], headers={
         "Content-Disposition": f'attachment; filename="{pytest_export.file_name(script)}"'})
+
+
+# ---- 23.11.0: editable Python test ----------------------------------------------------------------------------
+
+
+def _python(rt: Runtime) -> Any:
+    rt.automation.python.datasets = lambda script: _all_datasets(rt, script)
+    return rt.automation.python
+
+
+class PythonIn(BaseModel):
+    source: str = Field(max_length=400_000)
+    note: str = Field(default="", max_length=300)
+
+
+@router.post("/scripts/{script_id}/python/validate")
+def python_validate(script_id: str, body: PythonIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    from ..automation.python_scripts import validate
+
+    rt.automation.scripts.get(script_id)
+    return {"ok": True, **validate(body.source)}
+
+
+@router.post("/scripts/{script_id}/python/format")
+def python_format(script_id: str, body: PythonIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    from ..automation.python_scripts import format_source, validate
+
+    rt.automation.scripts.get(script_id)
+    src = format_source(body.source)
+    return {"ok": True, "source": src, **validate(src)}
+
+
+@router.put("/scripts/{script_id}/python")
+def python_save(script_id: str, body: PythonIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    cur = _python(rt).save(script_id, body.source, body.note)
+    return {"ok": True, "python": cur["source"], "python_state": {k: cur[k] for k in ("edited", "version", "steps_version",
+                                                                                       "steps_changed", "sha256")},
+            "python_versions": rt.automation.python.versions(script_id)}
+
+
+@router.get("/scripts/{script_id}/python/versions/{version}")
+def python_version(script_id: str, version: int, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    row = rt.db.query_one("SELECT version, source, note, created_by, created_at FROM script_python WHERE script_id = ?"
+                          " AND version = ?", (script_id, version))
+    if not row:
+        raise QAError("PYTHON_VERSION_NOT_FOUND", f"Python version {version} does not exist.", status=404)
+    return {"ok": True, "version": row}
+
+
+class PythonActionIn(BaseModel):
+    confirm: bool = False
+
+
+@router.post("/scripts/{script_id}/python/{action}")
+def python_action(script_id: str, action: str, body: PythonActionIn | None = None, version: int | None = None,
+                  rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    svc = _python(rt)
+    if action == "revert":
+        cur = svc.revert(script_id)
+    elif action == "regenerate":
+        cur = svc.regenerate(script_id, confirm=bool(body and body.confirm))
+    elif action == "restore" and version:
+        cur = svc.restore(script_id, version)
+    elif action == "run":
+        return {"ok": True, "run_id": svc.run(script_id)}
+    else:
+        raise QAError("PYTHON_ACTION_INVALID", "Use revert, regenerate, restore (with version) or run.", status=404)
+    return {"ok": True, "python": cur["source"], "python_state": {k: cur[k] for k in ("edited", "version", "steps_version",
+                                                                                       "steps_changed", "sha256")},
+            "python_versions": svc.versions(script_id)}
 
 
 class BundleIn(BaseModel):
@@ -262,7 +385,9 @@ def export_bundle(body: BundleIn, rt: Runtime = Depends(runtime)) -> Response:
     if not scripts:
         raise QAError("NO_SCRIPTS", "No automation scripts match. Create the automation first.", status=404)
     data = pytest_export.bundle([(s, _all_datasets(rt, s)) for s in scripts], now_iso(),
-                                files={s.id: rt.automation.scripts.files_dir(s.id) for s in scripts})
+                                files={s.id: rt.automation.scripts.files_dir(s.id) for s in scripts},
+                                sources={s.id: _python(rt).current(s.id)["source"] for s in scripts
+                                         if rt.automation.python.is_edited(s.id)})
     name = f"automated-tests-US{body.user_story_id}.zip" if body.user_story_id else "automated-tests.zip"
     return Response(data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 

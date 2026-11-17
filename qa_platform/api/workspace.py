@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
@@ -119,6 +120,51 @@ async def import_file(aid: str, request: Request, name: str = Query(..., max_len
 @router.post("/applications/{aid}/capture")
 def capture(aid: str, body: CaptureIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, **_ws(rt).capture(aid, body.model_dump())}
+
+
+# ---- 23.10.0 guided recording of the navigation ----------------------------------------------------------------
+
+
+class GuidedUpdateIn(BaseModel):
+    steps_text: str | None = Field(default=None, max_length=20000)
+    filter_values: dict[str, Any] | None = None
+    detail_enabled: bool | None = None
+    detail_limit: int | None = Field(default=None, ge=1, le=2000)
+
+
+@router.post("/applications/{aid}/guided/start")
+async def guided_start(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **(await run_in_threadpool(_ws(rt).guided_start, aid))}
+
+
+@router.get("/applications/{aid}/guided")
+async def guided_status(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **(await run_in_threadpool(_ws(rt).guided_status, aid))}
+
+
+@router.post("/applications/{aid}/guided/stop")
+async def guided_stop(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **(await run_in_threadpool(_ws(rt).guided_stop, aid))}
+
+
+@router.put("/applications/{aid}/guided")
+def guided_update(aid: str, body: GuidedUpdateIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_ws(rt).guided_update(aid, body.model_dump(exclude_none=True))}
+
+
+class GuidedImportIn(BaseModel):
+    recording: dict[str, Any]
+
+
+@router.post("/applications/{aid}/guided/import")
+def guided_import(aid: str, body: GuidedImportIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """A navigation recorded with the SkyGuard browser extension (Record for Integration Comparison)."""
+    return {"ok": True, **_ws(rt).guided_import(aid, body.recording)}
+
+
+@router.post("/applications/{aid}/guided/replay")
+def guided_replay(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return {"ok": True, **_ws(rt).guided_replay(aid)}
 
 
 @router.delete("/applications/{aid}/inputs/{input_id}")

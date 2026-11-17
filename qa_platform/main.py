@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .api import opsagent as opsagent_api
+from .api import agent_simple as agent_simple_api
 from .api import ai_reports, app_control, aura as aura_api, auth as auth_api, automation, core, defects, design, guard, knowledge, perf_schedules, performance, reports, schedules, setup, studio, tfs, voice
 from .config import WEB_ROOT, Paths
 from .errors import install_error_handlers
@@ -70,6 +71,7 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app.include_router(workspace_api.router)
     app.include_router(comparison_api.router)  # final patch: Application Data Comparison Agent
     app.include_router(opsagent_api.router)  # 23.5.0: Adaptive AI Application Learning & Operations Agent
+    app.include_router(agent_simple_api.router)  # 23.10.0: the simple AI Agent (four tabs)
     opsagent_api.install(app)
     auth_api.install(app)  # 23.3.34: every API request needs an account allowed to make it (runs after the guard)
     guard.install(app)  # 23.3.32: only the dashboard itself may use the API

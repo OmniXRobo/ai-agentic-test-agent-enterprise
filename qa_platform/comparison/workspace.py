@@ -317,13 +317,154 @@ class Workspace:
             raise QAError("WS_URL_REQUIRED", "Enter the application's page address first.", status=422)
         steps = data.get("steps") or []
         # 23.9.0: one browser session reads the whole page (table, other tables, KPI cards, charts, OCR fallback)
+        rec = app["config"].get("ws_guided") or {}
+        if not steps and rec.get("steps") and not data.get("ignore_recording"):
+            steps = rec["steps"]  # 23.10.0: the recorded navigation, unless steps are given
+            if rec.get("detail") and not rec.get("detail_disabled") and "detail" not in data:
+                data = {**data, "detail": rec["detail"]}
         spec = {"kind": "page", "steps": steps, "screenshots": True,
                 "screen_name": data.get("page_name") or app["name"], "target": data.get("target") or {}}
         if data.get("filters_spec"):
             spec.update(data["filters_spec"])
+        if data.get("detail"):
+            spec["detail"] = data["detail"]
         jobs = [self.svc.start_extraction(aid, spec)]
         self._set_config(aid, ws_datasets=(app["config"].get("ws_datasets") or []) + [j["dataset_id"] for j in jobs])
         return {"jobs": jobs}
+
+    # ---- 23.10.0 guided recording of the navigation (Connect to Application) --------------------------------
+    def _recorders(self) -> dict[str, Any]:
+        if not hasattr(self, "_guided"):
+            self._guided: dict[str, Any] = {}
+        return self._guided
+
+    def guided_start(self, aid: str) -> dict[str, Any]:
+        """Open the application in a visible, maximized browser and record what the tester does there."""
+        from . import guided_nav
+
+        self._app(aid)
+        s = self._session(aid, visible=True)
+        rec = guided_nav.Recorder(aid)
+        self._recorders()[aid] = rec
+        if s.state == "paused":  # sign-in first: the recorder starts now and drops the sign-in page's steps
+            pass
+        info = s.call(rec.install, timeout=120)
+        self.svc.audit("workspace.guided.start", self._app(aid)["project_id"], aid)
+        return {"recording": True, "session": s.status(), **info}
+
+    def guided_status(self, aid: str) -> dict[str, Any]:
+        app = self._app(aid)
+        rec = self._recorders().get(aid)
+        s = self._sessions().get(aid)
+        live = None
+        if rec and rec.active and s and s.state not in ("closed", "failed"):
+            try:
+                live = s.call(rec.pump, timeout=30)
+            except QAError:
+                live = None
+        saved = app["config"].get("ws_guided")
+        return {"recording": bool(rec and rec.active), "live": live, "session": s.status() if s else {"state": "none"},
+                "saved": saved, "steps_text": _steps_text(saved)}
+
+    def guided_stop(self, aid: str) -> dict[str, Any]:
+        from . import guided_nav
+
+        app = self._app(aid)
+        rec = self._recorders().get(aid)
+        s = self._sessions().get(aid)
+        if not rec or not rec.active or not s:
+            raise QAError("WS_NOT_RECORDING", "No recording is running for this application.", status=409)
+        out = s.call(rec.finish, timeout=120)
+        self._recorders().pop(aid, None)
+        values = {}
+        if out.get("login_url") and app.get("auth_method") in (None, "", "none"):
+            # the tester signed in by hand: at replay they are asked to sign in again (or save the login)
+            self.update_app(aid, {"auth_method": "manual", "url": app.get("base_url")})
+            values["auth_method"] = "manual"
+        self._set_config(aid, ws_guided=out)
+        self.svc.audit("workspace.guided.save", app["project_id"], aid, steps=len(out["steps"]),
+                       filters=len(out["filters"]), detail=bool(out.get("detail")))
+        return {"saved": out, "steps_text": guided_nav.steps_text(out["steps"]), **values}
+
+    def guided_import(self, aid: str, recording: Any) -> dict[str, Any]:
+        """Import a navigation recorded with the SkyGuard browser extension (Edge or Chrome) instead of SkyGuard's own
+        browser: checked like an edited recording (nothing that changes data, no secrets) and kept to the
+        application's own site, then saved exactly as Stop & Save would."""
+        from urllib.parse import urlsplit
+
+        from skyguard_agent import navrec
+
+        from . import guided_nav
+
+        app = self._app(aid)
+        if not app.get("base_url"):
+            raise QAError("WS_URL_REQUIRED", "Set the application's address first.", status=409)
+        try:
+            out = navrec.sanitize_recording(recording)
+        except navrec.NavRecordingError as exc:
+            raise QAError(exc.code, exc.message, status=exc.status) from exc
+        own = urlsplit(app["base_url"])
+        urls = [st["url"] for st in out["steps"] if st["action"] == "goto"]
+        urls += [u for u in (out.get("login_url"), (out.get("detail") or {}).get("url_template")) if u]
+        for u in urls:
+            p = urlsplit(u.replace("{key}", "k"))
+            if (p.scheme, p.hostname, p.port) != (own.scheme, own.hostname, own.port):
+                raise QAError("WS_RECORDING_OTHER_SITE", f"The recording goes to {p.scheme}://{p.netloc}, which is not "
+                              f"this application ({own.scheme}://{own.netloc}). Record it on the application itself.",
+                              status=422)
+        out["source"] = "browser-extension"
+        out["imported_at"] = _guided_now()
+        values = {}
+        if out.get("login_url") and app.get("auth_method") in (None, "", "none"):
+            self.update_app(aid, {"auth_method": "manual", "url": app.get("base_url")})
+            values["auth_method"] = "manual"
+        self._set_config(aid, ws_guided=out)
+        self.svc.audit("workspace.guided.import", app["project_id"], aid, steps=len(out["steps"]),
+                       filters=len(out["filters"]), detail=bool(out.get("detail")))
+        return {"saved": out, "steps_text": guided_nav.steps_text(out["steps"]), **values}
+
+    def guided_update(self, aid: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Edit Recorded Steps: the edited lines, new filter values, the detail page on or off."""
+        from . import guided_nav
+
+        app = self._app(aid)
+        rec = dict(app["config"].get("ws_guided") or {})
+        if not rec:
+            raise QAError("WS_NO_RECORDING", "Record the navigation first (Start Guided Recording).", status=409)
+        if data.get("steps_text") is not None:
+            rec["steps"] = guided_nav.parse_steps_text(data["steps_text"], rec.get("steps"))
+        for label, value in (data.get("filter_values") or {}).items():
+            for st in rec.get("steps") or []:
+                if st.get("filter") == label:
+                    st["value"] = value
+            for f in rec.get("filters") or []:
+                if f["label"] == label:
+                    f["value"] = value
+        if data.get("detail_enabled") is False:
+            rec["detail_disabled"] = True
+        elif data.get("detail_enabled") is True:
+            rec.pop("detail_disabled", None)
+        if data.get("detail_limit") and rec.get("detail"):
+            rec["detail"]["limit"] = max(1, min(int(data["detail_limit"]), 2000))
+        rec["edited_at"] = _guided_now()
+        self._set_config(aid, ws_guided=rec)
+        return {"saved": rec, "steps_text": guided_nav.steps_text(rec.get("steps") or [])}
+
+    def guided_replay(self, aid: str) -> dict[str, Any]:
+        """Replay & Verify: replay the recorded navigation in a new session and capture the data, every page, and
+        the detail pages when one was recorded."""
+        app = self._app(aid)
+        rec = app["config"].get("ws_guided")
+        if not rec:
+            raise QAError("WS_NO_RECORDING", "Record the navigation first (Start Guided Recording).", status=409)
+        s = self._sessions().get(aid)
+        if s and s.state not in ("closed", "failed"):
+            s.close()  # the replay uses its own browser, exactly as a comparison run will
+        data: dict[str, Any] = {"steps": [{k: v for k, v in st.items() if k != "apply_filters"}
+                                          for st in rec.get("steps") or []]}
+        if rec.get("detail") and not rec.get("detail_disabled"):
+            data["detail"] = rec["detail"]
+        return self.capture(aid, data)
 
     # ---- 23.9.0 filters: discover, configure, apply & fetch, sync, filter sets -------------------------------
     def _sessions(self) -> dict[str, Any]:
@@ -500,7 +641,7 @@ class Workspace:
                 self.svc.audit("workspace.filters.fetch", app["project_id"], aid, dataset=out["dataset"],
                                filters=list(out["applied"]), records=st.get("records"), set=set_name)
             except QAError as exc:
-                state.update(status="failed", error=exc.message, code=exc.code)
+                state.update(status="failed", error=exc.message, code=exc.error_code)
             except Exception as exc:
                 state.update(status="failed", error=str(exc).splitlines()[0][:300])
             finally:
@@ -1995,8 +2136,8 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
         apps_in = sorted(values)
         sig_src = json.dumps([field_id or field, record_key, apps_in,
                               [str((values[a] or {}).get("value")) for a in apps_in], str(expected)], default=str)
-        sig = hashlib.sha1(sig_src.encode()).hexdigest()[:16]
-        row = {"id": "WR-" + hashlib.sha1(f"{sig}|{len(rows)}".encode()).hexdigest()[:10].upper(),
+        sig = hashlib.sha1(sig_src.encode(), usedforsecurity=False).hexdigest()[:16]
+        row = {"id": "WR-" + hashlib.sha1(f"{sig}|{len(rows)}".encode(), usedforsecurity=False).hexdigest()[:10].upper(),
                "signature": sig, "field": field, "field_id": field_id, "record_key": record_key,
                "values": values, "result": result, "category": category, "explanation": explanation,
                "expected": _fmt(expected), "actual": actual, "difference": _fmt(difference),
@@ -2571,3 +2712,15 @@ overall {badge(e['result'])} · mapping version {_e((cfg_row or {}).get('version
 <h2>8. Tester decisions</h2>{f'<table><tr><th>When</th><th>Tester</th><th>Result</th><th>Decision</th><th>Note</th></tr>{dec_rows}</table>' if dec_rows else '<p>None.</p>'}
 <p style="color:#6b7280;margin-top:24px">Results were decided by deterministic comparison and calculation rules.
 AI only suggested mappings (approved by a tester) and wrote explanations.</p></body></html>"""
+
+
+def _steps_text(rec: dict[str, Any] | None) -> str:
+    from . import guided_nav
+
+    return guided_nav.steps_text((rec or {}).get("steps") or [])
+
+
+def _guided_now() -> str:
+    from . import guided_nav
+
+    return guided_nav._now()

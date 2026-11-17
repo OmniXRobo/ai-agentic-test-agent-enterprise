@@ -1,9 +1,10 @@
-"""Builds SkyGuard_Integration_Comparison_OCR_Browser_Final_Patch.zip, the cumulative 23.9.0 patch (23.4.0 to 23.9.0):
+"""Builds the SkyGuard QA 23.11.1 cumulative patch folder and zip (23.3.35 to 23.11.1: every release in between):
 every application file changed or added since the 23.3.35 baseline commit (the merge of PR #39), the offline OCR
 runtime wheels (RapidOCR, ONNX Runtime, OpenCV, NumPy, Pillow and their dependencies for 64-bit Windows and Python 3.13,
 listed with SHA-256 in ocr-runtime/WHEELS.json), the installer and its Windows wrappers, the browser extension update,
 the release documents (earlier notes under previous-*), the regression and acceptance tests with their fixture sites,
-and SHA256_CHECKSUM.txt. Writes the zip and <zip>.sha256.
+and SHA256_CHECKSUM.txt. Writes the zip and <zip>.sha256. packaging/setup/build_release.py wraps this folder into
+Setup.exe and the release zip.
 
     python packaging/cumulative-patch/build_patch.py --out <folder> --ocr-wheels <folder of .whl> [--baseline 6d448fa]
 
@@ -24,16 +25,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-NAME = "SkyGuard_Integration_Comparison_OCR_Browser_Final_Patch"
-VERSION = "23.9.0"
+NAME = "SkyGuard_SGQA-23.3.35_to_23.11.1_Patch_Files"
+VERSION = "23.11.1"
 BASELINE_COMMIT = "6d448fa"  # SkyGuard QA 23.3.35 (merge of PR #39)
 PREFIXES = ("qa_platform/", "web/", "skyguard_agent/")
-DOCS = REPO / "docs" / "integration-23.9.0"
-PREVIOUS_DOCS = {"previous-23.8.0": REPO / "docs" / "integration-23.8.0", "previous-23.7.2": REPO / "docs" / "automation-23.7.2", "previous-23.7.1": REPO / "docs" / "playback-23.7.1", "previous-23.7.0": REPO / "docs" / "autolearn-23.7.0",
+DOCS = REPO / "docs" / "release-23.11.1"
+PREVIOUS_DOCS = {"previous-23.11.0": REPO / "docs" / "release-23.11.0", "previous-23.10.0": REPO / "docs" / "release-23.10.0", "previous-23.9.0": REPO / "docs" / "integration-23.9.0", "previous-23.8.0": REPO / "docs" / "integration-23.8.0", "previous-23.7.2": REPO / "docs" / "automation-23.7.2", "previous-23.7.1": REPO / "docs" / "playback-23.7.1", "previous-23.7.0": REPO / "docs" / "autolearn-23.7.0",
                  "previous-23.6.1": REPO / "docs" / "adaptive-23.6.1"}
 TOOLS = ["APPLY_PATCH.cmd", "APPLY_PATCH.ps1", "ROLLBACK_PATCH.cmd", "VERIFY_PATCH.cmd", "install_patch.py",
          "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "DIAGNOSE_SITE.cmd", "DIAGNOSE_SITE.ps1",
-         "VERIFY_LIVE_SITE.cmd", "VERIFY_LIVE_SITE.ps1"]
+         "VERIFY_LIVE_SITE.cmd", "VERIFY_LIVE_SITE.ps1", "../setup/stop_skyguard.ps1"]
 TESTS = ["tests/test_passive_learning_23700.py", "tests/passive_session.py", "tests/transport_site.py",
          "tests/test_autolearn_patch_23700.py", "tests/test_ops_agent_e2e.py", "tests/test_extension_static.py",
          "tests/test_companion_security.py", "tests/test_adaptive_components_23600.py",
@@ -50,7 +51,15 @@ TESTS = ["tests/test_passive_learning_23700.py", "tests/passive_session.py", "te
          "tests/site/tripcom/flights.js", "tests/site/components/kit.js", "tests/site/components/travel.html",
          "tests/site/components/widgets.html",
          "tests/test_integration_ocr_browser_23900.py", "tests/test_integration_ai_browser_23900.py",
-         "tests/test_cumulative_patch_23900.py", "tests/conftest.py", "tests/site_server.py", "tests/auth_helper.py"]
+         "tests/test_cumulative_patch_23900.py", "tests/conftest.py", "tests/site_server.py", "tests/auth_helper.py",
+         "tests/test_autopilot_231000.py", "tests/test_agent_simple_api_231000.py", "tests/test_guided_comparison_231000.py",
+         "tests/report_site.py", "tests/test_extension_120.py", "tests/test_cumulative_patch_231000.py",
+         "tests/test_setup_wizard_231000.py", "tests/test_auth_23334.py", "tests/ops_agent_fixtures.py",
+         "tests/test_cumulative_patch_231100.py", "tests/test_smart_wait_231100.py", "tests/ajax_site.py",
+         "tests/test_python_editor_231100.py", "tests/test_comparison_tfs_231100.py", "tests/test_ui_231100.py",
+         "tests/test_defects.py", "tests/fake_ado.py", "tests/test_ai_agent_repair_231101.py",
+         "tests/shop_site.py", "tests/transport_flow_site.py", "tests/test_extension_130.py", "tests/test_ui_231101.py",
+         "tests/test_cumulative_patch_231101.py"]
 TEST_SITES = ["tests/site/integration_ocr", "tests/site/integration_live"]  # whole folders (fixtures of 23.9.0)
 
 
@@ -91,7 +100,8 @@ def main() -> None:
     shutil.copytree(REPO / "skyguard_agent", ext / "app" / "skyguard_agent", ignore=ignore)
     shutil.copy2(REPO / "qa_platform" / "voice" / "whisper_server.py", ext / "app" / "whisper_server.py")
     for a, b in ((REPO / "skyguard_agent" / "js" / "agent_dom.js", ext / "extension" / "lib" / "agent_dom.js"),
-                 (REPO / "web" / "js" / "secret-check.js", ext / "extension" / "lib" / "secret-check.js")):
+                 (REPO / "web" / "js" / "secret-check.js", ext / "extension" / "lib" / "secret-check.js"),
+                 (REPO / "web" / "js" / "wav-recorder.js", ext / "extension" / "lib" / "wav-recorder.js")):
         if a.read_bytes() != b.read_bytes():  # the extension must use the same DOM reader as SkyGuard
             raise SystemExit(f"{b} differs from {a}")
     wheels = sorted(Path(args.ocr_wheels).glob("*.whl"))
@@ -106,14 +116,15 @@ def main() -> None:
     (stage / "ocr-runtime" / "WHEELS.json").write_text(json.dumps({w.name: sha(w) for w in wheels}, indent=1),
                                                      encoding="utf-8")
     manifest = {"version": VERSION, "baseline": ["23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1",
-                                              "23.7.2", "23.8.0"], "ocr_wheels": len(wheels),
+                                              "23.7.2", "23.8.0", "23.9.0", "23.10.0", "23.11.0"], "ocr_wheels": len(wheels),
                 "extension_version": json.loads((ext / "extension" / "manifest.json").read_text())["version"], "baseline_commit": args.baseline,
                 "files": {rel: sha(stage / "app" / rel) for rel in files}}
     (stage / "PATCH_MANIFEST.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     for t in TOOLS:
-        shutil.copy2(HERE / t, stage / t)
-        if t.endswith((".cmd", ".ps1")):  # Windows line endings for cmd.exe and PowerShell 5.1
-            crlf(stage / t)
+        name = Path(t).name
+        shutil.copy2(HERE / t, stage / name)
+        if name.endswith((".cmd", ".ps1")):  # Windows line endings for cmd.exe and PowerShell 5.1
+            crlf(stage / name)
     for d in sorted(DOCS.glob("*.md")):
         shutil.copy2(d, stage / d.name)
     if (DOCS / "evidence").is_dir():

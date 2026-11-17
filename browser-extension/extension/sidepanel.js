@@ -68,20 +68,42 @@ async function show(tab) {
 async function chat() {
   main.innerHTML = `<div class="card"><div class="row"><label style="flex:1">Application ${appSelect()}</label></div>
     <div class="chat" id="chatLog"></div>
-    <label>Request<textarea id="say" placeholder="e.g. create 3 trips on 2026-12-01 from 06:00 every 30 minutes, route: Dubai to Abu Dhabi, bus: BUS-101, driver: available, trip numbers starting at DXB200 as Entry Operator (test)"></textarea></label>
-    <div class="row"><button class="btn primary" id="sendBtn">Send</button><button class="btn" id="micBtn">Speak</button>
-    <span class="muted">Never type passwords or codes here.</span></div><p class="err" id="chatErr"></p></div>`;
-  $("#appSel").onchange = (e) => { S.appId = e.target.value; };
+    <div class="suggest" id="suggest"></div>
+    <label>Request<textarea id="say" placeholder="Type or speak a request"></textarea></label>
+    <div class="row"><button class="btn primary" id="sendBtn">Send</button><button class="btn" id="micBtn">Speak</button></div>
+    <p class="err" id="chatErr"></p></div>`;
+  $("#appSel").onchange = (e) => { S.appId = e.target.value; suggestions(); };
   renderChat();
+  suggestions();
+  S.poll = setInterval(suggestions, 8000);
   $("#sendBtn").onclick = sendChat;
   $("#say").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) sendChat(); });
   $("#micBtn").onclick = voice;
 }
 
+// 1.3.0: suggestions come from what was learned for this application, the page open in the active tab, records
+// waiting for a step and recent requests; view-only accounts get reading and navigation only. No fixed list.
+async function suggestions() {
+  const box = $("#suggest");
+  if (!box || !S.appId) { if (box) box.innerHTML = ""; return; }
+  let out;
+  try {
+    const { url } = await send({ type: "active-url" });
+    out = await api.get(`/v1/simple/suggestions?app_id=${encodeURIComponent(S.appId)}${url ? `&page=${encodeURIComponent(url)}` : ""}${S.conversation ? `&conversation=${encodeURIComponent(S.conversation)}` : ""}`);
+  } catch (e) { return; }
+  const items = out.suggestions || [];
+  const html = items.length ? items.map((s) => `<button class="chip" data-say="${esc(s.text)}" title="${esc(s.why || "")}">${esc(s.text)}</button>`).join("")
+    : `<span class="muted">${out.learned ? "Nothing to suggest right now." : "Nothing learned for this application yet: open Learn and press Start learning."}</span>`;
+  if (box.dataset.sig === html) return;
+  box.dataset.sig = html;
+  box.innerHTML = html;
+  box.querySelectorAll("[data-say]").forEach((b) => b.onclick = () => { $("#say").value = b.dataset.say; $("#say").focus(); });
+}
+
 function renderChat() {
   const log = $("#chatLog");
   if (!log) return;
-  log.innerHTML = (S.messages.length ? S.messages : [{ who: "agent", text: "Hello. With automatic learning on (Options), I learn your registered applications while you use them. Ask me 'what have you learned?', 'how do I create a trip?', 'who approves trips?'. Every operation shows a preview first and runs only after you confirm. Say 'help' for examples." }])
+  log.innerHTML = (S.messages.length ? S.messages : [{ who: "agent", text: "Hello. Choose the application, then tell me what to do in it. Every change shows a short preview first and runs only after you confirm." }])
     .map((m) => `<div class="msg ${m.who}${m.warn ? " warn" : ""}">${esc(m.text)}${m.actions || ""}</div>`).join("");
   log.scrollTop = log.scrollHeight;
   log.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => chatAction(b.dataset.act, b.dataset));
@@ -108,16 +130,28 @@ async function sendChat() {
     let actions = "";
     if (r.type === "secret_intercepted") actions = `<div class="row" style="margin-top:6px"><button class="btn" data-act="apps">Open Applications &amp; Accounts</button></div>`;
     if (r.type === "suggest_discovery" || r.type === "suggest_watch") actions = `<div class="row" style="margin-top:6px"><button class="btn" data-act="learn">Open Learn</button></div>`;
+    if (r.type === "need_credential" && r.account_id) actions = `<div class="row" style="margin-top:6px"><button class="btn primary" data-act="credential" data-account="${esc(r.account_id)}">Save the password securely</button></div>`;
+    if (r.type === "records" && (r.keys || []).length) actions = `<div class="muted" style="margin-top:4px">${esc(r.keys.slice(0, 50).join(", "))}</div>`;
+    if (r.type === "run" && r.consequential) actions = `<div class="muted" style="margin-top:4px">This changes records: you will tick a confirmation box under the preview.</div>`;
     if (r.type === "needs_approval") { S.pendingApproval = { id: r.entry_id, text }; actions = `<div class="row" style="margin-top:6px"><button class="btn primary" data-act="approve-run">Approve and run</button><button class="btn" data-act="knowledge">Review it first</button></div>`; }
+    if (r.type === "clarify" && (r.missing || []).length) actions = `<div class="muted" style="margin-top:4px">Missing information: ${esc(r.missing.join(", "))}</div>`;
+    if (r.type === "need_credential" && r.security_notice) actions += `<div class="muted" style="margin-top:4px">${esc(r.security_notice)}</div>`;
+    if (r.type === "navigate" && r.url) {
+      const opened = await send({ type: "open-url", url: r.url });
+      actions = `<div class="muted" style="margin-top:4px">${opened.ok ? "Opened in the browser." : esc(opened.error || "Could not open it.")} ${esc(r.url)}</div>`;
+    }
     S.messages.push({ who: "agent", text: r.text, warn: r.type === "secret_intercepted" || r.type === "error", actions });
-    if (r.type === "run" && r.run_id) { S.runId = r.run_id; await send({ type: "drive", runId: r.run_id }); setTimeout(() => show("run"), 600); }
+    if (r.type === "run" && r.run_id && !r.duplicate) { S.runId = r.run_id; await send({ type: "drive", runId: r.run_id }); setTimeout(() => show("run"), 600); }
+    else if (r.type === "run" && r.run_id) { S.runId = r.run_id; setTimeout(() => show("run"), 600); }
+    suggestions();
   } catch (e) {
     S.messages.push({ who: "agent", warn: true, text: e.message });
   }
   renderChat();
 }
 
-async function chatAction(act) {
+async function chatAction(act, data) {
+  if (act === "credential") { chrome.windows.create({ url: chrome.runtime.getURL(`credential.html?account=${encodeURIComponent(data.account)}`), type: "popup", width: 460, height: 560 }); return; }
   if (act !== "approve-run") return show(act);
   const p = S.pendingApproval;
   if (!p) return;
@@ -179,21 +213,32 @@ async function run() {
 async function renderRun(quiet) {
   const body = $("#runBody");
   if (!body || !S.runId) return;
-  let v, ev;
-  try { [v, ev] = await Promise.all([api.get(`/v1/runs/${S.runId}`), api.get(`/v1/runs/${S.runId}/events`)]); }
+  let v, ev, sv;
+  try { [v, ev, sv] = await Promise.all([api.get(`/v1/runs/${S.runId}`), api.get(`/v1/runs/${S.runId}/events`), api.get(`/v1/simple/runs/${S.runId}`).then((x) => x.simple).catch(() => null)]); }
   catch (e) { if (!quiet) toast($("#runErr"), e.message); return; }
   const r = v.run, st = v.status, p = r.preview || {};
-  // re-render only when something changed, so buttons stay put while the person reaches for them
-  const sig = JSON.stringify([r.id, r.status, r.updated_at, v.items.map((i) => i.status), ev.events.length, st.pause]);
+  // re-render only when something changed, so buttons stay put while the person reaches for them; the
+  // confirmation box keeps its tick across re-renders (1.3.0)
+  const ackKey = `${r.id}:${r.preview_hash || ""}`;
+  S.ack = S.ack || {};
+  const box = $("#ackBox");
+  if (box && box.dataset.key) S.ack[box.dataset.key] = box.checked;
+  const sig = JSON.stringify([r.id, r.status, r.preview_hash, v.items.map((i) => i.status), ev.events.length, st.pause]);
   if (quiet && sig === S.runSig) return;
   S.runSig = sig;
   const pause = st.pause;
   const final = ["completed", "partial", "failed", "stopped", "cancelled"].includes(r.status);
   statusBar(st, r);
+  const s = sv || {};
+  const rows = (s.records || []).map((rec) => Object.entries(rec).map(([k, val]) => `<tr><th>${esc(k)}</th><td>${esc(val)}</td></tr>`).join("")).join("<tr><td colspan='2'><hr></td></tr>");
   const preview = r.status === "awaiting_confirmation" && p.records ? `<h2>Preview (nothing has been submitted)</h2>
-    <p>${esc(p.totals.ready)} of ${esc(p.totals.records)} record(s) ready, ${esc(p.totals.blocked)} blocked. Account(s): ${esc(v.plan.stages.map((s) => `${s.title}: ${s.account}`).join("; "))}.</p>
-    <table><tr><th>#</th><th>Values</th><th>Checks</th></tr>${p.records.map((x) => `<tr><td>${x.seq}</td><td>${esc(Object.entries(x.values || {}).map(([k, val]) => `${k}: ${val}`).join(", "))}</td><td>${esc(x.status)} ${esc((x.findings || []).map((f) => f.message).join("; "))}</td></tr>`).join("")}</table>
-    <div class="row" style="margin-top:8px"><button class="btn primary" id="confirmBtn"${p.totals.ready ? "" : " disabled"}>Confirm and run ${esc(p.totals.ready)} record(s)</button><button class="btn danger" id="cancelBtn">Cancel</button></div>` : "";
+    <table><tr><th>Action</th><td>${esc(s.action || v.plan.stages.map((x) => x.title).join(" → "))}</td></tr><tr><th>Application</th><td>${esc(s.application || "")}</td></tr>
+    ${rows}<tr><th>Role</th><td>${esc(s.role || "-")}${s.account ? ` (${esc(s.account)})` : ""}</td></tr><tr><th>Status</th><td>${esc(s.status_text || r.status)}</td></tr></table>
+    ${(s.missing || []).length ? `<p class="err">Missing information: ${esc(s.missing.join(", "))}</p>` : ""}
+    ${!s.can_confirm && (s.blocked_reasons || []).length ? `<p class="err">${esc(s.blocked_reasons.join("; "))}</p>` : ""}
+    ${s.can_confirm ? `${s.consequential ? `<label style="display:block;margin-top:6px"><input type="checkbox" id="ackBox" data-key="${esc(ackKey)}"${S.ack[ackKey] ? " checked" : ""}> I have read the preview. These ${esc(s.ready)} record(s) will be changed in the application.</label>` : ""}
+      <div class="row" style="margin-top:8px"><button class="btn primary" id="confirmBtn">Confirm &amp; Execute</button><button class="btn" id="editBtn">Edit</button><button class="btn danger" id="cancelBtn">Cancel</button></div>`
+    : `<div class="row" style="margin-top:8px"><button class="btn primary" id="editBtn">Provide missing data</button><button class="btn" id="editBtn2">Edit request</button><button class="btn danger" id="cancelBtn">Cancel</button></div>`}` : "";
   const controls = final ? "" : `<div class="row">${r.status === "paused" ? `<button class="btn primary" id="resumeBtn">Resume</button>` : `<button class="btn" id="pauseBtn">Pause</button>`}
     <button class="btn danger" id="stopBtn">Stop</button><button class="btn" id="cancelRestBtn">Cancel remaining</button>${pause ? `<button class="btn" id="ackBtn">Acknowledge</button>` : ""}</div>`;
   body.innerHTML = `${pause ? `<div class="card" style="border-color:var(--warn)"><strong>Paused:</strong> ${esc(pause.message)}<br><span class="muted">The browser stays open. Complete the step yourself, then press Resume; I will verify and continue.</span></div>` : ""}
@@ -202,7 +247,22 @@ async function renderRun(quiet) {
     <h2>Records</h2><table><tr><th>#</th><th>Result</th><th>Reason</th></tr>${v.items.map((i) => `<tr><td>${i.seq}</td><td>${esc(STATUS_TEXT[i.status] || i.status)}</td><td>${esc((i.result || {}).reason || "")}</td></tr>`).join("")}</table>
     <h2>Activity</h2><div class="list">${ev.events.slice(-40).reverse().map((e) => `<div><span class="muted">${esc(e.at.slice(11, 19))}</span> ${esc(e.message)}</div>`).join("")}</div>`;
   const on = (id, fn) => { const b = $(id); if (b) b.onclick = async () => { try { await fn(); await renderRun(); } catch (e) { toast($("#runErr"), e.message); } }; };
-  on("#confirmBtn", async () => { await api.post(`/v1/runs/${r.id}/confirm`, { preview_hash: r.preview_hash }); await send({ type: "drive", runId: r.id }); });
+  on("#confirmBtn", async () => {
+    const consequential = s.consequential ?? v.consequential;
+    if (consequential && !$("#ackBox")?.checked) throw new Error("Tick the confirmation box after reading the preview.");
+    $("#confirmBtn").disabled = true; // one press, one execution
+    await api.post(`/v1/runs/${r.id}/confirm`, { preview_hash: r.preview_hash, acknowledge: consequential ? true : undefined, app_id: r.application_id });
+    await send({ type: "drive", runId: r.id });
+  });
+  const edit = async () => {
+    await api.post(`/v1/runs/${r.id}/stop`);
+    S.appId = r.application_id;
+    await show("chat");
+    $("#say").value = (s.request_text || "") + ((s.missing || []).length ? `; ${s.missing[0]}: ` : "");
+    $("#say").focus();
+  };
+  on("#editBtn", edit);
+  on("#editBtn2", edit);
   on("#cancelBtn", () => api.post(`/v1/runs/${r.id}/stop`));
   on("#pauseBtn", () => api.post(`/v1/runs/${r.id}/pause`));
   on("#resumeBtn", async () => { const { events } = await send({ type: "manual-events", runId: r.id }); await api.post(`/v1/runs/${r.id}/resume`, { manual_events: events || [] }); await send({ type: "drive", runId: r.id }); });
@@ -221,6 +281,10 @@ function statusBar(st, r) {
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "run-paused" || msg.type === "run-done" || msg.type === "run-error") { if (S.tab === "run") renderRun(true); }
+  if ((msg.type === "learned" || msg.type === "learning-status") && S.tab === "learn" && !$("#lwStop:disabled")) {
+    clearTimeout(S.learnRefresh);
+    S.learnRefresh = setTimeout(() => { if (S.tab === "learn") learn().catch(() => {}); }, 1500);
+  }
 });
 
 // ---- applications and accounts -----------------------------------------------------------------------------------
@@ -268,8 +332,19 @@ async function learn() {
   const active = sessions.find((s) => s.status === "recording");
   const accSel = `<select id="lAcc"><option value="">(signed in already / none)</option>${accs.map((a) => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join("")}</select>`;
   const { auto_learn } = await api.settings();
-  main.innerHTML = `<div class="card"><h2>Learn while I browse</h2><p>${auto_learn ? "On: just use the application in its tabs; I work out screens, tasks, statuses, rules and roles myself." : "Off. Turn on <em>Learn automatically while I browse</em> in Options, then use the application as usual."}</p>
-    <div class="row"><button class="btn" id="openOpts">Options</button><button class="btn" data-goto="understand">What I understood</button></div></div>
+  const cmp = await send({ type: "cmp-record-status" });
+  const ls = S.appId ? await send({ type: "learning-status", appId: S.appId }) : { learning: false };
+  if (S.tab !== "learn") return; // the person moved to another tab while this was loading
+  main.innerHTML = `<div class="card"><h2>Learn while I browse</h2><label>Application ${appSelect("learnApp")}</label>
+    ${ls.learning ? `<p><span class="pill ${ls.offline ? "warn" : "ok"}">${ls.offline ? "Companion unreachable: keeping your actions and retrying" : "Learning"}</span> since ${esc(new Date(ls.since).toLocaleTimeString())}: ${esc(ls.events)} action(s) and ${esc(ls.pages)} page(s) sent${ls.queued ? `, ${esc(ls.queued)} waiting` : ""}.</p>
+      <p class="muted">Use the application normally in its tab. Passwords and codes are never recorded.</p>
+      <div class="row"><button class="btn primary" id="lwStop">Stop &amp; save learning</button></div>`
+    : `<p>Press Start, then use the application normally: I watch only, never click or type, and work out pages, tasks, statuses, rules and roles. ${auto_learn ? "(Automatic learning is also on in Options.)" : ""}</p>
+      <div class="row"><button class="btn primary" id="lwStart"${S.appId ? "" : " disabled"}>Start learning</button><button class="btn" data-goto="understand">What I understood</button><button class="btn" id="openOpts">Options</button></div>`}
+    <p class="err" id="lwErr"></p></div>
+    <div class="card"><h2>Connect an application</h2><label>Address<input id="cUrl" placeholder="https://trips.example.local/"></label><label>Name (optional)<input id="cName" placeholder="suggested from the address"></label>
+    <button class="btn" id="cBtn">Connect</button><p class="muted">Then open it and use it normally; I learn while you browse.</p></div>
+    ${cmpCard(cmp)}
     <div class="card"><h2>Guided learning</h2><label>Application ${appSelect()}</label>
     ${active ? `<p>Recording <strong>${esc(active.title)}</strong> (${esc(active.events)} actions so far). Perform the task normally in the application tab.</p>
       <div class="row"><button class="btn primary" id="finish">Finish and review</button><button class="btn" id="cancelL">Cancel</button></div>`
@@ -279,13 +354,88 @@ async function learn() {
     <button class="btn" id="discBtn">Start discovery</button><p class="muted">Opens screens and reads them; it never submits anything.</p></div>
     <div class="card"><h2>Recent sessions</h2><div class="list">${sessions.slice(0, 10).map((s) => `<div>${esc(s.title)} - ${esc(s.status)}</div>`).join("") || "<p class='muted'>None.</p>"}</div></div>`;
   $("#appSel").onchange = (e) => { S.appId = e.target.value; learn(); };
-  $("#openOpts").onclick = () => chrome.runtime.openOptionsPage();
-  main.querySelector("[data-goto]").onclick = () => show("understand");
+  $("#learnApp").onchange = (e) => { S.appId = e.target.value; learn(); };
+  if ($("#openOpts")) $("#openOpts").onclick = () => chrome.runtime.openOptionsPage();
+  if (main.querySelector("[data-goto]")) main.querySelector("[data-goto]").onclick = () => show("understand");
   const err = (e) => toast($("#lErr"), e.message);
+  const lwErr = (e) => toast($("#lwErr"), e.message || e);
+  if ($("#lwStart")) $("#lwStart").onclick = async () => {
+    // the site permission can only be asked for in this click
+    const app = S.apps.find((a) => a.id === S.appId);
+    if (app && !(await chrome.permissions.contains({ origins: app.origins.map((o) => o + "/*") }))
+        && !(await chrome.permissions.request({ origins: app.origins.map((o) => o + "/*") }).catch(() => false))) return lwErr("Learning needs access to this application's site.");
+    const r = await send({ type: "learning-start", appId: S.appId });
+    if (!r.ok) return lwErr(r.error);
+    learn();
+  };
+  if ($("#lwStop")) $("#lwStop").onclick = async () => {
+    try {
+      $("#lwStop").disabled = true;
+      const r = await send({ type: "learning-stop", appId: S.appId });
+      const out = await api.post(`/v1/simple/learn/${encodeURIComponent(S.appId)}/save`, {});
+      const vf = out.verified || {};
+      await learn();
+      main.insertAdjacentHTML("afterbegin", `<div class="card"><h2>${vf.ok ? "Learning saved and tested" : "Learning saved, not all of it can be used yet"}</h2>
+        <p>${esc(r.events || 0)} action(s) observed in this session. ${esc(vf.tasks || 0)} task(s) and ${esc(vf.pages || 0)} page(s) can be retrieved by a command${vf.checked ? ` (${esc(vf.checked - (vf.failed || []).length)} of ${esc(vf.checked)} checks passed)` : ""}.</p>
+        ${(vf.failed || []).length ? `<p class="err">Not retrievable yet: ${esc(vf.failed.map((f) => f.name).join(", "))}</p>` : ""}</div>`);
+    } catch (e) { lwErr(e); }
+  };
   if ($("#startL")) $("#startL").onclick = async () => { try { const { session } = await api.post("/v1/learning", { application_id: S.appId, account_id: $("#lAcc").value || undefined, title: $("#lTitle").value.trim() || "Workflow" }); await send({ type: "learn-start", appId: S.appId, sessionId: session.id }); learn(); } catch (e) { err(e); } };
   if ($("#finish")) $("#finish").onclick = async () => { try { await send({ type: "learn-stop", sessionId: active.id }); const out = await api.post(`/v1/learning/${active.id}/finish`); main.insertAdjacentHTML("afterbegin", `<div class="card"><h2>Learned (awaiting your approval)</h2><p>Workflow "${esc(out.workflow.key)}" with ${esc((out.workflow.data.steps || []).length)} step(s) and ${esc((out.rules || []).length)} suggested rule(s) were added to Knowledge for your review.${out.profile_learned ? " The sign-in screen was learned too." : ""}</p></div>`); setTimeout(() => show("knowledge"), 1500); } catch (e) { err(e); } };
   if ($("#cancelL")) $("#cancelL").onclick = async () => { await send({ type: "learn-stop", sessionId: active.id }); await api.post(`/v1/learning/${active.id}/cancel`); learn(); };
+  $("#cBtn").onclick = async () => {
+    try {
+      const out = await api.post("/v1/simple/connect", { url: $("#cUrl").value.trim(), name: $("#cName").value.trim() || undefined });
+      S.appId = out.application.id;
+      main.insertAdjacentHTML("afterbegin", `<div class="card"><p>${out.created ? "Connected" : "Already connected"}: <strong>${esc(out.application.name)}</strong>. Grant access to its site under Applications, then use it normally.</p></div>`);
+      setTimeout(() => show("apps"), 1500);
+    } catch (e) { err(e); }
+  };
+  bindCmp(err);
   $("#discBtn").onclick = async () => { try { const v = await api.post("/v1/discovery", { application_id: S.appId, account_id: $("#dAcc").value || undefined, max_pages: Number($("#dMax").value) || 25 }); S.runId = v.run.id; await send({ type: "drive", runId: v.run.id }); show("run"); } catch (e) { err(e); } };
+}
+
+// ---- recording for SkyGuard's Integration Comparison (read-only: the way to a report, saved as a file) -----------
+function cmpCard(cmp) {
+  const on = cmp && cmp.recording;
+  return `<div class="card"><h2>Record for Integration Comparison</h2>
+    ${on ? `<p>Recording in this tab: ${esc(cmp.events)} action(s). Sign in, open the menus and the report, set its filters, go to a next page and open one detail record if you need them.</p>
+      <div class="row"><button class="btn primary" id="cmpStop">Stop and save file</button><button class="btn" id="cmpCancel">Cancel</button></div>`
+    : `<p>Records the way to a report in the active tab, for SkyGuard's Integration Comparison (Connect to Application, <em>Import from browser extension</em>).</p>
+      <button class="btn" id="cmpStart">Start recording in the active tab</button>`}
+    <p class="muted">Only reads: clicks that change data (Save, Delete, Approve...) and sign-in steps are left out; passwords are never recorded.</p><p class="err" id="cmpErr"></p></div>`;
+}
+
+function bindCmp() {
+  const err = (e) => toast($("#cmpErr"), e.message || e);
+  if ($("#cmpStart")) $("#cmpStart").onclick = async () => {
+    // asked here, in the click: a site permission can only be requested from a user gesture
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const origin = tab ? originOf(tab.url || "") : "";
+    if (origin && /^https?:/.test(origin) && !(await chrome.permissions.request({ origins: [origin + "/*"] }).catch(() => false))) return err("Recording needs access to this site.");
+    const r = await send({ type: "cmp-record-start" });
+    if (!r.ok) return err(r.error);
+    learn();
+  };
+  if ($("#cmpCancel")) $("#cmpCancel").onclick = async () => { await send({ type: "cmp-record-stop" }); learn(); };
+  if ($("#cmpStop")) $("#cmpStop").onclick = async () => {
+    try {
+      const r = await send({ type: "cmp-record-stop" });
+      if (!r.ok) throw new Error(r.error);
+      const out = await api.post("/v1/comparison/recording", { events: r.events, start_url: r.start_url, final_url: r.final_url, tables: r.tables });
+      const rec = out.recording;
+      const blob = new Blob([JSON.stringify(rec, null, 1)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      let host = "report"; try { host = new URL(r.start_url).hostname.replace(/[^\w.-]/g, "_"); } catch (e) { /* keep */ }
+      a.download = `skyguard-navigation-${host}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      await learn();
+      main.insertAdjacentHTML("afterbegin", `<div class="card"><h2>Recording saved</h2><p>${rec.steps.length} step(s), ${rec.filters.length} filter(s)${rec.pagination_seen ? ", pagination noticed (SkyGuard reads every page)" : ""}${rec.detail ? `, detail page ${esc(rec.detail.url_template)}` : ""}. ${rec.dropped.length} action(s) left out.</p>
+        <p class="muted">In SkyGuard: Integration Comparison, the application's Connect dialog, <em>Import from browser extension</em>, choose ${esc(a.download)}.</p></div>`);
+    } catch (e) { err(e); }
+  };
 }
 
 // ---- knowledge ---------------------------------------------------------------------------------------------------

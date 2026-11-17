@@ -1485,13 +1485,33 @@ class ScriptStudio:
     # ---- self-healing --------------------------------------------------------------------------------
 
     def _on_diagnosis(self, result: dict[str, Any], found: dict[str, Any]) -> None:
-        """A likely application problem becomes a defect draft for Defect Review (never for automation issues)."""
-        if self.defects is None or not found.get("likely_application_problem"):
+        """23.11.0: every failed AI-Driven run becomes a defect draft for the Defect Review ("Draft, Needs Review"),
+        with the classification of the evidence (application, script, test data, environment, timing or
+        inconclusive). Only a person can approve it and send it to TFS; the run itself stays Failed."""
+        if self.defects is None:
             return
-        from ...defects import analysis
+        from ...defects import analysis, triage
 
-        category = {"Network/API Failure": "navigation", "Application Performance Problem": "navigation"}.get(
-            found["classification"], "assertion")
+        category = {"Network/API Failure": "navigation", "Application Performance Problem": "navigation",
+                    "Locator Changed": "locator", "Test Data Problem": "test_setup",
+                    "Authentication Failure": "test_setup", "Environment Failure": "browser_environment",
+                    "Automation Script Defect": "interaction", "Timeout": "interaction",
+                    "Unknown - Manual Investigation Required": "interaction"}.get(found["classification"], "assertion")
+        tri_class = {"Application Functional Defect": "application_defect", "Expected Result Mismatch":
+                     "application_defect", "Network/API Failure": "environment", "Application Performance Problem":
+                     "application_defect", "Locator Changed": "automation_script", "Automation Script Defect":
+                     "automation_script", "Test Data Problem": "test_data", "Authentication Failure": "test_data",
+                     "Environment Failure": "environment", "Timeout": "timing"}.get(found["classification"],
+                                                                                     "inconclusive")
+        tri_rec = {"automation_script": "locator_recovery" if found["classification"] == "Locator Changed" else
+                   "script_correction", "test_data": "test_data", "environment": "environment",
+                   "timing": "smart_wait"}.get(tri_class, "none")
+        tri = {"classification": tri_class, "label": triage.CLASSES[tri_class],
+               "confidence": round(min(float(found.get("confidence") or 0) / 100, 0.95), 2),
+               "evidence": [triage.redact(found.get("reason") or "", 300), *[triage.redact(o, 300) for o in
+                                                                             (found.get("observed") or [])[:5]]],
+               "recommendation": tri_rec, "recommendation_text": triage.RECOMMENDATIONS[tri_rec],
+               "origin": "Failure & Quality Analysis (rules)"}
         product, severity, finding = analysis.CATEGORIES[category]
         rec = self._record(result["script_id"])
         what = found.get("failed_step_title") or "a step"
@@ -1508,15 +1528,24 @@ class ScriptStudio:
                    f" · run {esc(result['run_id'])}</p>")
         shots = [p for p in (found["evidence"].get("failure_screenshot"), found["evidence"].get("full_page_screenshot")) if p]
         draft = {
-            "source": "functional", "source_run_id": result["run_id"],
+            "source": "framework", "source_run_id": result["run_id"], "triage": tri,
             "signature": analysis.signature("framework", rec["id"], found.get("failed_step"), found["classification"]),
             "category": category, "product_defect": product, "title": f"TC{rec['test_case_id']} {rec['test_case_title']}: "
                                                                        f"{what} - {found['classification'].lower()}"[:250],
             "severity": severity, "priority": 2 if severity <= 2 else 3, "repro_steps": repro,
-            "facts": {"error": found.get("error"), "failed_step": found.get("failed_step"), "finding": finding,
-                      "classification": found["classification"], "confidence": found["confidence"],
-                      "script_id": rec["id"], "base_url": result.get("base_url")},
-            "evidence": [{"kind": "screenshot", "path": p} for p in shots],
+            "facts": {"error": triage.redact(found.get("error") or "", 2000), "failed_step": found.get("failed_step"),
+                      "finding": finding, "classification": found["classification"], "confidence": found["confidence"],
+                      "script_id": rec["id"], "base_url": result.get("base_url"),
+                      "failed_step_description": what, "expected": found.get("expected"),
+                      "actual": triage.redact(found.get("actual") or "", 1000), "run_id": result["run_id"],
+                      "test_case_id": rec["test_case_id"], "script_file": rec["file"],
+                      "previous_step": passed[-1] if passed else None, "observed": found.get("observed"),
+                      "execution_mode": result.get("execution_mode"),
+                      "traceback": triage.redact((result.get("traceback") or "")[-4000:], 4000) or None},
+            "evidence": [{"kind": "screenshot", "path": p} for p in shots]
+                        + [{"kind": k, "path": str(p)} for k in ("trace", "log") for p in
+                           _as_list((found.get("evidence") or {}).get(k) or (result.get("evidence") or {}).get(k))
+                           if p and isinstance(p, str)],
             "test_case_id": rec["test_case_id"], "user_story_id": rec["user_story_id"],
         }
         threading.Thread(target=self._safe(lambda: self.defects.record_draft(draft), result["run_id"]),
@@ -1662,3 +1691,7 @@ def _mapping_schema(manual_steps: int) -> dict[str, Any]:
     if isinstance(steps, dict):
         steps["maxItems"] = max(6, 4 * manual_steps + 2)
     return schema
+
+
+def _as_list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, (list, tuple)) else ([value] if value else [])
