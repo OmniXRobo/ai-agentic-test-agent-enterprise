@@ -10,6 +10,11 @@ Cumulative patch: 23.4.0 to 23.9.0. It installs on 23.3.35, 23.4.0, 23.5.0, 23.6
 * A new table reader: separate columns even when they are close together, multi-line headers with units (AED, %),
   empty cells, wrapped cells, and totals / subtotals / grand totals that are checked and never counted as records.
   Titles and KPI cards are kept apart from tables. Dark themes and large screenshots are handled.
+* The bundled OCR engine carries the Microsoft C++ runtime it was built with and loads it first. On a Windows 10
+  1909 PC, the older msvcp140.dll in System32 ended the OCR process without an error ("stopped without an answer"),
+  and the patch rolled back. The installer's check now reads a test image (not only imports), and a failure names
+  the step, the exit code and the error output. If the bundled engine still cannot run while Windows OCR can, the
+  check is a WARN: the patch stays and screenshots are read with Windows OCR.
 * Windows OCR (found on real Windows runners): a number read with letters in a number column ("IO" for 10) is
   corrected and flagged for review, keeping what was read; an empty cell of a number column (Windows OCR skips a "0"
   that stands alone) is read again, enlarged, as copies that must agree. A cell that still reads as nothing stays

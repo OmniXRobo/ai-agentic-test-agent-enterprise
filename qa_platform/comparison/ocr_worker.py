@@ -35,6 +35,39 @@ TILE_H = 1800  # tall screenshots are read in overlapping strips so small text i
 OVERLAP = 120
 
 
+MSVC_DLLS = ("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
+             "msvcp140_codecvt_ids.dll", "concrt140.dll", "vcomp140.dll")
+
+
+def _load_msvc(sites: list[str]) -> str:
+    """Windows: load the Microsoft C++ runtime that the patch ships in ``<site>\\_msvc`` before anything else.
+
+    ONNX Runtime and OpenCV link to msvcp140.dll by name. Without this, Windows takes the copy in System32, which on
+    many PCs is older than the one they were built with (before 14.40), and the process ends with an access violation
+    on its first lock, without a Python error. Once a DLL of that name is loaded, every later load by name uses it."""
+    if os.name != "nt":
+        return "not needed"
+    import ctypes
+
+    for site in sites:
+        d = Path(site) / "_msvc"
+        if not (d / "msvcp140.dll").is_file():
+            continue
+        os.add_dll_directory(str(d))
+        loaded = []
+        for name in MSVC_DLLS:
+            if (d / name).is_file():
+                ctypes.WinDLL(str(d / name))
+                loaded.append(name)
+        return f"{len(loaded)} DLLs from {d}"
+    return "not shipped (Windows copies are used)"
+
+
+def stage(text: str) -> None:
+    """Progress on stdout, flushed: if a native library ends the process, the last stage says where."""
+    print(f"stage: {text}", flush=True)
+
+
 def fail(code: str, message: str) -> None:
     print(json.dumps({"error": code, "message": message}))
     sys.exit(2)
@@ -245,6 +278,22 @@ def graphics(img) -> dict:  # type: ignore[no-untyped-def]
     return {"background": bg, "rects": rects[:400], "pies": pies[:6], "hlines": hlines, "width": W, "height": H}
 
 
+def _self_test() -> str:
+    """The engine reads a small image drawn here (no file, no network): import alone does not prove that ONNX
+    Runtime can create a session and run the models on this PC."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (520, 110), "white")
+    try:
+        font = ImageFont.load_default(size=44)
+    except TypeError:  # Pillow < 10.1
+        font = ImageFont.load_default()
+    ImageDraw.Draw(img).text((20, 25), "Total 4120", fill="black", font=font)
+    res = run_rapidocr(img)
+    text = " ".join(ln.get("text", "") for ln in res.get("lines") or [])
+    return f"read '{text[:40]}'" if "4120" in text.replace(",", "") else f"missing (read '{text[:40]}')"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--site", default="")
@@ -253,18 +302,27 @@ def main() -> None:
     ap.add_argument("--engine", default="rapidocr")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
-    for p in [s for s in args.site.split(os.pathsep) if s]:
-        if Path(p).is_dir():
-            sys.path.insert(0, p)
+    sites = [p for p in args.site.split(os.pathsep) if p and Path(p).is_dir()]
+    for p in sites:
+        sys.path.insert(0, p)
     started = time.monotonic()
+    stage("C++ runtime")
+    try:
+        msvc = _load_msvc(sites)
+    except OSError as exc:
+        fail("OCR_RUNTIME_MISSING", f"The C++ runtime of the OCR engine could not be loaded ({exc}).")
     if args.mode == "probe":
-        info = {}
+        info = {"msvc": msvc}
         for mod in ("PIL", "numpy", "cv2", "onnxruntime", "rapidocr"):
+            stage(f"import {mod}")
             try:
                 m = __import__(mod)
                 info[mod] = getattr(m, "__version__", "ok")
             except Exception as exc:  # noqa: BLE001
-                info[mod] = f"missing ({type(exc).__name__})"
+                info[mod] = f"missing ({type(exc).__name__}: {exc})"[:300]
+        if not any(str(v).startswith("missing") for v in info.values()):
+            stage("read a test image")
+            info["test"] = _self_test()
         print(json.dumps({"probe": info}))
         return
     img = load(args.image)

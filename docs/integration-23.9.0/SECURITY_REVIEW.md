@@ -57,6 +57,8 @@ These are my own review notes on the changes. This is not a penetration test, an
 * Public sub-resources are allowed by default. A page that loads a malicious script from a CDN runs it in the
   isolated, non-persistent Playwright context, as it would in the tester's own browser. Use `strict_hosts` for
   sensitive applications.
-* The bundled OCR wheels are third-party binaries, pinned by version and hash. They were not code-reviewed here.
+* The bundled OCR wheels are third-party binaries, pinned by version and hash. They were not code-reviewed here. The
+  C++ runtime DLLs (msvc_runtime wheel) are Microsoft's redistributable files; they are loaded only inside the OCR
+  worker process and are not registered in Windows.
 * The Windows wrappers and the Windows-specific code paths (Credential Manager, Windows OCR, side-by-side launcher)
   were not executed in this review. See KNOWN_LIMITATIONS.md.

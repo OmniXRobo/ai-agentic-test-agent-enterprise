@@ -9,7 +9,7 @@ Baseline: commit `c838bf8` (23.8.0, merge of PR #53). The patch is cumulative fr
 |---|---|
 | `qa_platform/__init__.py` | Version 23.9.0. |
 | `qa_platform/comparison/ocr.py` | Engine detection and order (bundled RapidOCR, Windows OCR, Tesseract); configurable paths; worker subprocess with a timeout; `diagnose()`; Windows OCR without `-ExecutionPolicy`; no duplicate Tesseract words; with Windows OCR, empty number cells read again (enlarged copies that must agree, outcome kept in `cell_rereads`). |
-| `qa_platform/comparison/ocr_worker.py` (new) | Isolated OCR worker: image validation (formats, 80 Mpx limit), preprocessing (upscale, dark-theme inversion, tiling), RapidOCR with word boxes, chart graphics (bars, swatches, pie/donut slices), engine probe. |
+| `qa_platform/comparison/ocr_worker.py` (new) | Isolated OCR worker: image validation (formats, 80 Mpx limit), preprocessing (upscale, dark-theme inversion, tiling), RapidOCR with word boxes, chart graphics (bars, swatches, pie/donut slices), engine probe that reads a test image; loads the bundled Microsoft C++ runtime first on Windows; prints its stages so a crash can be located. |
 | `qa_platform/comparison/screen_reader.py` | Rewritten table reader: column gutters from body-word coverage, segments (titles, KPI cards, tables), multi-line headers with units, totals/subtotals/grand totals with Decimal checks, wrapped cells, extraction status and issues; chart reconstruction (bar, horizontal bar, multi-series, pie, donut, axis-only = approximate); digit look-alikes (O, I, l) corrected in number columns and flagged; `empty_number_cells`. |
 | `qa_platform/comparison/semantics.py` (new) | Business meaning of a field (concept, money role, unit), `same_meaning`, `can_combine`, `aggregate_allowed`; extensible vocabulary. |
 | `qa_platform/comparison/mapping.py` | Lenient, validated AI answers (confidence 85 / "85%" / "high", bare list, alias keys); grammar enforced; batches of 20; safe logging; deterministic fallback. |
@@ -36,7 +36,7 @@ No database migration (still 19). Filters, links and sets live in existing JSON 
 | `install_patch.py` | 23.9.0; OCR wheels checked (SHA-256), unpacked to a staging folder and swapped in, previous runtime kept for rollback; protected folders refused or patched side by side in `%LOCALAPPDATA%`; new verify checks (comparison 23.9.0, browser policy, OCR probe). |
 | `APPLY_PATCH.ps1/.cmd`, `ROLLBACK_PATCH.cmd`, `VERIFY_PATCH.cmd` | 23.9.0 texts, `-SideBySide`, logs fall back to `%LOCALAPPDATA%`. |
 | `build_patch.py` | Name `SkyGuard_Integration_Comparison_OCR_Browser_Final_Patch`, OCR wheels with `ocr-runtime/WHEELS.json`, 23.9.0 docs and tests. |
-| `ocr-runtime/wheels/*.whl` | Offline OCR runtime for 64-bit Windows / Python 3.13 (see OFFLINE_DEPENDENCIES.md). |
+| `ocr-runtime/wheels/*.whl` | Offline OCR runtime for 64-bit Windows / Python 3.13, with the Microsoft C++ runtime (see OFFLINE_DEPENDENCIES.md). |
 
 ## Tests
 

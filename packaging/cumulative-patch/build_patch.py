@@ -96,7 +96,7 @@ def main() -> None:
             raise SystemExit(f"{b} differs from {a}")
     wheels = sorted(Path(args.ocr_wheels).glob("*.whl"))
     names = {w.name.split("-")[0].lower().replace("_", "-") for w in wheels}
-    need = {"rapidocr", "onnxruntime", "opencv-python-headless", "numpy", "pillow"}
+    need = {"rapidocr", "onnxruntime", "opencv-python-headless", "numpy", "pillow", "msvc-runtime"}
     if not need <= names or any("win_amd64" not in w.name and "none-any" not in w.name for w in wheels):
         raise SystemExit(f"--ocr-wheels must hold the win_amd64 / py3-none-any wheels of {sorted(need)}; "
                          f"missing {sorted(need - names)}")

@@ -378,7 +378,15 @@ def _worker(args: list[str], settings: Any = None, timeout: float | None = None)
     try:
         data = json.loads((proc.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
-        raise QAError("OCR_FAILED", "The OCR engine stopped without an answer.", status=500,
+        # 23.9.0: say where it stopped (the worker prints a stage before each step) and how (the exit code: on
+        # Windows 0xC0000005 is an access violation inside a native library, 0xC0000135 a missing DLL)
+        out = [ln for ln in (proc.stdout or "").strip().splitlines() if ln.startswith("stage: ")]
+        where = out[-1][7:] if out else "start"
+        code = proc.returncode & 0xFFFFFFFF if proc.returncode is not None else None
+        how = f"exit code 0x{code:08X}" if code is not None and code > 255 else f"exit code {proc.returncode}"
+        err = " ".join((proc.stderr or "").strip().splitlines()[-2:])[-240:]
+        raise QAError("OCR_FAILED", f"The OCR engine stopped without an answer at '{where}' ({how})"
+                      + (f": {err}" if err else "") + ".", status=500,
                       details=(proc.stderr or "")[-600:]) from None
     if data.get("error"):
         raise QAError(data["error"], data.get("message") or "The OCR engine failed.", status=422
@@ -556,8 +564,8 @@ def diagnose(settings: Any = None, sample: Path | None = None) -> dict[str, Any]
     site = eng["rapidocr"]
     if site:
         try:
-            probe = _worker(["--image", "-", "--mode", "probe"], settings, 60)["probe"]
-            ok = all(not str(v).startswith("missing") for v in probe.values())
+            probe = _worker(["--image", "-", "--mode", "probe"], settings, 120)["probe"]
+            ok = all(not str(v).startswith("missing") for v in probe.values()) and "test" in probe
             out.append({"engine": "rapidocr", "label": "Bundled OCR (RapidOCR, offline)", "status": "ready" if ok
                         else "broken", "detail": ", ".join(f"{k} {v}" for k, v in probe.items()), "path": site})
         except QAError as exc:

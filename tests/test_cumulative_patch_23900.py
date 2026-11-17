@@ -282,6 +282,11 @@ def test_ocr_runtime_is_staged_swapped_and_rolled_back(built, tmp_path):
         assert (site / pkg).is_dir(), pkg
     assert not (site / "OLD_RUNTIME.txt").exists()
     assert json.loads((site / "SKYGUARD_OCR_RUNTIME.json").read_text())["patch"] == "23.9.0"
+    # the Microsoft C++ runtime that the OCR worker loads before ONNX Runtime and OpenCV (older System32 copies
+    # end the worker with an access violation on Windows 10 PCs without a recent Visual C++ redistributable)
+    for dll in ("msvcp140.dll", "msvcp140_1.dll", "concrt140.dll"):
+        assert (site / "_msvc" / dll).is_file(), dll
+    assert not (site / "Scripts").exists() and not list(site.glob("*.dll"))
     assert not list(site.parent.glob("site-packages.staging-*"))       # the staging folder became the runtime
     assert list(site.parent.glob("site-packages.before-23.9.0-*"))     # the previous runtime is kept for rollback
     # the application finds it where it looks (qa_platform.comparison.ocr.runtime_sites)

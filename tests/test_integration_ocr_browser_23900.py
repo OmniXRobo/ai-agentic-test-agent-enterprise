@@ -567,3 +567,41 @@ def test_a_printed_label_in_front_of_the_cell_copies_is_ignored():
         {"text": "0", "box": [left + k * (cw + gap) + 30, ocr.CELL_PAD + 6, 30, 40]} for k in range(3)]
     got = ocr._cell_number(rect, words, ocr.CELL_SCALE, left)
     assert got["text"] == "0" and got["copies"] == 3 and got["box"][0] == 110
+
+
+# ---- the bundled OCR engine on a Windows 10 PC (found on a user's Windows 10 1909 install) -------------------------
+
+def test_a_worker_that_dies_says_where_and_how(monkeypatch, tmp_path):
+    """No answer from the OCR worker: the message names the last stage and the exit code (0xC0000005 is an access
+    violation in a native library), and keeps the end of stderr, so the installer log explains the failure."""
+    import subprocess as sp
+
+    from qa_platform.comparison import ocr
+    from qa_platform.errors import QAError
+
+    monkeypatch.setattr(ocr, "_bundled_site", lambda settings=None: str(tmp_path))
+
+    def died(*a, **k):
+        return sp.CompletedProcess(a[0], 3221225477, stdout="stage: C++ runtime\nstage: import cv2\nstage: import "
+                                   "onnxruntime\n", stderr="Windows fatal exception: access violation\n")
+    monkeypatch.setattr(ocr.subprocess, "run", died)
+    with pytest.raises(QAError) as e:
+        ocr._worker(["--image", "-", "--mode", "probe"])
+    msg = e.value.message
+    assert "'import onnxruntime'" in msg and "0xC0000005" in msg and "access violation" in msg
+    d = ocr.diagnose()
+    assert d["engines"][0]["status"] == "broken" and "0xC0000005" in d["engines"][0]["detail"]
+
+
+def test_the_worker_probe_reads_a_test_image_and_loads_the_cpp_runtime_first():
+    import inspect
+
+    from qa_platform.comparison import ocr, ocr_worker
+
+    src = inspect.getsource(ocr_worker.main)
+    assert src.index("_load_msvc(") < src.index("__import__(mod)")  # before numpy, OpenCV and ONNX Runtime
+    assert "_self_test()" in src
+    assert ocr_worker._load_msvc([]) in ("not needed", "not shipped (Windows copies are used)")
+    if ocr.engines()["rapidocr"]:  # the runtime is on this machine: the probe must really read
+        eng = next(e for e in ocr.diagnose()["engines"] if e["engine"] == "rapidocr")
+        assert eng["status"] == "ready" and "4120" in eng["detail"], eng

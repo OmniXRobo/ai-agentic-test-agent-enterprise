@@ -62,6 +62,7 @@ PATCH_VERSION = "23.9.0"
 BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2 or 23.8.0"
 BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
+MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
 AGENT_SCHEMA = 2
 MIGRATION_COUNT = 19
 MARGIN_MB = 300
@@ -244,9 +245,16 @@ def extract_wheel(whl: Path, target: Path) -> None:
                 continue
             parts = name.split("/")
             if parts[0].endswith(".data"):
-                if len(parts) < 3 or parts[1] not in ("purelib", "platlib"):
+                if len(parts) == 4 and parts[1] == "data" and parts[2] == "Scripts":
                     continue
-                parts = parts[2:]
+                if len(parts) == 3 and parts[1] == "data" and parts[2].lower().endswith(".dll"):
+                    # 23.9.0: the Microsoft C++ runtime (msvc_runtime wheel) goes into a folder of its own that the
+                    # OCR worker loads first, so an older msvcp140.dll in Windows\System32 is never used
+                    parts = [MSVC_DIR, parts[2]]
+                elif len(parts) < 3 or parts[1] not in ("purelib", "platlib"):
+                    continue
+                else:
+                    parts = parts[2:]
             dst = (root / Path(*parts)).resolve()
             if root not in dst.parents:  # never outside the runtime folder
                 raise PatchError(f"{whl.name}: unsafe path {name}")
@@ -280,6 +288,9 @@ def install_ocr(patch_dir: Path, app: Path, python: str, stamp: str, force: bool
     for w in wheels:
         extract_wheel(w, staging)
     missing = [p for p in OCR_PACKAGES if not (staging / p).is_dir()]
+    if any(w.name.lower().startswith("msvc_runtime") for w in wheels) and \
+            not (staging / MSVC_DIR / "msvcp140.dll").is_file():
+        missing.append(f"{MSVC_DIR}\\msvcp140.dll")
     if missing:
         shutil.rmtree(staging, ignore_errors=True)
         raise PatchError(f"The OCR runtime is incomplete after unpacking (missing {', '.join(missing)}).")
@@ -372,8 +383,9 @@ BROWSER_POLICY_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.au
                        "'--start-maximized' not in b.launch_args(True, pb) and "
                        "b.context_options(False, pb).get('no_viewport') else 'browser policy incomplete')")
 OCR_PROBE = ("import sys; sys.path.insert(0, '.'); from qa_platform.comparison import ocr; d = ocr.diagnose(); "
-             "e = next(x for x in d['engines'] if x['engine'] == 'rapidocr'); print(e['status'] + ': ' + "
-             "str(e.get('detail'))[:200])")
+             "e = next(x for x in d['engines'] if x['engine'] == 'rapidocr'); "
+             "w = next((x for x in d['engines'] if x['engine'] == 'windows'), {}); "
+             "print(e['status'] + ': ' + str(e.get('detail'))[:400] + ' | windows: ' + str(w.get('status')))")
 AGENT_MIGRATE = ("import sys; sys.path.insert(0, '.'); from pathlib import Path; from qa_platform.config import Paths; "
                  "from skyguard_agent.store import Store; p = Paths().ensure(); s = Store(Path(p.root) / 'opsagent' / "
                  "'knowledge.sqlite3'); print(s.schema_version); s.close()")
@@ -385,6 +397,10 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
     def check(name: str, ok: bool, detail: str) -> None:
         report["checks"].append({"name": name, "status": "PASS" if ok else "FAIL", "detail": detail})
         say(f"  {name:<34} {'PASS' if ok else 'FAIL'}  {detail}")
+
+    def warn(name: str, detail: str) -> None:
+        report["checks"].append({"name": name, "status": "WARN", "detail": detail})
+        say(f"  {name:<34} WARN  {detail}")
 
     v = version_of(app)
     check("Version file", v == PATCH_VERSION, v)
@@ -427,9 +443,15 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
     if tag == "win32-cp313-64bit":
         try:
             ocr_state = run_py(python, app, data, OCR_PROBE).splitlines()[-1]
-            check("Offline OCR engine", ocr_state.startswith("ready"), ocr_state)
         except PatchError as exc:
-            check("Offline OCR engine", False, str(exc))
+            ocr_state = f"broken: {exc}"
+        if ocr_state.startswith("ready"):
+            check("Offline OCR engine", True, ocr_state)
+        elif ocr_state.startswith("broken") and "windows: available" in ocr_state:
+            # the rest of 23.9.0 works; screenshots are read by Windows OCR until the bundled engine runs
+            warn("Offline OCR engine", ocr_state.split(" | ")[0] + " | screenshots will be read with Windows OCR")
+        else:
+            check("Offline OCR engine", False, ocr_state)
     else:
         say(f"  {'Offline OCR engine':<34} SKIP  bundled runtime is for Windows / Python 3.13 (this is {tag})")
     try:
@@ -477,7 +499,7 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
     missing = [rel for rel in json.loads((app / f"PATCH_FILES_{PATCH_VERSION}.json").read_text(encoding="utf-8"))["files"]
                if not (app / rel).exists()] if (app / f"PATCH_FILES_{PATCH_VERSION}.json").exists() else [f"PATCH_FILES_{PATCH_VERSION}.json"]
     check("Patch files present", not missing, "all" if not missing else ", ".join(missing[:5]))
-    report["ok"] = all(c["status"] == "PASS" for c in report["checks"])
+    report["ok"] = all(c["status"] in ("PASS", "WARN") for c in report["checks"])
     return report
 
 

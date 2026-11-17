@@ -10,7 +10,10 @@ This list keeps to what was actually run. Anything not checked here is stated as
   from `-SideBySide` and the log-folder fallback.
 * **The bundled OCR runtime on Windows.** The same RapidOCR 3.10.0, ONNX Runtime and OpenCV versions were run here on
   Linux wheels. The Windows `win_amd64` wheels in the patch were checked by hash and by unpacking, but not executed.
-  The installer's OCR engine probe is the first check on Windows. If it fails, the patch rolls back.
+  The installer's OCR engine probe (a real read of a test image) is the first check on Windows. A first install on a
+  Windows 10 1909 PC failed there because the worker loaded the older C++ runtime of System32; the patch now ships
+  and loads its own. If the bundled engine still cannot run, the check reports WARN with the step and exit code and
+  Windows OCR is used; only when no engine works does the patch roll back.
 * **Windows OCR (`Windows.Media.Ocr`).** Executed on GitHub's Windows runners (Windows Server), where it read the
   three test screenshots and the comparison passed after two fixes it made necessary ("IO" read for 10, a lone "0"
   not read). That is a server image with one language; Windows 10/11 desktops with other display languages were not

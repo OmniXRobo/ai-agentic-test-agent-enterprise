@@ -27,7 +27,9 @@ and prints every step:
    `%LOCALAPPDATA%\SkyGuardQA\ocr\site-packages` when the application folder cannot be written. It unpacks into a
    staging folder first and swaps it in only when it is complete;
 5. migrates (23.9.0 adds no database migration) and verifies: version, comparison workspace with filters and meaning,
-   maximized browser policy, the **OCR engine probe**, database integrity and that no data was lost;
+   maximized browser policy, the **OCR engine probe** (it reads a small test image), database integrity and that no
+   data was lost. If the bundled OCR engine cannot run on this PC but Windows OCR can, the check shows **WARN** with
+   the reason, the patch is kept, and screenshots are read with Windows OCR;
 6. on any failure, puts back the files, the previous OCR runtime and the database copy automatically.
 
 Then it starts SkyGuard QA and checks `/api/health`. Press Ctrl+F5 once in the browser.
