@@ -319,11 +319,15 @@ def test_c_complete_trip_process_is_learned(tms):
 def test_c_learning_never_stored_secrets(tms):
     blob = (tms["folder"]).rglob("*")
     secrets = [p for _, (p, _r) in T.USERS.items()] + [T.DRIVER_CODES["Aslam Khan"]]
+    # A four-digit code can occur by chance inside a hex hash or random bytes (CI found "7788" inside a SHA-256 in the
+    # database's WAL file); a stored code would stand on its own, so it is searched as a whole token.
+    patterns = [re.compile(rb"(?<![0-9A-Za-z])" + re.escape(s.encode()) + rb"(?![0-9A-Za-z])") for s in secrets]
     for path in blob:
         if path.is_file():
             data = path.read_bytes()
-            for s in secrets:
-                assert s.encode() not in data, (path, s)
+            for s, pat in zip(secrets, patterns):
+                m = pat.search(data)
+                assert not m, (path, s, data[max(0, m.start() - 40):m.end() + 40])
 
 
 def test_c_single_observation_rules_stay_unverified(tms):

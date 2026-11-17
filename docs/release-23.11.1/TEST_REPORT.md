@@ -113,6 +113,16 @@ with Python 3.11, and the agent tests (52 passed) and the installer tests (24 pa
 `cumulative-patch-231101-linux.xml`) were run again. Both zips and Setup.exe were rebuilt from that commit, and the
 Wine walkthrough (section 7) was repeated with the rebuilt Setup.exe.
 
+**Two more findings from that CI run:**
+* `setup-exe-windows` on the 23.11.0 installation: the upgrade, verify and rollback worked ("Version now 23.11.0"),
+  but the job's own matrix label said 23.11.1, so its rollback check compared with the wrong version. The label was
+  corrected (commit `e20af2e`).
+* `test_c_learning_never_stored_secrets` on Ubuntu with Python 3.12: the driver's four-digit test code "7788" was
+  found inside the agent database's WAL file. The bytes around it are a hexadecimal SHA-256 written by the agent, so
+  the digits occurred by chance inside a hash; the same test found nothing in any local run. The test now looks for
+  each secret as a whole token (not inside a longer run of letters and digits), which still finds a code stored as a
+  value. The 41 tests passed again.
+
 The CI run of the fixed commit is listed on the pull request. Its result is reported in the release message.
 The Windows jobs run the full suite on Windows (Python 3.11 to 3.13), and Setup.exe unattended over real 23.3.35,
 23.10.0 and 23.11.0 installations: refusal of an unsupported version, upgrade and verify, rollback, and the upgrade
