@@ -118,7 +118,10 @@ class OperationsAgent:
         return list(reversed(rows))
 
     def chat(self, text: str, *, conversation: str | None = None, user: str | None = None,
-             interface: str | None = None, app_id: str | None = None, source: str = "typed") -> dict[str, Any]:
+             interface: str | None = None, app_id: str | None = None, source: str = "typed",
+             workflow: str | None = None) -> dict[str, Any]:
+        """``workflow``: the task already chosen by the caller (23.10.0 simple agent), so the engine does not pick
+        another one from similar words ("authorize all approved trips" is Authorize, not Approve)."""
         interface = interface or self.interface
         conversation = conversation or new_id("conv")
         text = (text or "").strip()[:4000]
@@ -136,7 +139,7 @@ class OperationsAgent:
             return {"conversation": conversation, "reply": reply}
         self._remember(conversation, "user", text, user, interface, {"source": source})
         try:
-            reply = self._interpret(text, user=user, interface=interface, app_id=app_id)
+            reply = self._interpret(text, user=user, interface=interface, app_id=app_id, workflow=workflow)
         except AgentError as exc:
             reply = {"type": "error", "text": exc.message, "code": exc.code}
         self._remember(conversation, "agent", reply.get("text", ""), user, interface,
@@ -153,7 +156,8 @@ class OperationsAgent:
             return named[0]
         return apps[0] if len(apps) == 1 else None
 
-    def _interpret(self, text: str, *, user: str | None, interface: str, app_id: str | None) -> dict[str, Any]:
+    def _interpret(self, text: str, *, user: str | None, interface: str, app_id: str | None,
+                   workflow: str | None = None) -> dict[str, Any]:
         t = norm(text)
         if t in ("help", "?", "what can you do", "what can you do?"):
             return {"type": "help", "text": HELP}
@@ -179,6 +183,8 @@ class OperationsAgent:
                             f"extension) and use {app['name']} as you normally do. I work out the screens, tasks, "
                             "statuses, rules and roles myself; you do not need to explain anything. Passwords and "
                             "codes are never captured."}
+        if workflow:
+            return self._operation(text, app, user=user, interface=interface, workflow=workflow)
         if is_question(text) or re.match(r"^(what do you know|knowledge|show knowledge|what have you learned)\b", t):
             ans = self.assistant.answer(app, text)
             if ans:
@@ -205,9 +211,11 @@ class OperationsAgent:
                                                   or "nothing learned yet") + "."}
         return self._operation(text, app, user=user, interface=interface)
 
-    def _operation(self, text: str, app: dict[str, Any], *, user: str | None, interface: str) -> dict[str, Any]:
+    def _operation(self, text: str, app: dict[str, Any], *, user: str | None, interface: str,
+                   workflow: str | None = None) -> dict[str, Any]:
         workflows = self.kb.approved_items(app["id"], "workflow")
-        learned = self._learned_match(app, text, workflows)
+        chosen = next((w for w in workflows if w["key"] == workflow), None) if workflow else None
+        learned = None if chosen else self._learned_match(app, text, workflows)
         if learned:
             return learned
         if not workflows:
@@ -216,7 +224,8 @@ class OperationsAgent:
                             "do the task once yourself (or run discovery / guided learning), then approve it in "
                             "Knowledge."}
         accounts = self.kb.accounts(app["id"])
-        wf = planner.match_workflow(canonical(text, nouns=False), workflows) or planner.match_workflow(text, workflows)
+        wf = chosen or planner.match_workflow(canonical(text, nouns=False), workflows) or \
+            planner.match_workflow(text, workflows)
         parsed: dict[str, Any] | None = None
         dropped: list[str] = []
         if wf:
@@ -224,7 +233,7 @@ class OperationsAgent:
         if not isinstance(self.llm, NoLLM):
             try:
                 proposal = planner.parse_with_llm(self.llm, text, workflows, accounts)
-                cand = next((w for w in workflows if w["key"] == proposal.get("workflow")), None)
+                cand = chosen or next((w for w in workflows if w["key"] == proposal.get("workflow")), None)
                 if cand and (wf is None or cand["key"] == wf["key"]):
                     wf = cand
                     grounded, dropped = planner.ground(proposal, text, wf)
