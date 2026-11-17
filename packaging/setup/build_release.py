@@ -1,4 +1,4 @@
-"""Builds the two release zips of SkyGuard QA 23.11.1 (run on a build machine with internet; installing needs none):
+"""Builds the two release zips of SkyGuard QA 23.11.2 (run on a build machine with internet; installing needs none):
 
     SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch.zip
         SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe   the wizard (Welcome, Detect, Backup, Install, Verify,
@@ -8,7 +8,7 @@
         Manual_Install/                                     the same upgrade without the .exe (APPLY_PATCH.cmd), for
                                                             PCs where a downloaded .exe may not be started
     SkyGuard_Offline_Edge_Chrome_Agent_Extension.zip
-        the MV3 extension 1.3.0 with its local companion and offline runtimes (new installs: INSTALL.cmd) and the
+        the MV3 extension 1.3.1 with its local companion and offline runtimes (new installs: INSTALL.cmd) and the
         update for an installed companion (UPDATE_EXTENSION.cmd)
 
     python packaging/setup/build_release.py --out <folder> --ocr-wheels <folder> [--test-results <folder>]
@@ -36,13 +36,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-VERSION = "23.11.1"
-EXT_VERSION = "1.3.0"
+VERSION = "23.11.2"
+EXT_VERSION = "1.3.1"
 PATCH_NAME = "SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch"
 SETUP_NAME = "SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe"
 EXT_NAME = "SkyGuard_Offline_Edge_Chrome_Agent_Extension"
-STAGE_NAME = "SkyGuard_SGQA-23.3.35_to_23.11.1_Patch_Files"  # build_patch.py
-DOCS = REPO / "docs" / "release-23.11.1"
+STAGE_NAME = "SkyGuard_SGQA-23.3.35_to_23.11.2_Patch_Files"  # build_patch.py
+DOCS = REPO / "docs" / "release-23.11.2"
 TOP_DOCS = ("RELEASE_INCLUSION_MANIFEST.md", "INSTALLATION_GUIDE.md", "SECURITY_REPORT.md", "TEST_REPORT.md",
             "KNOWN_LIMITATIONS.md", "FINAL_RELEASE_REPORT.md", "SOURCE_ARCHITECTURE_AUDIT.md", "PATCH_CHANGELOG.md",
             "USER_GUIDE.md", "ROOT_CAUSE_ANALYSIS.md")

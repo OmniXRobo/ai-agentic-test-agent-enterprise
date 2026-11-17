@@ -1,9 +1,17 @@
-# Test report: SkyGuard Adaptive AI Browser Extension 1.3.0
+# Test report: SkyGuard Adaptive AI Browser Extension 1.3.1 (and 1.3.0)
 
 Run on 17 November 2026. Only tests that were actually executed are reported as passed. Environment: Linux
 container, Python 3.13, Playwright's Chromium (new headless mode) with the extension loaded unpacked, the companion
 running, and stand-in applications. No Windows PC, no Google Chrome or Microsoft Edge build and none of your own
 applications were available (see COMPATIBILITY.md).
+
+## 1.3.1 (executed)
+
+1.3.1 changes only the agent core shared with SkyGuard (answers to missing information, the sign-in rule) and the
+secret check. The results are in SkyGuard's TEST_REPORT.md for 23.11.2: `tests/test_missing_info_231102.py` (the
+answers end to end on the stand-in shop in Chromium), `tests/test_extension_static.py` (the extension's
+`lib/secret-check.js` is identical to SkyGuard's) and all the 1.3.0 tests below, run again with 1.3.1
+(`test_versions_are_130` now checks 1.3.1).
 
 ## 1.3.0 tests (executed)
 

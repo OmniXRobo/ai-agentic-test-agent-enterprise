@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.1 (companion 1.3.1, agent core shared with SkyGuard QA 23.11.2)
+
+* **Answers to missing information**: when the agent says "I still need: First Name, Last Name, Zip/Postal Code", an
+  answer such as "First Name; muhammad", "last name Ali, zip 54000" or just "54000" (one field asked) is read field by
+  field. The reply confirms what was received and asks only for what is still missing; "prepare it" asks again for
+  the missing fields only. (Agent core, `skyguard_agent/autopilot.py`.)
+* **Postal codes are not secrets**: "Zip/Postal Code: 54000" is no longer stopped by the side panel's secret check
+  (`lib/secret-check.js`, identical to SkyGuard's). One-time codes, driver codes and PINs still are.
+* **Applications that never show the signed-in user** (Swag Labs, for example) can run operations that no role
+  restricts, after accepting the sign-in the agent made with the saved account. Role-restricted operations still need
+  the role shown by the application.
+* Nothing else changed: permissions, routes, pairing and the local channel are the same as 1.3.0.
+
 ## 1.3.0 (companion 1.3.0, agent core shared with SkyGuard QA 23.11.1)
 
 * **Start learning / Stop & save learning** for the selected application in the Learn tab, with a visible status: a

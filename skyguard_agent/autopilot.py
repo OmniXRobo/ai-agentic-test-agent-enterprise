@@ -147,6 +147,100 @@ def next_key(keys: list[str]) -> str | None:
     return f"{prefix}{int(top.group(2)) + 1:0{width}d}"
 
 
+# 23.11.2: answers to "I still need: ..." ------------------------------------------------------------------------
+
+# words that only push the request on ("prepare it", "pre pare it", "go ahead"): never a field's value
+FILLER = re.compile(r"(please|pls|prepare|prepareit|preparethe(preview|request)|doit|goahead|go|ok|okay|yes|continue|"
+                    r"proceed|again|retry|tryagain|done|next|submit|run|runit|confirm|thanks|thankyou)+")
+
+
+def field_aliases(label: str, name: str | None = None) -> list[str]:
+    """The ways a person names a field: "Zip/Postal Code" is also "zip", "postal code" and "zip code"; a unit in
+    brackets may be left out; the internal name with spaces ("first_name" -> "first name")."""
+    out: list[str] = []
+    for n in (label, re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name or "")):  # "postalCode" -> "postal code"
+        n = norm(n).replace("_", " ").strip()
+        if not n:
+            continue
+        bare = re.sub(r"\s*\([^)]*\)\s*", " ", n).strip()
+        for v in (n, bare, *[x.strip() for x in re.split(r"\s*/\s*", bare)]):
+            if len(v) >= 2 and v not in out:
+                out.append(v)
+        parts = [x.strip() for x in re.split(r"\s*/\s*", bare) if x.strip()]
+        if len(parts) > 1 and len(parts[-1].split()) > 1:  # "zip/postal code" -> "zip code"
+            tail = parts[-1].split()[-1]
+            for x in parts[:-1]:
+                if f"{x} {tail}" not in out:
+                    out.append(f"{x} {tail}")
+    return sorted(out, key=len, reverse=True)
+
+
+def _option_value(value: str, options: list[str]) -> str | None:
+    v = norm(value)
+    exact = [o for o in options if norm(o) == v]
+    if exact:
+        return exact[0]
+    part = [o for o in options if v and (v in norm(o) or norm(o) in v)]
+    return part[0] if len(part) == 1 else None
+
+
+def parse_answer(text: str, fields: list[dict[str, Any]],
+                 others: list[dict[str, Any]] | None = None) -> tuple[dict[str, str], list[str]]:
+    """Reads an answer to a question for ``fields`` ({label, name, options}), in the person's own form:
+    "First Name; muhammad", "first name muhammad", "First name: Muhammad, last name Ali, zip 12345", or only the value
+    when one field was asked ("muhammad"), or the values in the order they were asked ("Muhammad; Ali; 12345").
+    Returns ({label: value}, problems). A value for a list field must be one of its options. Nothing is invented: a
+    reply that only pushes the request on ("prepare it") gives no value. ``others`` are the task's fields that were
+    not asked: a value named for one of them ("last name Ali") is read as that field (a correction), and is never
+    taken as the value of the asked field."""
+    raw = (text or "").strip()
+    if not raw or not fields:
+        return {}, []
+    hits: list[tuple[int, int, dict[str, Any]]] = []
+    asked = {f["label"] for f in fields}
+    names = [(alias, f) for f in [*fields, *[o for o in others or [] if o["label"] not in asked]]
+             for alias in field_aliases(f["label"], f.get("name"))]
+    for alias, f in sorted(names, key=lambda a: -len(a[0])):  # the longest name wins where two overlap
+        pat = r"(?<![\w])" + r"\s+".join(re.escape(w) for w in alias.split()) + r"(?![\w])"
+        for m in re.finditer(pat, raw, re.I):
+            if not any(s <= m.start() < e or m.start() <= s < m.end() for s, e, _ in hits):
+                hits.append((m.start(), m.end(), f))
+    hits.sort(key=lambda h: h[0])
+    found: dict[str, str] = {}
+    problems: list[str] = []
+
+    def take(f: dict[str, Any], value: str) -> None:
+        value = re.sub(r"^(?:\s*(?:[:;=,\-–]|\bis\b|\bshould be\b|\bto\b)\s*)+", "", value, flags=re.I)
+        # trailing joiners before the next field's name: "Sara and my | last name", "Ali, the | zip"
+        value = re.sub(r"(?:[\s;,.]+|\s+(?:and|also|then|my|the|his|her|their|our|your|with|plus))+$", "", value,
+                       flags=re.I).strip().strip("\"'")
+        if not value or FILLER.fullmatch(re.sub(r"[^a-z]", "", value.lower())):
+            return
+        if f.get("options"):
+            opt = _option_value(value, f["options"])
+            if not opt:
+                problems.append(f"'{value}' is not one of the {f['label']} values ({', '.join(f['options'][:6])})")
+                return
+            value = opt
+        found[f["label"]] = value
+
+    if hits:
+        for i, (s, e, f) in enumerate(hits):
+            end = hits[i + 1][0] if i + 1 < len(hits) else len(raw)
+            take(f, raw[e:end])
+        return found, problems
+    if FILLER.fullmatch(re.sub(r"[^a-z]", "", raw.lower())):
+        return {}, []
+    if len(fields) == 1:
+        take(fields[0], raw)
+        return found, problems
+    parts = [p for p in re.split(r"\s*[;\n|]\s*|\s*,\s*", raw) if p.strip()]
+    if len(parts) == len(fields):
+        for f, p in zip(fields, parts):
+            take(f, p)
+    return found, problems
+
+
 # ---- the agent -------------------------------------------------------------------------------------------------
 
 class Autopilot:
@@ -367,11 +461,22 @@ class Autopilot:
         intent = classify(raw, app_names=[a["name"] for a in self.kb.applications()])
         pending = self._fresh_pending(state, app)
         combined = raw
+        answers: dict[str, str] = {}
+        got: dict[str, str] = {}
+        problems: list[str] = []
         if pending and pending.get("retry") and re.fullmatch(
                 r"\W*(again|retry|try again|done|ok|okay|saved|go|go ahead|continue|yes)\W*", raw, re.I):
             combined, intent = pending["text"], Intent(**pending["intent"])
+            answers = dict(pending.get("answers") or {})
         elif pending and intent.kind in ("data_entry", "unknown"):
             combined, intent = f"{pending['text']}; {raw}", Intent(**pending["intent"])  # the answer to my question
+            # 23.11.2: the answer is read field by field ("First Name; muhammad", "first name muhammad", only the
+            # value when one field was asked) and kept with the earlier answers, so only what is still missing is
+            # asked again
+            answers = dict(pending.get("answers") or {})
+            got, problems = parse_answer(raw, self._pending_fields(app, pending),
+                                         self._pending_fields(app, pending, every=True))
+            answers.update(got)
         state.pop("pending", None)  # a new request replaces an unanswered one (it is never glued to it)
         self.agent.audit.record("chat.intent", actor=user, interface=iface, target=app["id"],
                                 details={"intent": intent.kind, "verb": intent.verb, "continued": combined != raw})
@@ -408,15 +513,26 @@ class Autopilot:
             return done({"type": "no_workflows", "intent": intent.as_dict(),
                          "text": f"I have not learned any task in {app['name']} yet. Open Connect & Learn, press Start "
                                  "learning and do the task once in the browser; then ask me again."})
-        wf, why = self._choose(app, intent, combined)
+        base = combined
+        if answers:
+            combined = base + "; " + "; ".join(f"{k}: {v}" for k, v in answers.items())
+        wf = next((w for w in self._workflows(app["id"]) if pending and w["key"] == pending.get("workflow")
+                   and combined != raw), None)  # an answer continues the task that asked for it
+        why = ""
+        if not wf:
+            wf, why = self._choose(app, intent, combined)
         if not wf:
             return done({"type": "clarify", "intent": intent.as_dict(), "text": why})
         prepared = self._prepare(app, combined, state, wf=wf)
         if prepared.get("ask"):
-            return done({"type": "clarify", "text": prepared["ask"], "missing": prepared.get("missing", []),
+            heard = ("Got it: " + "; ".join(f"{k} = {v}" for k, v in got.items()) + ". ") if got else ""
+            issue = ("I could not use this: " + "; ".join(problems) + ". ") if problems else ""
+            return done({"type": "clarify", "text": heard + issue + prepared["ask"],
+                         "missing": prepared.get("missing", []), "received": answers,
                          "workflow": wf["key"], "intent": intent.as_dict()},
-                        pending={"app_id": app["id"], "text": combined, "intent": intent.as_dict(),
-                                 "workflow": wf["key"], "at": now_iso()})
+                        pending={"app_id": app["id"], "text": base, "intent": intent.as_dict(),
+                                 "workflow": wf["key"], "missing": prepared.get("missing", []),
+                                 "answers": answers, "at": now_iso()})
         dup = self._duplicate(app["id"], prepared["text"], wf["key"])
         if dup:
             return done({"type": "run", "run_id": dup, "duplicate": True, "workflow": wf["key"],
@@ -464,6 +580,19 @@ class Autopilot:
         except ValueError:
             return None
         return p if age <= self.PENDING_MINUTES else None
+
+    def _pending_fields(self, app: dict[str, Any], pending: dict[str, Any], every: bool = False) -> list[dict[str, Any]]:
+        """The fields the pending question asked for (``every``: all the task's fields), with their options (23.11.2)."""
+        wf = next((w for w in self._workflows(app["id"]) if w["key"] == pending.get("workflow")), None)
+        if not wf:
+            return []
+        asked = {norm(x) for x in pending.get("missing") or []}
+        out = []
+        for p in planner.workflow_params(wf):
+            label = p.get("field") or p["name"]
+            if every or norm(label) in asked:
+                out.append({"label": label, "name": p.get("name"), "options": p.get("options") or []})
+        return out
 
     def _screens(self, app_id: str) -> list[dict[str, Any]]:
         return list((self.agent.understanding.model(app_id) or {}).get("screens") or [])
@@ -873,7 +1002,8 @@ class Autopilot:
         if conversation:
             for h in reversed(self.agent.history(conversation, limit=40)):
                 if h["speaker"] == "user" and (h.get("data") or {}).get("app_id") == app["id"] and \
-                        not h["text"].startswith("[message withheld") and len(h["text"]) < 120:
+                        not h["text"].startswith("[message withheld") and len(h["text"]) < 120 and \
+                        classify(h["text"]).kind not in ("data_entry", "unknown"):  # 23.11.2: not answers
                     add(h["text"], "recent", "you asked this before")
                 if sum(1 for x in out if x["kind"] == "recent") >= 2:
                     break
