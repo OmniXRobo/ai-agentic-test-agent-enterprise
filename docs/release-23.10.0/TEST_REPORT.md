@@ -41,7 +41,7 @@ OCR file.
 
 | Test | What it proves | Result |
 |---|---|---|
-| `test_patch_contents` | The built patch holds every changed file with its SHA-256, the OCR wheels, the docs and the tools | see below |
+| `test_patch_contents` | The built patch holds every changed file with its SHA-256, the OCR wheels, the docs and the tools | passed |
 | `test_installer_needs_no_network_and_no_administrator` | No network module imported; no elevation, machine registry, service or protected-folder use in the installer, wrappers and Setup script | passed |
 | `test_wrong_version_is_refused` | 23.3.31 and an unknown version are refused before anything changes | passed |
 | `test_changed_patch_file_is_refused` | A changed patch file stops the install before anything changes | passed |
@@ -51,13 +51,13 @@ OCR file.
 | `test_failed_apply_restores_the_previous_ocr_runtime` | | passed |
 | `test_damaged_ocr_wheel_is_refused` | | passed |
 | `test_protected_application_folder_is_never_forced_and_side_by_side_works` | A folder that cannot be written is never forced; the side-by-side copy works and the original is untouched | passed |
-| `test_detect_reports_what_setup_shows` [23.3.35, 23.9.0] | The Detect page data (version, supported, folders, running); changes nothing | see below |
+| `test_detect_reports_what_setup_shows` [23.3.35, 23.9.0] | The Detect page data (version, supported, folders, running); changes nothing | passed (2 of 2) |
 | `test_setup_log_option_writes_every_message` | `--log` writes every step | passed |
 
 First run: **19 passed, 3 failed**. The failures were in the tests, not the installer: `test_patch_contents` ran
 before this report existed (the patch must contain it), and `test_detect_reports_what_setup_shows` did not give the
 test installation a Python (Setup finds the application's own). Both were fixed. The final run is in
-`cumulative-patch-231000-linux.xml`: **RESULT_PATCH_FINAL**.
+`cumulative-patch-231000-linux.xml`: **22 passed, 0 failed**.
 
 ## 4. Windows (GitHub Actions)
 

@@ -102,6 +102,7 @@ Page custom BackupPage BackupLeave
 Page custom VerifyPage
 !define MUI_FINISHPAGE_TITLE "$FinishTitle"
 !define MUI_FINISHPAGE_TEXT "$FinishText"
+!define MUI_FINISHPAGE_TEXT_LARGE  ; room for the whole text above the two check boxes
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Start SkyGuard QA now"
 !define MUI_FINISHPAGE_RUN_FUNCTION StartApp

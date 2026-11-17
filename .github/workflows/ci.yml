@@ -178,7 +178,9 @@ jobs:
           $v, $c = "${{ matrix.baseline }}".Split(":")
           $inst = Join-Path $env:RUNNER_TEMP "inst"
           New-Item -ItemType Directory -Force "$inst\app", "$inst\data" | Out-Null
-          git archive --format=zip -o "$env:RUNNER_TEMP\rel.zip" $c qa_platform web skyguard_agent requirements.txt
+          # skyguard_agent exists from 23.5.0 on: archive only what the release has
+          $parts = @(git ls-tree --name-only $c) | Where-Object { $_ -in @("qa_platform", "web", "skyguard_agent", "requirements.txt") }
+          git archive --format=zip -o "$env:RUNNER_TEMP\rel.zip" $c @parts
           Expand-Archive "$env:RUNNER_TEMP\rel.zip" "$inst\app"
           '{"installed": true}' | Set-Content "$inst\app\INSTALLED.json"
           python -m venv "$inst\app\.venv"
