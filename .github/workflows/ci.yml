@@ -153,14 +153,14 @@ jobs:
           compression-level: 0
   setup-exe-windows:
     # Runs the Setup wizard unattended on Windows (Windows PowerShell 5.1, a standard runner account) over real
-    # 23.3.35, 23.10.0 and 23.11.1 installations, checks the result, verifies, rolls back, refuses an unsupported version,
+    # 23.3.35, 23.10.0 and 23.11.0 installations, checks the result, verifies, rolls back, refuses an unsupported version,
     # and runs the manual APPLY_PATCH.ps1 with Windows PowerShell 5.1.
     needs: setup-exe-build
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        baseline: ["23.3.35:6d448fa", "23.10.0:8c8dcc4", "23.11.1:292743c"]
+        baseline: ["23.3.35:6d448fa", "23.10.0:8c8dcc4", "23.11.0:292743c"]
     steps:
       - uses: actions/checkout@v4
         with:
