@@ -23,6 +23,7 @@ import zipfile
 from typing import Any
 
 from ..config import APP_ROOT
+from . import smart_wait
 from .dsl import Script, describe
 
 _SLUG = re.compile(r"[^a-z0-9]+")
@@ -430,6 +431,17 @@ def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> s
     if any(st.action in ("pick_date", "choose_option", "set_count") or (st.semantic or {}).get("intent") == "set_count"
            for st in script.steps):
         body += _COMPONENT_HELPERS
+    policy = smart_wait.clean_policy(script.wait_policy) if script.wait_policy else None
+    waits = bool(policy and policy.get("enabled")) or any(st.action == "wait_until" for st in script.steps)
+    if waits:  # 23.11.0: the same Smart Wait code the SkyGuard runner uses, copied here
+        body += ("\n\nimport fnmatch\nimport hashlib\nimport time\nfrom typing import Any\n\n"
+                 + smart_wait.embedded_source()
+                 + "\n# Execution Wait Settings saved with the script (the SkyGuard runner uses the same policy).\n"
+                 + f"WAIT_POLICY = {_plain(policy) if policy else None!r}\n\n\n"
+                 + "def _waited(res, what):\n"
+                 + "    if not res[\"ok\"]:\n"
+                 + "        print(f\"WARNING  Smart Wait timed out after {what}: {'; '.join(res['reasons'][:3])}\")\n"
+                 + "    return res\n")
     steps = [
         "",
         "",
@@ -442,9 +454,26 @@ def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> s
         "@_data_sets",
         f"def {func}(page, data):",
     ]
+    if waits:
+        steps.append("    sw = SmartWait(page.context)")
     for i, step in enumerate(script.steps, start=1):
         steps.append(f"    # Step {i}: {_text(describe(step))}")
+        nxt = script.steps[i] if i < len(script.steps) else None
+        if nxt is not None and nxt.action == "wait_until" and (nxt.wait or {}).get("kind") in (
+                "text_change", "table_refresh", "network_response"):
+            steps.append(f"    prior_{i + 1} = sw.capture(page, {_plain(nxt.wait)!r})")
+        if step.action == "wait_until":
+            spec = _plain(step.wait or {"kind": "ajax"})
+            prior = f"prior_{i}" if (step.wait or {}).get("kind") in ("text_change", "table_refresh",
+                                                                    "network_response") and i > 1 else "None"
+            steps.append(f"    res = _waited(sw.wait(page, {spec!r}, {prior}), {('step ' + str(i))!r})")
+            if (step.wait or {}).get("strict"):
+                steps.append("    assert res[\"ok\"], res[\"reasons\"]")
+            continue
         steps.extend("    " + line for line in _step_lines(step))
+        if policy and smart_wait.policy_applies(policy, i - 1, step.action) and not (
+                nxt is not None and nxt.action == "wait_until"):
+            steps.append(f"    _waited(policy_wait(sw, page, WAIT_POLICY), {('step ' + str(i))!r})")
     if not script.steps:
         steps.append("    pass")
     steps += [

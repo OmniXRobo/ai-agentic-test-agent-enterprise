@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 import base64
 import binascii
 
-from ..automation import date_rules, pytest_export
+from ..automation import smart_wait, date_rules, pytest_export
 from ..automation import files as filekit
 from ..automation.dsl import DataTable, Script, Step, new_script_id, to_playwright_python
 from ..clock import now_iso
@@ -45,6 +45,7 @@ class ScriptIn(BaseModel):
     browser: str = "chromium"
     steps: list[Step] = []
     notes: str | None = None
+    wait_policy: dict[str, Any] | None = None  # 23.11.0: Execution Wait Settings (kept when not sent)
 
 
 @router.get("/scripts")
@@ -91,7 +92,55 @@ def update_script(script_id: str, body: ScriptIn, rt: Runtime = Depends(runtime)
     script = Script.model_validate({**body.model_dump(), "id": script_id, "version": current.version,
                                     "created_at": current.created_at})
     script.data_table = current.data_table  # imported test data is changed with its own endpoints (23.3.17)
+    if "wait_policy" not in body.model_fields_set:
+        script.wait_policy = current.wait_policy
+    else:
+        script.wait_policy = smart_wait.clean_policy(body.wait_policy)
+    _check_waits(script)
     return {"ok": True, "script": rt.automation.scripts.save(script, reason="edited").model_dump()}
+
+
+# ---- 23.11.0: Smart Wait (Execution Wait Settings, Insert Wait After Steps, + Wait) -----------------------------
+
+
+def _check_waits(script: Script) -> None:
+    for i, st in enumerate(script.steps):
+        if st.action == "wait_until":
+            st.wait = smart_wait.clean_spec({**(st.wait or {}), "auto": (st.wait or {}).get("auto")})
+
+
+class WaitPolicyIn(BaseModel):
+    enabled: bool = False
+    mode: str = Field(default="smart", pattern="^(smart|fixed|smart_min)$")
+    timeout_ms: int = Field(default=30000, ge=500, le=300000)
+    minimum_ms: int = Field(default=500, ge=0, le=60000)
+    fixed_ms: int = Field(default=1000, ge=50, le=120000)
+    scope: str = Field(default="all", pattern="^(all|selected)$")
+    steps: list[int] = []
+    include_navigation: bool = True
+
+
+@router.put("/scripts/{script_id}/wait-policy")
+def set_wait_policy(script_id: str, body: WaitPolicyIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    script = rt.automation.scripts.get(script_id)
+    script.wait_policy = smart_wait.clean_policy(body.model_dump())
+    return {"ok": True, "script": rt.automation.scripts.save(script, reason="wait settings").model_dump()}
+
+
+class WaitBulkIn(BaseModel):
+    op: str = Field(pattern="^(insert|remove|update)$")
+    where: str = Field(default="all", pattern="^(all|selected|clicks|dropdowns|navigation|data)$")
+    steps: list[int] = []
+    wait: dict[str, Any] | None = None
+
+
+@router.post("/scripts/{script_id}/waits")
+def bulk_waits(script_id: str, body: WaitBulkIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    script = rt.automation.scripts.get(script_id)
+    steps, summary = smart_wait.bulk(script, body.op, body.where, body.steps, body.wait)
+    script.steps = steps
+    saved = rt.automation.scripts.save(script, reason=f"waits {body.op} ({body.where})")
+    return {"ok": True, "script": saved.model_dump(), **summary}
 
 
 # ---- 23.3.17: files for upload steps -------------------------------------------------------------

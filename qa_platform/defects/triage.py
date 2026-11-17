@@ -111,10 +111,11 @@ def rules_classify(category: str, facts: dict[str, Any]) -> dict[str, Any]:
         ev.append("The element could not be found with the recorded locator or a confident alternative."
                   if "strict mode" not in error else "The locator matches more than one element (strict mode).")
         return out("automation_script", 0.65, "locator_recovery")
-    if _TIMING.search(error) or facts.get("wait_uncertain"):
-        ev.append("The page was still changing when the step ran: " + (_TIMING.search(error).group(0)
-                                                                          if _TIMING.search(error)
-                                                                          else "the Smart Wait could not confirm the page was ready"))
+    if _TIMING.search(error) or facts.get("wait_uncertain") or facts.get("page_busy"):
+        busy = facts.get("page_busy") or []
+        ev.append("The page was still changing when the step ran: " + (
+            _TIMING.search(error).group(0) if _TIMING.search(error) else
+            ("; ".join(str(b) for b in busy[:3]) if busy else "the Smart Wait could not confirm the page was ready")))
         return out("timing", 0.65, "smart_wait")
     if "timeout" in error.lower() and action in ("click", "fill", "select", "choose_option", "check", "type",
                                                   "expect_visible", "expect_text", "expect_value"):

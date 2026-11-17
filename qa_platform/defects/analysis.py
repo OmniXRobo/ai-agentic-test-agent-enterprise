@@ -118,7 +118,8 @@ def functional_draft(execution: dict[str, Any], script: dict[str, Any], healing:
                   "actual": (failed_entry or {}).get("actual"), "previous_step": passed[-1] if passed else None,
                   "dataset": (execution.get("evidence") or {}).get("dataset"),
                   "traceback": (execution.get("evidence") or {}).get("traceback"),
-                  "healing_failed": heal_failed, "wait_uncertain": (failed_entry or {}).get("wait_uncertain")},
+                  "healing_failed": heal_failed, "wait_uncertain": (failed_entry or {}).get("wait_uncertain"),
+                  "page_busy": (failed_entry or {}).get("page_busy")},
         "evidence": [{"kind": "screenshot", "path": p} for p in shots]
                     + [{"kind": "trace", "path": p} for p in [(execution.get("evidence") or {}).get("trace")] if p],
         "test_case_id": tc,

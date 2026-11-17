@@ -37,12 +37,13 @@ ACTIONS = ("goto", "click", "dblclick", "fill", "type", "select", "pick_date", "
            "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
            "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
            "right_click", "drag_to", "dialog",  # 23.3.21
-           "choose_option", "dismiss")  # 23.6.0: semantic dropdown / autocomplete choice; close a pop-up safely
+           "choose_option", "dismiss",  # 23.6.0: semantic dropdown / autocomplete choice; close a pop-up safely
+           "wait_until")  # 23.11.0: a Smart Wait step (Page Load, AJAX/Data Load, Element Visible, ...)
 
 Action = Literal["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover",
                  "wait", "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
                  "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
-                 "right_click", "drag_to", "dialog", "choose_option", "dismiss", "set_count"]
+                 "right_click", "drag_to", "dialog", "choose_option", "dismiss", "set_count", "wait_until"]
 
 NEEDS_TARGET = {"click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "hover",
                 "expect_visible", "expect_hidden", "expect_text", "expect_value", "upload_file", "download_file",
@@ -97,6 +98,10 @@ class Step(BaseModel):
     semantic: dict[str, Any] | None = None
     # 23.6.0: a click on a payment / booking-finalisation control plays only when a person allowed it for this step
     commit_ok: bool = False
+    # 23.11.0: a wait_until step's settings: {"kind": "ajax" | "page_load" | "element_visible" | "element_hidden" |
+    # "text_change" | "fixed" | "network_response" | "table_refresh", "selector", "value", "url", "ms",
+    # "timeout_ms", "minimum_ms", "auto" (inserted by a bulk action)}
+    wait: dict[str, Any] | None = None
 
 
 class DataTable(BaseModel):
@@ -125,6 +130,10 @@ class Script(BaseModel):
     updated_at: str | None = None
     notes: str | None = None
     data_table: DataTable | None = None
+    # 23.11.0: Execution Wait Settings, saved with the script and used by the runner and the exported Python alike:
+    # {"enabled", "mode": "smart" | "fixed" | "smart_min", "timeout_ms", "minimum_ms", "fixed_ms",
+    #  "scope": "all" | "selected", "steps": [indexes], "include_navigation"}
+    wait_policy: dict[str, Any] | None = None
 
 
 def describe(step: Step) -> str:
@@ -149,7 +158,14 @@ def describe(step: Step) -> str:
         "right_click": f"Right-click {what}", "drag_to": f"Drag {what} to {v}",
         "dialog": "Cancel the next pop-up" if v == "dismiss" else "OK on the next pop-up",
         "choose_option": f"Choose '{v}' in {what}", "dismiss": "Close the open pop-up",
+        "wait_until": _describe_wait(step.wait),
     }.get(step.action, step.action)
+
+
+def _describe_wait(spec: dict[str, Any] | None) -> str:
+    from .smart_wait import describe_wait
+
+    return describe_wait(spec)
 
 
 def new_script_id() -> str:
@@ -316,6 +332,18 @@ def to_playwright_python(script: Script) -> str:
             lines.append(f"    page.get_by_role(\"option\", name={_py(step.value)}).first.click()")
         elif a == "dismiss":
             lines.append("    page.keyboard.press(\"Escape\")")
+        elif a == "wait_until":  # 23.11.0: the pytest export carries the full Smart Wait service; this is the plain form
+            w = step.wait or {}
+            wl = f"page.locator({_py(w.get('selector') or 'body')})"
+            t = int(w.get("timeout_ms") or 30000)
+            lines.append({"element_visible": f"    expect({wl}).to_be_visible(timeout={t})",
+                          "element_hidden": f"    expect({wl}).to_be_hidden(timeout={t})",
+                          "fixed": f"    page.wait_for_timeout({int(w.get('ms') or 1000)})",
+                          "text_change": (f"    expect({wl}).to_contain_text({_py(w.get('value'))}, timeout={t})"
+                                          if w.get("value") else f"    page.wait_for_load_state(\"load\", timeout={t})"
+                                          "  # Smart Wait: see the pytest export")}.get(
+                w.get("kind"), f"    page.wait_for_load_state(\"load\", timeout={t})  # Smart Wait"
+                               f" ({w.get('kind') or 'ajax'}): the pytest export includes the full Smart Wait service"))
     if not script.steps:
         lines.append("    pass")
     lines += [
