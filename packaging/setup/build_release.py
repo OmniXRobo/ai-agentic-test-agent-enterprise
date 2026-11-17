@@ -1,4 +1,4 @@
-"""Builds the two release zips of SkyGuard QA 23.11.0 (run on a build machine with internet; installing needs none):
+"""Builds the two release zips of SkyGuard QA 23.11.1 (run on a build machine with internet; installing needs none):
 
     SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch.zip
         SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe   the wizard (Welcome, Detect, Backup, Install, Verify,
@@ -8,11 +8,15 @@
         Manual_Install/                                     the same upgrade without the .exe (APPLY_PATCH.cmd), for
                                                             PCs where a downloaded .exe may not be started
     SkyGuard_Offline_Edge_Chrome_Agent_Extension.zip
-        the MV3 extension 1.2.0 with its local companion and offline runtimes (new installs: INSTALL.cmd) and the
+        the MV3 extension 1.3.0 with its local companion and offline runtimes (new installs: INSTALL.cmd) and the
         update for an installed companion (UPDATE_EXTENSION.cmd)
 
     python packaging/setup/build_release.py --out <folder> --ocr-wheels <folder> [--test-results <folder>]
                                             [--extension-cache <folder>] [--skip-extension]
+                                            [--patch-name <name>] [--extension-name <name>]
+
+--patch-name and --extension-name rename the two zips (and their top folders), for example to the names a release
+request asks for: SkyGuard_SGQA-23.10.0_AI_Agent_Final_Patch and SkyGuard_SGQA-23.10.0_Edge_Chrome_Extension.
 
 makensis (NSIS 3.x) must be on PATH. Every downloaded file is checked against its pinned SHA-256 by the builders.
 """
@@ -32,16 +36,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-VERSION = "23.11.0"
-EXT_VERSION = "1.2.0"
+VERSION = "23.11.1"
+EXT_VERSION = "1.3.0"
 PATCH_NAME = "SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch"
 SETUP_NAME = "SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe"
 EXT_NAME = "SkyGuard_Offline_Edge_Chrome_Agent_Extension"
-STAGE_NAME = "SkyGuard_SGQA-23.3.35_to_23.11.0_Patch_Files"  # build_patch.py
-DOCS = REPO / "docs" / "release-23.11.0"
+STAGE_NAME = "SkyGuard_SGQA-23.3.35_to_23.11.1_Patch_Files"  # build_patch.py
+DOCS = REPO / "docs" / "release-23.11.1"
 TOP_DOCS = ("RELEASE_INCLUSION_MANIFEST.md", "INSTALLATION_GUIDE.md", "SECURITY_REPORT.md", "TEST_REPORT.md",
             "KNOWN_LIMITATIONS.md", "FINAL_RELEASE_REPORT.md", "SOURCE_ARCHITECTURE_AUDIT.md", "PATCH_CHANGELOG.md",
-            "USER_GUIDE.md")
+            "USER_GUIDE.md", "ROOT_CAUSE_ANALYSIS.md")
 SETUP_PAYLOAD = ("install_patch.py", "PATCH_MANIFEST.json", "stop_skyguard.ps1", "APPLY_PATCH.ps1", "ROLLBACK_PATCH.cmd",
                  "VERIFY_PATCH.cmd")
 
@@ -80,7 +84,7 @@ def wheel_component(w: Path) -> dict:
             "hashes": [{"alg": "SHA-256", "content": sha(w)}], "properties": [{"name": "skyguard:file", "value": w.name}]}
 
 
-def sbom(stage: Path, setup: Path, ext_manifest: dict | None) -> dict:
+def sbom(stage: Path, setup: Path, ext_manifest: dict | None, ext_name: str = EXT_NAME) -> dict:
     """CycloneDX 1.5: what the cumulative patch ships (application, OCR runtime wheels, extension update) and the
     build tool of Setup.exe. The full offline package (Python, Chromium, JMeter, AI runtimes) has its own SBOM."""
     comps = [{"type": "application", "name": "SkyGuard QA", "version": VERSION,
@@ -98,13 +102,13 @@ def sbom(stage: Path, setup: Path, ext_manifest: dict | None) -> dict:
             comps.append({"type": "application", "name": key.replace("_", "-"), "version": item.get("version"),
                           "hashes": [{"alg": "SHA-256", "content": item.get("sha256")}],
                           "licenses": [{"license": {"name": item.get("license") or "see vendor"}}],
-                          "properties": [{"name": "skyguard:in", "value": EXT_NAME}]})
+                          "properties": [{"name": "skyguard:in", "value": ext_name}]})
         for name, digest in (ext_manifest.get("faster_whisper_wheels") or {}).items():
             n, v = name.split("-")[:2]
             comps.append({"type": "library", "name": n.replace("_", "-").lower(), "version": v,
                           "purl": f"pkg:pypi/{n.replace('_', '-').lower()}@{v}",
                           "hashes": [{"alg": "SHA-256", "content": digest}],
-                          "properties": [{"name": "skyguard:in", "value": EXT_NAME}]})
+                          "properties": [{"name": "skyguard:in", "value": ext_name}]})
     return {"bomFormat": "CycloneDX", "specVersion": "1.5", "serialNumber": f"urn:uuid:{uuid.uuid4()}", "version": 1,
             "metadata": {"timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                          "component": {"type": "application", "name": "SkyGuard QA cumulative upgrade",
@@ -132,7 +136,7 @@ def build_setup(stage: Path, work: Path, out_exe: Path) -> None:
          str(HERE / "SkyGuardSetup.nsi")], cwd=str(HERE))
 
 
-def build_extension(out: Path, cache: str | None) -> tuple[Path, dict]:
+def build_extension(out: Path, cache: str | None, name: str = EXT_NAME) -> tuple[Path, dict]:
     """The full extension package (fresh installs) plus the update of an installed companion."""
     work = out / "ext-work"
     cmd = [sys.executable, str(REPO / "packaging" / "browser-extension" / "build_extension.py"), "--out", str(work)]
@@ -140,7 +144,7 @@ def build_extension(out: Path, cache: str | None) -> tuple[Path, dict]:
         cmd += ["--cache", cache]
     run(cmd)
     built = work / "SkyGuard_Adaptive_AI_Browser_Extension_Final"
-    folder = out / EXT_NAME
+    folder = out / name
     if folder.exists():
         shutil.rmtree(folder)
     shutil.copytree(built, folder)
@@ -161,7 +165,7 @@ def build_extension(out: Path, cache: str | None) -> tuple[Path, dict]:
     manifest = json.loads((folder / "offline" / "OFFLINE_MANIFEST.json").read_text(encoding="utf-8"))
     if json.loads((folder / "extension" / "manifest.json").read_text())["version"] != EXT_VERSION:
         raise SystemExit("the extension in the package is not " + EXT_VERSION)
-    zpath = out / f"{EXT_NAME}.zip"
+    zpath = out / f"{name}.zip"
     zip_folder(folder, zpath)
     return zpath, manifest
 
@@ -173,6 +177,8 @@ def main() -> None:
     ap.add_argument("--test-results", help="folder with junit XML and logs of the test runs, copied to test-results/")
     ap.add_argument("--extension-cache")
     ap.add_argument("--skip-extension", action="store_true")
+    ap.add_argument("--patch-name", default=PATCH_NAME)
+    ap.add_argument("--extension-name", default=EXT_NAME)
     args = ap.parse_args()
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -180,9 +186,10 @@ def main() -> None:
     run([sys.executable, str(REPO / "packaging" / "cumulative-patch" / "build_patch.py"), "--out", str(work),
          "--ocr-wheels", args.ocr_wheels])
     stage = work / STAGE_NAME
-    ext_zip, ext_manifest = (None, None) if args.skip_extension else build_extension(out, args.extension_cache)
+    ext_zip, ext_manifest = (None, None) if args.skip_extension else build_extension(out, args.extension_cache,
+                                                                                        args.extension_name)
 
-    rel = out / PATCH_NAME
+    rel = out / args.patch_name
     if rel.exists():
         shutil.rmtree(rel)
     rel.mkdir()
@@ -196,11 +203,11 @@ def main() -> None:
     if args.test_results:
         shutil.copytree(args.test_results, rel / "test-results")
     shutil.copytree(stage, rel / "Manual_Install")
-    (rel / "sbom.cdx.json").write_text(json.dumps(sbom(stage, setup, ext_manifest), indent=1), encoding="utf-8")
+    (rel / "sbom.cdx.json").write_text(json.dumps(sbom(stage, setup, ext_manifest, args.extension_name), indent=1), encoding="utf-8")
     for p in (rel / "README_FIRST.txt",):
         p.write_bytes(p.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
     sums(rel)
-    zpath = out / f"{PATCH_NAME}.zip"
+    zpath = out / f"{args.patch_name}.zip"
     zip_folder(rel, zpath)
     result = {"patch_zip": str(zpath), "patch_sha256": sha(zpath), "setup_sha256": sha(setup),
               "size_mb": round(zpath.stat().st_size / 1048576, 1)}

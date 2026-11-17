@@ -95,7 +95,8 @@ def test_learning_is_trusted_without_approval_steps(env):
 
 
 def test_missing_password_is_asked_through_the_secure_form(env):
-    r = say(env, "Create Ahmed's trip from Dubai to Abu Dhabi tomorrow at 14:00", conv="cred")
+    # 23.11.1: a bus is picked only when the person says "any available"; otherwise it is asked (Missing information)
+    r = say(env, "Create Ahmed's trip from Dubai to Abu Dhabi tomorrow at 14:00 on any available bus", conv="cred")
     assert r["type"] == "need_credential" and r["account"] == "operator"
     assert "Credential Manager" in r["text"]
     for user in ("operator", "manager", "manager2"):
@@ -116,7 +117,7 @@ def test_bulk_create_asks_once_for_what_is_missing(env):
     r = say(env, "Create two trips for tomorrow for driver Dina", conv="bulk")
     assert r["type"] == "clarify", r
     assert "Route" in r["text"] and "Departure time" in r["text"] and "Driver" not in r["missing"]
-    r = say(env, "route Dubai to Sharjah, from 18:00 every 60 minutes", conv="bulk")
+    r = say(env, "route Dubai to Sharjah, from 18:00 every 60 minutes, any available bus", conv="bulk")
     assert r["type"] == "run", r
     assert r["consequential"] is False
     seen = drive(env["agent"], env["browser"], r["run_id"])

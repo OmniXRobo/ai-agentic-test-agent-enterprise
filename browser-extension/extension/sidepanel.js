@@ -376,7 +376,7 @@ async function learn() {
       const vf = out.verified || {};
       await learn();
       main.insertAdjacentHTML("afterbegin", `<div class="card"><h2>${vf.ok ? "Learning saved and tested" : "Learning saved, not all of it can be used yet"}</h2>
-        <p>${esc(r.events || 0)} action(s) observed in this session. ${esc((vf.tasks || []).length)} task(s) and ${esc((vf.pages || []).length)} page(s) can be retrieved by a command${vf.checked ? ` (${esc(vf.checked - (vf.failed || []).length)} of ${esc(vf.checked)} checks passed)` : ""}.</p>
+        <p>${esc(r.events || 0)} action(s) observed in this session. ${esc(vf.tasks || 0)} task(s) and ${esc(vf.pages || 0)} page(s) can be retrieved by a command${vf.checked ? ` (${esc(vf.checked - (vf.failed || []).length)} of ${esc(vf.checked)} checks passed)` : ""}.</p>
         ${(vf.failed || []).length ? `<p class="err">Not retrievable yet: ${esc(vf.failed.map((f) => f.name).join(", "))}</p>` : ""}</div>`);
     } catch (e) { lwErr(e); }
   };

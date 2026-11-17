@@ -1,12 +1,15 @@
-r"""SkyGuard QA 23.11.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
-23.8.0, 23.9.0 and 23.10.0): editable Python tests in Guided Browser Automation (versions, validation, the saved
+r"""SkyGuard QA 23.11.1 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0, 23.9.0, 23.10.0 and 23.11.0). 23.11.1 repairs the AI Agent: the intent of a command is decided first (a navigation
+opens a page and never runs a task), a plan is tied to its request and application, the confirmation is checked by
+the server, learning covers multi-step and multi-role record flows and is tested after Stop & save, suggestions come
+from what was learned, and the browser extension 1.3.0 files (Start/Stop learning, reconnect). From 23.11.0: editable Python tests in Guided Browser Automation (versions, validation, the saved
 version is the one run and downloaded), the Smart Wait service shared by the runner and the exported Python (Wait
 settings, Insert waits, + Wait), one Defect Review for every failure (drafts that need approval before anything is sent
 to TFS; publishing confirmed by reading the work item back, with retry and reconciliation), Integration Comparison
 defects sent through the same publisher; and from 23.10.0: the simple AI Agent (connect, learn while browsing, plain-language and voice commands, one preview,
 explicit confirmation for consequential operations), guided recording for the Integration Comparison (Start Guided
 Recording, Stop & Save, Edit Recorded Steps, Replay & Verify, editable filters, every page, master-detail), and the
-browser extension 1.2.0 files. Offline installer, verifier and rollback. No administrator rights are needed.
+browser extension files. Offline installer, verifier and rollback. No administrator rights are needed.
 
 Runs with the application's own Python (no packages beyond the standard library are needed for the installer itself).
 Every step is printed; nothing is downloaded.
@@ -17,13 +20,13 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.10.0; 23.11.0 to apply again); any other version is
+  1. detects the installation and its version (23.3.35 to 23.11.0; 23.11.1 to apply again); any other version is
      refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.11.0), patches that copy and writes START_SKYGUARD_23.11.0.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.11.1), patches that copy and writes START_SKYGUARD_23.11.1.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
@@ -35,7 +38,7 @@ apply:
      is replaced only when the staging folder is complete, and the previous runtime is kept for rollback. Nothing is
      installed into the system Python and no registry key or PATH is changed,
   8. migrates: the main database is brought to 20 migrations (23.11.0 adds migration 20: review columns on
-     defect_drafts, defect_events, script_python and script_python_state; 23.9.0 and 23.10.0 add none); the Operations Agent's knowledge database is created or
+     defect_drafts, defect_events, script_python and script_python_state; 23.9.0, 23.10.0 and 23.11.1 add none); the Operations Agent's knowledge database is created or
      migrated to schema 2 and gets the simple agent's conversation_state table (23.10.0),
   9. verifies: the new version loads, the agent core, the comparison workspace with filters and semantics, the OCR
      engine probe (on Windows with Python 3.13), every migration, PRAGMA integrity_check for both databases and no
@@ -64,9 +67,10 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.11.0"
-BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0 or 23.10.0"
-RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0")
+PATCH_VERSION = "23.11.1"
+BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0 or 23.11.0"
+RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0",
+            "23.11.0")
 BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
@@ -430,6 +434,15 @@ RELEASE_2311_LOAD = ("import sys; sys.path.insert(0, '.'); from pathlib import P
                      "and any(r.path.endswith('/publish') for r in dapi.router.routes) "
                      "and Path('web/js/python-editor.js').is_file() and Path('web/js/smart-wait-ui.js').is_file() "
                      "else 'Python editor, Smart Wait or Defect Review incomplete')")
+AGENT_REPAIR_231101_LOAD = ("import sys; sys.path.insert(0, '.'); "
+                            "from skyguard_agent.intent import classify; from skyguard_agent.autopilot import Autopilot; "
+                            "from qa_platform.api import agent_simple as a; "
+                            "paths = {r.path for r in a.router.routes}; "
+                            "print('ok' if classify('navigate to online store', app_names=['Online Store']).kind == 'navigate' "
+                            "and classify('cancel order 5').kind == 'cancel_delete' "
+                            "and hasattr(Autopilot, 'verify_retrieval') and hasattr(Autopilot, 'suggestions') "
+                            "and any(p.endswith('/suggestions') for p in paths) and any(p.endswith('/verify/{app_id}') for p in paths) "
+                            "else 'AI Agent repair incomplete')")
 
 
 def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None) -> dict:
@@ -485,6 +498,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("Python editor, Smart Wait, Defect Review (23.11.0)", r11 == "ok", r11)
     except PatchError as exc:
         check("Python editor, Smart Wait, Defect Review (23.11.0)", False, str(exc))
+    try:
+        r111 = run_py(python, app, data, AGENT_REPAIR_231101_LOAD).splitlines()[-1]
+        check("AI Agent repair (23.11.1)", r111 == "ok", r111)
+    except PatchError as exc:
+        check("AI Agent repair (23.11.1)", False, str(exc))
     try:
         bp = run_py(python, app, data, BROWSER_POLICY_LOAD).splitlines()[-1]
         check("Maximized browser policy", bp == "ok", bp)
@@ -582,7 +600,7 @@ def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
     step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
-         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0)")
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):

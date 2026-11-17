@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.3.0 (companion 1.3.0, agent core shared with SkyGuard QA 23.11.1)
+
+* **Start learning / Stop & save learning** for the selected application in the Learn tab, with a visible status: a
+  red REC badge and a page banner while learning, and the number of actions and pages sent. Stop & save analyses what
+  was seen and tests that every learned task and page can be found again by a command, then reports the result.
+* **Reconnect**: while the companion cannot be reached, the person's actions and the pages they saw are kept in order
+  (up to 500 items, in memory) and sent when it is back, retried after 2 to 30 seconds. The badge turns grey and the
+  Learn tab says so. The list of registered applications is cached, so pages are still recorded during the outage.
+* **Duplicates removed**: the same action reported twice within 0.4 s (frames, re-injection) is kept once.
+* Chat:
+  * **suggestions** from what was learned, the page in the active tab, records waiting for a step, and recent requests
+    (viewers get no operations);
+  * no fixed example text and no permanent warning;
+  * "Missing information" is shown as it is asked;
+  * a navigation answer opens the page in a tab, only for a registered and granted site.
+* **Short preview**: Action, Application, the values, Role, Status, then **Confirm & Execute | Edit | Cancel**. When
+  nothing can run, it shows **Provide missing data | Edit request | Cancel** and the reason. The confirmation box keeps
+  its tick while the panel refreshes. Confirm sends the application, and the companion checks it.
+* Agent core: intent routing, plans linked to their request, the shared server-side confirmation, multi-step and
+  record-page learning, and the label text without the options of a list (`lib/agent_dom.js`, identical to
+  SkyGuard's). See SkyGuard 23.11.1's ROOT_CAUSE_ANALYSIS.md.
+* Companion routes: `GET /v1/simple/suggestions`, `POST /v1/simple/learn/{app}/save`, `POST /v1/simple/verify/{app}`,
+  `GET /v1/simple/runs/{id}`.
+* Unchanged: the permissions, the fixed extension ID, local-only operation, pairing and sign-in.
+
 ## 1.2.0 (companion 1.2.0, agent core shared with SkyGuard QA 23.10.0)
 
 * Simple agent: the chat uses the same simple agent as SkyGuard's new AI Agent page. Requests in plain words or voice

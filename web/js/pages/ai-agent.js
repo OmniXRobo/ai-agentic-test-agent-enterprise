@@ -330,7 +330,7 @@ function watchingHtml() {
     const s = w.stats || {};
     return `<div class="row" style="margin:6px 0">${pill("INFO", "Learning")} <b>${esc(app?.name || "")}</b>
       <span class="muted">${s.pages ?? s.snapshots ?? 0} page views, ${s.actions ?? s.events ?? 0} actions seen</span><span class="spacer"></span>
-      <button class="btn primary" data-stopwatch="${esc(w.session_id)}">Stop and save learning</button></div>`;
+      <button class="btn primary" data-stopwatch="${esc(w.session_id)}">Stop &amp; save learning</button></div>`;
   }).join("");
 }
 function bindWatching(root) {
