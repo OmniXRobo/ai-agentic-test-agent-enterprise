@@ -258,6 +258,8 @@ jobs:
           $out
           "exit code $rc"
           if ($rc -ne 1 -or $out -notmatch "Could not find a part of the path") { throw "the released installer did not fail as reported" }
+          "Reproduced: the released installer fails exactly as reported."
+          exit 0
       - name: The fixed installer installs on a new profile (TEMP on another drive) and the companion answers
         shell: powershell
         run: |
