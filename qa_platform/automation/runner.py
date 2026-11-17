@@ -183,6 +183,8 @@ class Runner:
             "steps": [], "evidence": {"folder": str(evidence_dir), "screenshots": [], "video": None, "downloads": []},
             "failed_step": None, "error": None, "healed": [], "data_row": data_label,
         }
+        if data_label or dataset:  # 23.11.0: which data set this run used (names only, never values)
+            record["evidence"]["dataset"] = data_label or ", ".join(sorted(dataset or {})[:20])
         row_id = self.db.execute(
             "INSERT INTO execution_results (run_id, script_id, test_case_id, user_story_id, status, started_at, browser,"
             " base_url) VALUES (?,?,?,?,?,?,?,?)",
@@ -242,6 +244,7 @@ class Runner:
         step_shots = bool(playback.get("step_screenshots", True))  # 23.3.31
         pw = start_playwright()
         browser = context = page = None
+        tracing = False
         try:
             browser = launch(pw, script.browser, headless=headless)
             # final patch: a visible run opens maximized on the monitor chosen in Preferences (Browser Manager)
@@ -256,6 +259,14 @@ class Runner:
                 if user and pwd:
                     ctx_opts["http_credentials"] = {"username": user, "password": pwd}
             context = bm_new_context(browser, headless, **ctx_opts)  # 23.9.0: maximized through CDP
+            # 23.11.0: a Playwright trace, kept only when the run fails (Defect Review evidence). A run that typed a
+            # password or another secret keeps no trace: a trace records typed values.
+            tracing = bool(playback.get("trace_on_failure", True))
+            if tracing:
+                try:
+                    context.tracing.start(screenshots=True, snapshots=True, sources=False)
+                except Exception:
+                    tracing = False
             context.add_init_script(js("fingerprint"))
             context.add_init_script(js("calendar"))
             context.add_init_script(js("components"))  # 23.6.0: universal component recognition
@@ -320,6 +331,23 @@ class Runner:
                     video_path = page.video.path()
                 else:
                     video_path = None
+                if context is not None and tracing:
+                    failed = any(st.get("status") == "FAILED" for st in record["steps"]) or record["status"] == "FAILED"
+                    if failed and not resolver.secrets_used:
+                        trace = evidence_dir / "trace.zip"
+                        try:
+                            context.tracing.stop(path=str(trace))
+                            record["evidence"]["trace"] = str(trace)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            context.tracing.stop()
+                        except Exception:
+                            pass
+                        if failed:
+                            record["evidence"]["trace_note"] = ("No Playwright trace was kept: this run typed a "
+                                                                "password or another secret.")
                 if context is not None:
                     context.close()
                 if video_path:
