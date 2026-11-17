@@ -56,6 +56,8 @@ class OperationsAgent:
         self.transcriber = transcriber
         self.interface = interface
         self.recovered = self.engine.recover_interrupted()
+        # 23.10.0: called with the application id after each digest (the simple agent trusts verified learning here)
+        self.after_digest: Callable[[str], Any] | None = None
 
     @property
     def backups_dir(self) -> Path:
@@ -85,6 +87,8 @@ class OperationsAgent:
         if final or self.understanding.pending(app["id"]) >= self.DIGEST_EVERY:
             res = self.understanding.digest(app["id"], by="passive-learning", use_ai=use_ai)
             out.update(digested=True, changes=res["changes"])
+            if self.after_digest:
+                out["trusted"] = self.after_digest(app["id"])
         return out
 
     def understanding_view(self, app_id: str) -> dict[str, Any]:

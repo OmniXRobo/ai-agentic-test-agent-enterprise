@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from skyguard_agent.agent import OperationsAgent
+from skyguard_agent.autopilot import Autopilot
 from skyguard_agent.llm import CallableLLM
 from skyguard_agent.util import AgentError
 from skyguard_agent.vault import SecretStoreBackend, Vault
@@ -26,7 +27,7 @@ from ..logging_setup import get_logger
 
 log = get_logger("opsagent")
 
-DEFAULTS = {"headless": False, "browser": None, "use_ai": True, "max_discovery_pages": 25}
+DEFAULTS = {"headless": False, "browser": None, "use_ai": True, "max_discovery_pages": 25, "auto_trust": True}
 
 
 class _BrowserJob:
@@ -41,6 +42,7 @@ class _BrowserJob:
         self.thread: threading.Thread | None = None
         self.error: str | None = None
         self.result: Any = None
+        self.browser: str | None = None  # 23.10.0: Edge or Chrome chosen on Connect & Learn
 
 
 class OpsAgentService:
@@ -55,6 +57,9 @@ class OpsAgentService:
                                      interface="skyguard")
         self.jobs: dict[str, _BrowserJob] = {}
         self._lock = threading.Lock()
+        # 23.10.0: the simple agent (four tabs). Learning by watching is trusted automatically unless an admin turns
+        # it off in Advanced settings ("auto_trust": false brings back one approval per learned task).
+        self.pilot = Autopilot(self.agent, auto_trust=bool(self.config().get("auto_trust", True)))
 
     # ---- reuse of SkyGuard components ------------------------------------------------------------------------
 
@@ -72,7 +77,8 @@ class OpsAgentService:
             except QAError as exc:
                 raise AgentError("LLM_UNAVAILABLE", exc.message if hasattr(exc, "message") else str(exc), 503) from exc
 
-        return CallableLLM(call, name=f"SkyGuard AI gateway ({ai.label})")
+        label = ai.label() if callable(getattr(ai, "label", None)) else getattr(ai, "label", "")
+        return CallableLLM(call, name=f"SkyGuard AI gateway ({label})")
 
     def _transcribe(self, audio: bytes, content_type: str) -> str:
         return self.rt.voice.transcribe(audio, content_type)
@@ -87,7 +93,7 @@ class OpsAgentService:
         pw = browser_manager.start_playwright()
         browser = None
         try:
-            browser = browser_manager.launch(pw, cfg.get("browser"), headless=bool(cfg.get("headless")))
+            browser = browser_manager.launch(pw, job.browser or cfg.get("browser"), headless=bool(cfg.get("headless")))
             headless = bool(cfg.get("headless"))
             job.driver = PlaywrightDriver(browser, context_options={}, evidence_dir=self.folder / "evidence",
                                           context_factory=lambda **o: browser_manager.new_context(browser, headless, **o))
@@ -114,11 +120,12 @@ class OpsAgentService:
                     if self.jobs.get(job.ref) is job:
                         self.jobs.pop(job.ref, None)
 
-    def _start(self, kind: str, ref: str, body: Any) -> None:
+    def _start(self, kind: str, ref: str, body: Any, browser: str | None = None) -> None:
         with self._lock:
             if ref in self.jobs:
                 raise AgentError("ALREADY_RUNNING", "A browser is already working on this.", 409)
             job = _BrowserJob(kind, ref)
+            job.browser = browser
             self.jobs[ref] = job
         job.thread = threading.Thread(target=self._launch, args=(job, body), name=f"opsagent-{ref}", daemon=True)
         job.thread.start()
@@ -191,7 +198,7 @@ class OpsAgentService:
 
     # ---- 23.7.0: learn while the person browses (passive learning in a SkyGuard browser) ---------------------------
 
-    def start_watch(self, app_id: str, by: str | None) -> dict[str, Any]:
+    def start_watch(self, app_id: str, by: str | None, browser: str | None = None) -> dict[str, Any]:
         """Open the application in a SkyGuard browser and learn from whatever the person does there, until they
         close the window or press Stop. The agent never clicks or types in this browser."""
         app = self.agent.kb.application(app_id)
@@ -211,7 +218,7 @@ class OpsAgentService:
                 self.agent.observe(app["id"], sid, [], None, by=by, interface="skyguard", final=True,
                                    use_ai=bool(self.config().get("use_ai")))
 
-        self._start("watch", sid, body)
+        self._start("watch", sid, body, browser=browser)
         return session
 
     def stop_watch(self, sid: str, by: str | None) -> dict[str, Any]:
@@ -226,6 +233,23 @@ class OpsAgentService:
         if not row:
             raise AgentError("LEARNING_NOT_FOUND", "That learning session does not exist.", 404)
         return self.agent.understanding_view(row["application_id"])
+
+    def connect_and_learn(self, url: str, name: str | None, by: str | None, learn: bool = True,
+                          browser: str | None = None) -> dict[str, Any]:
+        """23.10.0: one button. The application for this address (created if new) and, unless asked otherwise, a
+        maximized browser on it that learns from what the person does."""
+        res = self.pilot.connect(url, name=name, by=by)
+        app = res["application"]
+        session = None
+        if learn:
+            running = [ref for ref, job in self.jobs.items() if job.kind == "watch"
+                       and self._session_app(ref) == app["id"]]
+            session = {"id": running[0], "reused": True} if running else self.start_watch(app["id"], by, browser)
+        return {**res, "session": session}
+
+    def _session_app(self, sid: str) -> str | None:
+        row = self.agent.store.query_one("SELECT application_id FROM learning_sessions WHERE id = ?", (sid,))
+        return row["application_id"] if row else None
 
     def watching(self) -> list[str]:
         return [ref for ref, job in self.jobs.items() if job.kind == "watch"]

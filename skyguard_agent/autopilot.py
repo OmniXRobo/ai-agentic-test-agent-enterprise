@@ -151,12 +151,14 @@ def next_key(keys: list[str]) -> str | None:
 class Autopilot:
     """Simple-mode front of the OperationsAgent (the four tabs of SkyGuard's AI Agent page and the extension panel)."""
 
-    def __init__(self, agent: Any, *, today: Any = None) -> None:
+    def __init__(self, agent: Any, *, today: Any = None, auto_trust: bool = True) -> None:
         self.agent = agent
         self.kb = agent.kb
         self.store = agent.store
         self._today = today
         self.store._conn.executescript(MIGRATION)
+        if auto_trust:
+            agent.after_digest = self.trust
 
     def today(self) -> _dt.date:
         return self._today() if callable(self._today) else (self._today or _dt.date.today())
@@ -367,8 +369,8 @@ class Autopilot:
         recs = {k: dict(r) for k, r in (model.get("records") or {}).items()}
         seen_at = str(model.get("_updated_at") or model.get("built_at") or "")
         lcs = {norm(lc.get("entity")): lc for lc in model.get("lifecycles") or []}
-        runs = self.store.query("SELECT id, plan, updated_at FROM runs WHERE plan LIKE ? ORDER BY created_at",
-                                (f'%"app_id": "{app_id}"%',))
+        runs = self.store.query("SELECT id, plan, updated_at FROM runs WHERE application_id = ? ORDER BY created_at",
+                                (app_id,))
         for r in runs:
             if seen_at and str(r["updated_at"]) < seen_at:
                 continue
@@ -609,7 +611,12 @@ class Autopilot:
             for i in items:
                 bucket = _bucket(i["status"])
                 counts[bucket] = counts.get(bucket, 0) + 1
-            out.append({**self.agent.engine.view_summary(r), "counts": counts})
+            plan = self.agent.engine.run(r["id"])["plan"]
+            out.append({"id": r["id"], "application_id": r["application_id"], "status": r["status"],
+                        "title": " → ".join(s["title"] for s in plan.get("stages") or []) or r["id"],
+                        "kind": plan.get("kind") or "task", "message": (r.get("summary") or {}).get("message"),
+                        "created_by": r["created_by"], "created_at": r["created_at"],
+                        "finished_at": r["finished_at"], "records": len(items), "counts": counts})
         return out
 
 

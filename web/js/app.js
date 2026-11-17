@@ -33,6 +33,7 @@ import { initVoiceAgent } from "./voice-agent.js";
 import { productName, loadBrand, onBrand } from "./brand.js";
 import * as usersPage from "./pages/users.js";
 import * as opsAgent from "./pages/ops-agent.js";
+import * as aiAgent from "./pages/ai-agent.js";
 import { ensureSignedIn, initUserMenu, isAdmin, canEdit } from "./auth.js";
 import * as integrationWorkspace from "./pages/integration-workspace.js";
 import { tfsIntegration, browserManager, auraMemory } from "./pages/preferences-final.js";
@@ -76,8 +77,10 @@ const NAV = [
     ["perf-results", "Performance Results", perfResults],
     ["perf-defects", "Performance Defects", perfDefects],
   ]],
-  ["AI Operations Agent", [
-    ["ops-agent", "AI Application Learning & Operations Agent", opsAgent],
+  // 23.10.0: one simple AI Agent page (four tabs) replaces the eight-tab Operations Agent page, whose technical
+  // screens remain only as Advanced Administrator Settings (no nav entry, admins only).
+  ["AI Agent", [
+    ["ai-agent", "AI Agent", aiAgent],
   ]],
   // 23.8.0: the 18 separate comparison pages (discovery, extraction, OCR, import, mapping, filters, rules, KPI
   // definitions, run, results, defects, reports, evidence ...) are one workspace; their work happens behind it.
@@ -111,6 +114,7 @@ for (const [, items] of NAV) {
 }
 // The earlier single-script AI generation page stays available (and opens its scripts) without a nav entry.
 ROUTES.set("ai-automation-classic", { route: "ai-automation", title: "AI-Driven Automation (single script)", page: aiAutomation });
+ROUTES.set("ops-agent", { route: "ops-agent", title: "AI Agent: Advanced Administrator Settings", page: opsAgent });
 
 // 23.3.34: view-only accounts do not see the Settings pages; only an admin sees Users & Network Access.
 function visibleNav() {
@@ -119,7 +123,8 @@ function visibleNav() {
 }
 
 function allowed(route) {
-  return visibleNav().some(([, items]) => items.some(([r]) => r === route)) || route === "ai-automation-classic";
+  return visibleNav().some(([, items]) => items.some(([r]) => r === route)) || route === "ai-automation-classic"
+    || (route === "ops-agent" && isAdmin());
 }
 
 // Final patch: collapsible sidebar. Every entry has an icon; when the sidebar is collapsed only icons show and the
@@ -145,7 +150,7 @@ const I = {
   search: "M10 2a8 8 0 1 0 4.9 14.3l5.4 5.4 1.4-1.4-5.4-5.4A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6Z",
 };
 const ICON_BY_ROUTE = [
-  [/^ops-agent/, "bot"],
+  [/^ops-agent|^ai-agent/, "bot"],
   [/command-center|voice/, "mic"], [/^dashboard|cmp-dashboard|analytics/, "grid"], [/workflow/, "flow"], [/notif/, "bell"],
   [/history|schedul|perf-schedules/, "clock"], [/test-data|perf-data|cmp-import|cmp-extract/, "data"],
   [/discovery|cmp-discovery|explorer|investigation/, "search"], [/test-|stories|acceptance|plans|suites/, "check"],

@@ -1,0 +1,155 @@
+"""23.10.0 simple AI Agent API (/api/ops/simple): the four tabs of the AI Agent page.
+
+  AI Chat & Voice          POST /command, POST /voice (local speech-to-text, then the same command path)
+  Connect & Learn          POST /connect, POST /learn/{sid}/stop, POST /explore, GET /status
+  Applications & Knowledge GET /knowledge/{app_id}, POST /knowledge/{entry_id}/forget, POST /knowledge/{entry_id}/trust
+  Tasks & History          GET /tasks, POST /runs/{run_id}/confirm
+
+Same sign-in and roles as the rest of SkyGuard: view-only accounts can read but every POST here is refused for them
+by the central guard. Consequential operations (approve, authorize, delete, cancel, record, submit ...) need
+``acknowledge: true`` on confirmation, which the page sends only after the person ticks the confirmation box.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
+
+from skyguard_agent.autopilot import CONSEQUENTIAL
+from skyguard_agent.util import AgentError
+
+from .opsagent import MAX_AUDIO_BYTES, actor, ops
+
+router = APIRouter(prefix="/api/ops/simple")
+
+
+class ConnectIn(BaseModel):
+    url: str = Field(min_length=8, max_length=500)
+    name: str | None = Field(default=None, max_length=80)
+    learn: bool = True
+    browser: Literal["msedge", "chrome", "chromium"] | None = None
+
+
+@router.post("/connect", status_code=201)
+async def connect(body: ConnectIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    out = await run_in_threadpool(svc.connect_and_learn, body.url, body.name, actor(request), body.learn,
+                                  body.browser)
+    return {"ok": True, **out}
+
+
+@router.post("/learn/{sid}/stop")
+async def stop_learning(sid: str, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    view = await run_in_threadpool(svc.stop_watch, sid, actor(request))
+    app_id = (view.get("application") or {}).get("id")
+    trusted = svc.pilot.trust(app_id) if app_id and svc.config().get("auto_trust", True) else None
+    return {"ok": True, "understanding": view, "trusted": trusted}
+
+
+class ExploreIn(BaseModel):
+    application_id: str = Field(max_length=80)
+    account_id: str | None = Field(default=None, max_length=80)
+    max_pages: int = Field(default=25, ge=1, le=200)
+
+
+@router.post("/explore", status_code=201)
+def explore(body: ExploreIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """Read-only automatic discovery: menus, pages, forms, tables. Nothing is submitted, created or deleted."""
+    view = svc.agent.learning.start_discovery(body.application_id, account_id=body.account_id,
+                                              max_pages=body.max_pages, by=actor(request), interface="skyguard")
+    svc.start_run(view["run"]["id"])
+    return {"ok": True, **view}
+
+
+@router.get("/status")
+def status(svc: Any = Depends(ops)) -> dict[str, Any]:
+    apps = svc.agent.kb.applications()
+    watching = []
+    for sid in svc.watching():
+        app_id = svc._session_app(sid)
+        watching.append({"session_id": sid, "application_id": app_id,
+                         "stats": svc.agent.journal.stats(app_id) if app_id else {}})
+    return {"ok": True, "applications": apps, "watching": watching,
+            "auto_trust": bool(svc.config().get("auto_trust", True)), "agent": svc.agent.info()}
+
+
+class CommandIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    conversation: str | None = Field(default=None, max_length=80)
+    app_id: str | None = Field(default=None, max_length=80)
+    source: Literal["typed", "voice"] = "typed"
+
+
+@router.post("/command")
+async def command(body: CommandIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    out = await run_in_threadpool(svc.pilot.command, body.text, conversation=body.conversation,
+                                  user=actor(request), interface="skyguard", app_id=body.app_id, source=body.source)
+    reply = out["reply"]
+    if reply.get("type") == "run" and reply.get("run_id"):
+        # the browser opens to check the application read-only and prepare the one preview
+        try:
+            svc.start_run(reply["run_id"])
+        except AgentError:
+            pass
+    return {"ok": True, **out}
+
+
+@router.post("/voice")
+async def voice(request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """Local speech-to-text (Faster-Whisper or the built-in recognizer). Returns the text; the page shows it and sends
+    it as a command, which can only ever produce a preview to confirm."""
+    audio = await request.body()
+    if len(audio) > MAX_AUDIO_BYTES:
+        raise AgentError("AUDIO_TOO_LARGE", "The recording is too long.", 413)
+    content_type = request.headers.get("content-type", "audio/wav").split(";")[0]
+    text = await run_in_threadpool(svc.agent.transcribe, audio, content_type)
+    return {"ok": True, "text": text}
+
+
+@router.get("/knowledge/{app_id}")
+def knowledge(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
+    return {"ok": True, **svc.pilot.knowledge(app_id)}
+
+
+class NoteIn(BaseModel):
+    note: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/knowledge/{entry_id}/forget")
+def forget(entry_id: int, body: NoteIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """A correction: this task or rule is wrong. It stops being used; the evidence stays in the history."""
+    return {"ok": True, "entry": svc.agent.kb.reject(entry_id, by=actor(request), note=body.note or "Marked wrong")}
+
+
+@router.post("/knowledge/{entry_id}/trust")
+def trust(entry_id: int, body: NoteIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """A correction the other way: use this suggestion (for example an AI-suggested rule)."""
+    return {"ok": True, "entry": svc.agent.kb.approve(entry_id, by=actor(request), note=body.note or "Confirmed")}
+
+
+@router.get("/tasks")
+def tasks(app_id: str | None = None, limit: int = 50, svc: Any = Depends(ops)) -> dict[str, Any]:
+    return {"ok": True, "tasks": svc.pilot.tasks(app_id, limit=max(1, min(limit, 200)))}
+
+
+class ConfirmIn(BaseModel):
+    preview_hash: str = Field(min_length=64, max_length=64)
+    acknowledge: bool = False
+
+
+def consequential(run: dict[str, Any]) -> bool:
+    return any(CONSEQUENTIAL.search(f"{s.get('workflow')} {s.get('title')}") for s in run["plan"].get("stages") or [])
+
+
+@router.post("/runs/{run_id}/confirm")
+def confirm(run_id: str, body: ConfirmIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    run = svc.agent.engine.run(run_id)
+    if consequential(run) and not body.acknowledge:
+        raise AgentError("ACKNOWLEDGE_REQUIRED", "This operation changes records (for example approves, authorizes, "
+                         "cancels or deletes them). Tick the confirmation box after reading the preview.", 409)
+    view = svc.agent.engine.confirm(run_id, body.preview_hash, by=actor(request), interface="skyguard")
+    if run_id not in svc.jobs:
+        svc.start_run(run_id)
+    return {"ok": True, **view, "consequential": consequential(run)}
