@@ -15,7 +15,7 @@ export function waitLabel(w) {
   const kind = WAIT_KINDS[w.kind || "ajax"] || w.kind;
   if (w.kind === "fixed") return `Fixed Delay ${w.ms || 1000} ms`;
   const what = w.selector || w.url || "";
-  return `${kind}${what ? ` (${what})` : ""}${w.value ? ` = '${w.value}'` : ""} · ${Math.round((w.timeout_ms || 30000) / 1000)} s${w.auto ? " · bulk" : ""}`;
+  return `${kind}${what ? ` (${what})` : ""}${w.value ? ` = '${w.value}'` : ""} · ${Math.round((w.timeout_ms || 30000) / 1000)} s${w.strict ? " · strict" : ""}${w.auto ? " · bulk" : ""}`;
 }
 
 // The settings of one wait step. Resolves with the wait object, or null when cancelled.
@@ -28,6 +28,7 @@ export function editWait(initial = {}) {
     <label data-for="url">Part of the request URL <input name="url" value="${esc(w.url || "")}" placeholder="/api/orders"></label>
     <label data-for="ms">Delay (ms) <input name="ms" type="number" min="50" max="120000" value="${esc(w.ms || 1000)}"></label>
     <label>Timeout (seconds) <input name="timeout" type="number" min="1" max="300" value="${Math.round((w.timeout_ms || 30000) / 1000)}"></label>
+    <label class="check"><input type="checkbox" name="strict" ${w.strict ? "checked" : ""}> Fail the step when the wait times out (otherwise it is reported and the run continues)</label>
     <p class="muted">Smart waits check requests in flight, loaders, busy markers, DataTables processing and page changes, and confirm the result changed. A wait that runs out of time is reported on the step; it does not hide the problem.</p>
     <div class="row"><button class="btn primary" type="submit">OK</button><button class="btn" type="button" data-close>Cancel</button></div></form>`;
   const { el, close } = openModal("Smart Wait", body);
@@ -55,6 +56,7 @@ export function editWait(initial = {}) {
       if (k === "text_change" && form.value.value) out.value = form.value.value;
       if (k === "network_response") out.url = form.url.value.trim();
       if (k === "fixed") out.ms = Number(form.ms.value) || 1000;
+      if (form.strict.checked) out.strict = true;
       if (initial.auto) out.auto = true;
       finish(out); close();
     });

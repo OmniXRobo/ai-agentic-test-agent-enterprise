@@ -160,6 +160,14 @@ class AutomationService:
         if bad:
             raise QAError("TEST_DATA_ROW_INVALID", f"Row {bad[0]} is not in the data ({len(table.rows)} rows).", status=422)
         batch_id = new_run_id("DDR")
+        if self.python.is_edited(script_id):
+            # 23.11.0: the saved (edited) Python runs every data row itself (one pytest test per row)
+            run_id = self.python.run(script_id, headless=headless)
+            batch = {"batch_id": batch_id, "started_at": now_iso(), "source": table.source,
+                     "rows": [{"row": None, "run_id": run_id, "label": f"all {len(table.rows)} rows (edited Python)"}],
+                     "note": "The edited Python test runs every row as its own test; the row choice does not apply."}
+            self.scripts.add_data_run(script_id, batch)
+            return batch
         items = [{"row": r, "run_id": new_run_id("RUN"), "label": f"row {r + 1} of {len(table.rows)}"} for r in chosen]
         stop = threading.Event()
         self.batch_stops[batch_id] = stop

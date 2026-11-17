@@ -16,6 +16,13 @@ from tests.test_automation import HAVE_PLAYWRIGHT, _login_script
 needs_browser = pytest.mark.skipif(not HAVE_PLAYWRIGHT, reason="playwright is not installed")
 
 
+@pytest.fixture(scope="module")
+def ajax_url():
+    server, url = ajax_site.start()
+    yield url
+    server.shutdown()
+
+
 @pytest.fixture()
 def prt(client, rt):
     rt.settings.update({"playback": {"visual_delay_ms": 0, "headless": True}})
@@ -101,3 +108,35 @@ def test_failed_python_without_secrets_keeps_the_playwright_trace(prt):
         assert run["status"] == "FAILED" and run["evidence"]["trace"] and Path(run["evidence"]["trace"]).is_file()
     finally:
         server.shutdown()
+
+
+@needs_browser
+def test_data_driven_run_of_edited_python_runs_every_row(prt, ajax_url):
+    """Run data rows on an edited script: the saved Python runs each Excel / CSV row as its own test."""
+    from qa_platform.automation.dsl import DataTable, Script, Step, Target
+
+    c, rt = prt
+    steps = [Step(action="goto", value=ajax_url + "/?delay=200"),
+             Step(action="select", target=Target(selector="#country"), value="UAE"),
+             Step(action="wait_until", wait={"kind": "ajax", "timeout_ms": 15000}),
+             Step(action="select", target=Target(selector="#city"), value="{{DATA:city}}"),
+             Step(action="click", target=Target(selector="#apply")),
+             Step(action="wait_until", wait={"kind": "ajax", "timeout_ms": 15000}),
+             Step(action="expect_text", target=Target(selector="#orders"), value="{{DATA:city}}", timeout_ms=3000)]
+    script = rt.automation.scripts.save(Script(id="SCR-PYDATA0001", name="Orders per city", base_url=ajax_url,
+                                               steps=steps, data_table=DataTable(columns=["city"], rows=[
+                                                   {"city": "Dubai"}, {"city": "Atlantis"}])))
+    src = c.get(f"/api/automation/scripts/{script.id}").json()["python"]
+    assert _save(c, script.id, src + "\n# reviewed\n", "reviewed").status_code == 200
+    batch = rt.automation.run_data_rows(script.id, [0])
+    assert batch["rows"][0]["row"] is None and "edited Python" in batch["rows"][0]["label"] and batch["note"]
+    run_id = batch["rows"][0]["run_id"]
+    import time as _t
+    for _ in range(240):
+        row = rt.db.query_one("SELECT status, steps FROM execution_results WHERE run_id = ?", (run_id,))
+        if row and row["status"] not in ("RUNNING",):
+            break
+        _t.sleep(0.5)
+    assert row["status"] == "FAILED"  # Atlantis is never shown
+    cases = json.loads(row["steps"])
+    assert [c_["status"] for c_ in cases] == ["PASSED", "FAILED"], cases

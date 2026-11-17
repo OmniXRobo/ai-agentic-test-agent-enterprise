@@ -169,3 +169,14 @@ def test_recorder_records_a_smart_wait_after_actions_that_load_data(wrt, ajax):
     wrt.automation.scripts.save(script)
     run = wrt.automation.run_script(script.id, headless=True, background=False)
     assert run["status"] == "PASSED", run.get("error")
+
+
+@needs_browser
+def test_strict_wait_fails_the_step_when_it_times_out(client, wrt, ajax):
+    """A wait marked strict (Smart Wait dialog: "Fail the step when the wait times out") stops the run at the wait."""
+    assert smart_wait.clean_spec({"kind": "element_visible", "selector": "#x", "strict": True})["strict"] is True
+    script = _script(ajax, id="SCR-WAITSTRICT")
+    script.steps.insert(1, Step(action="wait_until", wait={"kind": "element_visible", "selector": "#never",
+                                                          "timeout_ms": 1000, "strict": True}))
+    run = _run(wrt, script)
+    assert run["status"] == "FAILED" and run["failed_step"] == 1 and "Smart Wait timed out" in run["error"]

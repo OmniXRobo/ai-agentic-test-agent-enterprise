@@ -13,7 +13,7 @@ HOW TO INSTALL (5 minutes)
      If Windows shows "Windows protected your PC": More info -> Run anyway (the program is not code-signed).
   3. In the browser press Ctrl+F5 once. New in 23.11.0: Guided Browser Automation > a script > "Python test"
      (Edit Script, Save, Validate, Run, Version History), "Wait settings" and "Insert waits..." above the steps,
-     and Test Management > Defect Review (every failure becomes a draft; nothing is sent to TFS until you approve).
+     and Quality > Defect Review (every failure becomes a draft; nothing is sent to TFS until you approve).
 
   If your PC does not allow starting the .exe: open the folder Manual_Install and double-click APPLY_PATCH.cmd.
   It does exactly the same upgrade, with the same checks, backup and automatic restore.

@@ -86,7 +86,7 @@ def _sig(target: dict | None) -> str:
     if not target:
         return ""
     raw = f"{target.get('exists')}|{target.get('rows')}|{target.get('length')}|{target.get('text')}"
-    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()
+    return hashlib.sha1(raw.encode("utf-8", "replace"), usedforsecurity=False).hexdigest()
 
 
 class SmartWait:
@@ -324,6 +324,8 @@ def clean_spec(spec: dict[str, Any]) -> dict[str, Any]:
         out["ms"] = ms
     if spec.get("minimum_ms"):
         out["minimum_ms"] = max(0, min(int(spec["minimum_ms"]), 60000))
+    if spec.get("strict"):
+        out["strict"] = True  # a timeout fails the step instead of being reported and continuing
     if spec.get("auto"):
         out["auto"] = True  # inserted by a bulk action (removed and updated by the bulk tools)
     return out
