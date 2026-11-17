@@ -177,6 +177,7 @@ def test_patch_contents(built):
     assert "tests/transport_flow_site.py" in sums and "tests/test_ui_231101.py" in sums
     assert "tests/test_extension_130.py" in sums and "ROOT_CAUSE_ANALYSIS.md" in sums
     assert "previous-23.11.1/PATCH_CHANGELOG.md" in sums and "tests/test_missing_info_231102.py" in sums
+    assert "tests/test_ui_231102.py" in sums
     app = built / "app" / "qa_platform"
     assert '__version__ = "23.11.2"' in (app / "__init__.py").read_text()
     assert "def classify" in (built / "app" / "skyguard_agent" / "intent.py").read_text()

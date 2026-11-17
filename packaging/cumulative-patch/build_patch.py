@@ -60,7 +60,7 @@ TESTS = ["tests/test_passive_learning_23700.py", "tests/passive_session.py", "te
          "tests/test_defects.py", "tests/fake_ado.py", "tests/test_ai_agent_repair_231101.py",
          "tests/shop_site.py", "tests/transport_flow_site.py", "tests/test_extension_130.py", "tests/test_ui_231101.py",
          "tests/test_cumulative_patch_231101.py",
-         "tests/test_missing_info_231102.py", "tests/test_cumulative_patch_231102.py"]
+         "tests/test_missing_info_231102.py", "tests/test_ui_231102.py", "tests/test_cumulative_patch_231102.py"]
 TEST_SITES = ["tests/site/integration_ocr", "tests/site/integration_live"]  # whole folders (fixtures of 23.9.0)
 
 
