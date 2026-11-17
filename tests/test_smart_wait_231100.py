@@ -117,8 +117,12 @@ def test_exported_pytest_waits_the_same_way(wrt, ajax, tmp_path):
 @needs_browser
 def test_timeout_is_reported_and_next_failure_is_classified_timing(wrt, ajax):
     script = _script(ajax)
+    # a long server delay, so the table is certainly still loading when the check after Apply gives up (under load
+    # a 1.2 s answer could arrive before the failure is examined, and the evidence would no longer show it busy)
+    script.steps[0].value = ajax + "/?delay=5000"
     script.steps.insert(1, Step(action="wait_until", wait={"kind": "element_visible", "selector": "#never",
                                                           "timeout_ms": 1000}))
+    script.steps.insert(3, Step(action="wait_until", wait={"kind": "ajax", "timeout_ms": 20000}))  # the cities
     run = _run(wrt, script)
     w = run["steps"][1]
     assert w["status"] == "PASSED" and w["wait_uncertain"] and "Smart Wait timed out" in w["warning"]
