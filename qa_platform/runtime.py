@@ -139,6 +139,7 @@ def build_runtime(
     performance.secrets = secrets  # 23.3.24: secrets of recorded scripts
     defects = DefectService(settings, bus, db, tfs, automation, performance)
     defects.ai = ai  # 23.11.0: the local AI's validated view of a failure (defects/triage.py)
+    automation.python.defects = defects  # 23.11.0: a failed Python test becomes a draft for review
     voice = VoiceService(settings, bus, db, runs, state, tfs, ai, design, automation, performance, defects,
                          transport=stt_transport)
     analytics = AnalyticsService(db, tfs, automation)

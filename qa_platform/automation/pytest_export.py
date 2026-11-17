@@ -638,7 +638,7 @@ endlocal
 
 
 def bundle(scripts: list[tuple[Script, list[dict[str, Any]]]], generated: str,
-           files: dict[str, Any] | None = None) -> bytes:
+           files: dict[str, Any] | None = None, sources: dict[str, str] | None = None) -> bytes:
     """A zip with tests/, pytest.ini, requirements.txt, README.txt and RUN_TESTS.cmd."""
     creds: list[str] = []
     names: set[str] = set()
@@ -649,13 +649,16 @@ def bundle(scripts: list[tuple[Script, list[dict[str, Any]]]], generated: str,
             if name in names:
                 name = name[:-3] + f"_{script.id.lower().replace('-', '_')}.py"
             names.add(name)
-            zf.writestr(f"tests/{name}", to_pytest(script, datasets))
+            # 23.11.0: an edited (saved) Python test is downloaded as saved
+            zf.writestr(f"tests/{name}", (sources or {}).get(script.id) or to_pytest(script, datasets))
             folder = (files or {}).get(script.id)
             if folder is not None and uses_files(script) and folder.is_dir():  # 23.3.17: files for upload steps
                 for f in sorted(folder.iterdir()):
                     if f.is_file():
                         zf.write(f, f"tests/files/{files_folder(script)}/{f.name}")
             creds += [c for c in credential_variables(script) if c not in creds]
+            if (sources or {}).get(script.id):
+                creds += [_env_name(r, f) for r, f in _CRED.findall(sources[script.id]) if _env_name(r, f) not in creds]
         zf.writestr("pytest.ini", "[pytest]\ntestpaths = tests\naddopts = -v\n")
         zf.writestr("requirements.txt", f"pytest=={PYTEST_VERSION}\nplaywright=={PLAYWRIGHT_VERSION}\n"
                     + (f"pypdf=={PYPDF_VERSION}\n" if any(uses_files(s) for s, _ in scripts) else ""))

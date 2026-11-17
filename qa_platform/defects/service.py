@@ -135,6 +135,8 @@ class DefectService:
         if event.name == names.EXECUTION_FAILED:
             if str((event.details or {}).get("script_id") or "").startswith("FWS-"):
                 return  # AI-Driven framework runs are diagnosed by the Script Studio (see record_draft)
+            if (event.details or {}).get("python"):
+                return  # 23.11.0: an edited Python test run makes its own draft (python_scripts.py)
             kind = "functional"
         elif event.name == names.PERFORMANCE_FAILED and (event.details or {}).get("sla") == "FAIL":
             kind = "performance"
