@@ -20,6 +20,11 @@ from .browser import new_context as bm_new_context
 from . import date_rules
 from .dsl import Step, Target
 from .files import safe_name
+from .smart_wait import SmartWait, clean_spec, describe_wait
+
+
+# 23.11.0: actions after which a page commonly loads data; a Smart Wait is recorded after them when it did
+LOAD_ACTIONS = ("click", "select", "fill", "check", "uncheck", "press", "choose_option", "pick_date", "dblclick")
 
 
 class GuidedBrowserAgent(BaseAgent):
@@ -296,6 +301,26 @@ class RecordingSession:
             with self._lock:
                 self._frame_pending.append((frame, [step.get(k) for k in ("target", "dest") if isinstance(step.get(k), dict)]))
 
+    LOAD_WINDOW_S = 2.5
+
+    def _watch_loading(self) -> None:
+        """23.11.0: a recorded action after which the page started AJAX / fetch requests (a dependent dropdown, a
+        filter, a table refresh) gets a Smart Wait (AJAX/Data Load) after it, so playback waits for the data instead
+        of failing on a slower day. The steps are marked here; the wait steps are added when the steps are converted."""
+        sw = getattr(self, "_sw", None)
+        if sw is None:
+            return
+        nowm = time.monotonic()
+        with self._lock:
+            for st in self.steps[-3:]:
+                t = st.get("_t")
+                if t is None or st.get("_loads") is not None or st.get("action") not in LOAD_ACTIONS:
+                    continue
+                if sw.requests_since(t - 0.05, t + self.LOAD_WINDOW_S):
+                    st["_loads"] = True
+                elif nowm - t > self.LOAD_WINDOW_S:
+                    st["_loads"] = False
+
     def _resolve_frames(self) -> None:
         """23.3.21: give steps done inside iframes their chain of iframe selectors (outermost first)."""
         with self._lock:
@@ -548,6 +573,7 @@ class RecordingSession:
                     context = bm_new_context(browser, self.headless, ignore_https_errors=True,
                                              accept_downloads=True)  # 23.9.0: one window policy
                     context.expose_binding("__qaRecord", self._on_record)
+                    self._sw = SmartWait(context)  # 23.11.0: notices actions that load data (same service as playback)
                     context.on("page", self._on_page)
                     context.add_init_script(js("fingerprint"))
                     context.add_init_script(js("recorder"))
@@ -581,6 +607,7 @@ class RecordingSession:
                                 pass
                             if self._frame_pending:
                                 self._resolve_frames()
+                            self._watch_loading()
                             count = sum(len(s["steps"]) for s in self.segments)
                             if pushed != self._state_ver or pushed_n != count:
                                 pushed, pushed_n = self._state_ver, count
@@ -816,6 +843,10 @@ class RecordingSession:
                     desc = f"{desc} ({rule_label})"
             out.append(Step(action=s["action"], target=target, value=s.get("value"), description=desc,
                             original_value=s.get("original_value"), tab=s.get("tab"), semantic=s.get("semantic")))
+            if s.get("_loads"):  # 23.11.0: the page loaded data after this action while recording
+                spec = clean_spec({"kind": "ajax", "timeout_ms": 30000, "auto": True})
+                out.append(Step(action="wait_until", wait=spec, timeout_ms=30000, tab=s.get("tab"),
+                                description=describe_wait(spec) + " (seen while recording)"))
         return out
 
     @property

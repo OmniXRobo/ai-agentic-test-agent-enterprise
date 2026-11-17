@@ -27,6 +27,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.skipif('__version__ = "23.10.0"' not in (ROOT / "qa_platform" / "__init__.py").read_text(encoding="utf-8"),
+                                reason="builds the patch from this checkout: only meaningful on the 23.10.0 tree "
+                                       "(23.11.0 is tested by test_cumulative_patch_231100.py)")
 NAME = "SkyGuard_SGQA-23.3.35_to_23.10.0_Patch_Files"
 WHEELS = Path(os.environ.get("SKYGUARD_OCR_WHEELS", "/tmp/claude-0/wheels/win"))
 PKG = ROOT / "packaging" / "cumulative-patch"

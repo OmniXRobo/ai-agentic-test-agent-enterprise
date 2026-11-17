@@ -5,6 +5,7 @@ duplicate prevention; a timeout is reported, not hidden; a failure after an unce
 from __future__ import annotations
 
 import os
+import time
 import subprocess
 import sys
 
@@ -140,3 +141,31 @@ def test_policy_and_spec_validation():
     with pytest.raises(Exception):
         smart_wait.clean_spec({"kind": "element_visible"})  # needs a selector
     assert "SMART WAIT BEGIN" in smart_wait.embedded_source()
+
+
+@needs_browser
+def test_recorder_records_a_smart_wait_after_actions_that_load_data(wrt, ajax):
+    """The recorder uses the same Smart Wait service: an action after which the page started AJAX requests gets an
+    AJAX/Data Load wait after it, so the recording plays back on a slow day without a global policy."""
+    auto = wrt.automation
+    run_id = auto.start_recording(f"{ajax}/?delay=1200", name="Recorded orders", headless=True)
+    session = auto.recording(run_id)["session"]
+    session.command("select", ("#country", "UAE"))
+    time.sleep(3)  # the tester waits for the cities, as a person would
+    session.command("select", ("#city", "Dubai"))
+    time.sleep(3)
+    session.command("click", "#apply")
+    time.sleep(3.5)
+    session.add_assertion("#orders", "Dubai")
+    script = auto.stop_recording(run_id)
+    acts = [s.action for s in script.steps]
+    assert acts == ["goto", "select", "wait_until", "select", "click", "wait_until", "expect_text"], acts
+    waits = [s for s in script.steps if s.action == "wait_until"]
+    assert all(w.wait["kind"] == "ajax" and w.wait.get("auto") for w in waits)
+    assert "seen while recording" in waits[0].description
+    for st in script.steps:  # the recorded timeouts are short, so only the recorded waits make playback pass
+        if st.action in ("select", "expect_text"):
+            st.timeout_ms = 600
+    wrt.automation.scripts.save(script)
+    run = wrt.automation.run_script(script.id, headless=True, background=False)
+    assert run["status"] == "PASSED", run.get("error")

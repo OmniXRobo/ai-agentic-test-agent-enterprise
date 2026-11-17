@@ -1,5 +1,9 @@
-r"""SkyGuard QA 23.10.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
-23.8.0 and 23.9.0): the simple AI Agent (connect, learn while browsing, plain-language and voice commands, one preview,
+r"""SkyGuard QA 23.11.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0, 23.9.0 and 23.10.0): editable Python tests in Guided Browser Automation (versions, validation, the saved
+version is the one run and downloaded), the Smart Wait service shared by the runner and the exported Python (Wait
+settings, Insert waits, + Wait), one Defect Review for every failure (drafts that need approval before anything is sent
+to TFS; publishing confirmed by reading the work item back, with retry and reconciliation), Integration Comparison
+defects sent through the same publisher; and from 23.10.0: the simple AI Agent (connect, learn while browsing, plain-language and voice commands, one preview,
 explicit confirmation for consequential operations), guided recording for the Integration Comparison (Start Guided
 Recording, Stop & Save, Edit Recorded Steps, Replay & Verify, editable filters, every page, master-detail), and the
 browser extension 1.2.0 files. Offline installer, verifier and rollback. No administrator rights are needed.
@@ -13,13 +17,13 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.9.0; 23.10.0 to apply again); any other version is
+  1. detects the installation and its version (23.3.35 to 23.10.0; 23.11.0 to apply again); any other version is
      refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.10.0), patches that copy and writes START_SKYGUARD_23.10.0.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.11.0), patches that copy and writes START_SKYGUARD_23.11.0.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
@@ -30,8 +34,8 @@ apply:
      the application folder cannot be written. The wheels are unpacked into a staging folder first; the folder in use
      is replaced only when the staging folder is complete, and the previous runtime is kept for rollback. Nothing is
      installed into the system Python and no registry key or PATH is changed,
-  8. migrates: the main database is brought to 19 migrations (23.9.0 and 23.10.0 add none; filters, filter sets and
-     guided recordings are kept in the comparison's settings); the Operations Agent's knowledge database is created or
+  8. migrates: the main database is brought to 20 migrations (23.11.0 adds migration 20: review columns on
+     defect_drafts, defect_events, script_python and script_python_state; 23.9.0 and 23.10.0 add none); the Operations Agent's knowledge database is created or
      migrated to schema 2 and gets the simple agent's conversation_state table (23.10.0),
   9. verifies: the new version loads, the agent core, the comparison workspace with filters and semantics, the OCR
      engine probe (on Windows with Python 3.13), every migration, PRAGMA integrity_check for both databases and no
@@ -41,7 +45,7 @@ apply:
 
 rollback (after a successful apply): restores the previous application files, removes the files the patch added and
 puts back the OCR runtime that was there before (or removes the one the patch installed). The databases are kept as
-they are by default (23.10.0 only adds a table that earlier versions ignore); --restore-database puts back the copy taken before the
+they are by default (23.10.0 and 23.11.0 only add tables and columns that earlier versions ignore); --restore-database puts back the copy taken before the
 upgrade instead (the current database is kept next to it, renamed).
 """
 
@@ -60,14 +64,14 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.10.0"
-BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0 or 23.9.0"
-RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0")
+PATCH_VERSION = "23.11.0"
+BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0 or 23.10.0"
+RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0")
 BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
 AGENT_SCHEMA = 2
-MIGRATION_COUNT = 19
+MIGRATION_COUNT = 20
 MARGIN_MB = 300
 
 
@@ -416,6 +420,17 @@ SIMPLE_AGENT_LOAD = ("import sys; sys.path.insert(0, '.'); from pathlib import P
                      "and hasattr(workspace.Workspace, 'guided_replay') and hasattr(guided_nav, 'Recorder') "
                      "and Path('web/js/pages/ai-agent.js').is_file() else 'simple agent or guided recording incomplete')")
 
+RELEASE_2311_LOAD = ("import sys; sys.path.insert(0, '.'); from pathlib import Path; "
+                     "from qa_platform.automation import smart_wait, python_scripts, pytest_export; "
+                     "from qa_platform.defects import service as ds, triage; from qa_platform.api import defects as dapi; "
+                     "v = python_scripts.validate('import subprocess\\n'); "
+                     "print('ok' if smart_wait.clean_policy({'enabled': True, 'mode': 'smart'})['enabled'] "
+                     "and '# --- SMART WAIT BEGIN' in smart_wait.embedded_source() and not v['ok'] "
+                     "and 'publication_failed' in ds.OPEN_STATUSES and len(triage.CLASSES) == 6 "
+                     "and any(r.path.endswith('/publish') for r in dapi.router.routes) "
+                     "and Path('web/js/python-editor.js').is_file() and Path('web/js/smart-wait-ui.js').is_file() "
+                     "else 'Python editor, Smart Wait or Defect Review incomplete')")
+
 
 def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None) -> dict:
     report: dict = {"checks": []}
@@ -465,6 +480,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("AI Agent and guided recording (23.10.0)", sa == "ok", sa)
     except PatchError as exc:
         check("AI Agent and guided recording (23.10.0)", False, str(exc))
+    try:
+        r11 = run_py(python, app, data, RELEASE_2311_LOAD).splitlines()[-1]
+        check("Python editor, Smart Wait, Defect Review (23.11.0)", r11 == "ok", r11)
+    except PatchError as exc:
+        check("Python editor, Smart Wait, Defect Review (23.11.0)", False, str(exc))
     try:
         bp = run_py(python, app, data, BROWSER_POLICY_LOAD).splitlines()[-1]
         check("Maximized browser policy", bp == "ok", bp)
@@ -517,6 +537,8 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
             conn.close()
         check("Database migrations", ver == MIGRATION_COUNT, f"schema version {ver} (expected {MIGRATION_COUNT})")
         check("Database integrity", integrity == "ok", integrity)
+        rev = {"defect_events", "script_python", "script_python_state"}
+        check("Review and Python tables", rev <= tables, "present" if rev <= tables else "missing: " + ", ".join(sorted(rev - tables)))
         cmp = {"cmp_projects", "cmp_records", "cmp_audit", "cmp_ws_screens", "cmp_ws_state", "cmp_ws_configs", "cmp_ws_decisions"}
         check("Comparison tables", cmp <= tables, "present" if cmp <= tables else "missing: " + ", ".join(sorted(cmp - tables)))
         check("Login sign-in method column", "auth_method" in cols, "present" if "auth_method" in cols else "missing")
@@ -560,7 +582,7 @@ def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
     step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
-         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0)")
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):

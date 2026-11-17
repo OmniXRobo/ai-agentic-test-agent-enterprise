@@ -102,6 +102,7 @@ class SmartWait:
         self._inflight: dict[int, tuple[str, float]] = {}
         self._last_request_end = 0.0
         self._responses: list[tuple[float, str, int]] = []
+        self._xhr_starts: list[float] = []
         context.on("request", self._on_request)
         context.on("requestfinished", self._on_end)
         context.on("requestfailed", self._on_end)
@@ -112,6 +113,8 @@ class SmartWait:
         try:
             if request.resource_type in ("xhr", "fetch"):
                 self._inflight[id(request)] = (request.url, time.monotonic())
+                self._xhr_starts.append(time.monotonic())
+                del self._xhr_starts[:-500]
         except Exception:
             pass
 
@@ -125,6 +128,11 @@ class SmartWait:
             del self._responses[:-500]
         except Exception:
             pass
+
+    def requests_since(self, t: float, until: float | None = None) -> int:
+        """XHR / fetch requests the page started between t and until (monotonic clock). The recorder uses this to see
+        that an action loaded data, and records a Smart Wait after it."""
+        return sum(1 for x in list(self._xhr_starts) if x >= t and (until is None or x <= until))
 
     def inflight(self) -> tuple[list[str], list[str]]:
         """(requests being waited for, long-running requests that are only reported)."""
