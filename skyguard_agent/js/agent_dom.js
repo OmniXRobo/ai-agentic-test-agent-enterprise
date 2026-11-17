@@ -39,14 +39,23 @@
       .filter(Boolean).map((e) => clean(e.textContent, 80)).join(" ").trim();
   }
 
+  // 23.11.1: the words of a label without the options of a list or the text of a box it wraps
+  // ("<label>From <select>...Dubai...</select></label>" is "From")
+  function labelText(l) {
+    if (!l.querySelector || !l.querySelector("select,textarea,option,datalist")) return l.textContent;
+    const c = l.cloneNode(true);
+    c.querySelectorAll("select,textarea,option,datalist").forEach((n) => n.remove());
+    return c.textContent;
+  }
+
   function labelOf(el) {
     const root = el.getRootNode();
-    if (el.labels && el.labels.length) return clean([...el.labels].map((l) => l.textContent).join(" "), 80);
+    if (el.labels && el.labels.length) return clean([...el.labels].map(labelText).join(" "), 80);
     if (el.id && root.querySelector) {
-      try { const l = root.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (l) return clean(l.textContent, 80); } catch (e) { /* ignore */ }
+      try { const l = root.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (l) return clean(labelText(l), 80); } catch (e) { /* ignore */ }
     }
     const wrap = el.closest("label");
-    if (wrap) return clean(wrap.textContent, 80);
+    if (wrap) return clean(labelText(wrap), 80);
     return "";
   }
 

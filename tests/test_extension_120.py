@@ -35,10 +35,8 @@ EVENTS = [
 ]
 
 
-def test_versions_are_120():
-    from skyguard_companion import VERSION
-    assert VERSION == "1.2.0"
-    assert json.loads((EXT / "manifest.json").read_text())["version"] == "1.2.0"
+def test_120_features_are_still_there():
+    # the version itself is checked in test_extension_130.py (1.3.0 keeps every 1.2.0 feature)
     js = (EXT / "background.js").read_text() + (EXT / "sidepanel.js").read_text()
     for needle in ("cmp-record-start", "cmp-record-stop", "/v1/comparison/recording", "/v1/simple/connect",
                    "ackBox", "need_credential"):

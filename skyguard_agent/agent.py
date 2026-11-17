@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from . import AGENT_NAME, __version__, planner, secrets_guard
 from .assistant import Assistant, canonical, is_question
+from .intent import Intent, classify, compatible
 from .audit import Audit
 from .executor import Engine
 from .journal import Journal
@@ -123,7 +124,8 @@ class OperationsAgent:
 
     def chat(self, text: str, *, conversation: str | None = None, user: str | None = None,
              interface: str | None = None, app_id: str | None = None, source: str = "typed",
-             workflow: str | None = None) -> dict[str, Any]:
+             workflow: str | None = None, context: dict[str, Any] | None = None,
+             remember: bool = True) -> dict[str, Any]:
         """``workflow``: the task already chosen by the caller (23.10.0 simple agent), so the engine does not pick
         another one from similar words ("authorize all approved trips" is Authorize, not Approve)."""
         interface = interface or self.interface
@@ -141,13 +143,16 @@ class OperationsAgent:
             reply = {"type": "secret_intercepted", "text": check.reply, "open": "accounts"}
             self._remember(conversation, "agent", reply["text"], user, interface, {"type": reply["type"]})
             return {"conversation": conversation, "reply": reply}
-        self._remember(conversation, "user", text, user, interface, {"source": source})
+        if remember:
+            self._remember(conversation, "user", text, user, interface, {"source": source})
         try:
-            reply = self._interpret(text, user=user, interface=interface, app_id=app_id, workflow=workflow)
+            reply = self._interpret(text, user=user, interface=interface, app_id=app_id, workflow=workflow,
+                                    context=context)
         except AgentError as exc:
             reply = {"type": "error", "text": exc.message, "code": exc.code}
-        self._remember(conversation, "agent", reply.get("text", ""), user, interface,
-                       {k: v for k, v in reply.items() if k in ("type", "run_id", "app_id")})
+        if remember:
+            self._remember(conversation, "agent", reply.get("text", ""), user, interface,
+                           {k: v for k, v in reply.items() if k in ("type", "run_id", "app_id")})
         return {"conversation": conversation, "reply": reply}
 
     def _app_for(self, text: str, app_id: str | None) -> dict[str, Any] | None:
@@ -161,7 +166,7 @@ class OperationsAgent:
         return apps[0] if len(apps) == 1 else None
 
     def _interpret(self, text: str, *, user: str | None, interface: str, app_id: str | None,
-                   workflow: str | None = None) -> dict[str, Any]:
+                   workflow: str | None = None, context: dict[str, Any] | None = None) -> dict[str, Any]:
         t = norm(text)
         if t in ("help", "?", "what can you do", "what can you do?"):
             return {"type": "help", "text": HELP}
@@ -188,7 +193,10 @@ class OperationsAgent:
                             "statuses, rules and roles myself; you do not need to explain anything. Passwords and "
                             "codes are never captured."}
         if workflow:
-            return self._operation(text, app, user=user, interface=interface, workflow=workflow)
+            return self._operation(text, app, user=user, interface=interface, workflow=workflow, context=context)
+        if context:  # 23.11.1: the router chose a task that still needs one approval (automatic trust is off)
+            return self._learned_match(app, text, []) or {"type": "clarify", "app_id": app["id"],
+                                                          "text": "That task is not usable yet."}
         if is_question(text) or re.match(r"^(what do you know|knowledge|show knowledge|what have you learned)\b", t):
             ans = self.assistant.answer(app, text)
             if ans:
@@ -216,7 +224,13 @@ class OperationsAgent:
         return self._operation(text, app, user=user, interface=interface)
 
     def _operation(self, text: str, app: dict[str, Any], *, user: str | None, interface: str,
-                   workflow: str | None = None) -> dict[str, Any]:
+                   workflow: str | None = None, context: dict[str, Any] | None = None) -> dict[str, Any]:
+        intent = classify(text) if not context else Intent(**context["intent"])
+        if not workflow and not intent.is_operation:
+            # 23.11.1: navigation, reading and questions never become an execution, whatever tasks exist
+            return {"type": "clarify", "app_id": app["id"],
+                    "text": "That does not ask me to change anything, so there is nothing to execute. Use the AI "
+                            "Agent chat to open pages, show records or ask questions."}
         workflows = self.kb.approved_items(app["id"], "workflow")
         chosen = next((w for w in workflows if w["key"] == workflow), None) if workflow else None
         learned = None if chosen else self._learned_match(app, text, workflows)
@@ -228,16 +242,20 @@ class OperationsAgent:
                             "do the task once yourself (or run discovery / guided learning), then approve it in "
                             "Knowledge."}
         accounts = self.kb.accounts(app["id"])
-        wf = chosen or planner.match_workflow(canonical(text, nouns=False), workflows) or \
-            planner.match_workflow(text, workflows)
+        same_kind = [w for w in workflows if compatible(intent, w)] if not chosen else workflows
+        wf = chosen or planner.match_workflow(canonical(text, nouns=False), same_kind) or \
+            planner.match_workflow(text, same_kind)
         parsed: dict[str, Any] | None = None
         dropped: list[str] = []
         if wf:
             parsed = planner.parse_structured(text, wf)
         if not isinstance(self.llm, NoLLM):
             try:
-                proposal = planner.parse_with_llm(self.llm, text, workflows, accounts)
-                cand = chosen or next((w for w in workflows if w["key"] == proposal.get("workflow")), None)
+                proposal = planner.parse_with_llm(self.llm, text, same_kind, accounts)
+                # 23.11.1: the model's choice is only a proposal: it must name a listed task of the requested kind
+                cand = chosen or next((w for w in same_kind if w["key"] == proposal.get("workflow")), None)
+                if cand and not chosen and not compatible(intent, cand):
+                    cand = None
                 if cand and (wf is None or cand["key"] == wf["key"]):
                     wf = cand
                     grounded, dropped = planner.ground(proposal, text, wf)
@@ -248,13 +266,20 @@ class OperationsAgent:
             except (ValueError, TypeError, KeyError):
                 pass
         if not wf:
+            if not same_kind:
+                return {"type": "clarify", "app_id": app["id"],
+                        "text": f"I have not learned a task that does that in {app['name']}. Show me once while I "
+                                "learn, then ask again."}
             return {"type": "clarify", "app_id": app["id"],
                     "text": "Which operation do you mean? I know: " + ", ".join(w["data"].get("title") or w["key"]
-                                                                               for w in workflows)}
+                                                                               for w in same_kind)}
         account = planner.match_account(text, accounts)
         if not account:
             allowed = {norm(r) for r in wf["data"].get("roles", [])}
             fitting = [a for a in accounts if not allowed or norm(a.get("verified_role") or a.get("role_key")) in allowed]
+            if len(fitting) > 1:  # 23.11.1: of several accounts with the role, the one that can sign in now
+                usable = [a for a in fitting if a.get("has_credential") and not a.get("credential_expired")]
+                fitting = usable if len(usable) == 1 else fitting
             account = fitting[0] if len(fitting) == 1 else None
         if not account:
             return {"type": "clarify", "app_id": app["id"], "workflow": wf["key"],
@@ -267,12 +292,18 @@ class OperationsAgent:
         missing = sorted({p["name"] for p in planner.workflow_params(wf) if p.get("required")
                           for r in records if not r.get(p["name"])})
         warnings = [f"Ignored values the model proposed that you did not say: {', '.join(dropped[:5])}."] if dropped else []
-        if missing and len(records) == 1 and not any(v for k, v in records[0].items() if not k.startswith("_")):
-            return {"type": "clarify", "app_id": app["id"], "workflow": wf["key"],
-                    "text": f"Tell me the values for: {', '.join(p.get('field') or p['name'] for p in planner.workflow_params(wf))}."}
+        if missing:
+            # 23.11.1: a preview in which every record is blocked for missing values is never prepared; the person is
+            # asked for exactly what is missing instead
+            labels = [p.get("field") or p["name"] for p in planner.workflow_params(wf) if p["name"] in missing]
+            return {"type": "clarify", "app_id": app["id"], "workflow": wf["key"], "missing": labels,
+                    "text": f"Missing information for {wf['data'].get('title') or wf['key']}: {', '.join(labels)}. "
+                            "Tell me the value(s) and I prepare the preview."}
         view = self.engine.create(app_id=app["id"], stages=[{"workflow": wf["key"], "account_id": account["id"]}],
                                   records=records, interface=interface, by=user,
-                                  request={"text": secrets_guard.redact_text(text), "parsed": parsed},
+                                  request={"text": secrets_guard.redact_text(text), "parsed": parsed,
+                                           "context": context or {"intent": intent.as_dict(), "app_id": app["id"],
+                                                                  "workflow": wf["key"]}},
                                   warnings=warnings)
         run = view["run"]
         if run["status"] == "awaiting_confirmation":

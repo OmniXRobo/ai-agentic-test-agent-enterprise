@@ -466,6 +466,46 @@ def simple_tasks(x: Ctx) -> dict[str, Any]:
     return {"tasks": x.c.pilot.tasks(x.query.get("app_id"), limit=min(200, _int(x.query.get("limit", "50"))))}
 
 
+# 1.3.0 (SkyGuard 23.11.1): dynamic suggestions, saved learning that is proven retrievable, the short preview
+
+
+@route("GET", "/v1/simple/suggestions")
+def simple_suggestions(x: Ctx) -> dict[str, Any]:
+    app_id = x.query.get("app_id") or ""
+    x.kb.application(app_id)
+    page = (x.query.get("page") or "")[:500] or None
+    if page and (x.kb.allowed_origin(page) or {}).get("id") != x.kb.application(app_id)["id"]:
+        page = None  # only a page of a registered application says anything about what to suggest
+    can_act = x.role in WRITE_ROLES
+    return {"suggestions": x.c.pilot.suggestions(app_id, page_url=page, can_act=can_act,
+                                                  conversation=x.query.get("conversation")),
+            "learned": bool(x.c.agent.understanding.model(app_id))}
+
+
+@route("POST", "/v1/simple/learn/{app_id}/save", "write", "llm")
+def simple_learn_save(x: Ctx, app_id: str) -> dict[str, Any]:
+    """Stop & save: analyse what was observed, use what was verified, and prove it can be retrieved by a command."""
+    x.kb.application(app_id)
+    res = x.c.agent.understanding.digest(app_id, by=x.user)
+    trusted = x.c.pilot.trust(app_id, by=x.user)
+    verified = x.c.pilot.verify_retrieval(app_id)
+    x.c.agent.audit.record("learning.saved", actor=x.user, interface="extension", target=app_id,
+                           details={"changes": len(res.get("changes") or []), "verified": verified.get("ok"),
+                                    "checked": verified.get("checked")})
+    return {"changes": res.get("changes") or [], "trusted": trusted, "verified": verified}
+
+
+@route("POST", "/v1/simple/verify/{app_id}", "write")
+def simple_verify(x: Ctx, app_id: str) -> dict[str, Any]:
+    x.kb.application(app_id)
+    return x.c.pilot.verify_retrieval(app_id)
+
+
+@route("GET", "/v1/simple/runs/{run_id}")
+def simple_run(x: Ctx, run_id: str) -> dict[str, Any]:
+    return {"simple": x.c.pilot.simple_view(run_id)}
+
+
 # 1.2.0: record navigation for SkyGuard's Integration Comparison (read-only; converted here, imported in SkyGuard)
 
 
@@ -623,11 +663,12 @@ def run_next(x: Ctx, run_id: str) -> dict[str, Any]:
 
 @route("POST", "/v1/runs/{run_id}/confirm", "write")
 def confirm(x: Ctx, run_id: str) -> dict[str, Any]:
-    b = validate(x.body, {"preview_hash": ("str", True, 64), "acknowledge": ("bool", False)})
-    if run_is_consequential(x.engine.run(run_id)) and not b.get("acknowledge"):
-        raise AgentError("ACKNOWLEDGE_REQUIRED", "This operation changes records (for example approves, authorizes, "
-                         "cancels or deletes them). Tick the confirmation box after reading the preview.", 409)
-    return x.engine.confirm(run_id, b["preview_hash"], by=x.user, interface="extension")
+    b = validate(x.body, {"preview_hash": ("str", True, 64), "acknowledge": ("bool", False),
+                          "app_id": ("str", False, 80)})
+    # 1.3.0: the same server-side checks as SkyGuard (plan linked to the request and application, something can run,
+    # acknowledgement for consequential operations, current preview hash)
+    return x.c.pilot.confirm(run_id, b["preview_hash"], acknowledge=bool(b.get("acknowledge")), by=x.user,
+                             interface="extension", app_id=b.get("app_id"))
 
 
 @route("POST", "/v1/runs/{run_id}/pause", "write")

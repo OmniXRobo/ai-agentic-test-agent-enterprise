@@ -8,6 +8,11 @@
 Same sign-in and roles as the rest of SkyGuard: view-only accounts can read but every POST here is refused for them
 by the central guard. Consequential operations (approve, authorize, delete, cancel, record, submit ...) need
 ``acknowledge: true`` on confirmation, which the page sends only after the person ticks the confirmation box.
+
+23.11.1: a "navigate" reply opens the page (in the learning window when one is open for that application, else in a
+new maximized window); GET /suggestions gives the contextual suggestions; GET /runs/{id} the short preview with
+``can_confirm``; confirmation is refused for a plan that is not linked to the request and application it was made
+for, and for a preview in which no record can run (with the real reasons).
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ router = APIRouter(prefix="/api/ops/simple")
 class ConnectIn(BaseModel):
     url: str = Field(min_length=8, max_length=500)
     name: str | None = Field(default=None, max_length=80)
+    environment: str | None = Field(default=None, max_length=60)  # 23.11.1: "Test", "Production" ...
     learn: bool = True
     browser: Literal["msedge", "chrome", "chromium"] | None = None
 
@@ -36,7 +42,7 @@ class ConnectIn(BaseModel):
 @router.post("/connect", status_code=201)
 async def connect(body: ConnectIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
     out = await run_in_threadpool(svc.connect_and_learn, body.url, body.name, actor(request), body.learn,
-                                  body.browser)
+                                  body.browser, body.environment)
     return {"ok": True, **out}
 
 
@@ -45,7 +51,9 @@ async def stop_learning(sid: str, request: Request, svc: Any = Depends(ops)) -> 
     view = await run_in_threadpool(svc.stop_watch, sid, actor(request))
     app_id = (view.get("application") or {}).get("id")
     trusted = svc.pilot.trust(app_id) if app_id and svc.config().get("auto_trust", True) else None
-    return {"ok": True, "understanding": view, "trusted": trusted}
+    # 23.11.1: learning is reported as saved only with proof that it can be retrieved by a command
+    verified = svc.pilot.verify_retrieval(app_id) if app_id else None
+    return {"ok": True, "understanding": view, "trusted": trusted, "verified": verified}
 
 
 class ExploreIn(BaseModel):
@@ -87,13 +95,48 @@ async def command(body: CommandIn, request: Request, svc: Any = Depends(ops)) ->
     out = await run_in_threadpool(svc.pilot.command, body.text, conversation=body.conversation,
                                   user=actor(request), interface="skyguard", app_id=body.app_id, source=body.source)
     reply = out["reply"]
-    if reply.get("type") == "run" and reply.get("run_id"):
+    if reply.get("type") == "run" and reply.get("run_id") and not reply.get("duplicate"):
         # the browser opens to check the application read-only and prepare the one preview
         try:
             svc.start_run(reply["run_id"])
         except AgentError:
             pass
+    if reply.get("type") == "navigate" and reply.get("url"):
+        try:
+            reply["opened"] = await run_in_threadpool(svc.open_page, reply["app_id"], reply["url"], actor(request))
+        except AgentError as exc:
+            reply["opened"] = {"ok": False, "message": exc.message}
     return {"ok": True, **out}
+
+
+@router.get("/suggestions")
+def suggestions(request: Request, app_id: str, conversation: str | None = None,
+                svc: Any = Depends(ops)) -> dict[str, Any]:
+    """Contextual suggestions: the page open in the learning window, learned tasks the accounts may do, records
+    waiting for a step, recent requests. View-only users get reading and navigation suggestions only."""
+    user = getattr(request.state, "user", None)
+    can_act = not bool(getattr(user, "view_only", False))
+    page = svc.current_url(app_id)
+    items = svc.pilot.suggestions(app_id, page_url=page, can_act=can_act, conversation=conversation)
+    return {"ok": True, "suggestions": items, "page": page,
+            "learned": bool(svc.agent.understanding.model(app_id))}
+
+
+@router.get("/runs/{run_id}")
+def run_view(run_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
+    view = svc.agent.engine.view(run_id)
+    return {"ok": True, **view, "simple": svc.pilot.simple_view(run_id)}
+
+
+@router.post("/runs/{run_id}/cancel")
+def cancel(run_id: str, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    return {"ok": True, **svc.stop(run_id, actor(request))}
+
+
+@router.post("/verify/{app_id}")
+def verify(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """Test learned knowledge: every task and page is retrieved through the same router a command uses."""
+    return {"ok": True, **svc.pilot.verify_retrieval(app_id)}
 
 
 @router.post("/voice")
@@ -137,6 +180,7 @@ def tasks(app_id: str | None = None, limit: int = 50, svc: Any = Depends(ops)) -
 class ConfirmIn(BaseModel):
     preview_hash: str = Field(min_length=64, max_length=64)
     acknowledge: bool = False
+    app_id: str | None = Field(default=None, max_length=80)  # the application selected on the page
 
 
 def consequential(run: dict[str, Any]) -> bool:
@@ -145,11 +189,8 @@ def consequential(run: dict[str, Any]) -> bool:
 
 @router.post("/runs/{run_id}/confirm")
 def confirm(run_id: str, body: ConfirmIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
-    run = svc.agent.engine.run(run_id)
-    if consequential(run) and not body.acknowledge:
-        raise AgentError("ACKNOWLEDGE_REQUIRED", "This operation changes records (for example approves, authorizes, "
-                         "cancels or deletes them). Tick the confirmation box after reading the preview.", 409)
-    view = svc.agent.engine.confirm(run_id, body.preview_hash, by=actor(request), interface="skyguard")
+    view = svc.pilot.confirm(run_id, body.preview_hash, acknowledge=body.acknowledge, by=actor(request),
+                             interface="skyguard", app_id=body.app_id)
     if run_id not in svc.jobs:
         svc.start_run(run_id)
-    return {"ok": True, **view, "consequential": consequential(run)}
+    return {"ok": True, **view, "consequential": run_is_consequential(view)}

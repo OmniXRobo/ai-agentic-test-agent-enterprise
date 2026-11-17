@@ -11,6 +11,39 @@ const DRIVES = new Map();      // runId -> { tabId, stop }
 const OBSERVE = new Map();     // tabId -> { purpose: "learning" | "manual" | "watch", id, events: [] }
 const WATCH_TIMERS = new Map(); // tabId -> pending flush timer (23.7.0 automatic learning)
 let blinkTimer = null;
+const MAX_QUEUED = 500;        // 1.3.0: events kept while the companion is unreachable (oldest dropped first)
+// 1.3.0 explicit "Start learning" per application: { appId: { since, events, pages, offline, lastError } }
+const LEARNING = new Map();
+let retryMs = 0;
+
+// The same person action reported twice within a moment (several frames, a re-injected script) is kept once.
+function duplicateEvent(obs, e) {
+  const el = e.element || {};
+  const key = [e.kind, el.tag, el.name, el.id, el.label, e.value === undefined ? "" : String(e.value).length, e.url].join("|");
+  const now = Date.now();
+  const dup = obs.lastKey === key && now - (obs.lastAt || 0) < 400;
+  obs.lastKey = key; obs.lastAt = now;
+  return dup;
+}
+
+function learningBadge() {
+  if (blinkTimer) return; // attention has priority
+  const on = LEARNING.size > 0;
+  const offline = [...LEARNING.values()].some((l) => l.offline);
+  chrome.action.setBadgeText({ text: on ? (offline ? "…" : "REC") : "" });
+  chrome.action.setBadgeBackgroundColor({ color: offline ? "#6b7280" : "#dc2626" });
+}
+
+async function saveLearning() {
+  await chrome.storage.session.set({ learning: Object.fromEntries([...LEARNING].map(([k, v]) => [k, { since: v.since }])) });
+}
+
+// After a service-worker restart the learning that was on stays on.
+(async () => {
+  const { learning } = await chrome.storage.session.get("learning");
+  for (const [appId, v] of Object.entries(learning || {})) LEARNING.set(appId, { since: v.since, events: 0, pages: 0 });
+  learningBadge();
+})().catch(() => {});
 
 // ---- side panel ------------------------------------------------------------------------------------------------
 chrome.runtime.onInstalled.addListener(async () => {
@@ -27,10 +60,19 @@ const originOf = (url) => { try { const u = new URL(url); return `${u.protocol}/
 
 function broadcast(msg) { chrome.runtime.sendMessage(msg).catch(() => {}); }
 
+let lastApps = null; // 1.3.0: the registered applications last read, used while the companion is unreachable
+async function appList() {
+  try {
+    lastApps = (await api.get("/v1/applications")).applications || [];
+  } catch (e) {
+    if (!lastApps || e.code !== "COMPANION_OFFLINE") throw e;
+  }
+  return lastApps;
+}
+
 async function appOrigins() {
-  const { applications } = await api.get("/v1/applications");
   const set = new Set();
-  for (const a of applications) for (const o of a.origins || [originOf(a.base_url)]) set.add(o);
+  for (const a of await appList()) for (const o of a.origins || [originOf(a.base_url)]) set.add(o);
   return set;
 }
 
@@ -159,7 +201,9 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "sg-observed" && sender.tab) {
     const obs = OBSERVE.get(sender.tab.id);
     if (obs && msg.event && typeof msg.event === "object") {
+      if (duplicateEvent(obs, msg.event)) return false; // 1.3.0: the same event reported twice (frames, re-injection)
       obs.events.push(msg.event);
+      if (obs.events.length > MAX_QUEUED) obs.events.splice(0, obs.events.length - MAX_QUEUED);
       if (obs.purpose === "learning" && obs.events.length >= 5) flushLearning(sender.tab.id).catch(() => {});
       if (obs.purpose === "watch") scheduleWatchFlush(sender.tab.id, ["submit", "click"].includes(msg.event.kind) ? 900 : obs.events.length >= 8 ? 50 : 4000);
     }
@@ -188,7 +232,7 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
 let appCache = { at: 0, apps: [] };
 async function registeredApp(url) {
   if (Date.now() - appCache.at > 30000) {
-    try { appCache = { at: Date.now(), apps: (await api.get("/v1/applications")).applications || [] }; } catch (e) { return null; }
+    try { appCache = { at: Date.now(), apps: await appList() }; } catch (e) { return null; }
   }
   const origin = originOf(url || "");
   return appCache.apps.find((a) => (a.origins || [originOf(a.base_url)]).includes(origin)) || null;
@@ -196,11 +240,12 @@ async function registeredApp(url) {
 
 async function maybeWatch(tabId) {
   const { auto_learn } = await api.settings();
-  if (!auto_learn || OBSERVE.has(tabId) || [...DRIVES.values()].some((d) => d.tabId === tabId)) return;
+  if ((!auto_learn && !LEARNING.size) || OBSERVE.has(tabId) || [...DRIVES.values()].some((d) => d.tabId === tabId)) return;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab || !/^https?:/.test(tab.url || "")) return;
   const app = await registeredApp(tab.url);
-  if (!app || !(await chrome.permissions.contains({ origins: [originOf(tab.url) + "/*"] }))) return;
+  if (!app || (!auto_learn && !LEARNING.has(app.id))) return; // 1.3.0: explicit learning covers only its application
+  if (!(await chrome.permissions.contains({ origins: [originOf(tab.url) + "/*"] }))) return;
   const key = "watch:" + tabId;
   const saved = (await chrome.storage.session.get(key))[key];
   const id = saved && saved.appId === app.id ? saved.id : `ext-${app.id.slice(-6)}-${tabId}-${Date.now().toString(36)}`;
@@ -224,10 +269,40 @@ async function flushWatch(tabId, final = false) {
     try { snap = await snapshot(tabId); } catch (e) { snap = undefined; }
     if (snap && !(await registeredApp(snap.url))) { snap = undefined; await stopWatch(tabId); }
   }
-  if (!events.length && !snap && !final) return;
-  const r = await api.post("/v1/observe", { application_id: obs.appId, session_id: obs.id, events, snapshot: snap, final: final || undefined });
-  if (r && r.session_id) obs.id = r.session_id;
-  broadcast({ type: "learned", appId: obs.appId, digested: !!(r && r.digested), changes: (r && r.changes) || [] });
+  // 1.3.0: what the person did and the page they saw are kept together, in order, until the companion has them
+  // (it may be restarting, or the person signed out of it); bounded, oldest dropped first
+  obs.pending = obs.pending || [];
+  if (events.length || snap) obs.pending.push({ events, snapshot: snap });
+  while (obs.pending.length > 1 && obs.pending.reduce((n, b) => n + b.events.length + 1, 0) > MAX_QUEUED) obs.pending.shift();
+  if (!obs.pending.length && !final) return;
+  if (obs.sending) { if (final) obs.finalWanted = true; return; } // the running send takes these too
+  obs.sending = true;
+  const l = LEARNING.get(obs.appId);
+  try {
+    do {
+      const batch = obs.pending[0] || { events: [] };
+      const last = obs.pending.length <= 1;
+      const isFinal = (final || obs.finalWanted) && last;
+      let r;
+      try {
+        r = await api.post("/v1/observe", { application_id: obs.appId, session_id: obs.id, events: batch.events, snapshot: batch.snapshot, final: isFinal || undefined });
+      } catch (e) {
+        if (l) { l.offline = true; l.lastError = String(e.message || e).slice(0, 160); learningBadge(); }
+        retryMs = Math.min(30000, retryMs ? retryMs * 2 : 2000);
+        if (!final && OBSERVE.get(tabId) === obs) scheduleWatchFlush(tabId, retryMs);
+        broadcast({ type: "learning-status" });
+        return;
+      }
+      if (obs.pending.length) obs.pending.shift();
+      retryMs = 0;
+      if (l) { l.offline = false; l.lastError = ""; l.events += batch.events.length; l.pages += batch.snapshot ? 1 : 0; learningBadge(); }
+      if (r && r.session_id) obs.id = r.session_id;
+      broadcast({ type: "learned", appId: obs.appId, digested: !!(r && r.digested), changes: (r && r.changes) || [] });
+      if (isFinal) obs.finalWanted = false;
+    } while (obs.pending.length);
+  } finally {
+    obs.sending = false;
+  }
 }
 
 async function stopWatch(tabId, final = false) {
@@ -266,6 +341,7 @@ function attention(on, title, text) {
     blinkTimer = null;
     chrome.action.setBadgeText({ text: "" });
     chrome.notifications.clear("sg-attention");
+    learningBadge();
   }
 }
 chrome.notifications.onClicked.addListener(async () => {
@@ -399,6 +475,50 @@ async function handle(msg) {
       return { ok: true };
     }
     case "watching": return { ok: true, tabs: [...OBSERVE].filter(([, o]) => o.purpose === "watch").map(([tabId, o]) => ({ tabId, appId: o.appId })) };
+    // 1.3.0: explicit Start learning / Stop & save for one application, with a visible status
+    case "learning-start": {
+      const tabId = await tabFor(msg.appId, msg.tabId);
+      await allowedTab(tabId);
+      LEARNING.set(msg.appId, { since: Date.now(), events: 0, pages: 0 });
+      await saveLearning();
+      learningBadge();
+      for (const t of await chrome.tabs.query({})) await maybeWatch(t.id).catch(() => {});
+      const o = OBSERVE.get(tabId);
+      if (o && o.purpose === "watch") { o.banner = "SkyGuard is learning: use the application normally. Passwords and codes are never recorded. Press Stop & save in the side panel when you are done."; await banner(tabId, o.banner); }
+      return { ok: true, tabId };
+    }
+    case "learning-stop": {
+      const { auto_learn } = await api.settings();
+      for (const [tabId, o] of [...OBSERVE]) if (o.purpose === "watch" && o.appId === msg.appId) {
+        await banner(tabId, "");
+        if (auto_learn) { await flushWatch(tabId, true).catch(() => {}); o.banner = ""; } else await stopWatch(tabId, true);
+      }
+      const l = LEARNING.get(msg.appId);
+      LEARNING.delete(msg.appId);
+      await saveLearning();
+      learningBadge();
+      return { ok: true, events: l ? l.events : 0, pages: l ? l.pages : 0, offline: !!(l && l.offline) };
+    }
+    case "learning-status": {
+      const l = LEARNING.get(msg.appId);
+      const queued = [...OBSERVE.values()].filter((o) => o.purpose === "watch" && o.appId === msg.appId)
+        .reduce((n, o) => n + o.events.length + (o.pending || []).reduce((m, b) => m + b.events.length + (b.snapshot ? 1 : 0), 0), 0);
+      return { ok: true, learning: !!l, since: l ? l.since : null, events: l ? l.events : 0, pages: l ? l.pages : 0, offline: !!(l && l.offline), error: l ? l.lastError || "" : "", queued };
+    }
+    // 1.3.0: a "navigate" reply opens the page, only on a registered application's granted origin
+    case "open-url": {
+      const origin = originOf(msg.url || "");
+      if (!(await appOrigins()).has(origin)) return { ok: false, error: "Not a registered application address." };
+      if (!(await chrome.permissions.contains({ origins: [origin + "/*"] }))) return { ok: false, error: `Access to ${origin} was not granted (Applications, Grant access).` };
+      const tabs = await chrome.tabs.query({});
+      const same = tabs.find((t) => originOf(t.url || "") === origin && ![...DRIVES.values()].some((d) => d.tabId === t.id));
+      const tab = same ? await chrome.tabs.update(same.id, { url: msg.url, active: true }) : await chrome.tabs.create({ url: msg.url, active: true });
+      return { ok: true, tabId: tab.id };
+    }
+    case "active-url": {
+      const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return { ok: true, url: t && /^https?:/.test(t.url || "") ? t.url : "" };
+    }
     case "cmp-record-start": {
       // the way to a report, for SkyGuard's Integration Comparison: observed only, nothing clicked or typed by us
       const tab = msg.tabId ? await chrome.tabs.get(msg.tabId).catch(() => null) : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];

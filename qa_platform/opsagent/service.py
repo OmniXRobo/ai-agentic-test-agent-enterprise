@@ -43,6 +43,9 @@ class _BrowserJob:
         self.error: str | None = None
         self.result: Any = None
         self.browser: str | None = None  # 23.10.0: Edge or Chrome chosen on Connect & Learn
+        self.app_id: str | None = None
+        self.navigate: list[str] = []  # 23.11.1: pages the person asked to open (handled in the browser's thread)
+        self.url: str | None = None  # the page the window shows now
 
 
 class OpsAgentService:
@@ -120,12 +123,13 @@ class OpsAgentService:
                     if self.jobs.get(job.ref) is job:
                         self.jobs.pop(job.ref, None)
 
-    def _start(self, kind: str, ref: str, body: Any, browser: str | None = None) -> None:
+    def _start(self, kind: str, ref: str, body: Any, browser: str | None = None, app_id: str | None = None) -> None:
         with self._lock:
             if ref in self.jobs:
                 raise AgentError("ALREADY_RUNNING", "A browser is already working on this.", 409)
             job = _BrowserJob(kind, ref)
             job.browser = browser
+            job.app_id = app_id
             self.jobs[ref] = job
         job.thread = threading.Thread(target=self._launch, args=(job, body), name=f"opsagent-{ref}", daemon=True)
         job.thread.start()
@@ -213,13 +217,70 @@ class OpsAgentService:
                 self.agent.observe(app["id"], sid, events, snap, by=by, interface="skyguard", use_ai=False)
 
             try:
-                job.result = drv.watch(record, stop=job.stop)
+                job.result = drv.watch(record, stop=job.stop, on_tick=self._tick(job))
             finally:
                 self.agent.observe(app["id"], sid, [], None, by=by, interface="skyguard", final=True,
                                    use_ai=bool(self.config().get("use_ai")))
 
-        self._start("watch", sid, body, browser=browser)
+        self._start("watch", sid, body, browser=browser, app_id=app["id"])
         return session
+
+    # ---- 23.11.1: open a page the person asked for -------------------------------------------------------------
+
+    @staticmethod
+    def _tick(job: _BrowserJob) -> Any:
+        def tick(drv: Any) -> None:
+            while job.navigate:
+                url = job.navigate.pop(0)
+                try:
+                    drv.page.goto(url)
+                except Exception as exc:  # reported in the status; the window stays open
+                    job.error = str(exc)[:200]
+            try:
+                job.url = drv.page.url
+            except Exception:
+                pass
+        return tick
+
+    def open_page(self, app_id: str, url: str, by: str | None = None) -> dict[str, Any]:
+        """Open a page of a registered application: in its learning window when one is open, else in a new
+        maximized window that stays until the person closes it. Only the application's own addresses are opened
+        (no cross-application navigation). Read-only: nothing is clicked or typed."""
+        from skyguard_agent.knowledge import origin_of
+
+        app = self.agent.kb.application(app_id)
+        if origin_of(url) not in (app.get("origins") or [origin_of(app["base_url"])]):
+            raise AgentError("URL_REFUSED", "That address is not part of this application; it was not opened.", 409)
+        self.agent.audit.record("chat.navigate", actor=by, interface="skyguard", target=app["id"],
+                                details={"url": url})
+        for kind in ("watch", "view"):
+            job = next((j for j in self.jobs.values() if j.kind == kind and j.app_id == app["id"]), None)
+            if job:
+                job.navigate.append(url)
+                return {"ok": True, "window": "learning" if kind == "watch" else "existing", "url": url}
+        ref = f"view-{app['id']}"
+
+        def body(job: _BrowserJob) -> None:
+            drv = job.driver
+            drv.perform({"type": "navigate", "url": url})
+            job.url = url
+            ctx = drv.contexts[drv.current]
+            tick = self._tick(job)
+            while not job.stop.is_set() and [pg for pg in ctx.pages if not pg.is_closed()]:
+                tick(drv)
+                drv._idle(0.5)
+
+        self._start("view", ref, body, app_id=app["id"])
+        return {"ok": True, "window": "new", "url": url}
+
+    def current_url(self, app_id: str) -> str | None:
+        """The page the person has open for this application in a SkyGuard window (for contextual suggestions)."""
+        for job in self.jobs.values():
+            if job.app_id == app_id and job.kind in ("watch", "view") and job.url:
+                return job.url
+        row = self.agent.store.query_one("SELECT url FROM observations WHERE application_id = ? AND kind = 'page' "
+                                         "ORDER BY id DESC LIMIT 1", (app_id,))
+        return row["url"] if row else None
 
     def stop_watch(self, sid: str, by: str | None) -> dict[str, Any]:
         job = self.jobs.get(sid)
@@ -235,10 +296,10 @@ class OpsAgentService:
         return self.agent.understanding_view(row["application_id"])
 
     def connect_and_learn(self, url: str, name: str | None, by: str | None, learn: bool = True,
-                          browser: str | None = None) -> dict[str, Any]:
+                          browser: str | None = None, environment: str | None = None) -> dict[str, Any]:
         """23.10.0: one button. The application for this address (created if new) and, unless asked otherwise, a
         maximized browser on it that learns from what the person does."""
-        res = self.pilot.connect(url, name=name, by=by)
+        res = self.pilot.connect(url, name=name, by=by, environment=environment)
         app = res["application"]
         session = None
         if learn:

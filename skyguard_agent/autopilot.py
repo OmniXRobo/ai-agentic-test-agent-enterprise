@@ -29,9 +29,10 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import planner
+from . import planner, secrets_guard
+from .intent import Intent, classify, compatible, navigation_target, relevance, workflow_category
 from .knowledge import NAME_RE, origin_of, safe_app_url
-from .util import AgentError, dumps, loads, norm, now_iso
+from .util import AgentError, digest, dumps, loads, norm, now_iso
 
 CONSEQUENTIAL = re.compile(r"\b(approv|authori[sz]|reject|delet|remov|cancel|void|record|submit|post|pay|close|"
                            r"accept|confirm|finali[sz]|complet|dispatch|release)\w*", re.I)
@@ -165,12 +166,18 @@ class Autopilot:
 
     # ---- connect -------------------------------------------------------------------------------------------------
 
-    def connect(self, url: str, *, name: str | None = None, by: str | None = None) -> dict[str, Any]:
-        """The application for this address: an existing one with the same origin, or a new one (name suggested)."""
+    def connect(self, url: str, *, name: str | None = None, by: str | None = None,
+                environment: str | None = None) -> dict[str, Any]:
+        """The application for this address: an existing one with the same origin, or a new one (name suggested).
+        23.11.1: the environment (Test, Production ...) is kept with it; a test environment is simply its own
+        address, so its knowledge never mixes with production's."""
         url = safe_app_url(url)
         origin = origin_of(url)
+        env = re.sub(r"[^\w .()-]", "", (environment or "").strip())[:60]
         for app in self.kb.applications():
             if origin in (app.get("origins") or [origin_of(app["base_url"])]):
+                if env and env != app.get("environment"):
+                    app = self.kb.update_application(app["id"], by=by, environment=env)
                 return {"application": app, "created": False}
         base = (name or "").strip() or suggest_name(url)
         candidate, n = base, 2
@@ -179,7 +186,7 @@ class Autopilot:
             candidate = f"{base} {n}"[:80]
             n += 1
         app = self.kb.register_application(candidate, url, description="Connected in the AI Agent (simple mode).",
-                                           by=by)
+                                           environment=env, by=by)
         return {"application": app, "created": True}
 
     # ---- trust what was learned ----------------------------------------------------------------------------------
@@ -203,7 +210,11 @@ class Autopilot:
                 note = (f"Learned by watching: done successfully {seen} times." if seen >= 2 else
                         "Learned from one demonstration: uncertain until seen again.")
             elif e["kind"] == "rule":
-                note = "The application's own message or screen constraint."
+                # 23.11.1: one observation is not proof of a rule. A rule seen once stays a candidate (shown, never
+                # enforced) until it is seen again or an administrator confirms it.
+                if int(d.get("observations") or 1) < 2:
+                    continue
+                note = f"The application's own message or screen constraint, seen {d.get('observations')} times."
             elif e["kind"] in ("role", "lifecycle", "screen", "navigation", "login"):
                 note = "Seen in the application."
             else:
@@ -221,6 +232,20 @@ class Autopilot:
         model = model or self.agent.understanding.model(app_id) or {}
         have = {norm(a["login_id"]) for a in self.kb.accounts(app_id)}
         made: list[str] = []
+        seen_roles = {norm(u) for r in model.get("roles") or [] for u in r.get("users") or []}
+        for user in model.get("login_users") or []:
+            # 23.11.1: a sign-in the agent saw where the application shows no role: the account is created with the
+            # role unverified; the role is read from the application when it signs in (never guessed)
+            if not user or norm(user) in have or norm(user) in seen_roles or not NAME_RE.match(user):
+                continue
+            try:
+                self.kb.add_account(app_id, user, user, role_key="", by=by,
+                                    role_description="Seen signing in while learning; the application did not show "
+                                                     "a role.")
+                have.add(norm(user))
+                made.append(user)
+            except AgentError:
+                continue
         for role in model.get("roles") or []:
             for user in role.get("users") or []:
                 if not user or norm(user) in have or not NAME_RE.match(user):
@@ -271,7 +296,30 @@ class Autopilot:
                 item = {"id": e["id"], "rule": d.get("description") or e["key"], "confidence": e.get("confidence"),
                         "state": e["state_label"], "evidence": (d.get("evidence") or d.get("source") or "")}
                 (rules if e["state"] == "approved" else suggestions).append(item)
-        return {"application": app, "tasks": tasks, "rules": rules, "suggestions": suggestions,
+        for item in rules + suggestions:
+            e = self.kb.entry(item["id"])
+            d = e["data"] or {}
+            item.update(observations=int(d.get("observations") or 1), applies_to=d.get("applies_to"),
+                        verification=("confirmed by an administrator" if e["state"] == "approved" and
+                                      int(d.get("observations") or 1) < 2 else
+                                      "verified (seen repeatedly)" if e["state"] == "approved" else
+                                      "candidate: seen once, not enforced" if int(d.get("observations") or 1) < 2
+                                      else "suggestion: not enforced until confirmed"))
+        sess = self.store.query_one("SELECT id, status, data, created_by, created_at, updated_at FROM "
+                                    "learning_sessions WHERE application_id = ? ORDER BY created_at DESC LIMIT 1",
+                                    (app["id"],))
+        pages = [{"title": s.get("name"), "path": s.get("path"), "type": s.get("type"), "visits": s.get("visits"),
+                  "entity": s.get("entity")} for s in model.get("screens") or []
+                 if s.get("type") not in ("sign-in", "verification")]
+        unverified = [t["title"] for t in tasks if t["certainty"] != "verified"] + \
+            [r["rule"] for r in suggestions]
+        return {"application": app, "tasks": tasks, "rules": rules, "suggestions": suggestions, "pages": pages,
+                "unverified": unverified,
+                "last_session": ({"id": sess["id"], "status": sess["status"], "by": sess["created_by"],
+                                  "started": sess["created_at"], "ended": sess["updated_at"],
+                                  **{k: v for k, v in loads(sess["data"]).items() if k in ("pages", "events")}}
+                                 if sess else None),
+                "retrieval": self.verify_retrieval(app["id"]),
                 "roles": model.get("roles") or [], "lifecycles": model.get("lifecycles") or [],
                 "screens": [{"title": s.get("title"), "path": s.get("path"), "kind": s.get("kind")}
                             for s in model.get("screens") or []][:200],
@@ -282,75 +330,193 @@ class Autopilot:
 
     def command(self, text: str, *, conversation: str | None = None, user: str | None = None,
                 interface: str | None = None, app_id: str | None = None, source: str = "typed") -> dict[str, Any]:
-        """Plain language (typed or transcribed) to an answer, a question, or one preview to confirm."""
+        """Plain language (typed or transcribed) to an answer, a question, a page to open, or one preview to confirm.
+
+        23.11.1: the intent is decided first (intent.classify), and only a task that performs that kind of operation
+        and fits the request's words may be prepared. A new request replaces an unanswered earlier one instead of
+        being glued to it. Navigation, reading and questions never produce an execution preview."""
         raw = (text or "").strip()
         if not raw:
             raise AgentError("EMPTY", "Type or say what you want me to do.")
-        conv = conversation or None
-        state = self._state(conv) if conv else {}
+        iface = interface or self.agent.interface
+        if secrets_guard.inspect(raw, self.agent._known_secrets()).contains_secret:
+            return self.agent.chat(raw, conversation=conversation, user=user, interface=interface, app_id=app_id,
+                                   source=source)  # withheld there: nothing of it is stored, logged or planned
+        conv = conversation or _conv_id()
+        state = self._state(conv)
         app = self.agent._app_for(raw, app_id or state.get("app_id"))
-        if app and not re.search(r"\b(cancel that|never ?mind|forget it|start over)\b", raw, re.I):
-            pending = state.get("pending")
-            combined = f"{pending['text']}; {raw}" if pending and pending.get("app_id") == app["id"] else raw
-            if pending and pending.get("retry") and re.fullmatch(r"\W*(again|retry|try again|done|ok|okay|saved|go|go "
-                                                                 r"ahead|continue|yes)\W*", raw, re.I):
-                combined = pending["text"]
-            listing = self._show(app, raw, state)
-            if listing:
-                conv = conv or _conv_id()
-                self.agent._remember(conv, "user", raw, user, interface or self.agent.interface, {"source": source})
-                self.agent._remember(conv, "agent", listing["text"], user, interface or self.agent.interface,
-                                     {"type": listing["type"], "app_id": app["id"]})
-                state.update(app_id=app["id"], selection=listing.get("keys", []), selection_entity=listing.get("entity"))
-                state.pop("pending", None)
-                self._save_state(conv, state)
-                return {"conversation": conv, "reply": listing}
-            prepared = self._prepare(app, combined, state)
-            if prepared.get("ask"):
-                conv = conv or _conv_id()
-                self.agent._remember(conv, "user", raw, user, interface or self.agent.interface, {"source": source})
-                reply = {"type": "clarify", "app_id": app["id"], "text": prepared["ask"],
-                         "missing": prepared.get("missing", [])}
-                self.agent._remember(conv, "agent", reply["text"], user, interface or self.agent.interface,
-                                     {"type": "clarify", "app_id": app["id"]})
-                state.update(app_id=app["id"], pending={"app_id": app["id"], "text": prepared["text"]})
-                self._save_state(conv, state)
-                return {"conversation": conv, "reply": reply}
-            text_for_engine = prepared["text"]
-        else:
-            prepared = {}
-            text_for_engine = raw
-            if conv:
-                state.pop("pending", None)
-        out = self.agent.chat(text_for_engine, conversation=conv, user=user, interface=interface,
-                              app_id=app["id"] if app else app_id, source=source,
-                              workflow=prepared.get("workflow") if self._usable(app, prepared) else None)
-        reply = out["reply"]
-        if app and reply.get("type") == "error" and reply.get("code") == "CREDENTIAL_MISSING":
-            acc = next((a for a in self.kb.accounts(app["id"]) if a["label"] in reply.get("text", "")), None)
-            reply = {"type": "need_credential", "app_id": app["id"], "account_id": acc["id"] if acc else None,
-                     "account": acc["label"] if acc else None,
-                     "text": (f"I need to sign in as {acc['label'] if acc else 'that account'} for this. Save its "
-                              "password once in the secure form (it goes to Windows Credential Manager, never into "
-                              "chat, learning or logs), then send the same request again.")}
-            out["reply"] = reply
-            state = self._state(out["conversation"])
-            state.update(app_id=app["id"], pending={"app_id": app["id"], "text": text_for_engine, "retry": True})
-            self._save_state(out["conversation"], state)
-            return out
-        if app and reply.get("type") in ("run",):
-            reply["consequential"] = bool(prepared.get("consequential"))
-            reply["understood"] = text_for_engine if text_for_engine != raw else None
-            reply["filled"] = prepared.get("filled", [])
-        state = self._state(out["conversation"])
-        if app:
+        if app and state.get("app_id") and state["app_id"] != app["id"]:
+            state = {"app_id": app["id"]}  # another application: nothing of the other one's conversation carries over
+        if not app:
+            return self.agent.chat(raw, conversation=conv, user=user, interface=interface, app_id=app_id, source=source)
+        self.agent._remember(conv, "user", raw, user, iface, {"source": source, "app_id": app["id"]})
+
+        def done(reply: dict[str, Any], **extra: Any) -> dict[str, Any]:
+            reply.setdefault("app_id", app["id"])
+            self.agent._remember(conv, "agent", reply.get("text", ""), user, iface,
+                                 {k: v for k, v in reply.items() if k in ("type", "run_id", "app_id", "url", "intent")})
             state["app_id"] = app["id"]
-        if reply.get("type") == "clarify" and app:
-            state["pending"] = {"app_id": app["id"], "text": text_for_engine}
-        else:
-            state.pop("pending", None)
-        self._save_state(out["conversation"], state)
-        return out
+            state.update(extra)
+            self._save_state(conv, state)
+            return {"conversation": conv, "reply": reply}
+
+        if re.search(r"^\W*(cancel that|never ?mind|forget it|start over|stop)\W*$", raw, re.I):
+            had = state.pop("pending", None)
+            return done({"type": "cleared", "text": "OK, I dropped that request." if had else
+                         "OK. Nothing is waiting."})
+        intent = classify(raw, app_names=[a["name"] for a in self.kb.applications()])
+        pending = self._fresh_pending(state, app)
+        combined = raw
+        if pending and pending.get("retry") and re.fullmatch(
+                r"\W*(again|retry|try again|done|ok|okay|saved|go|go ahead|continue|yes)\W*", raw, re.I):
+            combined, intent = pending["text"], Intent(**pending["intent"])
+        elif pending and intent.kind in ("data_entry", "unknown"):
+            combined, intent = f"{pending['text']}; {raw}", Intent(**pending["intent"])  # the answer to my question
+        state.pop("pending", None)  # a new request replaces an unanswered one (it is never glued to it)
+        self.agent.audit.record("chat.intent", actor=user, interface=iface, target=app["id"],
+                                details={"intent": intent.kind, "verb": intent.verb, "continued": combined != raw})
+
+        if intent.kind == "navigate":
+            return done(self._navigate(app, intent))
+        if intent.kind == "read":
+            listing = self._show(app, raw if combined == raw else combined, state)
+            if listing:
+                listing["intent"] = intent.as_dict()
+                return done(listing, selection=listing.get("keys", []), selection_entity=listing.get("entity"))
+            page = navigation_target(Intent("navigate", target=intent.target, words=intent.words), app,
+                                     self._screens(app["id"]), self._workflows(app["id"]))
+            if page and page["kind"] == "page":
+                return done({"type": "navigate", "url": page["url"], "title": page["title"], "intent": intent.as_dict(),
+                             "text": f"Opening {page['title']} in {app['name']}."})
+            ans = self.agent.assistant.answer(app, raw)
+            if ans:
+                return done(ans)
+            return done({"type": "clarify", "intent": intent.as_dict(),
+                         "text": f"I have not seen that in {app['name']} yet. Open it in the browser while I am "
+                                 "learning, or tell me which page to open."})
+        if intent.kind == "explain":
+            ans = self.agent.assistant.answer(app, raw)
+            return done(ans or {"type": "answer", "grounded": False,
+                                "text": f"I have not learned enough about {app['name']} to answer that yet."})
+        if not intent.is_operation:
+            sugg = [x["text"] for x in self.suggestions(app["id"])[:3]]
+            return done({"type": "clarify", "intent": intent.as_dict(),
+                         "text": "What would you like me to do in " + app["name"] + "?"
+                                 + (" For example: " + "; ".join(sugg) + "." if sugg else "")})
+
+        if not self._workflows(app["id"]):
+            return done({"type": "no_workflows", "intent": intent.as_dict(),
+                         "text": f"I have not learned any task in {app['name']} yet. Open Connect & Learn, press Start "
+                                 "learning and do the task once in the browser; then ask me again."})
+        wf, why = self._choose(app, intent, combined)
+        if not wf:
+            return done({"type": "clarify", "intent": intent.as_dict(), "text": why})
+        prepared = self._prepare(app, combined, state, wf=wf)
+        if prepared.get("ask"):
+            return done({"type": "clarify", "text": prepared["ask"], "missing": prepared.get("missing", []),
+                         "workflow": wf["key"], "intent": intent.as_dict()},
+                        pending={"app_id": app["id"], "text": combined, "intent": intent.as_dict(),
+                                 "workflow": wf["key"], "at": now_iso()})
+        dup = self._duplicate(app["id"], prepared["text"], wf["key"])
+        if dup:
+            return done({"type": "run", "run_id": dup, "duplicate": True, "workflow": wf["key"],
+                         "text": "This request is already prepared (same task and values); here it is again. "
+                                 "Nothing new was created."})
+        context = {"intent": intent.as_dict(), "command": combined, "conversation": conv, "app_id": app["id"],
+                   "workflow": wf["key"], "fingerprint": _fingerprint(app["id"], wf["key"], prepared["text"])}
+        out = self.agent.chat(prepared["text"], conversation=conv, user=user, interface=interface, app_id=app["id"],
+                              source=source, workflow=wf["key"] if self._usable(app, prepared) else None,
+                              context=context, remember=False)
+        reply = out["reply"]
+        if reply.get("type") == "error" and reply.get("code") == "CREDENTIAL_MISSING":
+            acc = next((a for a in self.kb.accounts(app["id"]) if a["label"] in reply.get("text", "")), None)
+            reply = {"type": "need_credential", "account_id": acc["id"] if acc else None,
+                     "account": acc["label"] if acc else None, "workflow": wf["key"],
+                     "security_notice": "Passwords and codes go only into this secure form (Windows Credential "
+                                        "Manager). Never type them in the chat.",
+                     "text": f"I need to sign in as {acc['label'] if acc else 'that account'} for this. Save its "
+                             "password once in the secure form (Windows Credential Manager), then I continue with "
+                             "the same request."}
+            return done(reply, pending={"app_id": app["id"], "text": prepared["text"], "retry": True,
+                                        "intent": intent.as_dict(), "workflow": wf["key"], "at": now_iso()})
+        if reply.get("type") == "clarify":
+            return done({**reply, "intent": intent.as_dict(), "workflow": wf["key"]},
+                        pending={"app_id": app["id"], "text": prepared["text"], "intent": intent.as_dict(),
+                                 "workflow": wf["key"], "at": now_iso()})
+        if reply.get("type") == "run":
+            reply.update(consequential=bool(prepared.get("consequential")), workflow=wf["key"],
+                         understood=prepared["text"] if prepared["text"] != raw else None,
+                         filled=prepared.get("filled", []), intent=intent.as_dict())
+        return done(reply)
+
+    # ---- 23.11.1: routing helpers -------------------------------------------------------------------------------
+
+    PENDING_MINUTES = 30
+
+    def _fresh_pending(self, state: dict[str, Any], app: dict[str, Any]) -> dict[str, Any] | None:
+        """The unanswered question of this conversation, only for the same application and only for a while."""
+        p = state.get("pending")
+        if not p or p.get("app_id") != app["id"] or not p.get("intent"):
+            return None
+        try:
+            at = _dt.datetime.fromisoformat(str(p.get("at")).replace("Z", "+00:00"))
+            age = (_dt.datetime.now(_dt.timezone.utc) - at).total_seconds() / 60
+        except ValueError:
+            return None
+        return p if age <= self.PENDING_MINUTES else None
+
+    def _screens(self, app_id: str) -> list[dict[str, Any]]:
+        return list((self.agent.understanding.model(app_id) or {}).get("screens") or [])
+
+    def _navigate(self, app: dict[str, Any], intent: Intent) -> dict[str, Any]:
+        page = navigation_target(intent, app, self._screens(app["id"]), self._workflows(app["id"]))
+        if not page:
+            known = [s["name"] for s in self._screens(app["id"]) if s.get("type") not in ("sign-in", "verification")]
+            return {"type": "clarify", "intent": intent.as_dict(),
+                    "text": f"Which page of {app['name']} do you mean?"
+                            + (f" I know: {', '.join(known[:8])}." if known else
+                               " I have not learned its pages yet; I can open its start page.")}
+        return {"type": "navigate", "url": page["url"], "title": page["title"], "intent": intent.as_dict(),
+                "text": f"Opening {page['title']}" + (f" in {app['name']}" if page["kind"] == "page" else "") + "."}
+
+    def _choose(self, app: dict[str, Any], intent: Intent, text: str) -> tuple[dict[str, Any] | None, str]:
+        """The one learned task for an operation request, or the one question to ask. Never a task of another kind,
+        and never a task about another entity than the one named."""
+        workflows = self._workflows(app["id"])
+        same_kind = [w for w in workflows if compatible(intent, w)]
+        what = f"{intent.verb or intent.kind} {intent.target}".strip()
+        if not same_kind:
+            can = sorted({(w["data"] or {}).get("title") or w["key"] for w in workflows})
+            return None, (f"I have not learned how to {what} in {app['name']}. Do it once in the browser while I "
+                          "am learning (Connect & Learn), then ask me again."
+                          + (f" What I can do there: {', '.join(can[:8])}." if can else ""))
+        entities = {norm((w["data"] or {}).get("entity")) for w in workflows} | \
+            {norm(s.get("entity")) for s in self._screens(app["id"])}
+        scored = sorted(((relevance(Intent(intent.kind, intent.verb, text, intent.words), w,
+                                    other_entities=entities), w) for w in same_kind), key=lambda x: -x[0])
+        scored = [(sc, w) for sc, w in scored if sc >= 0.5]
+        if not scored:
+            titles = [(w["data"] or {}).get("title") or w["key"] for w in same_kind]
+            return None, (f"I do not know how to {what} in {app['name']}. Did you mean: {', '.join(titles[:6])}?")
+        top = [w for sc, w in scored if sc == scored[0][0]]
+        if len(top) > 1:
+            named = match_by_verb(text, top) or planner.match_workflow(text, top)
+            if named:
+                return named, ""
+            titles = [(w["data"] or {}).get("title") or w["key"] for w in top]
+            return None, f"Which one do you mean: {', '.join(titles[:6])}?"
+        return top[0], ""
+
+    def _duplicate(self, app_id: str, text: str, wf_key: str, minutes: int = 10) -> str | None:
+        """The run this same request already produced and that is not finished (no second submission)."""
+        fp = _fingerprint(app_id, wf_key, text)
+        since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=minutes)).isoformat()
+        for r in self.store.query("SELECT id, status, request FROM runs WHERE application_id = ? AND created_at >= ? "
+                                  "ORDER BY created_at DESC LIMIT 50", (app_id, since)):
+            if r["status"] in ("planning", "inspecting", "awaiting_confirmation", "running", "paused") and \
+                    (loads(r["request"]) or {}).get("context", {}).get("fingerprint") == fp:
+                return r["id"]
+        return None
 
     def _usable(self, app: dict[str, Any] | None, prepared: dict[str, Any]) -> bool:
         return bool(app and prepared.get("workflow")
@@ -450,14 +616,11 @@ class Autopilot:
         return {"type": "records", "app_id": app["id"], "entity": entity, "status": status, "keys": keys,
                 "rows": rows[:200], "text": txt}
 
-    def _prepare(self, app: dict[str, Any], text: str, state: dict[str, Any]) -> dict[str, Any]:
-        """Rewrite a plain request into the labelled form the engine's parser reads; ask once for what is missing."""
+    def _prepare(self, app: dict[str, Any], text: str, state: dict[str, Any],
+                 wf: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Rewrite a plain request into the labelled form the engine's parser reads; ask once for what is missing.
+        23.11.1: ``wf`` is the task the router chose; no other task is looked for here."""
         t = words_to_numbers(text)
-        workflows = self._workflows(app["id"])
-        wf = match_by_verb(t, workflows) or planner.match_workflow(t, workflows)
-        if not wf:
-            from .assistant import canonical
-            wf = planner.match_workflow(canonical(t, nouns=False), workflows)
         if not wf:
             return {"text": text}
         d = wf["data"]
@@ -506,6 +669,17 @@ class Autopilot:
                     ambiguous.append(f"Which {norm(p.get('field') or p['name'])} do you mean: {', '.join(hits)}?")
         if ambiguous:
             return {"text": text, "ask": " ".join(ambiguous), "missing": []}
+        # 23.11.1: a field named in plain words with its value ("odometer end 500 fuel used 30" for the fields
+        # "Odometer end (km)" and "Fuel used (litres)"); only free-text fields, a number or one word as the value
+        for p in params:
+            label = p.get("field") or p["name"]
+            core = norm(re.sub(r"\(.*?\)", " ", label))
+            if p.get("options") or p.get("type") == "date" or len(core) < 3 or re.search(
+                    rf"\b{re.escape(core)}\b[^;:]*?:", norm(t)) or any(x.startswith(label + ":") for x in extra):
+                continue
+            vm = re.search(rf"\b{re.escape(core)}\s*(?:\([^)]*\)\s*)?(?:is|=|of|:)?\s*(-?\d+(?:[.,]\d+)?)\b", norm(t))
+            if vm:
+                extra.append(f"{re.sub(r'\s*\([^)]*\)', '', label).strip()}: {vm.group(1)}")
         if d.get("operation") and _is_row_action(wf):
             return self._prepare_row_action(app, wf, t, extra, state, consequential)
         rewritten = t + ("; " + "; ".join(extra) if extra else "")
@@ -527,7 +701,10 @@ class Autopilot:
                     filled.append(f"{label} from {nxt} (next free number after the highest one I have seen)")
                     given.add(p["name"])
                 continue
-            if p.get("options") and RESOURCE_FIELD.search(label) and p.get("type") == "select":
+            # 23.11.1: a vehicle or similar resource is chosen only when the person said "any available"; otherwise
+            # it is missing information and the person is asked
+            if p.get("options") and RESOURCE_FIELD.search(label) and p.get("type") == "select" and re.search(
+                    rf"\b(any|an?)\s+(available|free)\b|\bany\s+{re.escape(norm(label))}\b", norm(t)):
                 more.append(f"{label}: available")
                 filled.append(f"{label}: an available one that no learned rule rejects")
                 given.add(p["name"])
@@ -601,6 +778,221 @@ class Autopilot:
                 return tr.get("from")
         return None
 
+    # ---- 23.11.1: retrieval check, suggestions, the simple preview ----------------------------------------------
+
+    def verify_retrieval(self, app_id: str) -> dict[str, Any]:
+        """Proves that what was saved can be used: every usable task is found again by the same router a command
+        goes through (from its own name), and every learned page by a navigation request. Nothing is executed."""
+        app = self.kb.application(app_id)
+        checks: list[dict[str, Any]] = []
+        for wf in self._workflows(app["id"]):
+            d = wf["data"] or {}
+            title = d.get("title") or wf["key"]
+            it = classify(title)
+            got, why = self._choose(app, it, title) if it.is_operation else (None, "not an operation name")
+            checks.append({"kind": "task", "name": title, "ok": bool(got and got["key"] == wf["key"]),
+                           "found": got["key"] if got else None, "usable": self._usable(app, {"workflow": wf["key"]}),
+                           **({"problem": why} if not got else {})})
+        for sc in self._screens(app["id"])[:40]:
+            if sc.get("type") in ("sign-in", "verification") or not sc.get("name"):
+                continue
+            it = Intent("navigate", target=sc["name"], words=[w for w in re.findall(r"[a-z0-9]+", norm(sc["name"]))
+                                                              if len(w) > 1])
+            page = navigation_target(it, app, self._screens(app["id"]), [])
+            checks.append({"kind": "page", "name": sc["name"], "ok": bool(page and page["kind"] == "page"),
+                           "found": page["title"] if page else None})
+        bad = [c for c in checks if not c["ok"]]
+        return {"checked": len(checks), "ok": not bad, "failed": bad, "checks": checks,
+                "tasks": sum(1 for c in checks if c["kind"] == "task" and c["ok"]),
+                "pages": sum(1 for c in checks if c["kind"] == "page" and c["ok"])}
+
+    def suggestions(self, app_id: str, *, page_url: str | None = None, can_act: bool = True,
+                    conversation: str | None = None, limit: int = 6) -> list[dict[str, Any]]:
+        """What the person can usefully ask now, built only from what was learned for this application: the page
+        open in the learning browser, tasks the configured accounts may perform, records and their statuses, and
+        the person's recent requests. Nothing that was not learned, and no task without an account allowed to do
+        it. View-only SkyGuard users get only reading and navigation suggestions."""
+        app = self.kb.application(app_id)
+        model = self.agent.understanding.model(app["id"]) or {}
+        accounts = self.kb.accounts(app["id"])
+        roles_with_account = {norm(a.get("verified_role") or a.get("role_key")) for a in accounts}
+        out: list[dict[str, Any]] = []
+
+        def add(text: str, kind: str, why: str) -> None:
+            if text and all(norm(x["text"]) != norm(text) for x in out):
+                out.append({"text": text, "kind": kind, "why": why})
+
+        def permitted(wf: dict[str, Any]) -> bool:
+            roles = {norm(r) for r in (wf["data"] or {}).get("roles") or [] if r}
+            return can_act and bool(accounts) and (not roles or bool(roles & roles_with_account)) and \
+                self._usable(app, {"workflow": wf["key"]})
+
+        here = None
+        if page_url:
+            from .understanding import path_template
+            from urllib.parse import urlsplit as _us
+            path = path_template(page_url)
+            here = next((sc for sc in model.get("screens") or [] if sc.get("path") == path), None)
+            if path in ("/", "") and not here:
+                here = None
+        workflows = self._workflows(app["id"])
+        lcs = {norm(lc.get("entity")): lc for lc in model.get("lifecycles") or []}
+        records = self._records(app["id"], None)
+        ent_here = norm((here or {}).get("entity"))
+        # 1. the page the person is on
+        if here:
+            if (here.get("tables") or here.get("type") == "list") and ent_here:
+                add(f"Show today's {plural_of(ent_here)}", "read", f"you are on {here.get('name')}")
+                lc = lcs.get(ent_here)
+                if lc and lc.get("initial"):
+                    add(f"Show {str(lc['initial'].get('status') or '').lower()} {plural_of(ent_here)}", "read",
+                        "the first status of the lifecycle")
+            for wf in workflows:
+                d = wf["data"] or {}
+                if norm(d.get("entity")) == ent_here and permitted(wf):
+                    add(self._task_phrase(wf, lcs), "task", f"a task learned on {here.get('name')}")
+        # 2. records waiting for a step the accounts may perform
+        for wf in workflows:
+            if not permitted(wf):
+                continue
+            d = wf["data"] or {}
+            req = self._requires(app["id"], wf) if _is_row_action(wf) else None
+            ent = norm(d.get("entity"))
+            if req and any(norm(r.get("status")) == norm(req) and norm(r.get("entity")) == ent
+                           for r in records.values()):
+                add(f"Show {req.lower()} {plural_of(ent)}", "read",
+                    f"{plural_of(ent)} waiting for {norm(d.get('operation') or 'the next step')}")
+                add(f"{(d.get('operation') or 'process').capitalize()} all {req.lower()} {plural_of(ent)}", "task",
+                    f"needs status {req}")
+        # 3. tasks the accounts may perform
+        for wf in workflows:
+            if permitted(wf) and workflow_category(wf) == "create":
+                add(self._task_phrase(wf, lcs), "task", "a learned task")
+        # 4. the person's recent requests in this application
+        if conversation:
+            for h in reversed(self.agent.history(conversation, limit=40)):
+                if h["speaker"] == "user" and (h.get("data") or {}).get("app_id") == app["id"] and \
+                        not h["text"].startswith("[message withheld") and len(h["text"]) < 120:
+                    add(h["text"], "recent", "you asked this before")
+                if sum(1 for x in out if x["kind"] == "recent") >= 2:
+                    break
+        # 5. places and explanations
+        for sc in sorted(model.get("screens") or [], key=lambda x: -(x.get("visits") or 0))[:3]:
+            if sc.get("type") not in ("sign-in", "verification") and sc is not here and sc.get("name"):
+                add(f"Open the {sc['name']} page", "navigate", "a page you used")
+        for ent, lc in list(lcs.items())[:1]:
+            sts = lc.get("statuses") or []
+            if len(sts) >= 2 and ent:
+                add(f"What happens after a {ent} is {str(sts[1]).lower()}?", "explain", "the learned status flow")
+        return out[:limit]
+
+    @staticmethod
+    def _task_phrase(wf: dict[str, Any], lcs: dict[str, Any]) -> str:
+        d = wf["data"] or {}
+        op, ent = norm(d.get("operation") or "do"), norm(d.get("entity"))
+        if workflow_category(wf) == "create":
+            lead = "Create a new" if op in ("create", "add", "save", "store", "submit") else f"{op.capitalize()} a new"
+            return f"{lead} {ent or 'record'}"
+        return f"{op.capitalize()} {('a ' + ent) if ent else 'a record'}"
+
+    def simple_view(self, run_id: str) -> dict[str, Any]:
+        """The short preview the person reads (Action, Application, the values, Role, Status) and what can be done
+        with it. ``can_confirm`` is false whenever no record can run; the page then offers Edit request / Provide
+        missing data / Cancel instead of Confirm. The same rule is enforced again when Confirm arrives."""
+        view = self.agent.engine.view(run_id)
+        run, plan, items = view["run"], view["plan"], view["items"]
+        p = run.get("preview") or {}
+        stages = plan.get("stages") or []
+        wf = self.kb.entry(stages[0]["workflow_entry_id"]) if stages else None
+        params = planner.workflow_params(wf) if wf else []
+        label = {pp["name"]: pp.get("field") or pp["name"] for pp in params}
+        recs = p.get("records") or []
+        blocked = [f["message"] for r in recs for f in r.get("findings") or [] if f.get("enforced")
+                   or f.get("severity") == "error"]
+        missing = sorted({label.get(f.get("field"), f.get("field")) for r in recs for f in r.get("findings") or []
+                          if f.get("type") == "required" and (f.get("enforced") or f.get("severity") == "error")
+                          and f.get("field")})
+        ready = int((p.get("totals") or {}).get("ready") or 0)
+        status_text = {"planning": "Preparing the preview", "inspecting": "Checking the application (read-only)",
+                       "awaiting_confirmation": "Ready for confirmation" if ready else "Cannot run: see below",
+                       "running": "Running", "paused": "Waiting for you", "completed": "Completed",
+                       "partial": "Partly completed", "failed": "Failed", "stopped": "Cancelled",
+                       "cancelled": "Cancelled"}.get(run["status"], run["status"])
+        stage0 = {**(stages[0] if stages else {}), **((p.get("stages") or [{}])[0] if p else {})}
+        fields = [{label.get(k, k).replace("_", " "): v for k, v in (r.get("values") or {}).items()} for r in recs]
+        result = self.outcome_text(run_id) if run["status"] in ("completed", "partial", "failed") else None
+        return {"run_id": run_id, "action": " → ".join(s.get("title") or "" for s in stages),
+                "application": plan.get("app_name"), "records": fields, "count": len(recs) or len(items),
+                "role": stage0.get("role_verified") or stage0.get("role_claimed") or None,
+                "account": stage0.get("account"), "status": run["status"], "status_text": status_text,
+                "ready": ready, "blocked": int((p.get("totals") or {}).get("blocked") or 0),
+                "can_confirm": run["status"] == "awaiting_confirmation" and ready > 0,
+                "consequential": run_is_consequential(view), "missing": missing,
+                "blocked_reasons": sorted(set(blocked))[:10], "preview_hash": run.get("preview_hash"),
+                "next_actions": (["confirm", "edit", "cancel"] if run["status"] == "awaiting_confirmation" and ready
+                                 else ["provide_missing", "edit", "cancel"] if run["status"] == "awaiting_confirmation"
+                                 else []),
+                "result": result,
+                "request_text": (self.agent.engine.run(run_id).get("request") or {}).get("context", {}).get("command")}
+
+    def confirm(self, run_id: str, preview_hash: str, *, acknowledge: bool, by: str | None,
+                interface: str | None = None, app_id: str | None = None) -> dict[str, Any]:
+        """The one confirmation, validated on the server (SkyGuard and the extension's companion alike): the plan
+        must belong to the selected application and to the request it was made for, at least one record must be
+        able to run, and a consequential operation needs the person's acknowledgement as well as the preview hash
+        (which the engine checks against the current preview, so a stale preview is refused)."""
+        run = self.agent.engine.run(run_id)
+        ctx = (run.get("request") or {}).get("context") or {}
+        stage_wf = ((run.get("plan") or {}).get("stages") or [{}])[0].get("workflow")
+        if app_id and app_id != run["application_id"]:
+            raise AgentError("PLAN_OTHER_APPLICATION", "This preview belongs to another application than the one "
+                             "selected. Nothing was executed.", 409)
+        if ctx and (ctx.get("app_id") not in (None, run["application_id"])
+                    or (ctx.get("workflow") and ctx["workflow"] != stage_wf)
+                    or (ctx.get("intent") and not Intent(**ctx["intent"]).is_operation)):
+            raise AgentError("PLAN_UNRELATED", "This preview does not match the request it was made for. Nothing "
+                             "was executed; send the request again.", 409)
+        if run.get("status") == "awaiting_confirmation" and \
+                not ((run.get("preview") or {}).get("totals") or {}).get("ready"):
+            sv = self.simple_view(run_id)
+            why = ("Missing information: " + ", ".join(sv["missing"]) + "." if sv["missing"] else
+                   "; ".join(sv["blocked_reasons"][:3]) or "Every record is blocked.")
+            raise AgentError("NOTHING_TO_RUN", f"Nothing can run, so there is nothing to confirm. {why} Use Provide "
+                             "missing data or Edit request.", 409)
+        if run_is_consequential(run) and not acknowledge:
+            raise AgentError("ACKNOWLEDGE_REQUIRED", "This operation changes records (for example creates, approves, "
+                             "authorizes, cancels or deletes them). Tick the box after reading the preview.", 409)
+        view = self.agent.engine.confirm(run_id, preview_hash, by=by, interface=interface)
+        self.agent.audit.record("run.confirmed_simple", actor=by, interface=interface, target=run_id,
+                                details={"acknowledged": bool(acknowledge), "context": bool(ctx)})
+        return view
+
+    def outcome_text(self, run_id: str) -> str:
+        """The verified result in the application's own words: the record number and status it reported. Nothing
+        is invented; a value the application did not show is not mentioned."""
+        view = self.agent.engine.view(run_id)
+        plan, items = view["plan"], view["items"]
+        title = " → ".join(s.get("title") or "" for s in plan.get("stages") or [])
+        parts = []
+        for it in items:
+            ev = {}
+            for v in ((it.get("result") or {}).get("evidence") or {}).values():
+                ev.update({k: v[k] for k in ("record_key", "record_status") if isinstance(v, dict) and v.get(k)})
+            if it["status"] == "confirmed_success":
+                bits = [f"{title}: done, confirmed by the application"]
+                if ev.get("record_key"):
+                    bits.append(f"number {ev['record_key']}")
+                if ev.get("record_status"):
+                    bits.append(f"status {ev['record_status']}")
+                parts.append(", ".join(bits) + ".")
+            elif it["status"] == "confirmed_failure":
+                parts.append(f"{title}: not done. {(it.get('result') or {}).get('reason') or ''}".strip())
+            elif it["status"] == "unknown":
+                parts.append(f"{title}: not confirmed by the application; check it there.")
+            elif it["status"] == "skipped":
+                parts.append(f"{title}: skipped ({(it.get('result') or {}).get('reason') or 'not run'}).")
+        return " ".join(parts) or "Nothing was executed."
+
     # ---- tasks & history ---------------------------------------------------------------------------------------
 
     def tasks(self, app_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
@@ -616,7 +1008,9 @@ class Autopilot:
                         "title": " → ".join(s["title"] for s in plan.get("stages") or []) or r["id"],
                         "kind": plan.get("kind") or "task", "message": (r.get("summary") or {}).get("message"),
                         "created_by": r["created_by"], "created_at": r["created_at"],
-                        "finished_at": r["finished_at"], "records": len(items), "counts": counts})
+                        "finished_at": r["finished_at"], "records": len(items), "counts": counts,
+                        "result": self.outcome_text(r["id"]) if r["status"] in ("completed", "partial", "failed")
+                        and plan.get("kind") != "discovery" else None})
         return out
 
 
@@ -670,6 +1064,15 @@ def _is_row_action(wf: dict[str, Any]) -> bool:
         return True
     return any(s.get("action") == "open_row" or s.get("row") for s in d.get("steps") or []) and \
         len(planner.workflow_params(wf)) <= 2
+
+
+def plural_of(word: str) -> str:
+    from .understanding import plural
+    return plural(word) if word else "records"
+
+
+def _fingerprint(app_id: str, wf_key: str, text: str) -> str:
+    return digest([app_id, wf_key, " ".join(norm(text).split())])[:32]
 
 
 def _conv_id() -> str:

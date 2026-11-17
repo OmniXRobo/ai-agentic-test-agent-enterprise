@@ -200,6 +200,26 @@ class Engine:
                                                                           (insp.get("keys") or {}).items()},
                                            existing_bookings=insp.get("bookings") or [],
                                            options=_options(self.kb, app["id"], wf))
+        # 23.11.1: an action on an existing record (approve, authorize ...) is blocked in the preview when the
+        # application shows that the record is missing or does not have the status the action needs
+        d = wf["data"]
+        need, to = (d.get("target") or {}).get("requires_status"), d.get("expected_status")
+        key_p = (d.get("exists_check") or {}).get("param")
+        statuses = insp.get("statuses")
+        if insp.get("done") and statuses is not None and key_p and d.get("target_kind") == "existing":
+            for i, rec in enumerate(records):
+                key = rec.get(key_p)
+                now = statuses.get(norm(key))
+                if now is None:
+                    msg = f"{key} was not found in the application."
+                elif to and norm(now) == norm(to):
+                    msg = f"{key} already has the status {now}; nothing to do."
+                elif need and norm(now) != norm(need):
+                    msg = f"{key} has the status {now}; {d.get('title') or 'this task'} needs {need}."
+                else:
+                    continue
+                findings.setdefault(i, []).append({"rule": "record status", "type": "status", "field": key_p,
+                                                   "severity": "error", "message": msg, "enforced": True})
         warnings = list(plan.get("warnings") or [])
         if not insp.get("done") and (wf["data"].get("exists_check") or wf["data"].get("bookings_source")):
             warnings.append("The application could not be inspected before the preview; duplicates and conflicts "
@@ -448,6 +468,9 @@ class Engine:
             if kind == "keys":
                 param, column = src.get("param"), src.get("column")
                 insp["keys"][param] = sorted({r.get(column, "") for r in rows if r.get(column)})
+                if src.get("status_column"):  # 23.11.1: the status each record shows now, for the preview
+                    insp["statuses"] = {norm(r.get(column, "")): r.get(src["status_column"], "") for r in rows
+                                        if r.get(column)}
             else:
                 cols = src.get("columns") or {}
                 insp["bookings"] = [{param: r.get(col, "") for param, col in cols.items()} for r in rows]
@@ -847,6 +870,14 @@ class Engine:
             if act == "wait":
                 cp["step"] += 1
                 return {"action": {"type": "snapshot", "wait_ms": min(int(step.get("ms") or 1000), 15000)}}
+            if act == "manual_secret":
+                # 23.11.1: a code only a person may enter (driver authentication, a one-time code on a form). The
+                # agent never asks for it in chat and never types or stores it: the person types it directly into
+                # the application, then presses Resume.
+                cp["step"] += 1
+                return self._pause(run, "auth_secret_step", f"'{step.get('target') or 'The code'}' is required here. "
+                                   "Type it yourself directly in the application window (I do not read, store or "
+                                   "type it), then press Resume.", target=step.get("target"))
             if sessions.logged_out(snap, app.get("profile") or {}) and step.get("screen") != "login":
                 cp["session"] = {}
                 cp["sub"] = "session"
@@ -1004,11 +1035,12 @@ class Engine:
             if success_msg and not ver.get("record_listed"):
                 self._promote_heal(app["id"], cp.pop("heal_pending", None))
                 self._stage_result(run, item, stage["index"], "confirmed_success", "the application confirmed it",
-                                   evidence={"message": success_msg.group(0)[:200], "url": snap.get("url")})
+                                   evidence={"message": success_msg.group(0)[:200], "url": snap.get("url"),
+                                             **reported(success_msg, text)})
                 return self._next_item(run, cp)
             if ver.get("record_listed"):
                 cp["verify_evidence"] = {"message": success_msg.group(0)[:200] if success_msg else None,
-                                         "url": snap.get("url")}
+                                         "url": snap.get("url"), **(reported(success_msg, text) if success_msg else {})}
                 cp["sub"] = "verify_lookup"
                 snap = {}
             else:
@@ -1307,6 +1339,20 @@ def report_text(run: dict[str, Any], items: list[dict[str, Any]]) -> str:
 
 _TIER_TEXT = {1: "its accessible role and name", 2: "its label", 3: "a stable attribute", 4: "nearby text",
               5: "its place in the page structure", 6: "its table row", 7: "visible text"}
+
+
+def reported(match: re.Match[str], text: str) -> dict[str, str]:
+    """23.11.1: what the application itself reported after the submission: the record number it generated (the
+    learned success message's capture group) and a status it displays ("Status: Pending Approval"). Never guessed:
+    a value is returned only when the page shows it."""
+    out: dict[str, str] = {}
+    key = (match.groupdict() or {}).get("record_key") if match else None
+    if key:
+        out["record_key"] = key[:60]
+    sm = re.search(r"\b(?i:status)\s*(?:is|:|-)\s*([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+){0,3})", text or "")
+    if sm:
+        out["record_status"] = sm.group(1)[:60]
+    return out
 
 
 def _rand() -> str:
