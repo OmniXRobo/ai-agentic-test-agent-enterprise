@@ -61,20 +61,42 @@ test installation a Python (Setup finds the application's own). Both were fixed.
 
 ## 4. Windows (GitHub Actions)
 
-RESULT_WINDOWS
+GitHub Actions run 44038294061 on commit `754c3c7` (pull request #55). Runner: Windows Server 2025
+(`windows-2025-vs2026`), Windows PowerShell 5.1. Every job passed.
+
+**Setup.exe on Windows** (`setup-exe-windows`, one job per baseline). Each baseline is installed from its own release
+commit with its own requirements, a virtual environment and a database with data. Then:
+
+| Step | 23.3.35 (`6d448fa`) | 23.9.0 (`33b3a50`) |
+|---|---|---|
+| Setup.exe refuses a version that is not supported (23.3.31), with exit code 3, and changes nothing | passed | passed |
+| `Setup.exe /S` upgrades and verifies: exit code 0, version 23.10.0, `patch-tools\23.10.0` present | passed | passed |
+| Offline OCR engine on Windows: the bundled RapidOCR runtime reads a test image ("Total 4120"); Windows OCR available | PASS | PASS |
+| Roll back to the baseline, then upgrade again with `APPLY_PATCH.ps1` under `powershell.exe` 5.1 | passed | passed |
+| Result in the log | Patched 23.3.35 -> 23.10.0 | Patched 23.9.0 -> 23.10.0 |
+
+**Full suite** on the same commit:
+
+| Runner | Python 3.11 | Python 3.12 | Python 3.13 |
+|---|---|---|---|
+| Windows (`windows-latest`) | 895 passed, 102 skipped, 0 failed | 895 passed, 102 skipped, 0 failed | 895 passed, 102 skipped, 0 failed |
+| Ubuntu (`ubuntu-latest`) | 888 passed, 109 skipped, 0 failed | 888 passed, 109 skipped, 0 failed | 888 passed, 109 skipped, 0 failed |
+
+CI counts more tests than section 1 because it includes the 23.10.0 patch test. The `offline-package`,
+`offline-package-download`, `setup-exe-build` and `security-audit` jobs passed.
 
 ## 5. Setup wizard under Wine 9.0 over a real 23.9.0 installation
 
 `tests/wine_setup_walkthrough.sh`. The installation was 23.9.0 extracted from its release commit with its own
 Windows Python 3.13.17 (the offline package's embeddable Python) and its Windows packages, a database with data, and
-the knowledge database. Screenshots: `evidence/setup-*.png`.
+the knowledge database. Screenshots: `evidence/setup-1-welcome.png` to `setup-6-finish.png`.
 
 * Welcome, Detect (found 23.9.0, supported), Backup (backup and data folders shown), Install, Verify, Finish: each
   page shown and passed with Next.
 * Result in the setup log: **Patched 23.9.0 -> 23.10.0**. Every verification check passed except the offline OCR
   engine, which is a **WARN** under Wine: Windows NumPy does not start under Wine 9.0 (`import numpy` ends with
   exit code 0x80000100). The installer reports it as a warning and says screenshots will be read with Windows OCR;
-  the Finish page counts the warning. On real Windows the OCR engine is checked by the CI job (section 4).
+  the Finish page counts the warning. On real Windows the OCR engine passed (section 4).
 * Found and fixed on the way: Python's `shutil.copy2` uses the Windows `CopyFile2` function, which crashes under
   Wine. The installer now copies with `copyfile` + `copystat` (contents and timestamps), which works on both.
 

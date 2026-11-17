@@ -6,15 +6,16 @@ numbers.
 ## Environments that were not available
 
 * **Windows 10 1909 (build 18363), the PC in your install log.** Not available to the build. Windows was tested on
-  GitHub's `windows-latest` runner, which is Windows Server with Windows PowerShell 5.1. On that runner, Setup.exe
-  upgraded real 23.3.35 and 23.9.0 installations unattended, verified, rolled back, refused an unsupported version,
-  and `APPLY_PATCH.ps1` ran under Windows PowerShell 5.1 (CI job `setup-exe-windows`, see TEST_REPORT.md). Setup is a
-  64-bit NSIS 3.09 program, and NSIS supports every Windows 10 release. Its only Windows tools are `powershell.exe`
-  (5.1) and the application's own Python, both already used on your PC by 23.9.0.
+  GitHub's Windows Server 2025 runner with Windows PowerShell 5.1. There, Setup.exe upgraded real 23.3.35 and 23.9.0
+  installations unattended, verified them (including the offline OCR engine), rolled back, refused an unsupported
+  version, and `APPLY_PATCH.ps1` ran under Windows PowerShell 5.1 (CI job `setup-exe-windows`, TEST_REPORT.md
+  section 4). Setup is a 64-bit NSIS 3.09 program, and NSIS supports every Windows 10 release. Its only Windows tools
+  are `powershell.exe` (5.1) and the application's own Python, both already used on your PC by 23.9.0.
 * **The wizard's pages on real Windows.** On the Windows runner, Setup ran unattended (`/S`). The pages (Welcome,
   Detect, Backup, Install, Verify, Finish) were run page by page under Wine 9.0 on Linux, with a real 23.9.0
   installation, its own Windows Python 3.13 and all its packages. The screenshots are in `evidence/`. Wine is not
-  Windows: fonts and spacing differ slightly.
+  Windows: fonts and spacing differ slightly, and the offline OCR engine does not start under Wine (Windows NumPy),
+  so the Verify page there shows one warning. On Windows the same check passed.
 * **Microsoft Edge and Google Chrome.** The extension was tested end to end in Playwright's Chromium with the
   unpacked extension. Real Edge and Chrome builds were not available. MV3 behaves the same in Chromium-based
   browsers, but enterprise policies on your PCs were not tested.
