@@ -391,5 +391,5 @@
   }
   function stopObserving() { if (observer) observer(); observer = null; return true; }
 
-  window.__sgAgent = { snapshot, act, element, highlight, banner, observe, stopObserving, describe, version: "1.1.0" };
+  window.__sgAgent = { snapshot, act, element, highlight, banner, observe, stopObserving, describe, version: "1.2.0" };
 })();

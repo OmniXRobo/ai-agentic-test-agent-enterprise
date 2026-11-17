@@ -291,7 +291,7 @@ class ComparisonService:
         self.db.execute("INSERT INTO cmp_screens (id, project_id, application_id, name, location, discovery, "
                         "fingerprint, created_at) VALUES (?,?,?,?,?,?,?,?)",
                         (scr, app["project_id"], app_id, name or info.get("title") or "Screen", dumps(steps or []),
-                         dumps(info), hashlib.sha1(dumps(info.get("tables")).encode()).hexdigest()[:16], now_iso()))
+                         dumps(info), hashlib.sha1(dumps(info.get("tables")).encode(), usedforsecurity=False).hexdigest()[:16], now_iso()))
         aura.learn("page_structure", app["name"], name or info.get("title") or scr,
                    {"headings": info.get("headings"), "tables": info.get("tables"), "tabs": info.get("tabs")},
                    source="data comparison discovery", agent="comparison")
@@ -1035,7 +1035,7 @@ class ComparisonService:
                 if r["result"] in ("FAIL", "REVIEW", "CONFIG_MISMATCH"):
                     cat = {"FAIL": "aggregate_mismatch", "CONFIG_MISMATCH": "filter_mismatch"}.get(r["result"],
                                                                                                  "aggregate_review")
-                    discs.append({"id": "D-" + hashlib.sha1(f"agg|{r['metric']}".encode()).hexdigest()[:10].upper(),
+                    discs.append({"id": "D-" + hashlib.sha1(f"agg|{r['metric']}".encode(), usedforsecurity=False).hexdigest()[:10].upper(),
                                   "category": cat, "metric": r["metric"], "expected": r.get("expected"),
                                   "displayed": r.get("displayed"), "difference": r.get("difference"),
                                   "note": r.get("reason"), "records_used": r.get("records_used")})

@@ -2136,8 +2136,8 @@ def compare(data: list[dict[str, Any]], cfg: dict[str, Any], *, decisions: list[
         apps_in = sorted(values)
         sig_src = json.dumps([field_id or field, record_key, apps_in,
                               [str((values[a] or {}).get("value")) for a in apps_in], str(expected)], default=str)
-        sig = hashlib.sha1(sig_src.encode()).hexdigest()[:16]
-        row = {"id": "WR-" + hashlib.sha1(f"{sig}|{len(rows)}".encode()).hexdigest()[:10].upper(),
+        sig = hashlib.sha1(sig_src.encode(), usedforsecurity=False).hexdigest()[:16]
+        row = {"id": "WR-" + hashlib.sha1(f"{sig}|{len(rows)}".encode(), usedforsecurity=False).hexdigest()[:10].upper(),
                "signature": sig, "field": field, "field_id": field_id, "record_key": record_key,
                "values": values, "result": result, "category": category, "explanation": explanation,
                "expected": _fmt(expected), "actual": actual, "difference": _fmt(difference),

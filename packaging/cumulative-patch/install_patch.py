@@ -1,8 +1,8 @@
-r"""SkyGuard QA 23.9.0 cumulative patch: Integration Comparison, offline OCR and browser final patch (offline OCR
-runtime with table extraction statuses, live URL capture in layers, semantic field mapping, Decimal calculations,
-chart checks, PASS / FAIL / WARNING / NEEDS REVIEW / NOT COMPARABLE / INCOMPLETE results with tester decisions,
-application filters with equivalent-filter sync and filter sets, and one maximized-window policy for every visible
-browser; includes 23.4.0 to 23.8.0): offline installer, verifier and rollback. No administrator rights are needed.
+r"""SkyGuard QA 23.10.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0 and 23.9.0): the simple AI Agent (connect, learn while browsing, plain-language and voice commands, one preview,
+explicit confirmation for consequential operations), guided recording for the Integration Comparison (Start Guided
+Recording, Stop & Save, Edit Recorded Steps, Replay & Verify, editable filters, every page, master-detail), and the
+browser extension 1.2.0 files. Offline installer, verifier and rollback. No administrator rights are needed.
 
 Runs with the application's own Python (no packages beyond the standard library are needed for the installer itself).
 Every step is printed; nothing is downloaded.
@@ -13,12 +13,13 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.8.0; 23.9.0 to apply again),
+  1. detects the installation and its version (23.3.35 to 23.9.0; 23.10.0 to apply again); any other version is
+     refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.9.0), patches that copy and writes START_SKYGUARD_23.9.0.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.10.0), patches that copy and writes START_SKYGUARD_23.10.0.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
@@ -29,8 +30,9 @@ apply:
      the application folder cannot be written. The wheels are unpacked into a staging folder first; the folder in use
      is replaced only when the staging folder is complete, and the previous runtime is kept for rollback. Nothing is
      installed into the system Python and no registry key or PATH is changed,
-  8. migrates: the main database is brought to 19 migrations (23.9.0 adds none; filters and filter sets are kept in
-     the comparison's settings); the Operations Agent's knowledge database is created or migrated to schema 2,
+  8. migrates: the main database is brought to 19 migrations (23.9.0 and 23.10.0 add none; filters, filter sets and
+     guided recordings are kept in the comparison's settings); the Operations Agent's knowledge database is created or
+     migrated to schema 2 and gets the simple agent's conversation_state table (23.10.0),
   9. verifies: the new version loads, the agent core, the comparison workspace with filters and semantics, the OCR
      engine probe (on Windows with Python 3.13), every migration, PRAGMA integrity_check for both databases and no
      table has fewer rows than before,
@@ -39,7 +41,7 @@ apply:
 
 rollback (after a successful apply): restores the previous application files, removes the files the patch added and
 puts back the OCR runtime that was there before (or removes the one the patch installed). The databases are kept as
-they are by default (23.9.0 does not change the schema); --restore-database puts back the copy taken before the
+they are by default (23.10.0 only adds a table that earlier versions ignore); --restore-database puts back the copy taken before the
 upgrade instead (the current database is kept next to it, renamed).
 """
 
@@ -58,9 +60,10 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.9.0"
-BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2 or 23.8.0"
-BASELINES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", PATCH_VERSION)
+PATCH_VERSION = "23.10.0"
+BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0 or 23.9.0"
+RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0")
+BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
 AGENT_SCHEMA = 2
@@ -387,8 +390,23 @@ OCR_PROBE = ("import sys; sys.path.insert(0, '.'); from qa_platform.comparison i
              "w = next((x for x in d['engines'] if x['engine'] == 'windows'), {}); "
              "print(e['status'] + ': ' + str(e.get('detail'))[:400] + ' | windows: ' + str(w.get('status')))")
 AGENT_MIGRATE = ("import sys; sys.path.insert(0, '.'); from pathlib import Path; from qa_platform.config import Paths; "
-                 "from skyguard_agent.store import Store; p = Paths().ensure(); s = Store(Path(p.root) / 'opsagent' / "
-                 "'knowledge.sqlite3'); print(s.schema_version); s.close()")
+                 "from skyguard_agent.store import Store; from skyguard_agent.autopilot import MIGRATION; "
+                 "p = Paths().ensure(); s = Store(Path(p.root) / 'opsagent' / "
+                 "'knowledge.sqlite3'); s._conn.executescript(MIGRATION); print(s.schema_version); s.close()")
+SIMPLE_AGENT_LOAD = ("import sys; sys.path.insert(0, '.'); from pathlib import Path; "
+                     "from skyguard_agent import autopilot, navrec; from qa_platform.api import agent_simple, workspace as w; "
+                     "from qa_platform.comparison import workspace, guided_nav; "
+                     "r = navrec.events_to_recording([{'kind': 'fill', 'url': 'http://a/login', 'value': '[secret]', 'secret': True, "
+                     "'element': {'tag': 'input', 'label': 'Password', 'secret': True}}, "
+                     "{'kind': 'click', 'url': 'http://a/login', 'element': {'tag': 'button', 'name': 'Sign in'}}, "
+                     "{'kind': 'click', 'url': 'http://a/', 'element': {'tag': 'a', 'name': 'Reports'}}]); "
+                     "print('ok' if autopilot.match_by_verb('Authorize all approved trips', [{'key': 'Approve trip', 'data': {'operation': 'approve', 'entity': 'trip'}}, "
+                     "{'key': 'Authorize trip', 'data': {'operation': 'authorize', 'entity': 'trip'}}])['key'] == 'Authorize trip' "
+                     "and [x.get('text') for x in r['steps']] == ['Reports'] "
+                     "and any(x.path == '/api/ops/simple/command' for x in agent_simple.router.routes) "
+                     "and any(x.path.endswith('/guided/import') for x in w.router.routes) "
+                     "and hasattr(workspace.Workspace, 'guided_replay') and hasattr(guided_nav, 'Recorder') "
+                     "and Path('web/js/pages/ai-agent.js').is_file() else 'simple agent or guided recording incomplete')")
 
 
 def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None) -> dict:
@@ -435,6 +453,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
     except PatchError as exc:
         check("Comparison 23.9.0 (filters, meaning)", False, str(exc))
     try:
+        sa = run_py(python, app, data, SIMPLE_AGENT_LOAD).splitlines()[-1]
+        check("AI Agent and guided recording (23.10.0)", sa == "ok", sa)
+    except PatchError as exc:
+        check("AI Agent and guided recording (23.10.0)", False, str(exc))
+    try:
         bp = run_py(python, app, data, BROWSER_POLICY_LOAD).splitlines()[-1]
         check("Maximized browser policy", bp == "ok", bp)
     except PatchError as exc:
@@ -448,7 +471,7 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         if ocr_state.startswith("ready"):
             check("Offline OCR engine", True, ocr_state)
         elif ocr_state.startswith("broken") and "windows: available" in ocr_state:
-            # the rest of 23.9.0 works; screenshots are read by Windows OCR until the bundled engine runs
+            # the rest of the release works; screenshots are read by Windows OCR until the bundled engine runs
             warn("Offline OCR engine", ocr_state.split(" | ")[0] + " | screenshots will be read with Windows OCR")
         else:
             check("Offline OCR engine", False, ocr_state)
@@ -469,7 +492,7 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         finally:
             conn.close()
         want = {"applications", "accounts", "knowledge", "locators", "runs", "run_items", "audit", "observations",
-                "app_model"}
+                "app_model", "conversation_state"}
         check("Knowledge database", kver == AGENT_SCHEMA and kint == "ok" and want <= ktables,
               f"schema {kver}, integrity {kint}, tables {'present' if want <= ktables else 'missing'}")
     else:
@@ -528,8 +551,8 @@ def restore_files(app: Path, backup: Path, added: list[str]) -> None:
 def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
-    step(f"SkyGuard QA {PATCH_VERSION}: Integration Comparison, offline OCR and browser final patch "
-         "(cumulative: 23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0)")
+    step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):
@@ -539,14 +562,15 @@ def apply(args: argparse.Namespace) -> int:
                              "to apply the patch, or run the patch with --side-by-side to install a patched copy in "
                              f"{user_dir() / ('app-' + PATCH_VERSION)} (your original installation stays as it is).")
         if before not in BASELINES:
-            raise PatchError(f"This patch installs on {BASELINE} (found {before}).")
+            raise PatchError(f"This upgrade installs on {BASELINE} (found {before}). Nothing was changed.")
         target = Path(args.side_by_side or (user_dir() / f"app-{PATCH_VERSION}")).expanduser().resolve()
         app = side_by_side(app, data, target, python)
         root = app
     say(f"Application folder : {app}\nData folder        : {data}  (kept)\nInstalled version  : {before} -> {PATCH_VERSION}")
     if before not in BASELINES:
-        raise PatchError(f"This patch installs on {BASELINE} (found {before}). Bring the installation to 23.3.35 "
-                         "first.")
+        raise PatchError(f"This upgrade installs on {BASELINE} (found {before}). Nothing was changed. "
+                         + ("Versions before 23.3.35 must first be brought to 23.3.35 with the earlier patches."
+                            if _older(before) else "This version is not one of the SkyGuard QA releases it supports."))
 
     step("Checking the patch files (SHA-256)")
     files = check_payload(patch_dir)
@@ -694,9 +718,87 @@ def rollback(args: argparse.Namespace) -> int:
     return 0
 
 
+class _Tee:
+    def __init__(self, stream, fh) -> None:
+        self.stream, self.fh = stream, fh
+
+    def write(self, text: str) -> int:
+        self.fh.write(text)
+        self.fh.flush()
+        return self.stream.write(text)
+
+    def flush(self) -> None:
+        self.stream.flush()
+        self.fh.flush()
+
+
+def _tee(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = path.open("a", encoding="utf-8")
+    sys.stdout = _Tee(sys.stdout, fh)
+    sys.stderr = _Tee(sys.stderr, fh)
+
+
+def _older(v: str) -> bool:
+    try:
+        return tuple(int(x) for x in v.split(".")) < (23, 3, 35)
+    except ValueError:
+        return False
+
+
+def find_python(app: Path) -> str | None:
+    for rel in (("runtime", "python", "python.exe"), (".venv", "Scripts", "python.exe"), ("runtime", "python", "bin",
+                                                                                          "python3"), (".venv", "bin", "python")):
+        p = app.joinpath(*rel)
+        if p.is_file():
+            return str(p)
+    return None
+
+
+def detect(args: argparse.Namespace) -> int:
+    """What the Setup wizard shows on its Detect page, as one line of JSON: never changes anything."""
+    out: dict = {"patch_version": PATCH_VERSION, "supported_versions": list(RELEASES)}
+    try:
+        app, root, data = locate(args.app, args.data)
+    except PatchError as exc:
+        out.update(found=False, supported=False, message=str(exc))
+        print(json.dumps(out))
+        if args.ini:
+            Path(args.ini).write_text(f"[detect]\r\nfound=0\r\nsupported=0\r\nmessage={exc}\r\n", encoding="utf-16")
+        return 2
+    v = version_of(app)
+    python = args.python or find_python(app)
+    can_write = writable(app)
+    out.update(found=True, app=str(app), root=str(root), data=str(data), version=v, python=python,
+               supported=v in BASELINES, already_latest=v == PATCH_VERSION, writable=can_write,
+               running=running(port_of(data)), port=port_of(data), free_mb=free_mb(root),
+               database=(data / "qa_platform.sqlite3").exists(),
+               backup_folder=str(root / "patch-backups"))
+    if v not in BASELINES:
+        out["message"] = (f"SkyGuard QA {v} was found. This upgrade installs on {BASELINE}. "
+                          + ("Bring it to 23.3.35 with the earlier patches first." if _older(v) else
+                             "This version is not supported; nothing will be changed."))
+    elif not python:
+        out["supported"] = False
+        out["message"] = f"The application's Python was not found in {app}\\runtime\\python or {app}\\.venv."
+    elif v == PATCH_VERSION:
+        out["message"] = f"SkyGuard QA {v} is already installed. Setup can apply it again (repair) or verify it."
+    else:
+        out["message"] = f"SkyGuard QA {v} was found and can be upgraded to {PATCH_VERSION}."
+    if not can_write and out["supported"]:
+        out["message"] += (" The application folder cannot be written by this user: Setup will install a patched copy "
+                           f"in {user_dir() / ('app-' + PATCH_VERSION)} (side by side) and keep the original.")
+    print(json.dumps(out))
+    if args.ini:  # the Setup wizard reads this with ReadINIStr
+        lines = ["[detect]"] + [f"{k}={'1' if v is True else '0' if v is False else '' if v is None else v}"
+                                for k, v in out.items() if not isinstance(v, list)]
+        Path(args.ini).write_text("\r\n".join(lines) + "\r\n", encoding="utf-16")
+    return 0 if out["supported"] else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=("apply", "verify", "rollback"))
+    ap.add_argument("command", choices=("apply", "verify", "rollback", "detect"))
     ap.add_argument("--app", required=True)
     ap.add_argument("--data")
     ap.add_argument("--python")
@@ -705,14 +807,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--skip-running-check", action="store_true")
     ap.add_argument("--side-by-side", nargs="?", const="", default=None,
                     help="protected application folder: patch a copy in this folder (default %%LOCALAPPDATA%%\\SkyGuardQA)")
+    ap.add_argument("--ini", help="detect: also write the result as an INI file (for the Setup wizard)")
+    ap.add_argument("--log", help="also write every message to this file")
     ap.add_argument("--fail-after-copy", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--force-ocr", action="store_true", help=argparse.SUPPRESS)  # tests: unpack on another platform
     args = ap.parse_args(argv)
+    if args.log:
+        _tee(Path(args.log))
     try:
         if args.command == "apply":
             return apply(args)
         if args.command == "rollback":
             return rollback(args)
+        if args.command == "detect":
+            return detect(args)
         app, _root, data = locate(args.app, args.data)
         step(f"Verifying {app}")
         return 0 if verify(app, data, args.python or sys.executable)["ok"] else 1
