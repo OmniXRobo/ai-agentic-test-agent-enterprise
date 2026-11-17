@@ -105,7 +105,15 @@ The earlier extension tests still pass: `test_extension_e2e.py`, `test_extension
 
 ## 6. Windows (GitHub Actions), pull request #55
 
-The CI run of the 23.11.1 commit is listed on the pull request. Its result is reported in the release message.
+**A failure found by CI.** The first CI run of 23.11.1 (run 44095122545, commit `05a266a`) stopped at once on Python
+3.11: one new line in `skyguard_agent/autopilot.py` put a backslash inside an f-string expression, which Python 3.12
+and later accept and 3.11 does not. SkyGuard runs on Python 3.13, so an installed system was not affected, but the
+code must load on every supported Python. The line was rewritten (commit `e91fff5`), every changed file was compiled
+with Python 3.11, and the agent tests (52 passed) and the installer tests (24 passed,
+`cumulative-patch-231101-linux.xml`) were run again. Both zips and Setup.exe were rebuilt from that commit, and the
+Wine walkthrough (section 7) was repeated with the rebuilt Setup.exe.
+
+The CI run of the fixed commit is listed on the pull request. Its result is reported in the release message.
 The Windows jobs run the full suite on Windows (Python 3.11 to 3.13), and Setup.exe unattended over real 23.3.35,
 23.10.0 and 23.11.0 installations: refusal of an unsupported version, upgrade and verify, rollback, and the upgrade
 again with `APPLY_PATCH.ps1` under Windows PowerShell 5.1.
