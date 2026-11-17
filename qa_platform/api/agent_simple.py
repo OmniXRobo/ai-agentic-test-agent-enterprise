@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from skyguard_agent.autopilot import CONSEQUENTIAL
+from skyguard_agent.autopilot import run_is_consequential
 from skyguard_agent.util import AgentError
 
 from .opsagent import MAX_AUDIO_BYTES, actor, ops
@@ -140,7 +140,7 @@ class ConfirmIn(BaseModel):
 
 
 def consequential(run: dict[str, Any]) -> bool:
-    return any(CONSEQUENTIAL.search(f"{s.get('workflow')} {s.get('title')}") for s in run["plan"].get("stages") or [])
+    return run_is_consequential(run)
 
 
 @router.post("/runs/{run_id}/confirm")

@@ -235,10 +235,11 @@ function connect(a) {
           <label style="display:inline">at most <input id="gLim" type="number" min="1" max="2000" style="width:6em" value="${rec.detail.limit || 200}"> records</label></p>` : ""}
         ${(rec.tables || []).length ? `<details><summary>View captured tables (${rec.tables.length})</summary>${rec.tables.map((t) => `<p class="muted">${esc(t.row_count)} row(s) on the page${t.method ? ` · ${esc(t.method)}` : ""}</p><div class="table-wrap"><table class="data"><thead><tr>${(t.headers || []).map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${(t.rows || []).map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`).join("")}</details>` : ""}
         ${(rec.dropped || []).length ? `<details><summary>Left out of the recording</summary><ul>${rec.dropped.slice(0, 30).map((d) => `<li>${esc(d.what || "")}: ${esc(d.why)}</li>`).join("")}</ul></details>` : ""}
-        <div class="row"><button type="button" class="btn" data-g="save">Save edits</button><button type="button" class="btn primary" data-g="replay">Replay &amp; Verify</button><button type="button" class="btn" data-g="start">Re-record</button></div>`
+        <div class="row"><button type="button" class="btn" data-g="save">Save edits</button><button type="button" class="btn primary" data-g="replay">Replay &amp; Verify</button><button type="button" class="btn" data-g="start">Re-record</button><button type="button" class="btn" data-g="import" title="A recording made with the SkyGuard Edge/Chrome extension (Record for Integration Comparison)">Import from browser extension</button><input type="file" accept=".json,application/json" data-g="file" hidden></div>`
         : `<h4 style="margin-top:0">Guided recording</h4>
         <p>Press Start, then sign in and go to the report as you always do: menus, the report, its filters, the next page, a detail record. SkyGuard records the way there; passwords are never recorded.</p>
-        <div class="row"><button type="button" class="btn primary" data-g="start">Start Guided Recording</button></div>`;
+        <div class="row"><button type="button" class="btn primary" data-g="start">Start Guided Recording</button><button type="button" class="btn" data-g="import" title="A recording made with the SkyGuard Edge/Chrome extension (Record for Integration Comparison)">Import from browser extension</button><input type="file" accept=".json,application/json" data-g="file" hidden></div>
+        <p class="muted">Already recorded the way to the report in Edge or Chrome with the SkyGuard extension? Import its file instead.</p>`;
     }
     box.querySelector('[data-g="start"]')?.addEventListener("click", guard(async () => {
       await saveApp();
@@ -251,6 +252,22 @@ function connect(a) {
       if (out.auth_method === "manual") toast("You signed in by hand while recording. Save the login above for unattended runs, or keep 'I sign in myself'.", "info", 9000);
       await show();
     }));
+    const file = box.querySelector('[data-g="file"]');
+    box.querySelector('[data-g="import"]')?.addEventListener("click", () => file && file.click());
+    file?.addEventListener("change", async () => {
+      const f = file.files && file.files[0];
+      if (!f) return;
+      try {
+        if (f.size > 4 * 1024 * 1024) throw new Error("This file is too large for a navigation recording.");
+        let data;
+        try { data = JSON.parse(await f.text()); } catch (e) { throw new Error("This is not a SkyGuard navigation recording (not JSON)."); }
+        await saveApp();
+        const out = await api(`${BASE}/applications/${a.id}/guided/import`, { method: "POST", body: { recording: data.recording || data } });
+        toast(`Imported ${out.saved.steps.length} step(s) from the browser extension.`, "success");
+        if (out.auth_method === "manual") toast("The sign-in was done by hand while recording. Save the login above for unattended runs, or keep 'I sign in myself'.", "info", 9000);
+        await show();
+      } catch (err) { toast(err.message, "error"); } finally { file.value = ""; }
+    });
     const edits = () => {
       const fv = {};
       box.querySelectorAll("[data-fv]").forEach((i) => { fv[i.dataset.fv] = i.value; });

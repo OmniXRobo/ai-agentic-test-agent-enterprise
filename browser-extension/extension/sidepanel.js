@@ -108,6 +108,9 @@ async function sendChat() {
     let actions = "";
     if (r.type === "secret_intercepted") actions = `<div class="row" style="margin-top:6px"><button class="btn" data-act="apps">Open Applications &amp; Accounts</button></div>`;
     if (r.type === "suggest_discovery" || r.type === "suggest_watch") actions = `<div class="row" style="margin-top:6px"><button class="btn" data-act="learn">Open Learn</button></div>`;
+    if (r.type === "need_credential" && r.account_id) actions = `<div class="row" style="margin-top:6px"><button class="btn primary" data-act="credential" data-account="${esc(r.account_id)}">Save the password securely</button></div>`;
+    if (r.type === "records" && (r.keys || []).length) actions = `<div class="muted" style="margin-top:4px">${esc(r.keys.slice(0, 50).join(", "))}</div>`;
+    if (r.type === "run" && r.consequential) actions = `<div class="muted" style="margin-top:4px">This changes records: you will tick a confirmation box under the preview.</div>`;
     if (r.type === "needs_approval") { S.pendingApproval = { id: r.entry_id, text }; actions = `<div class="row" style="margin-top:6px"><button class="btn primary" data-act="approve-run">Approve and run</button><button class="btn" data-act="knowledge">Review it first</button></div>`; }
     S.messages.push({ who: "agent", text: r.text, warn: r.type === "secret_intercepted" || r.type === "error", actions });
     if (r.type === "run" && r.run_id) { S.runId = r.run_id; await send({ type: "drive", runId: r.run_id }); setTimeout(() => show("run"), 600); }
@@ -117,7 +120,8 @@ async function sendChat() {
   renderChat();
 }
 
-async function chatAction(act) {
+async function chatAction(act, data) {
+  if (act === "credential") { chrome.windows.create({ url: chrome.runtime.getURL(`credential.html?account=${encodeURIComponent(data.account)}`), type: "popup", width: 460, height: 560 }); return; }
   if (act !== "approve-run") return show(act);
   const p = S.pendingApproval;
   if (!p) return;
@@ -193,6 +197,7 @@ async function renderRun(quiet) {
   const preview = r.status === "awaiting_confirmation" && p.records ? `<h2>Preview (nothing has been submitted)</h2>
     <p>${esc(p.totals.ready)} of ${esc(p.totals.records)} record(s) ready, ${esc(p.totals.blocked)} blocked. Account(s): ${esc(v.plan.stages.map((s) => `${s.title}: ${s.account}`).join("; "))}.</p>
     <table><tr><th>#</th><th>Values</th><th>Checks</th></tr>${p.records.map((x) => `<tr><td>${x.seq}</td><td>${esc(Object.entries(x.values || {}).map(([k, val]) => `${k}: ${val}`).join(", "))}</td><td>${esc(x.status)} ${esc((x.findings || []).map((f) => f.message).join("; "))}</td></tr>`).join("")}</table>
+    ${v.consequential ? `<label style="display:block;margin-top:6px"><input type="checkbox" id="ackBox"> I have read the preview. These ${esc(p.totals.ready)} record(s) will be changed in the application.</label>` : ""}
     <div class="row" style="margin-top:8px"><button class="btn primary" id="confirmBtn"${p.totals.ready ? "" : " disabled"}>Confirm and run ${esc(p.totals.ready)} record(s)</button><button class="btn danger" id="cancelBtn">Cancel</button></div>` : "";
   const controls = final ? "" : `<div class="row">${r.status === "paused" ? `<button class="btn primary" id="resumeBtn">Resume</button>` : `<button class="btn" id="pauseBtn">Pause</button>`}
     <button class="btn danger" id="stopBtn">Stop</button><button class="btn" id="cancelRestBtn">Cancel remaining</button>${pause ? `<button class="btn" id="ackBtn">Acknowledge</button>` : ""}</div>`;
@@ -202,7 +207,11 @@ async function renderRun(quiet) {
     <h2>Records</h2><table><tr><th>#</th><th>Result</th><th>Reason</th></tr>${v.items.map((i) => `<tr><td>${i.seq}</td><td>${esc(STATUS_TEXT[i.status] || i.status)}</td><td>${esc((i.result || {}).reason || "")}</td></tr>`).join("")}</table>
     <h2>Activity</h2><div class="list">${ev.events.slice(-40).reverse().map((e) => `<div><span class="muted">${esc(e.at.slice(11, 19))}</span> ${esc(e.message)}</div>`).join("")}</div>`;
   const on = (id, fn) => { const b = $(id); if (b) b.onclick = async () => { try { await fn(); await renderRun(); } catch (e) { toast($("#runErr"), e.message); } }; };
-  on("#confirmBtn", async () => { await api.post(`/v1/runs/${r.id}/confirm`, { preview_hash: r.preview_hash }); await send({ type: "drive", runId: r.id }); });
+  on("#confirmBtn", async () => {
+    if (v.consequential && !$("#ackBox")?.checked) throw new Error("Tick the confirmation box after reading the preview.");
+    await api.post(`/v1/runs/${r.id}/confirm`, { preview_hash: r.preview_hash, acknowledge: v.consequential ? true : undefined });
+    await send({ type: "drive", runId: r.id });
+  });
   on("#cancelBtn", () => api.post(`/v1/runs/${r.id}/stop`));
   on("#pauseBtn", () => api.post(`/v1/runs/${r.id}/pause`));
   on("#resumeBtn", async () => { const { events } = await send({ type: "manual-events", runId: r.id }); await api.post(`/v1/runs/${r.id}/resume`, { manual_events: events || [] }); await send({ type: "drive", runId: r.id }); });
@@ -268,8 +277,12 @@ async function learn() {
   const active = sessions.find((s) => s.status === "recording");
   const accSel = `<select id="lAcc"><option value="">(signed in already / none)</option>${accs.map((a) => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join("")}</select>`;
   const { auto_learn } = await api.settings();
+  const cmp = await send({ type: "cmp-record-status" });
   main.innerHTML = `<div class="card"><h2>Learn while I browse</h2><p>${auto_learn ? "On: just use the application in its tabs; I work out screens, tasks, statuses, rules and roles myself." : "Off. Turn on <em>Learn automatically while I browse</em> in Options, then use the application as usual."}</p>
     <div class="row"><button class="btn" id="openOpts">Options</button><button class="btn" data-goto="understand">What I understood</button></div></div>
+    <div class="card"><h2>Connect an application</h2><label>Address<input id="cUrl" placeholder="https://trips.example.local/"></label><label>Name (optional)<input id="cName" placeholder="suggested from the address"></label>
+    <button class="btn" id="cBtn">Connect</button><p class="muted">Then open it and use it normally; I learn while you browse.</p></div>
+    ${cmpCard(cmp)}
     <div class="card"><h2>Guided learning</h2><label>Application ${appSelect()}</label>
     ${active ? `<p>Recording <strong>${esc(active.title)}</strong> (${esc(active.events)} actions so far). Perform the task normally in the application tab.</p>
       <div class="row"><button class="btn primary" id="finish">Finish and review</button><button class="btn" id="cancelL">Cancel</button></div>`
@@ -285,7 +298,59 @@ async function learn() {
   if ($("#startL")) $("#startL").onclick = async () => { try { const { session } = await api.post("/v1/learning", { application_id: S.appId, account_id: $("#lAcc").value || undefined, title: $("#lTitle").value.trim() || "Workflow" }); await send({ type: "learn-start", appId: S.appId, sessionId: session.id }); learn(); } catch (e) { err(e); } };
   if ($("#finish")) $("#finish").onclick = async () => { try { await send({ type: "learn-stop", sessionId: active.id }); const out = await api.post(`/v1/learning/${active.id}/finish`); main.insertAdjacentHTML("afterbegin", `<div class="card"><h2>Learned (awaiting your approval)</h2><p>Workflow "${esc(out.workflow.key)}" with ${esc((out.workflow.data.steps || []).length)} step(s) and ${esc((out.rules || []).length)} suggested rule(s) were added to Knowledge for your review.${out.profile_learned ? " The sign-in screen was learned too." : ""}</p></div>`); setTimeout(() => show("knowledge"), 1500); } catch (e) { err(e); } };
   if ($("#cancelL")) $("#cancelL").onclick = async () => { await send({ type: "learn-stop", sessionId: active.id }); await api.post(`/v1/learning/${active.id}/cancel`); learn(); };
+  $("#cBtn").onclick = async () => {
+    try {
+      const out = await api.post("/v1/simple/connect", { url: $("#cUrl").value.trim(), name: $("#cName").value.trim() || undefined });
+      S.appId = out.application.id;
+      main.insertAdjacentHTML("afterbegin", `<div class="card"><p>${out.created ? "Connected" : "Already connected"}: <strong>${esc(out.application.name)}</strong>. Grant access to its site under Applications, then use it normally.</p></div>`);
+      setTimeout(() => show("apps"), 1500);
+    } catch (e) { err(e); }
+  };
+  bindCmp(err);
   $("#discBtn").onclick = async () => { try { const v = await api.post("/v1/discovery", { application_id: S.appId, account_id: $("#dAcc").value || undefined, max_pages: Number($("#dMax").value) || 25 }); S.runId = v.run.id; await send({ type: "drive", runId: v.run.id }); show("run"); } catch (e) { err(e); } };
+}
+
+// ---- recording for SkyGuard's Integration Comparison (read-only: the way to a report, saved as a file) -----------
+function cmpCard(cmp) {
+  const on = cmp && cmp.recording;
+  return `<div class="card"><h2>Record for Integration Comparison</h2>
+    ${on ? `<p>Recording in this tab: ${esc(cmp.events)} action(s). Sign in, open the menus and the report, set its filters, go to a next page and open one detail record if you need them.</p>
+      <div class="row"><button class="btn primary" id="cmpStop">Stop and save file</button><button class="btn" id="cmpCancel">Cancel</button></div>`
+    : `<p>Records the way to a report in the active tab, for SkyGuard's Integration Comparison (Connect to Application, <em>Import from browser extension</em>).</p>
+      <button class="btn" id="cmpStart">Start recording in the active tab</button>`}
+    <p class="muted">Only reads: clicks that change data (Save, Delete, Approve...) and sign-in steps are left out; passwords are never recorded.</p><p class="err" id="cmpErr"></p></div>`;
+}
+
+function bindCmp() {
+  const err = (e) => toast($("#cmpErr"), e.message || e);
+  if ($("#cmpStart")) $("#cmpStart").onclick = async () => {
+    // asked here, in the click: a site permission can only be requested from a user gesture
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const origin = tab ? originOf(tab.url || "") : "";
+    if (origin && /^https?:/.test(origin) && !(await chrome.permissions.request({ origins: [origin + "/*"] }).catch(() => false))) return err("Recording needs access to this site.");
+    const r = await send({ type: "cmp-record-start" });
+    if (!r.ok) return err(r.error);
+    learn();
+  };
+  if ($("#cmpCancel")) $("#cmpCancel").onclick = async () => { await send({ type: "cmp-record-stop" }); learn(); };
+  if ($("#cmpStop")) $("#cmpStop").onclick = async () => {
+    try {
+      const r = await send({ type: "cmp-record-stop" });
+      if (!r.ok) throw new Error(r.error);
+      const out = await api.post("/v1/comparison/recording", { events: r.events, start_url: r.start_url, final_url: r.final_url, tables: r.tables });
+      const rec = out.recording;
+      const blob = new Blob([JSON.stringify(rec, null, 1)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      let host = "report"; try { host = new URL(r.start_url).hostname.replace(/[^\w.-]/g, "_"); } catch (e) { /* keep */ }
+      a.download = `skyguard-navigation-${host}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      await learn();
+      main.insertAdjacentHTML("afterbegin", `<div class="card"><h2>Recording saved</h2><p>${rec.steps.length} step(s), ${rec.filters.length} filter(s)${rec.pagination_seen ? ", pagination noticed (SkyGuard reads every page)" : ""}${rec.detail ? `, detail page ${esc(rec.detail.url_template)}` : ""}. ${rec.dropped.length} action(s) left out.</p>
+        <p class="muted">In SkyGuard: Integration Comparison, the application's Connect dialog, <em>Import from browser extension</em>, choose ${esc(a.download)}.</p></div>`);
+    } catch (e) { err(e); }
+  };
 }
 
 // ---- knowledge ---------------------------------------------------------------------------------------------------

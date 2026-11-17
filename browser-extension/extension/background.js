@@ -399,6 +399,38 @@ async function handle(msg) {
       return { ok: true };
     }
     case "watching": return { ok: true, tabs: [...OBSERVE].filter(([, o]) => o.purpose === "watch").map(([tabId, o]) => ({ tabId, appId: o.appId })) };
+    case "cmp-record-start": {
+      // the way to a report, for SkyGuard's Integration Comparison: observed only, nothing clicked or typed by us
+      const tab = msg.tabId ? await chrome.tabs.get(msg.tabId).catch(() => null) : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+      if (!tab || !/^https?:/.test(tab.url || "")) return { ok: false, error: "Open the application's page in the active tab first." };
+      if (!(await chrome.permissions.contains({ origins: [originOf(tab.url) + "/*"] })))
+        return { ok: false, error: "Allow the extension on this site to record (Applications, Grant access)." };
+      for (const [, d] of DRIVES) if (d.tabId === tab.id) return { ok: false, error: "The agent is working in this tab." };
+      await stopWatch(tab.id, true).catch(() => {});
+      OBSERVE.set(tab.id, { purpose: "comparison", id: "cmp", events: [], startUrl: tab.url, banner: "SkyGuard is recording the way to the report: sign in, open the report, set its filters, then press Stop in the side panel." });
+      await observe(tab.id, true);
+      await banner(tab.id, OBSERVE.get(tab.id).banner);
+      return { ok: true, tabId: tab.id };
+    }
+    case "cmp-record-status": {
+      for (const [, o] of OBSERVE) if (o.purpose === "comparison") return { ok: true, recording: true, events: o.events.length };
+      return { ok: true, recording: false };
+    }
+    case "cmp-record-stop": {
+      for (const [tabId, o] of [...OBSERVE]) if (o.purpose === "comparison") {
+        OBSERVE.delete(tabId);
+        await observe(tabId, false);
+        await banner(tabId, "");
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        let tables = [];
+        try {
+          const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: () => (window.__sgAgent ? window.__sgAgent.snapshot().tables : []) });
+          tables = (res && res.result) || [];
+        } catch (e) { /* page gone: the replay reads everything anyway */ }
+        return { ok: true, events: o.events.slice(0, 2000), start_url: o.startUrl, final_url: tab ? tab.url : "", tables: tables.slice(0, 10) };
+      }
+      return { ok: false, error: "No recording is running." };
+    }
     case "acknowledge": attention(false); return { ok: true };
     case "drives": return { ok: true, runs: [...DRIVES.keys()] };
     default: return { ok: false, error: "unknown request" };

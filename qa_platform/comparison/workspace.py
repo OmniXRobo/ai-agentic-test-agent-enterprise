@@ -386,6 +386,43 @@ class Workspace:
                        filters=len(out["filters"]), detail=bool(out.get("detail")))
         return {"saved": out, "steps_text": guided_nav.steps_text(out["steps"]), **values}
 
+    def guided_import(self, aid: str, recording: Any) -> dict[str, Any]:
+        """Import a navigation recorded with the SkyGuard browser extension (Edge or Chrome) instead of SkyGuard's own
+        browser: checked like an edited recording (nothing that changes data, no secrets) and kept to the
+        application's own site, then saved exactly as Stop & Save would."""
+        from urllib.parse import urlsplit
+
+        from skyguard_agent import navrec
+
+        from . import guided_nav
+
+        app = self._app(aid)
+        if not app.get("base_url"):
+            raise QAError("WS_URL_REQUIRED", "Set the application's address first.", status=409)
+        try:
+            out = navrec.sanitize_recording(recording)
+        except navrec.NavRecordingError as exc:
+            raise QAError(exc.code, exc.message, status=exc.status) from exc
+        own = urlsplit(app["base_url"])
+        urls = [st["url"] for st in out["steps"] if st["action"] == "goto"]
+        urls += [u for u in (out.get("login_url"), (out.get("detail") or {}).get("url_template")) if u]
+        for u in urls:
+            p = urlsplit(u.replace("{key}", "k"))
+            if (p.scheme, p.hostname, p.port) != (own.scheme, own.hostname, own.port):
+                raise QAError("WS_RECORDING_OTHER_SITE", f"The recording goes to {p.scheme}://{p.netloc}, which is not "
+                              f"this application ({own.scheme}://{own.netloc}). Record it on the application itself.",
+                              status=422)
+        out["source"] = "browser-extension"
+        out["imported_at"] = _guided_now()
+        values = {}
+        if out.get("login_url") and app.get("auth_method") in (None, "", "none"):
+            self.update_app(aid, {"auth_method": "manual", "url": app.get("base_url")})
+            values["auth_method"] = "manual"
+        self._set_config(aid, ws_guided=out)
+        self.svc.audit("workspace.guided.import", app["project_id"], aid, steps=len(out["steps"]),
+                       filters=len(out["filters"]), detail=bool(out.get("detail")))
+        return {"saved": out, "steps_text": guided_nav.steps_text(out["steps"]), **values}
+
     def guided_update(self, aid: str, data: dict[str, Any]) -> dict[str, Any]:
         """Edit Recorded Steps: the edited lines, new filter values, the detail page on or off."""
         from . import guided_nav

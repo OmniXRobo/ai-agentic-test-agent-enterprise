@@ -244,3 +244,85 @@ def parse_steps_text(text: str, previous: list[dict[str, Any]] | None = None) ->
     if len(out) > 200:
         raise NavRecordingError("WS_STEPS_TOO_MANY", "At most 200 steps.", status=422)
     return out
+
+
+FORMAT = "skyguard-navigation-recording/1"
+_STEP_KEYS = {"selector": 200, "label": 120, "text": 120, "filter": 120}
+
+
+def _clean_step(s: Any) -> dict[str, Any]:
+    if not isinstance(s, dict) or s.get("action") not in ("click", "fill", "select", "check", "goto"):
+        raise NavRecordingError("WS_RECORDING_INVALID", "The recording contains a step SkyGuard does not run.")
+    out: dict[str, Any] = {"action": s["action"]}
+    for k, n in _STEP_KEYS.items():
+        if isinstance(s.get(k), str) and s[k].strip():
+            out[k] = s[k][:n]
+    if s["action"] == "goto":
+        url = str(s.get("url") or "")
+        if not re.match(r"^https?://", url, re.I) or len(url) > 1000:
+            raise NavRecordingError("WS_RECORDING_INVALID", "A recorded address is not an http(s) address.")
+        out["url"] = url
+    elif s["action"] == "check":
+        out["value"] = bool(s.get("value"))
+    elif s["action"] in ("fill", "select"):
+        out["value"] = str(s.get("value") if s.get("value") is not None else "")[:500]
+    if s.get("apply_filters") is True:
+        out["apply_filters"] = True
+    if s["action"] != "goto" and not ({"selector", "label", "text"} & out.keys()):
+        raise NavRecordingError("WS_RECORDING_INVALID", "A recorded step has nothing to find on the page.")
+    if s["action"] == "click":
+        what = out.get("text") or out.get("label") or ""
+        if CHANGE.search(what) and not APPLY.search(what):
+            raise NavRecordingError("WS_STEP_CHANGES_DATA", f"'{what}' looks like it changes data in the application. "
+                                    "The comparison only reads.")
+    if out.get("value") == "[secret]":
+        raise NavRecordingError("WS_RECORDING_INVALID", "A recording never contains passwords or codes.")
+    return out
+
+
+def sanitize_recording(data: Any) -> dict[str, Any]:
+    """A recording made elsewhere (the browser extension) checked before SkyGuard keeps it: only the step actions the
+    extractor runs, nothing that changes data, a detail address with exactly one {key}, bounded sizes."""
+    if not isinstance(data, dict):
+        raise NavRecordingError("WS_RECORDING_INVALID", "This is not a SkyGuard navigation recording.")
+    if data.get("format") not in (None, FORMAT):
+        raise NavRecordingError("WS_RECORDING_INVALID", f"Unsupported recording format {str(data.get('format'))[:60]!r}.")
+    steps = data.get("steps")
+    if not isinstance(steps, list) or len(steps) > 200:
+        raise NavRecordingError("WS_RECORDING_INVALID", "The recording has no steps list (or more than 200 steps).")
+    out: dict[str, Any] = {"steps": [_clean_step(s) for s in steps]}
+    filters = []
+    for f in (data.get("filters") or [])[:50]:
+        if isinstance(f, dict) and isinstance(f.get("label"), str):
+            filters.append({"label": f["label"][:120], "control": str(f.get("control") or "fill")[:10],
+                            "value": f.get("value") if isinstance(f.get("value"), bool) else str(f.get("value") or "")[:500],
+                            "type": str(f.get("type") or "")[:20]})
+    out["filters"] = filters
+    out["pagination_seen"] = bool(data.get("pagination_seen"))
+    d = data.get("detail")
+    if isinstance(d, dict) and d.get("url_template"):
+        tpl = str(d["url_template"])
+        if not re.match(r"^https?://", tpl, re.I) or tpl.count("{key}") != 1 or len(tpl) > 1000:
+            raise NavRecordingError("WS_RECORDING_INVALID", "The detail address must be http(s) with one {key}.")
+        out["detail"] = {"url_template": tpl, "key_column": str(d.get("key_column") or "")[:120],
+                         "example_key": str(d.get("example_key") or "")[:200],
+                         "filters": [_clean_step(s) for s in (d.get("filters") or [])[:20]]}
+    else:
+        out["detail"] = None
+    for k in ("report_url_path", "login_url", "final_url", "recorded_at"):
+        out[k] = str(data.get(k) or "")[:1000] or None
+    out["dropped"] = [{"why": str(x.get("why") or "")[:200], "what": str(x.get("what") or "")[:200]}
+                      for x in (data.get("dropped") or [])[:100] if isinstance(x, dict)]
+    out["events"] = int(data.get("events") or 0) if str(data.get("events") or "0").isdigit() else 0
+    tables = []
+    for t in (data.get("tables") or [])[:10]:
+        if isinstance(t, dict) and isinstance(t.get("headers"), list):
+            rows = [r for r in (t.get("rows") or []) if isinstance(r, list)][:5]
+            tables.append({"headers": [str(h)[:120] for h in t["headers"][:60]],
+                           "rows": [[str(c)[:200] for c in r[:60]] for r in rows],
+                           "row_count": int(t.get("row_count") or len(rows)) if str(t.get("row_count") or "0").isdigit()
+                           else len(rows), "method": str(t.get("method") or "")[:40]})
+    out["tables"] = tables
+    if "[secret]" in str(out):
+        raise NavRecordingError("WS_RECORDING_INVALID", "A recording never contains passwords or codes.")
+    return out

@@ -16,7 +16,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
 
+from skyguard_agent import navrec
 from skyguard_agent.agent import OperationsAgent
+from skyguard_agent.autopilot import Autopilot, run_is_consequential
 from skyguard_agent.rules import validate_rule
 from skyguard_agent.secrets_guard import redact_text
 from skyguard_agent.util import AgentError
@@ -54,6 +56,8 @@ class Companion:
                                                                         paths.logs)
         self.agent = OperationsAgent(paths.data / "opsagent", vault=self.vault, llm=None,
                                      transcriber=self.whisper.transcribe, interface="extension")
+        # 1.2.0: the simple agent (connect, learn while browsing, plain-language and voice commands)
+        self.pilot = Autopilot(self.agent, auto_trust=bool(self.config.get("auto_trust", True)))
         self.started = time.time()
 
     def start_models(self) -> None:
@@ -432,8 +436,57 @@ def restore(x: Ctx) -> dict[str, Any]:
 def chat(x: Ctx) -> dict[str, Any]:
     b = validate(x.body, {"text": ("str", True, 4000), "conversation": ("str", False, 80), "app_id": ("str", False, 80),
                           "source": ("str", False, 10)})
-    return x.c.agent.chat(b["text"], conversation=b.get("conversation"), user=x.user, interface="extension",
-                          app_id=b.get("app_id"), source="voice" if b.get("source") == "voice" else "typed")
+    return x.c.pilot.command(b["text"], conversation=b.get("conversation"), user=x.user, interface="extension",
+                             app_id=b.get("app_id"), source="voice" if b.get("source") == "voice" else "typed")
+
+
+# 1.2.0: the simple agent
+
+
+@route("POST", "/v1/simple/connect", "write")
+def simple_connect(x: Ctx) -> dict[str, Any]:
+    b = validate(x.body, {"url": ("str", True, 500), "name": ("str", False, 80)})
+    return x.c.pilot.connect(b["url"], name=b.get("name"), by=x.user)
+
+
+@route("GET", "/v1/simple/knowledge/{app_id}")
+def simple_knowledge(x: Ctx, app_id: str) -> dict[str, Any]:
+    x.kb.application(app_id)
+    return x.c.pilot.knowledge(app_id)
+
+
+@route("POST", "/v1/simple/trust/{app_id}", "write")
+def simple_trust(x: Ctx, app_id: str) -> dict[str, Any]:
+    x.kb.application(app_id)
+    return {"trusted": x.c.pilot.trust(app_id, by=x.user)}
+
+
+@route("GET", "/v1/simple/tasks")
+def simple_tasks(x: Ctx) -> dict[str, Any]:
+    return {"tasks": x.c.pilot.tasks(x.query.get("app_id"), limit=min(200, _int(x.query.get("limit", "50"))))}
+
+
+# 1.2.0: record navigation for SkyGuard's Integration Comparison (read-only; converted here, imported in SkyGuard)
+
+
+@route("POST", "/v1/comparison/recording", "write")
+def comparison_recording(x: Ctx) -> dict[str, Any]:
+    b = validate(x.body, {"events": ("list", True, navrec.MAX_EVENTS), "start_url": ("str", False, 1000),
+                          "final_url": ("str", False, 1000), "tables": ("list", False, 10)})
+    events = [e for e in b["events"] if isinstance(e, dict)]
+    rec = navrec.events_to_recording(events, start_url=b.get("start_url") or "")
+    rec["final_url"] = b.get("final_url") or ""
+    tables = []
+    for t in b.get("tables") or []:
+        if isinstance(t, dict) and isinstance(t.get("headers"), list):
+            rows = [r for r in (t.get("rows") or []) if isinstance(r, list)]
+            tables.append({"headers": [str(h)[:120] for h in t["headers"][:60]],
+                           "rows": [[str(c)[:200] for c in r[:60]] for r in rows[:5]],
+                           "row_count": len(rows), "method": "extension"})
+    rec["tables"] = tables
+    x.c.agent.audit.record("comparison.recording", actor=x.user, interface="extension",
+                           details={"steps": len(rec["steps"]), "filters": len(rec["filters"])})
+    return {"recording": {"format": navrec.FORMAT, **rec}}
 
 
 @route("GET", "/v1/chat/{conversation}")
@@ -548,7 +601,8 @@ def create_run(x: Ctx) -> dict[str, Any]:
 
 @route("GET", "/v1/runs/{run_id}")
 def get_run(x: Ctx, run_id: str) -> dict[str, Any]:
-    return x.engine.view(run_id)
+    view = x.engine.view(run_id)
+    return {**view, "consequential": run_is_consequential(view)}
 
 
 @route("GET", "/v1/runs/{run_id}/events")
@@ -569,7 +623,10 @@ def run_next(x: Ctx, run_id: str) -> dict[str, Any]:
 
 @route("POST", "/v1/runs/{run_id}/confirm", "write")
 def confirm(x: Ctx, run_id: str) -> dict[str, Any]:
-    b = validate(x.body, {"preview_hash": ("str", True, 64)})
+    b = validate(x.body, {"preview_hash": ("str", True, 64), "acknowledge": ("bool", False)})
+    if run_is_consequential(x.engine.run(run_id)) and not b.get("acknowledge"):
+        raise AgentError("ACKNOWLEDGE_REQUIRED", "This operation changes records (for example approves, authorizes, "
+                         "cancels or deletes them). Tick the confirmation box after reading the preview.", 409)
     return x.engine.confirm(run_id, b["preview_hash"], by=x.user, interface="extension")
 
 
@@ -707,7 +764,7 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
                 c.limiter.check(extension_id, bucket)
                 length = int(self.headers.get("Content-Length") or 0)
                 limit = (AUDIO_LIMIT if url.path.endswith("/voice/transcribe") else
-                         OBSERVATION_LIMIT if url.path.endswith("/next") or url.path.endswith("/events") else JSON_LIMIT)
+                         OBSERVATION_LIMIT if url.path.endswith(("/next", "/events", "/comparison/recording")) else JSON_LIMIT)
                 if length > limit:
                     # read (and drop) a moderately oversized body before answering, then close: answering while the
                     # client is still sending makes Windows abort the connection (WinError 10053) instead of

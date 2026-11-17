@@ -152,6 +152,16 @@ def guided_update(aid: str, body: GuidedUpdateIn, rt: Runtime = Depends(runtime)
     return {"ok": True, **_ws(rt).guided_update(aid, body.model_dump(exclude_none=True))}
 
 
+class GuidedImportIn(BaseModel):
+    recording: dict[str, Any]
+
+
+@router.post("/applications/{aid}/guided/import")
+def guided_import(aid: str, body: GuidedImportIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """A navigation recorded with the SkyGuard browser extension (Record for Integration Comparison)."""
+    return {"ok": True, **_ws(rt).guided_import(aid, body.recording)}
+
+
 @router.post("/applications/{aid}/guided/replay")
 def guided_replay(aid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, **_ws(rt).guided_replay(aid)}

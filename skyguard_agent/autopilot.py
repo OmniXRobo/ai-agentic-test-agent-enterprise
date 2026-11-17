@@ -620,6 +620,13 @@ class Autopilot:
         return out
 
 
+def run_is_consequential(run: dict[str, Any]) -> bool:
+    """A run whose task changes the state of records (approve, authorize, cancel, delete ...): its confirmation needs
+    the person's explicit acknowledgement as well as the preview hash, in SkyGuard and in the extension alike."""
+    return any(CONSEQUENTIAL.search(f"{s.get('workflow')} {s.get('title')}") for s in (run.get("plan") or {}).get("stages")
+               or [])
+
+
 def _bucket(status: str) -> str:
     """Completed, failed, skipped, uncertain or pending: the four outcomes the person reads, plus not-yet-done."""
     s = status or ""
