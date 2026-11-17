@@ -226,3 +226,65 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$($manual.FullName)\APPLY_PATCH.ps1" -InstallDir "$env:INST" -NoStart
           if ($LASTEXITCODE -ne 0) { throw "APPLY_PATCH.ps1 failed" }
           if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.10.0"') { throw "version is not 23.10.0 after APPLY_PATCH.ps1" }
+  extension-install-windows:
+    # 1.2.0 installer fix: runs the companion installer (Install-SkyGuardAgent.ps1) for real under Windows
+    # PowerShell 5.1 on a brand-new per-user profile. First the script as released in 23.10.0 (expected to fail with
+    # "Could not find a part of the path", as reported on Windows 10 1909), then the fixed script: a new
+    # installation, the companion answering on 127.0.0.1, and a second run over the existing installation.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the extension package with the released 23.10.0 installer, then with the fixed one
+        shell: bash
+        run: |
+          cp browser-extension/scripts/Install-SkyGuardAgent.ps1 /tmp/fixed.ps1
+          git show 8c8dcc4:browser-extension/scripts/Install-SkyGuardAgent.ps1 > browser-extension/scripts/Install-SkyGuardAgent.ps1
+          python packaging/browser-extension/build_extension.py --out ext-old --cache ext-cache
+          cp /tmp/fixed.ps1 browser-extension/scripts/Install-SkyGuardAgent.ps1
+          git diff --exit-code browser-extension/scripts/Install-SkyGuardAgent.ps1
+          python packaging/browser-extension/build_extension.py --out ext-new --cache ext-cache
+      - name: The released installer fails on a new installation (reproduction)
+        shell: powershell
+        run: |
+          $env:LOCALAPPDATA = "C:\sg-old\Local"; New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+          $s = Get-ChildItem ext-old -Recurse -Filter Install-SkyGuardAgent.ps1 | Select-Object -First 1
+          $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $s.FullName -NoStart -NoAutostart 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          $out
+          "exit code $rc"
+          if ($rc -ne 1 -or $out -notmatch "Could not find a part of the path") { throw "the released installer did not fail as reported" }
+      - name: The fixed installer installs on a new profile (TEMP on another drive) and the companion answers
+        shell: powershell
+        run: |
+          $env:LOCALAPPDATA = "C:\sg-new\Local"; New-Item -ItemType Directory -Force -Path $env:LOCALAPPDATA | Out-Null
+          $env:TEMP = "D:\sg-temp"; $env:TMP = $env:TEMP; New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+          $s = Get-ChildItem ext-new -Recurse -Filter Install-SkyGuardAgent.ps1 | Select-Object -First 1
+          $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $s.FullName -NoAutostart 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          $out
+          "exit code $rc"
+          if ($rc -ne 0) { throw "installation failed" }
+          if ($out -notmatch "New installation") { throw "not a new installation" }
+          if ($out -notmatch "answers on http://127.0.0.1:8790") { throw "the companion did not answer" }
+          foreach ($f in @("runtime\python\python.exe", "runtime\llama\llama-server.exe", "app\companion_main.py", "extension\manifest.json")) {
+            if (-not (Test-Path "$env:LOCALAPPDATA\SkyGuardAgent\$f")) { throw "$f missing" }
+          }
+          if (Get-ChildItem "$env:LOCALAPPDATA\SkyGuardAgent\runtime" -Filter "staging-*") { throw "staging folder left behind" }
+      - name: The fixed installer runs again over the existing installation
+        shell: powershell
+        run: |
+          $env:LOCALAPPDATA = "C:\sg-new\Local"
+          $s = Get-ChildItem ext-new -Recurse -Filter Install-SkyGuardAgent.ps1 | Select-Object -First 1
+          $out = powershell.exe -NoProfile -ExecutionPolicy Bypass -File $s.FullName -NoAutostart 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          $out
+          "exit code $rc"
+          if ($rc -ne 0) { throw "re-installation failed" }
+          if ($out -notmatch "Previous program files saved") { throw "the earlier installation was not backed up" }
+          if ($out -notmatch "answers on http://127.0.0.1:8790") { throw "the companion did not answer" }
+          Get-Process pythonw, python -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "C:\sg-*" } | Stop-Process -Force
