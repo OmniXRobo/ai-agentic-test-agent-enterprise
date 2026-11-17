@@ -598,7 +598,69 @@ class ComparisonService:
             stats["reason"] = ("nothing readable was found on the page" + (
                 f"; {len(ex.blocked)} request(s) were blocked by the security policy" if ex.blocked else ""))
         status = "complete" if stats.get("complete", True) and found else "incomplete"
+        if spec.get("detail") and result["records"]:
+            stats["detail_dataset"] = self._capture_details(app, ex, spec, result, state)
         self._finish_dataset(ds, status, stats, aggregates, filters)
+
+    def _capture_details(self, app: dict[str, Any], ex: Any, spec: dict[str, Any], master: dict[str, Any],
+                         state: dict[str, Any]) -> str:
+        """23.10.0 master-detail: open the detail page of every master record through the recorded, parameterized
+        address (the record's own key in place of {key}) and read its table. Each detail row carries its parent key.
+        The dataset says how many parents were read and which were not; it is never called complete if one failed."""
+        from urllib.parse import quote
+
+        d = spec["detail"]
+        tpl, col = str(d.get("url_template") or ""), str(d.get("key_column") or "")
+        if "{key}" not in tpl or not col:
+            raise QAError("WS_DETAIL_INVALID", "The detail page address has no {key} parameter.", status=422)
+        keys: list[str] = []
+        for r in master["records"]:
+            v = (r["fields"].get(col) or {}).get("value")
+            if v not in (None, "") and str(v) not in keys:
+                keys.append(str(v))
+        limit = max(1, min(int(d.get("limit") or 200), 2000))
+        ds = self._new_dataset(app, "table", "dom")
+        row = self.db.query_one("SELECT config FROM cmp_applications WHERE id = ?", (app["id"],))
+        cfg = loads(row["config"]) if row else {}
+        cfg["ws_datasets"] = (cfg.get("ws_datasets") or []) + [ds]
+        self.db.execute("UPDATE cmp_applications SET config = ? WHERE id = ?", (dumps(cfg), app["id"]))
+        seq, read, failed = 0, 0, []
+        parent = f"Parent {col}"
+        for i, key in enumerate(keys[:limit]):
+            if ex.cancel():
+                failed.append("stopped by the tester")
+                break
+            state["progress"] = f"detail page {i + 1} of {min(len(keys), limit)} ({col} {key})"
+            url = tpl.replace("{key}", quote(key, safe=""))
+            try:
+                ex.goto(url)
+                ex.wait_for_data()
+                if d.get("filters"):
+                    ex.run_steps(d["filters"])
+                res = ex.table(dict(d.get("target") or {}), screenshots=False)
+            except QAError as exc:
+                failed.append(f"{key}: {exc.message}")
+                continue
+            except Exception as exc:  # noqa: BLE001 - one parent must not stop the others
+                failed.append(f"{key}: {str(exc).splitlines()[0][:160]}")
+                continue
+            recs = [{"page": r["page"], "key": key,
+                     "fields": {parent: {"value": key, "method": "navigation", "confidence": 1.0}, **r["fields"]}}
+                    for r in res["records"]]
+            self._store_records(ds, recs, seq)
+            seq += len(recs)
+            read += 1
+            if not res["stats"].get("complete", True):
+                failed.append(f"{key}: {res['stats'].get('reason')}")
+        skipped = max(0, len(keys) - limit)
+        complete = not failed and not skipped
+        reason = None if complete else "; ".join(
+            ([f"{skipped} parent record(s) over the limit of {limit} were not opened"] if skipped else []) + failed[:10])
+        self._finish_dataset(ds, "complete" if complete else "incomplete", {
+            "complete": complete, "reason": reason, "method": "dom", "records": seq, "kind": "detail",
+            "parents": len(keys), "parents_read": read, "parent_key": col, "parent_dataset_key": parent,
+            "url_template": tpl, "failures": failed[:50], "headers": [parent]})
+        return ds
 
     def _extract_desktop(self, app: dict[str, Any], ds: str, spec: dict[str, Any], state: dict[str, Any]) -> None:
         from . import desktop

@@ -317,13 +317,117 @@ class Workspace:
             raise QAError("WS_URL_REQUIRED", "Enter the application's page address first.", status=422)
         steps = data.get("steps") or []
         # 23.9.0: one browser session reads the whole page (table, other tables, KPI cards, charts, OCR fallback)
+        rec = app["config"].get("ws_guided") or {}
+        if not steps and rec.get("steps") and not data.get("ignore_recording"):
+            steps = rec["steps"]  # 23.10.0: the recorded navigation, unless steps are given
+            if rec.get("detail") and not rec.get("detail_disabled") and "detail" not in data:
+                data = {**data, "detail": rec["detail"]}
         spec = {"kind": "page", "steps": steps, "screenshots": True,
                 "screen_name": data.get("page_name") or app["name"], "target": data.get("target") or {}}
         if data.get("filters_spec"):
             spec.update(data["filters_spec"])
+        if data.get("detail"):
+            spec["detail"] = data["detail"]
         jobs = [self.svc.start_extraction(aid, spec)]
         self._set_config(aid, ws_datasets=(app["config"].get("ws_datasets") or []) + [j["dataset_id"] for j in jobs])
         return {"jobs": jobs}
+
+    # ---- 23.10.0 guided recording of the navigation (Connect to Application) --------------------------------
+    def _recorders(self) -> dict[str, Any]:
+        if not hasattr(self, "_guided"):
+            self._guided: dict[str, Any] = {}
+        return self._guided
+
+    def guided_start(self, aid: str) -> dict[str, Any]:
+        """Open the application in a visible, maximized browser and record what the tester does there."""
+        from . import guided_nav
+
+        self._app(aid)
+        s = self._session(aid, visible=True)
+        rec = guided_nav.Recorder(aid)
+        self._recorders()[aid] = rec
+        if s.state == "paused":  # sign-in first: the recorder starts now and drops the sign-in page's steps
+            pass
+        info = s.call(rec.install, timeout=120)
+        self.svc.audit("workspace.guided.start", self._app(aid)["project_id"], aid)
+        return {"recording": True, "session": s.status(), **info}
+
+    def guided_status(self, aid: str) -> dict[str, Any]:
+        app = self._app(aid)
+        rec = self._recorders().get(aid)
+        s = self._sessions().get(aid)
+        live = None
+        if rec and rec.active and s and s.state not in ("closed", "failed"):
+            try:
+                live = s.call(rec.pump, timeout=30)
+            except QAError:
+                live = None
+        saved = app["config"].get("ws_guided")
+        return {"recording": bool(rec and rec.active), "live": live, "session": s.status() if s else {"state": "none"},
+                "saved": saved, "steps_text": _steps_text(saved)}
+
+    def guided_stop(self, aid: str) -> dict[str, Any]:
+        from . import guided_nav
+
+        app = self._app(aid)
+        rec = self._recorders().get(aid)
+        s = self._sessions().get(aid)
+        if not rec or not rec.active or not s:
+            raise QAError("WS_NOT_RECORDING", "No recording is running for this application.", status=409)
+        out = s.call(rec.finish, timeout=120)
+        self._recorders().pop(aid, None)
+        values = {}
+        if out.get("login_url") and app.get("auth_method") in (None, "", "none"):
+            # the tester signed in by hand: at replay they are asked to sign in again (or save the login)
+            self.update_app(aid, {"auth_method": "manual", "url": app.get("base_url")})
+            values["auth_method"] = "manual"
+        self._set_config(aid, ws_guided=out)
+        self.svc.audit("workspace.guided.save", app["project_id"], aid, steps=len(out["steps"]),
+                       filters=len(out["filters"]), detail=bool(out.get("detail")))
+        return {"saved": out, "steps_text": guided_nav.steps_text(out["steps"]), **values}
+
+    def guided_update(self, aid: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Edit Recorded Steps: the edited lines, new filter values, the detail page on or off."""
+        from . import guided_nav
+
+        app = self._app(aid)
+        rec = dict(app["config"].get("ws_guided") or {})
+        if not rec:
+            raise QAError("WS_NO_RECORDING", "Record the navigation first (Start Guided Recording).", status=409)
+        if data.get("steps_text") is not None:
+            rec["steps"] = guided_nav.parse_steps_text(data["steps_text"], rec.get("steps"))
+        for label, value in (data.get("filter_values") or {}).items():
+            for st in rec.get("steps") or []:
+                if st.get("filter") == label:
+                    st["value"] = value
+            for f in rec.get("filters") or []:
+                if f["label"] == label:
+                    f["value"] = value
+        if data.get("detail_enabled") is False:
+            rec["detail_disabled"] = True
+        elif data.get("detail_enabled") is True:
+            rec.pop("detail_disabled", None)
+        if data.get("detail_limit") and rec.get("detail"):
+            rec["detail"]["limit"] = max(1, min(int(data["detail_limit"]), 2000))
+        rec["edited_at"] = _guided_now()
+        self._set_config(aid, ws_guided=rec)
+        return {"saved": rec, "steps_text": guided_nav.steps_text(rec.get("steps") or [])}
+
+    def guided_replay(self, aid: str) -> dict[str, Any]:
+        """Replay & Verify: replay the recorded navigation in a new session and capture the data, every page, and
+        the detail pages when one was recorded."""
+        app = self._app(aid)
+        rec = app["config"].get("ws_guided")
+        if not rec:
+            raise QAError("WS_NO_RECORDING", "Record the navigation first (Start Guided Recording).", status=409)
+        s = self._sessions().get(aid)
+        if s and s.state not in ("closed", "failed"):
+            s.close()  # the replay uses its own browser, exactly as a comparison run will
+        data: dict[str, Any] = {"steps": [{k: v for k, v in st.items() if k != "apply_filters"}
+                                          for st in rec.get("steps") or []]}
+        if rec.get("detail") and not rec.get("detail_disabled"):
+            data["detail"] = rec["detail"]
+        return self.capture(aid, data)
 
     # ---- 23.9.0 filters: discover, configure, apply & fetch, sync, filter sets -------------------------------
     def _sessions(self) -> dict[str, Any]:
@@ -2571,3 +2675,15 @@ overall {badge(e['result'])} · mapping version {_e((cfg_row or {}).get('version
 <h2>8. Tester decisions</h2>{f'<table><tr><th>When</th><th>Tester</th><th>Result</th><th>Decision</th><th>Note</th></tr>{dec_rows}</table>' if dec_rows else '<p>None.</p>'}
 <p style="color:#6b7280;margin-top:24px">Results were decided by deterministic comparison and calculation rules.
 AI only suggested mappings (approved by a tester) and wrote explanations.</p></body></html>"""
+
+
+def _steps_text(rec: dict[str, Any] | None) -> str:
+    from . import guided_nav
+
+    return guided_nav.steps_text((rec or {}).get("steps") or [])
+
+
+def _guided_now() -> str:
+    from . import guided_nav
+
+    return guided_nav._now()

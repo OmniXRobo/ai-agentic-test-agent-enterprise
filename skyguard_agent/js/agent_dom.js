@@ -126,7 +126,13 @@
     const table = el.closest("table");
     if (!row || !table) return null;
     const cells = [...row.children].map((c) => clean(c.innerText, 40));
-    return { row: cells.filter(Boolean).slice(0, 6).join(" | ") };
+    // 23.10.0: every cell in place, the column headers and the clicked cell's column (master-detail recording)
+    const head = table.querySelector("thead tr") || [...table.querySelectorAll("tr")].find((r) => r.querySelector("th"));
+    const headers = head && head !== row ? [...head.children].map((c) => clean(c.innerText, 40)) : [];
+    const cell = el.closest("td,th");
+    const idx = cell ? [...row.children].indexOf(cell) : -1;
+    return { row: cells.filter(Boolean).slice(0, 6).join(" | "), cells: cells.slice(0, 30), headers: headers.slice(0, 30),
+      column: idx >= 0 && headers[idx] ? headers[idx] : "" };
   }
 
   function ancestors(el) {
