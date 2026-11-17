@@ -44,7 +44,9 @@ The details are in ROOT_CAUSE_ANALYSIS.md.
 
 * Full suite on Linux: **975 passed, 0 failed**, 96 skipped; the page regression test: 1 passed.
 * Tests A to H: 41 passed. Extension 1.3.0: 5 passed. AI Agent page in a browser: 5 passed. Installer: 24 passed.
-* See TEST_REPORT.md for how each was run, and the one failure found on the way (an intended behaviour change).
+* Windows CI (GitHub Actions, run 44103527898): all 14 jobs passed, including Setup.exe over real 23.3.35, 23.10.0
+  and 23.11.0 installations and the full suite on Windows and Ubuntu with Python 3.11, 3.12 and 3.13.
+* See TEST_REPORT.md for how each was run, and the failures found on the way and how they were fixed.
 
 ## Not verified
 

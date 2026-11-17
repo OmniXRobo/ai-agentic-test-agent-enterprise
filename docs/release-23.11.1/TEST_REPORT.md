@@ -124,7 +124,16 @@ Wine walkthrough (section 7) was repeated with the rebuilt Setup.exe.
   each secret as a whole token (not inside a longer run of letters and digits), which still finds a code stored as a
   value. The 41 tests passed again.
 
-The CI run of the fixed commit is listed on the pull request. Its result is reported in the release message.
+**Run 44103527898, commit `dcc7ed1`: all 14 jobs passed.**
+
+| Job | Result |
+|---|---|
+| Full suite, Windows, Python 3.11 / 3.12 / 3.13 | passed |
+| Full suite, Ubuntu, Python 3.11 / 3.12 / 3.13 | passed |
+| `setup-exe-windows` on real **23.3.35**, **23.10.0** and **23.11.0** installations | passed. Setup.exe refuses an unsupported version and changes nothing; unattended upgrade and verify; rollback to the baseline; upgrade again with `APPLY_PATCH.ps1` under Windows PowerShell 5.1 |
+| `extension-install-windows`, `offline-package`, `offline-package-download`, `setup-exe-build`, `security-audit` | passed |
+
+The commit after it changes only this report. Its result is reported in the release message.
 The Windows jobs run the full suite on Windows (Python 3.11 to 3.13), and Setup.exe unattended over real 23.3.35,
 23.10.0 and 23.11.0 installations: refusal of an unsupported version, upgrade and verify, rollback, and the upgrade
 again with `APPLY_PATCH.ps1` under Windows PowerShell 5.1.
