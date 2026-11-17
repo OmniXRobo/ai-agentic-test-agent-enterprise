@@ -654,11 +654,15 @@ function showDefect(dft) {
     <tr><th>Steps to reproduce</th><td><ol>${(d.steps || []).map((s) => `<li>${esc(s)}</li>`).join("")}</ol></td></tr>
     <tr><th>Explanation</th><td>${esc(d.explanation || "")}</td></tr>
     <tr><th>Screenshots</th><td>${esc((d.screenshots || []).join(", ") || "none")}</td></tr></tbody></table>
-    <div class="row"><button class="btn primary" id="wsTfs">Send to TFS</button><span class="muted">It stays listed under "Defects and tester decisions" below the results.</span></div>`, { wide: true });
+    <div class="row"><button class="btn primary" id="wsTfs">Send to TFS</button><button class="btn" id="wsReview">Open in Defect Review</button><span class="muted">It stays listed under "Defects and tester decisions" below the results. Sending approves it in your name.</span></div>`, { wide: true });
+  el.querySelector("#wsReview").addEventListener("click", async () => {
+    try { const { draft } = await api(`/api/comparison/defects/${dft.id}/review`, { method: "POST", body: {} }); location.hash = `#/defect-review?id=${draft.id}`; }
+    catch (err) { toast(err.message, "error"); }
+  });
   el.querySelector("#wsTfs").addEventListener("click", async (e) => {
     e.target.disabled = true;
     const send = (force) => api(`/api/comparison/defects/${dft.id}/tfs`, { method: "POST", body: { force } });
-    try { const r = await send(false); toast(r.defect.tfs_id ? `Created TFS #${r.defect.tfs_id}` : "TFS is not reachable: queued", "success"); }
+    try { const r = await send(false); toast(r.defect.tfs_id ? `Created TFS #${r.defect.tfs_id}` : `TFS is not reachable: kept for retry${r.defect.tfs_sync?.reason ? ` (${r.defect.tfs_sync.reason})` : ""}`, r.defect.tfs_id ? "success" : "info"); }
     catch (err) {
       if (err.code === "CMP_POSSIBLE_DUPLICATE" && confirm(`${err.message}\n\nCreate it anyway?`)) { try { await send(true); } catch (e2) { toast(e2.message, "error"); } }
       else toast(err.message, "error");
