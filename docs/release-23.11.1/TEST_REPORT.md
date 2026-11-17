@@ -118,8 +118,9 @@ Wine walkthrough (section 7) was repeated with the rebuilt Setup.exe.
   but the job's own matrix label said 23.11.1, so its rollback check compared with the wrong version. The label was
   corrected (commit `e20af2e`).
 * `test_c_learning_never_stored_secrets` on Ubuntu with Python 3.12: the driver's four-digit test code "7788" was
-  found inside the agent database's WAL file. The bytes around it are a hexadecimal SHA-256 written by the agent, so
-  the digits occurred by chance inside a hash; the same test found nothing in any local run. The test now looks for
+  found inside the agent database's WAL file. The CI log shows that file's content as binary pages and hexadecimal hashes
+  that the agent writes, and the same test found nothing in any local run, so the digits most likely occurred by
+  chance inside a hash (the CI log does not show the exact bytes around the match). The test now looks for
   each secret as a whole token (not inside a longer run of letters and digits), which still finds a code stored as a
   value. The 41 tests passed again.
 
