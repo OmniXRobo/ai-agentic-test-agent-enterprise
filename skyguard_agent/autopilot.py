@@ -679,7 +679,8 @@ class Autopilot:
                 continue
             vm = re.search(rf"\b{re.escape(core)}\s*(?:\([^)]*\)\s*)?(?:is|=|of|:)?\s*(-?\d+(?:[.,]\d+)?)\b", norm(t))
             if vm:
-                extra.append(f"{re.sub(r'\s*\([^)]*\)', '', label).strip()}: {vm.group(1)}")
+                bare = re.sub(r"\s*\([^)]*\)", "", label).strip()  # Python 3.11: no backslash inside an f-string
+                extra.append(f"{bare}: {vm.group(1)}")
         if d.get("operation") and _is_row_action(wf):
             return self._prepare_row_action(app, wf, t, extra, state, consequential)
         rewritten = t + ("; " + "; ".join(extra) if extra else "")
