@@ -32,6 +32,7 @@ from ..errors import QAError
 from ..events import names
 from ..storage.db import Database, dumps, loads
 from .browser import context_options, js, launch, start_playwright
+from .browser import new_context as bm_new_context
 
 STATIC = re.compile(r"\.(png|jpe?g|gif|svg|ico|css|js|woff2?|ttf|map|pdf|zip)(\?|$)", re.I)
 LOGOUT = re.compile(r"log[\s_-]?out|sign[\s_-]?out|log[\s_-]?off|sign[\s_-]?off", re.I)
@@ -458,7 +459,7 @@ class _Explorer:
             row, password = self._credential()  # final patch: Windows (NTLM) / Basic sign-in
             if row and password and (row.get("auth_method") or "form") in ("windows", "basic"):
                 opts["http_credentials"] = {"username": row["username"], "password": password}
-            context = b.new_context(**opts)
+            context = bm_new_context(b, self.headless, **opts)  # 23.9.0: one window policy
             context.add_init_script(js("fingerprint"))
             context.add_init_script(js("discovery"))
             if self.visual:

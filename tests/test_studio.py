@@ -300,8 +300,14 @@ def test_edit_data_credentials_play_and_evidence(studio_env):
     analysis = failed["failure_analysis"]
     assert analysis["classification"] == "Authentication Failure", analysis
     assert any("Invalid credentials" in o for o in analysis["observed"]) and not analysis["likely_application_problem"]
-    time.sleep(0.5)
-    assert not rt.db.query("SELECT id FROM defect_drafts WHERE source_run_id = ?", (failed["run_id"],))
+    # 23.11.0: every AI-Driven failure becomes a draft for review, classified: here test data, not the application
+    assert rt.defects.wait_for_automatic(failed["run_id"], 10)
+    rows_ = rt.db.query("SELECT id FROM defect_drafts WHERE source_run_id = ?", (failed["run_id"],))
+    assert len(rows_) == 1
+    d = rt.defects.get(rows_[0]["id"])
+    assert d["source"] == "framework" and d["status"] == "needs_review" and d["classification"] == "test_data"
+    assert d["analysis"]["recommendation"] == "test_data" and d["tfs_id"] is None
+    assert "nope" not in json.dumps(d)
 
 
 @needs_browser

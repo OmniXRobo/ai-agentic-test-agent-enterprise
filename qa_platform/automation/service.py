@@ -115,6 +115,10 @@ class AutomationService:
         self.batch_stops: dict[str, threading.Event] = {}
         self.last_conversions: dict[str, list[dict[str, Any]]] = {}  # 23.3.17: dates made dynamic by the last recording
         self.last_summary: dict[str, list[str]] = {}  # 23.3.20: where the last recording put its steps
+        # 23.11.0: editable Python tests; once edited, the saved Python is what runs and is downloaded
+        from .python_scripts import PythonScripts
+
+        self.python = PythonScripts(self, db, paths, settings, self.runner.playback)
 
     def _background(self, name: str, fn: Any) -> None:
         def wrapper() -> None:
@@ -131,6 +135,8 @@ class AutomationService:
                    background: bool = True, browser: str | None = None, data_label: str | None = None,
                    run_id: str | None = None, interactive: bool = False) -> str | dict[str, Any]:
         self.scripts.get(script_id)  # validate before starting
+        if self.python.is_edited(script_id):  # 23.11.0: the saved (edited) Python test is the one that runs
+            return self.python.run(script_id, headless=headless, background=background, run_id=run_id)
         run_id = run_id or new_run_id("RUN")
 
         def work() -> dict[str, Any]:
@@ -154,6 +160,14 @@ class AutomationService:
         if bad:
             raise QAError("TEST_DATA_ROW_INVALID", f"Row {bad[0]} is not in the data ({len(table.rows)} rows).", status=422)
         batch_id = new_run_id("DDR")
+        if self.python.is_edited(script_id):
+            # 23.11.0: the saved (edited) Python runs every data row itself (one pytest test per row)
+            run_id = self.python.run(script_id, headless=headless)
+            batch = {"batch_id": batch_id, "started_at": now_iso(), "source": table.source,
+                     "rows": [{"row": None, "run_id": run_id, "label": f"all {len(table.rows)} rows (edited Python)"}],
+                     "note": "The edited Python test runs every row as its own test; the row choice does not apply."}
+            self.scripts.add_data_run(script_id, batch)
+            return batch
         items = [{"row": r, "run_id": new_run_id("RUN"), "label": f"row {r + 1} of {len(table.rows)}"} for r in chosen]
         stop = threading.Event()
         self.batch_stops[batch_id] = stop

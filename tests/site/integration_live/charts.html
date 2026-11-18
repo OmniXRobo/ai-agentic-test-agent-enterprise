@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Charts</title><script src="data.js"></script>
+<style>body{font-family:Arial;margin:20px}</style></head>
+<body>
+<figure><figcaption>Sales by City (d3)</figcaption><svg id="d3" width="420" height="200"></svg></figure>
+<figure><svg id="aria" width="420" height="200" aria-label="Invoices by Status" role="img"></svg></figure>
+<h3>Amount by City (canvas)</h3><canvas id="cv" width="700" height="360"></canvas>
+<script>
+const byCity = {}; for (const r of INVOICES) byCity[r.city] = (byCity[r.city] || 0) + Number(r.amount);
+const cities = Object.keys(byCity);
+// d3 binds each datum to its element as __data__
+const svg = document.getElementById("d3"), NS = "http://www.w3.org/2000/svg";
+cities.forEach((c, i) => { const rect = document.createElementNS(NS, "rect"); const h = byCity[c] / 60;
+  rect.setAttribute("x", 20 + i * 90); rect.setAttribute("y", 190 - h); rect.setAttribute("width", 60); rect.setAttribute("height", h); rect.setAttribute("fill", "#2563eb");
+  rect.__data__ = {city: c, sales: byCity[c]}; svg.appendChild(rect); });
+const counts = {}; for (const r of INVOICES) counts[r.status] = (counts[r.status] || 0) + 1;
+const svg2 = document.getElementById("aria");
+Object.entries(counts).forEach(([s, n], i) => { const rect = document.createElementNS(NS, "rect");
+  rect.setAttribute("x", 20 + i * 90); rect.setAttribute("y", 190 - n * 15); rect.setAttribute("width", 60); rect.setAttribute("height", n * 15);
+  rect.setAttribute("aria-label", `${s}: ${n}`); svg2.appendChild(rect); });
+// a canvas chart without any chart library: only the pixels show the values
+const ctx = document.getElementById("cv").getContext("2d");
+ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, 700, 360); ctx.font = "16px Arial"; ctx.textAlign = "center";
+cities.forEach((c, i) => { const v = byCity[c], h = v / 55, x = 60 + i * 150;
+  ctx.fillStyle = "#16a34a"; ctx.fillRect(x, 320 - h, 80, h);
+  ctx.fillStyle = "#111"; ctx.fillText(c, x + 40, 344); ctx.fillText(fmt(v), x + 40, 312 - h); });
+ctx.font = "bold 20px Arial"; ctx.textAlign = "left"; ctx.fillText("Amount by City", 20, 28);
+</script></body></html>

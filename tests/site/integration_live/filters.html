@@ -1,0 +1,36 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Invoices with filters</title><script src="data.js"></script><script src="filters_common.js"></script>
+<style>body{font-family:Arial;margin:20px}.filters{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0}td,th{border:1px solid #ccc;padding:3px 6px}
+[role=listbox]{border:1px solid #888;background:#fff;position:absolute}[role=option]{padding:3px 8px;cursor:pointer}</style></head>
+<body>
+<nav><label>Language <select id="lang"><option>English</option><option>العربية</option></select></label> <a href="#">Home</a></nav>
+<h2>Invoices</h2>
+<div class="filters" role="search" aria-label="Invoice filters">
+  <label>Region <select id="region"><option value="">All</option><option>North</option><option>South</option></select></label>
+  <label>City <select id="city"><option value="">All</option></select></label>
+  <span id="st-lab">Status</span>
+  <div id="status" role="combobox" aria-haspopup="listbox" aria-labelledby="st-lab" tabindex="0" style="border:1px solid #888;padding:2px 10px;min-width:90px">All</div>
+  <div id="st-list" role="listbox" hidden><div role="option">All</div><div role="option">Paid</div><div role="option">Pending</div><div role="option">Cancelled</div></div>
+  <label>Date From <input type="date" id="from"></label>
+  <label>Date To <input type="date" id="to"></label>
+  <label>Search <input type="search" id="q" placeholder="Invoice or customer"></label>
+  <button id="apply">Apply Filters</button> <button id="reset">Reset</button>
+</div>
+<label>Show <select id="size"><option>10</option><option>25</option><option>50</option></select> entries</label>
+<div id="host"></div><div id="pager"></div>
+<script>
+const city = document.getElementById("city"), region = document.getElementById("region"), st = document.getElementById("status"), list = document.getElementById("st-list");
+function cities() { const r = region.value; city.innerHTML = '<option value="">All</option>' + Object.keys(REGION).filter(c => !r || REGION[c] === r).map(c => `<option>${c}</option>`).join(""); }
+region.onchange = cities; cities();
+st.onclick = () => { list.hidden = !list.hidden; };
+list.querySelectorAll("[role=option]").forEach(o => o.onclick = () => { st.textContent = o.textContent; list.hidden = true; });
+let rows = INVOICES.slice();
+function apply() {
+  const r = region.value, c = city.value, s = st.textContent.trim(), f = document.getElementById("from").value, t = document.getElementById("to").value, q = document.getElementById("q").value.toLowerCase();
+  rows = INVOICES.filter(x => (!r || REGION[x.city] === r) && (!c || x.city === c) && (s === "All" || x.status === s) && (!f || x.date >= f) && (!t || x.date <= t) && (!q || (x.id + " " + x.customer).toLowerCase().includes(q)));
+  show(0);
+}
+function show(p) { renderTable(rows, p, 10, document.getElementById("host"), document.getElementById("pager"), show); }
+document.getElementById("apply").onclick = () => setTimeout(apply, 300);
+document.getElementById("reset").onclick = () => { region.value = ""; cities(); st.textContent = "All"; ["from", "to", "q"].forEach(i => document.getElementById(i).value = ""); apply(); };
+show(0);
+</script></body></html>

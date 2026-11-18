@@ -170,3 +170,74 @@ def test_pair_sign_in_credential_page_and_operation(world):
     dump = json.dumps([agent.engine.events(run["id"]), agent.audit.list(2000)])
     assert transport_site.USERS["operator"][0] not in dump
     assert not errors, errors
+
+
+def test_record_for_integration_comparison_in_the_extension(world, client):
+    """1.2.0: the person records the way to a report in their own browser tab; the side panel saves the converted
+    recording as a file, and SkyGuard's Integration Comparison imports it."""
+    from tests import report_site
+
+    w = world
+    server, rsite = report_site.start()
+    rsite = rsite.replace("127.0.0.1", "localhost")
+    try:
+        options_sign_in(w)
+        app_page = w["ctx"].new_page()
+        app_page.goto(rsite + "/login")
+        panel = w["ctx"].new_page()
+        errors = []
+        panel.on("pageerror", lambda e: errors.append(str(e)))
+        panel.goto(w["base"] + "/sidepanel.html")
+        panel.wait_for_selector("#say")
+        tab_id = w["sw"].evaluate("u => chrome.tabs.query({}).then(ts => ts.find(t => t.url.startsWith(u)).id)", rsite)
+        # in the product the side panel records the active tab; here the panel is a tab itself, so name the tab
+        assert panel.evaluate("id => chrome.runtime.sendMessage({ type: 'cmp-record-start', tabId: id })",
+                              tab_id)["ok"]
+        panel.click("#tabs button[data-tab=learn]")
+        panel.wait_for_selector("#cmpStop")
+        p = app_page
+        p.wait_for_timeout(500)
+        p.fill("input[name=user]", report_site.USER)
+        p.fill("input[name=pw]", report_site.PASSWORD)
+        p.click("button:has-text('Sign in')")
+        p.wait_for_url(rsite + "/")
+        p.wait_for_timeout(500)
+        p.click("ul >> text=Reports")
+        p.wait_for_url("**/reports")
+        p.wait_for_timeout(500)
+        p.click("text=Orders Summary")
+        p.wait_for_url("**/reports/orders")
+        p.wait_for_timeout(500)
+        p.select_option("#rg", label="North")
+        p.click("text=Search")
+        p.wait_for_url("**region=North**")
+        p.wait_for_timeout(500)
+        p.click(".pagination >> text=2")
+        p.wait_for_url("**page=2")
+        p.wait_for_timeout(500)
+        p.click("text=SO-1020")
+        p.wait_for_url("**/orders/SO-1020")
+        p.wait_for_timeout(800)
+        panel.bring_to_front()
+        with panel.expect_download() as dl:
+            panel.click("#cmpStop")
+        path = dl.value.path()
+        rec = json.loads(Path(path).read_text())
+        assert dl.value.suggested_filename == "skyguard-navigation-localhost.json"
+        assert [s.get("text") or s.get("label") for s in rec["steps"]] == ["Reports", "Orders Summary", "Region",
+                                                                            "Search"], rec["steps"]
+        assert rec["filters"][0]["label"] == "Region" and rec["filters"][0]["value"] == "North"
+        assert rec["pagination_seen"] and rec["detail"]["url_template"] == rsite + "/orders/{key}"
+        assert report_site.PASSWORD not in json.dumps(rec) and report_site.USER not in json.dumps(rec["steps"])
+        wait_text(panel, "#main", "Recording saved")
+        assert not errors, errors
+        W = "/api/comparison/workspace"
+        pid = client.post(W, json={"name": "Orders", "applications": ["Sales reports", "ERP"]}).json()
+        aid = pid["applications"][0]["id"]
+        client.patch(f"{W}/applications/{aid}", json={"url": rsite + "/", "auth_method": "none"})
+        r = client.post(f"{W}/applications/{aid}/guided/import", json={"recording": rec})
+        assert r.status_code == 200, r.text
+        assert r.json()["steps_text"] == "click Reports\nclick Orders Summary\nselect Region = North\nclick Search"
+        assert report_site.DELETES == []
+    finally:
+        server.shutdown()

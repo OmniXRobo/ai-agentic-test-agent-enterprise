@@ -43,11 +43,28 @@ export async function mount(view) {
           ${[["chromium", "Chromium (included)"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"]]
             .map(([v, l]) => `<option value="${v}" ${(settings.playback.browser || "chromium") === v ? "selected" : ""}>${l}</option>`).join("")}
         </select></label>
+      <label>Browser window <select name="window_mode">
+          ${[["maximized", "Maximized (every visible window, popups and new tabs)"], ["fixed", "Fixed size (below)"], ["default", "As the browser opens it"]]
+            .map(([v, l]) => `<option value="${v}" ${(settings.playback.window_mode || "maximized") === v ? "selected" : ""}>${l}</option>`).join("")}
+        </select></label>
+      <label>Fixed size <input type="number" name="viewport_width" min="320" max="7680" value="${settings.playback.viewport_width ?? 1366}" style="width:90px"> ×
+        <input type="number" name="viewport_height" min="240" max="4320" value="${settings.playback.viewport_height ?? 768}" style="width:90px"></label>
       <label>Element timeout (seconds) <input type="number" name="timeout_seconds" min="1" max="120" step="1" value="${settings.playback.timeout_seconds ?? 10}" style="width:110px"></label>
       <label><span><input type="checkbox" name="step_screenshots" ${settings.playback.step_screenshots !== false ? "checked" : ""}> Screenshot after every step (failures are always captured)</span></label>
       <label><span><input type="checkbox" name="video" ${settings.playback.video ? "checked" : ""}> Record a video of each test</span></label>
       <label><span><input type="checkbox" name="trace" ${settings.playback.trace ? "checked" : ""}> Save a Playwright trace of each test</span></label>
       <p class="muted">Every test plays and records in this browser: Play, Run selected, generated Python Playwright scripts and new recordings. Schedules can pick their own browsers. Edge and Chrome must be installed on this PC. The voice agent can change these too ("change the browser to Edge", "set timeout to 30 seconds").</p>
+      <h3>Integration Comparison</h3>
+      <label>OCR engine for screenshots <select name="ocr_engine">
+          ${[["auto", "Automatic (bundled offline OCR, then Windows OCR, then Tesseract)"], ["rapidocr", "Bundled offline OCR"], ["windows", "Windows OCR"], ["tesseract", "Tesseract"]]
+            .map(([v, l]) => `<option value="${v}" ${((settings.comparison || {}).ocr_engine || "auto") === v ? "selected" : ""}>${l}</option>`).join("")}
+        </select></label>
+      <label>OCR runtime folder (optional) <input name="ocr_runtime_path" value="${esc((settings.comparison || {}).ocr_runtime_path || "")}" placeholder="runtime\\ocr\\site-packages is used by default"></label>
+      <label>Tesseract (optional) <input name="tesseract_path" value="${esc((settings.comparison || {}).tesseract_path || "")}" placeholder="C:\\Tools\\Tesseract\\tesseract.exe"></label>
+      <label>Wait for live page data (ms) <input type="number" name="data_timeout_ms" min="1000" max="120000" step="1000" value="${(settings.comparison || {}).data_timeout_ms ?? 15000}" style="width:110px"></label>
+      <label>Business vocabulary (one concept per line: <code>location: depot, hub</code>)
+        <textarea name="concept_words" rows="3">${esc(Object.entries((settings.comparison || {}).concept_words || {}).map(([k, v]) => `${k}: ${v.join(", ")}`).join("\n"))}</textarea></label>
+      <p class="muted">Concepts: id, location, date, status, quantity, money, percent, customer, product, employee, department. Extra words help the mapping recognise equivalent field names; values and units are still checked.</p>
       <p class="muted">Times always follow the Windows system clock. There is no separate time zone setting.</p>
       <div class="row"><button class="btn primary" type="submit">Save</button></div>
     </form>`;
@@ -68,6 +85,16 @@ export async function mount(view) {
             click_sound: f.get("click_sound") === "on", click_volume: Number(f.get("click_volume")),
             browser: f.get("browser"), timeout_seconds: Math.max(1, Math.min(120, Number(f.get("timeout_seconds")) || 10)),
             step_screenshots: f.get("step_screenshots") === "on", video: f.get("video") === "on", trace: f.get("trace") === "on",
+            window_mode: f.get("window_mode") || "maximized",
+            viewport_width: Math.max(320, Math.min(7680, Math.round(Number(f.get("viewport_width")) || 1366))),
+            viewport_height: Math.max(240, Math.min(4320, Math.round(Number(f.get("viewport_height")) || 768))),
+          },
+          comparison: {
+            ocr_engine: f.get("ocr_engine") || "auto", ocr_runtime_path: String(f.get("ocr_runtime_path") || "").trim(),
+            tesseract_path: String(f.get("tesseract_path") || "").trim(),
+            data_timeout_ms: Math.max(1000, Math.min(120000, Math.round(Number(f.get("data_timeout_ms")) || 15000))),
+            concept_words: Object.fromEntries(String(f.get("concept_words") || "").split("\n").map((l) => l.split(":"))
+              .filter((p) => p.length === 2 && p[0].trim()).map(([k, v]) => [k.trim().toLowerCase(), v.split(",").map((w) => w.trim()).filter(Boolean)])),
           },
         },
       });

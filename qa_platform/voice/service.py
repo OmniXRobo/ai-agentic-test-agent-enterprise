@@ -917,6 +917,9 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
         if dup and dup["score"] >= LIKELY_DUPLICATE:
             return (f"It looks like existing defect {dup['id']}, so I did not create a new one. "
                     "The draft is waiting for your review.")
+        if mode == "automatic":
+            return (f"I found no duplicate defect. A new {kind} defect draft is waiting for your approval on Defect "
+                    "Review; nothing is sent to TFS without it.")
         return "A defect draft is waiting for your review on Defect Review."
 
     def _cmd_run_all_tests(self, conv: Conversation, intent: Intent) -> Outcome:

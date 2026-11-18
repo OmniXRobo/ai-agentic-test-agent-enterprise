@@ -125,7 +125,9 @@ def test_01_table_vs_table(client):
     r = run(client, pid)
     s = r["detail"]["summary"]
     assert r["result"] == "PASS" and s["failed"] == 0 and s["records_checked"] == 4
-    assert {x["result"] for x in rows(r, "Total Sales")} == {"PASS*"}  # 50,000 = 50000.00 after normalization
+    # 50,000 = 50000.00 after normalization (23.9.0: PASS, marked as a normalized match)
+    assert {x["result"] for x in rows(r, "Total Sales")} == {"PASS"}
+    assert all(x["normalized"] for x in rows(r, "Total Sales"))
 
 
 # ---- TEST 2 ------------------------------------------------------------------------------------------------------
@@ -155,7 +157,8 @@ def test_02b_unapproved_rule_is_a_warning(client):
     cfg = analyze(client, pid)["config"]
     save(client, pid, approve_all(cfg, rules=False))
     r = run(client, pid)
-    assert rows(r, "Order Completion (calculated)", "WARNING") and r["result"] == "WARNING"
+    # 23.9.0: an unapproved rule needs the tester's review (was WARNING)
+    assert rows(r, "Order Completion (calculated)", "NEEDS_REVIEW") and r["result"] == "NEEDS_REVIEW"
 
 
 # ---- TEST 3 ------------------------------------------------------------------------------------------------------
@@ -239,7 +242,8 @@ def test_05_status_codes_vs_descriptions(client):
     save(client, pid, approve_all(cfg))
     r = run(client, pid)
     st = {x["record_key"]: x for x in rows(r, "Status")}
-    assert st["1001"]["result"] == "PASS*" and st["1002"]["result"] == "PASS*"
+    assert st["1001"]["result"] == "PASS" and st["1002"]["result"] == "PASS"
+    assert st["1001"]["normalized"] and st["1002"]["normalized"]
     assert st["1004"]["result"] == "FAIL" and st["1004"]["category"] == "status_mismatch"
     assert r["detail"]["summary"]["status_mismatches"] == 1
 
@@ -251,7 +255,7 @@ def test_05b_unapproved_status_mapping_never_passes(client):
     cfg = analyze(client, pid)["config"]
     save(client, pid, approve_all(cfg, statuses=False))
     r = run(client, pid)
-    assert {x["result"] for x in rows(r, "Status")} == {"WARNING"}
+    assert {x["result"] for x in rows(r, "Status")} == {"NEEDS_REVIEW"}
 
 
 # ---- TEST 6 ------------------------------------------------------------------------------------------------------
@@ -293,7 +297,8 @@ def _shots(tmp_path):
     return out
 
 
-@pytest.mark.skipif(not shutil.which("tesseract"), reason="needs an offline OCR engine (Tesseract)")
+@pytest.mark.skipif(not any(__import__("qa_platform.comparison.ocr", fromlist=["x"]).engines({}).values()),
+                    reason="needs an offline OCR engine (bundled RapidOCR, Windows OCR or Tesseract)")
 def test_07_three_screenshots_ocr_and_compare(client, tmp_path):
     pytest.importorskip("playwright")
     shots = _shots(tmp_path)
@@ -316,7 +321,15 @@ def test_07_three_screenshots_ocr_and_compare(client, tmp_path):
     assert row_of(cfg, L["A"], "Total Sales")["members"][L["C"]]["field"] == "Revenue"
     save(client, pid, approve_all(cfg))
     r = run(client, pid)
-    assert r["result"] == "PASS", [x for x in r["detail"]["rows"] if x["result"] != "PASS"]
+    # what the engine read and which rules it found, so that a failure on another OCR engine can be read in the log
+    why = {"inputs": [(s.get("engine"), s.get("status"), s.get("cell_rereads"), s.get("issues"))
+                      for a in an["apps"] for s in (a.get("coverage") or {}).get("inputs") or []],
+           "rules": [(x["app"][-4:], x["field"], x["expression"]) for x in cfg["rules"]],
+           "rows": [(x["field"], x["record_key"], x["result"], x["category"],
+                     {k[-4:]: (v or {}).get("value") for k, v in x["values"].items()}, x["explanation"][:160])
+                    for x in r["detail"]["rows"] if x["result"] not in ("PASS", "ACCEPTED")],
+           "A": prev["A"]["tables"][0].get("rows"), "C": [t.get("rows") for t in prev["C"]["tables"]]}
+    assert r["result"] == "PASS", json.dumps(why, default=str)[:6000]
     assert all("screenshot" in x["sources"] for x in r["detail"]["rows"] if x["sources"])
     assert rows(r, "Sales by Month (chart)", "PASS")
 
@@ -358,7 +371,7 @@ def test_08_tester_corrects_a_mapping(client):
     assert row["status"] == "approved" and row["members"][L["B"]]["origin"] == "tester"
     r = run(client, pid)
     res = {x["record_key"]: x["result"] for x in rows(r, "Sales")}
-    assert res == {"1001": "PASS*", "1002": "PASS*", "1003": "PASS*", "1004": "FAIL"}
+    assert res == {"1001": "PASS", "1002": "PASS", "1003": "PASS", "1004": "FAIL"}
 
 
 # ---- TEST 9 ------------------------------------------------------------------------------------------------------
@@ -471,10 +484,10 @@ def test_13_incomplete_screenshots_give_warnings_not_pass(client, rt):
     r = run(client, pid)
     assert r["result"] != "PASS"
     miss = [x for x in rows(r) if x["category"] == "not_on_screenshots"]
-    assert {x["record_key"] for x in miss} == {"1003", "1004"} and {x["result"] for x in miss} == {"WARNING"}
+    assert {x["record_key"] for x in miss} == {"1003", "1004"} and {x["result"] for x in miss} == {"INCOMPLETE"}
     low = [x for x in rows(r, "Total Sales") if x["record_key"] == "1002"][0]
-    assert low["result"] == "WARNING" and low["category"] == "ocr_uncertainty"
-    assert rows(r, result="WARNING") and r["detail"]["summary"]["unverified_visual"] >= 1
+    assert low["result"] == "NEEDS_REVIEW" and low["category"] == "ocr_uncertainty"
+    assert rows(r, result="NEEDS_REVIEW") and r["detail"]["summary"]["unverified_visual"] >= 1
     assert r["detail"]["coverage_note"] and "Sales Portal" in r["detail"]["coverage_note"]
     assert not rows(r, result="FAIL")
 

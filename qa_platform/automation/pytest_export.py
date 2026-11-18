@@ -23,6 +23,7 @@ import zipfile
 from typing import Any
 
 from ..config import APP_ROOT
+from . import smart_wait
 from .dsl import Script, describe
 
 _SLUG = re.compile(r"[^a-z0-9]+")
@@ -137,13 +138,29 @@ def _launch(playwright):
     options = {{"headless": HEADLESS}}
     if BROWSER in ("msedge", "chrome"):
         options["channel"] = BROWSER
+    if not HEADLESS:
+        options["args"] = ["--start-maximized"]  # visible runs open maximized
     return getattr(playwright, kind).launch(**options)
+
+
+def _maximize(page):
+    try:
+        cdp = page.context.new_cdp_session(page)
+        win = cdp.send("Browser.getWindowForTarget")
+        cdp.send("Browser.setWindowBounds", {{"windowId": win["windowId"], "bounds": {{"windowState": "maximized"}}}})
+        cdp.detach()
+    except Exception:
+        pass
 
 
 def _open_page():
     playwright = sync_playwright().start()
     browser = _launch(playwright)
-    page = browser.new_page()
+    if HEADLESS:
+        page = browser.new_page()
+    else:
+        page = browser.new_context(no_viewport=True).new_page()  # the viewport is the maximized window
+        _maximize(page)
 
     def close():
         browser.close()
@@ -414,6 +431,17 @@ def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> s
     if any(st.action in ("pick_date", "choose_option", "set_count") or (st.semantic or {}).get("intent") == "set_count"
            for st in script.steps):
         body += _COMPONENT_HELPERS
+    policy = smart_wait.clean_policy(script.wait_policy) if script.wait_policy else None
+    waits = bool(policy and policy.get("enabled")) or any(st.action == "wait_until" for st in script.steps)
+    if waits:  # 23.11.0: the same Smart Wait code the SkyGuard runner uses, copied here
+        body += ("\n\nimport fnmatch\nimport hashlib\nimport time\nfrom typing import Any\n\n"
+                 + smart_wait.embedded_source()
+                 + "\n# Execution Wait Settings saved with the script (the SkyGuard runner uses the same policy).\n"
+                 + f"WAIT_POLICY = {_plain(policy) if policy else None!r}\n\n\n"
+                 + "def _waited(res, what):\n"
+                 + "    if not res[\"ok\"]:\n"
+                 + "        print(f\"WARNING  Smart Wait timed out after {what}: {'; '.join(res['reasons'][:3])}\")\n"
+                 + "    return res\n")
     steps = [
         "",
         "",
@@ -426,9 +454,26 @@ def to_pytest(script: Script, datasets: list[dict[str, Any]] | None = None) -> s
         "@_data_sets",
         f"def {func}(page, data):",
     ]
+    if waits:
+        steps.append("    sw = SmartWait(page.context)")
     for i, step in enumerate(script.steps, start=1):
         steps.append(f"    # Step {i}: {_text(describe(step))}")
+        nxt = script.steps[i] if i < len(script.steps) else None
+        if nxt is not None and nxt.action == "wait_until" and (nxt.wait or {}).get("kind") in (
+                "text_change", "table_refresh", "network_response"):
+            steps.append(f"    prior_{i + 1} = sw.capture(page, {_plain(nxt.wait)!r})")
+        if step.action == "wait_until":
+            spec = _plain(step.wait or {"kind": "ajax"})
+            prior = f"prior_{i}" if (step.wait or {}).get("kind") in ("text_change", "table_refresh",
+                                                                    "network_response") and i > 1 else "None"
+            steps.append(f"    res = _waited(sw.wait(page, {spec!r}, {prior}), {('step ' + str(i))!r})")
+            if (step.wait or {}).get("strict"):
+                steps.append("    assert res[\"ok\"], res[\"reasons\"]")
+            continue
         steps.extend("    " + line for line in _step_lines(step))
+        if policy and smart_wait.policy_applies(policy, i - 1, step.action) and not (
+                nxt is not None and nxt.action == "wait_until"):
+            steps.append(f"    _waited(policy_wait(sw, page, WAIT_POLICY), {('step ' + str(i))!r})")
     if not script.steps:
         steps.append("    pass")
     steps += [
@@ -593,7 +638,7 @@ endlocal
 
 
 def bundle(scripts: list[tuple[Script, list[dict[str, Any]]]], generated: str,
-           files: dict[str, Any] | None = None) -> bytes:
+           files: dict[str, Any] | None = None, sources: dict[str, str] | None = None) -> bytes:
     """A zip with tests/, pytest.ini, requirements.txt, README.txt and RUN_TESTS.cmd."""
     creds: list[str] = []
     names: set[str] = set()
@@ -604,13 +649,16 @@ def bundle(scripts: list[tuple[Script, list[dict[str, Any]]]], generated: str,
             if name in names:
                 name = name[:-3] + f"_{script.id.lower().replace('-', '_')}.py"
             names.add(name)
-            zf.writestr(f"tests/{name}", to_pytest(script, datasets))
+            # 23.11.0: an edited (saved) Python test is downloaded as saved
+            zf.writestr(f"tests/{name}", (sources or {}).get(script.id) or to_pytest(script, datasets))
             folder = (files or {}).get(script.id)
             if folder is not None and uses_files(script) and folder.is_dir():  # 23.3.17: files for upload steps
                 for f in sorted(folder.iterdir()):
                     if f.is_file():
                         zf.write(f, f"tests/files/{files_folder(script)}/{f.name}")
             creds += [c for c in credential_variables(script) if c not in creds]
+            if (sources or {}).get(script.id):
+                creds += [_env_name(r, f) for r, f in _CRED.findall(sources[script.id]) if _env_name(r, f) not in creds]
         zf.writestr("pytest.ini", "[pytest]\ntestpaths = tests\naddopts = -v\n")
         zf.writestr("requirements.txt", f"pytest=={PYTEST_VERSION}\nplaywright=={PLAYWRIGHT_VERSION}\n"
                     + (f"pypdf=={PYPDF_VERSION}\n" if any(uses_files(s) for s, _ in scripts) else ""))

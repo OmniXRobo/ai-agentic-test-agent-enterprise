@@ -45,6 +45,7 @@ DEFECT_ANALYSIS_STARTED = "defect.analysis.started"
 DEFECT_DUPLICATE_FOUND = "defect.duplicate_found"
 DEFECT_CREATED = "defect.created"
 DEFECT_FAILED = "defect.failed"
+DEFECT_DRAFTED = "defect.drafted"  # 23.11.0: a failure became a draft that waits for review
 
 VOICE_COMMAND_RECEIVED = "voice.command.received"
 VOICE_COMMAND_ACCEPTED = "voice.command.accepted"

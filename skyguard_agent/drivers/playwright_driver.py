@@ -20,9 +20,11 @@ JS = (Path(__file__).resolve().parents[1] / "js" / "agent_dom.js").read_text(enc
 
 class PlaywrightDriver:
     def __init__(self, browser: Any, *, context_options: dict[str, Any] | None = None,
-                 evidence_dir: Path | None = None) -> None:
+                 evidence_dir: Path | None = None, context_factory: Any = None) -> None:
         self.browser = browser
         self.context_options = context_options or {}
+        # 23.9.0: the host application's window policy (maximized visible windows) creates the contexts
+        self.context_factory = context_factory
         self.evidence_dir = evidence_dir
         self.contexts: dict[str, Any] = {}
         self.pages: dict[str, Any] = {}
@@ -36,7 +38,7 @@ class PlaywrightDriver:
 
     def _open(self, name: str) -> Any:
         if name not in self.contexts:
-            ctx = self.browser.new_context(**self.context_options)
+            ctx = (self.context_factory or self.browser.new_context)(**self.context_options)
             ctx.add_init_script(JS)
             ctx.expose_binding("__sgReport", lambda source, event: self._on_event(event))
             self.contexts[name] = ctx

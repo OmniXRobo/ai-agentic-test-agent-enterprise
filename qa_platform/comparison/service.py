@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import html
 import io
 import json
 import re
@@ -291,7 +292,7 @@ class ComparisonService:
         self.db.execute("INSERT INTO cmp_screens (id, project_id, application_id, name, location, discovery, "
                         "fingerprint, created_at) VALUES (?,?,?,?,?,?,?,?)",
                         (scr, app["project_id"], app_id, name or info.get("title") or "Screen", dumps(steps or []),
-                         dumps(info), hashlib.sha1(dumps(info.get("tables")).encode()).hexdigest()[:16], now_iso()))
+                         dumps(info), hashlib.sha1(dumps(info.get("tables")).encode(), usedforsecurity=False).hexdigest()[:16], now_iso()))
         aura.learn("page_structure", app["name"], name or info.get("title") or scr,
                    {"headings": info.get("headings"), "tables": info.get("tables"), "tabs": info.get("tabs")},
                    source="data comparison discovery", agent="comparison")
@@ -409,8 +410,8 @@ class ComparisonService:
     def start_extraction(self, app_id: str, spec: dict[str, Any]) -> dict[str, Any]:
         app = self._app_row(app_id)
         kind = spec.get("kind") or "table"
-        if kind not in ("table", "kpis", "charts", "dashboard"):
-            raise QAError("CMP_KIND", "Extraction kind must be table, kpis, charts or dashboard.", status=422)
+        if kind not in ("table", "kpis", "charts", "dashboard", "page"):
+            raise QAError("CMP_KIND", "Extraction kind must be table, kpis, charts, dashboard or page.", status=422)
         ds = self._new_dataset(app, kind, {"web": "dom", "desktop": "uia", "rdp": "ocr"}.get(app["app_type"], "file"),
                                screen_id=spec.get("screen_id"))
         job = _id("JOB")
@@ -450,9 +451,15 @@ class ComparisonService:
             state["progress"] = "signing in"
             ex.login()
             filters = ex.run_steps(spec.get("steps") or [])
+            filters.update(spec.get("applied_filters") or {})
+            state["progress"] = "waiting for the page's data"
+            ex.wait_for_data()
             aggregates: dict[str, Any] = {}
             stats: dict[str, Any] = {"complete": True, "method": "dom"}
             kind = spec.get("kind") or "table"
+            if kind == "page":
+                self._capture_page(app, ds, ex, spec, state, filters)
+                return
             if kind in ("kpis", "dashboard"):
                 aggregates["kpis"] = ex.kpis()
             if kind in ("charts", "dashboard"):
@@ -491,6 +498,170 @@ class ComparisonService:
             stats["blocked_requests"] = sorted(set(ex.blocked))[:20]
             self._finish_dataset(ds, "complete" if stats.get("complete", True) else "incomplete", stats,
                                  aggregates or None, filters)
+
+    def _capture_page(self, app: dict[str, Any], ds: str, ex: Any, spec: dict[str, Any], state: dict[str, Any],
+                      filters: dict[str, Any]) -> None:
+        """23.9.0 live capture of one page in ONE browser session, in layers: the table through the page code (HTML
+        table, ARIA grid, div grid, DataTables API, every page / scroll position), further tables, KPI cards and
+        chart-library data; then, for what the page code does not give (a canvas chart, a table drawn as an image),
+        the offline OCR on the page's screenshot. The dataset says which method gave what and how complete it is."""
+        from . import screen_reader
+
+        seq = [0]
+
+        def on_page(n: int, data: dict[str, Any], png: bytes | None) -> None:
+            state["progress"] = f"table page {n}: {len(data['rows'])} rows"
+            ev_id = self._save_evidence(app, png, source="web capture", screen=spec.get("screen_name"),
+                                        sequence=n)["id"] if png else None
+            recs = [{"page": n, "screenshot": ev_id,
+                     "fields": {h or f"Column {j + 1}": {"value": v, "method": data.get("method") or "dom",
+                                                         "confidence": 1.0, "screenshot": ev_id}
+                                for j, (h, v) in enumerate(zip(data["headers"], row))}} for row in data["rows"]]
+            self._store_records(ds, recs, seq[0])
+            seq[0] += len(recs)
+
+        target = dict(spec.get("target") or {})
+        result = ex.table(target, on_page=on_page, screenshots=spec.get("screenshots", True))
+        stats = result["stats"]
+        layers = []
+        if result["records"]:
+            layers.append(f"table: {stats.get('method')}")
+        aggregates: dict[str, Any] = {"tables": [{"headers": t["headers"], "rows": t["rows"], "method": t.get("method"),
+                                                  "totals": t.get("totals")} for t in getattr(ex, "other_tables", [])
+                                                 if t.get("rows")]}
+        state["progress"] = "reading KPI cards and charts"
+        aggregates["kpis"] = ex.kpis()
+        aggregates["charts"] = ex.charts()
+        if aggregates["charts"]:
+            layers.append("charts: " + ", ".join(sorted({c.get("lib") or "?" for c in aggregates["charts"]})))
+        png = ex.screenshot()
+        ev = self._save_evidence(app, png, source="web capture", screen=spec.get("screen_name"))
+        aggregates["screenshot"] = ev["id"]
+        canvases = int(getattr(ex, "canvases", 0) or 0)
+        need_ocr = (not result["records"] and not aggregates["tables"]) or canvases > len(
+            [c for c in aggregates["charts"] if c.get("lib") == "chartjs"])
+        if need_ocr and spec.get("ocr_fallback", True):
+            state["progress"] = "reading the screenshot (offline OCR)"
+            path = self.evidence.path(app["project_id"], ev["file"])
+            try:
+                res = ocr.read_for_layout(path, self.rt.settings)
+                g = res.pop("graphics", None) or ocr.graphics(path, self.rt.settings)
+                parsed = screen_reader.read_screen(res, g)
+                self.db.execute("UPDATE cmp_evidence SET ocr = ? WHERE id = ?", (dumps(res), ev["id"]))
+            except QAError as exc:
+                parsed = None
+                stats.setdefault("warnings", []).append(f"OCR fallback not possible: {exc.message}")
+            if parsed:
+                ocr_tables = parsed["tables"]
+                if not result["records"] and ocr_tables:
+                    t0 = ocr_tables.pop(0)
+                    recs = [{"page": 1, "screenshot": ev["id"],
+                             "fields": {h: {"value": c.get("value"), "raw": c.get("raw"), "method": "ocr fallback",
+                                            "confidence": c.get("confidence"), "box": c.get("box"),
+                                            "screenshot": ev["id"]} for h, c in r.items()}} for r in t0["rows"]]
+                    self._store_records(ds, recs, 0)
+                    stats.update(headers=t0["headers"], records=len(recs), method="ocr fallback", complete=False,
+                                 reason="the page code has no readable table (canvas or image): read from a "
+                                        "screenshot of the visible part of the page", units=t0.get("units"),
+                                 totals=[{"label": x.get("label"), "kind": x.get("kind"),
+                                          "values": {h: (v or {}).get("value") for h, v in (x.get("cells") or
+                                                                                            x.get("values") or {}).items()}}
+                                         for x in t0.get("totals") or []])
+                    layers.append("table: OCR of the screenshot")
+                for t in ocr_tables:
+                    aggregates["tables"].append({"headers": t["headers"], "method": "ocr fallback",
+                                                 "rows": [[(r.get(h) or {}).get("value") for h in t["headers"]]
+                                                          for r in t["rows"]]})
+                lib_titles = {str(c.get("title") or "").strip().lower() for c in aggregates["charts"]}
+                for ch in parsed["charts"]:
+                    if str(ch["title"]).strip().lower() in lib_titles:
+                        continue
+                    aggregates["charts"].append({"lib": "ocr", "title": ch["title"], "type": ch.get("type"),
+                                                 "method": "ocr fallback", "status": ch.get("status"),
+                                                 "confidence": min([float(p.get("confidence") or 0) for p in
+                                                                    ch["points"].values()] or [0]),
+                                                 "approximate": bool(ch.get("approximate")),
+                                                 "series_values": [{"name": ch.get("series"), "type": ch.get("type"),
+                                                                    "values": {k: p.get("value") for k, p in
+                                                                               ch["points"].items()}}]})
+                    layers.append(f"chart '{ch['title']}': OCR of the screenshot")
+                known = {str(k.get("label")).lower() for k in aggregates["kpis"]}
+                for v in parsed["values"]:
+                    if str(v["label"]).lower() not in known:
+                        aggregates["kpis"].append({"label": v["label"], "value": v["value"], "method": "ocr fallback",
+                                                   "confidence": v.get("confidence")})
+        stats["layers"] = layers
+        stats["blocked_requests"] = sorted(set(ex.blocked))[:20]
+        stats["redirects"] = sorted(set(getattr(ex, "redirected", [])))[:10]
+        found = bool(stats.get("records")) or any(aggregates.get(k) for k in ("tables", "kpis", "charts"))
+        if not found:
+            stats["complete"] = False
+            stats["reason"] = ("nothing readable was found on the page" + (
+                f"; {len(ex.blocked)} request(s) were blocked by the security policy" if ex.blocked else ""))
+        status = "complete" if stats.get("complete", True) and found else "incomplete"
+        if spec.get("detail") and result["records"]:
+            stats["detail_dataset"] = self._capture_details(app, ex, spec, result, state)
+        self._finish_dataset(ds, status, stats, aggregates, filters)
+
+    def _capture_details(self, app: dict[str, Any], ex: Any, spec: dict[str, Any], master: dict[str, Any],
+                         state: dict[str, Any]) -> str:
+        """23.10.0 master-detail: open the detail page of every master record through the recorded, parameterized
+        address (the record's own key in place of {key}) and read its table. Each detail row carries its parent key.
+        The dataset says how many parents were read and which were not; it is never called complete if one failed."""
+        from urllib.parse import quote
+
+        d = spec["detail"]
+        tpl, col = str(d.get("url_template") or ""), str(d.get("key_column") or "")
+        if "{key}" not in tpl or not col:
+            raise QAError("WS_DETAIL_INVALID", "The detail page address has no {key} parameter.", status=422)
+        keys: list[str] = []
+        for r in master["records"]:
+            v = (r["fields"].get(col) or {}).get("value")
+            if v not in (None, "") and str(v) not in keys:
+                keys.append(str(v))
+        limit = max(1, min(int(d.get("limit") or 200), 2000))
+        ds = self._new_dataset(app, "table", "dom")
+        row = self.db.query_one("SELECT config FROM cmp_applications WHERE id = ?", (app["id"],))
+        cfg = loads(row["config"]) if row else {}
+        cfg["ws_datasets"] = (cfg.get("ws_datasets") or []) + [ds]
+        self.db.execute("UPDATE cmp_applications SET config = ? WHERE id = ?", (dumps(cfg), app["id"]))
+        seq, read, failed = 0, 0, []
+        parent = f"Parent {col}"
+        for i, key in enumerate(keys[:limit]):
+            if ex.cancel():
+                failed.append("stopped by the tester")
+                break
+            state["progress"] = f"detail page {i + 1} of {min(len(keys), limit)} ({col} {key})"
+            url = tpl.replace("{key}", quote(key, safe=""))
+            try:
+                ex.goto(url)
+                ex.wait_for_data()
+                if d.get("filters"):
+                    ex.run_steps(d["filters"])
+                res = ex.table(dict(d.get("target") or {}), screenshots=False)
+            except QAError as exc:
+                failed.append(f"{key}: {exc.message}")
+                continue
+            except Exception as exc:  # noqa: BLE001 - one parent must not stop the others
+                failed.append(f"{key}: {str(exc).splitlines()[0][:160]}")
+                continue
+            recs = [{"page": r["page"], "key": key,
+                     "fields": {parent: {"value": key, "method": "navigation", "confidence": 1.0}, **r["fields"]}}
+                    for r in res["records"]]
+            self._store_records(ds, recs, seq)
+            seq += len(recs)
+            read += 1
+            if not res["stats"].get("complete", True):
+                failed.append(f"{key}: {res['stats'].get('reason')}")
+        skipped = max(0, len(keys) - limit)
+        complete = not failed and not skipped
+        reason = None if complete else "; ".join(
+            ([f"{skipped} parent record(s) over the limit of {limit} were not opened"] if skipped else []) + failed[:10])
+        self._finish_dataset(ds, "complete" if complete else "incomplete", {
+            "complete": complete, "reason": reason, "method": "dom", "records": seq, "kind": "detail",
+            "parents": len(keys), "parents_read": read, "parent_key": col, "parent_dataset_key": parent,
+            "url_template": tpl, "failures": failed[:50], "headers": [parent]})
+        return ds
 
     def _extract_desktop(self, app: dict[str, Any], ds: str, spec: dict[str, Any], state: dict[str, Any]) -> None:
         from . import desktop
@@ -865,7 +1036,7 @@ class ComparisonService:
                 if r["result"] in ("FAIL", "REVIEW", "CONFIG_MISMATCH"):
                     cat = {"FAIL": "aggregate_mismatch", "CONFIG_MISMATCH": "filter_mismatch"}.get(r["result"],
                                                                                                  "aggregate_review")
-                    discs.append({"id": "D-" + hashlib.sha1(f"agg|{r['metric']}".encode()).hexdigest()[:10].upper(),
+                    discs.append({"id": "D-" + hashlib.sha1(f"agg|{r['metric']}".encode(), usedforsecurity=False).hexdigest()[:10].upper(),
                                   "category": cat, "metric": r["metric"], "expected": r.get("expected"),
                                   "displayed": r.get("displayed"), "difference": r.get("difference"),
                                   "note": r.get("reason"), "records_used": r.get("records_used")})
@@ -1021,58 +1192,153 @@ class ComparisonService:
         self.audit("defect.investigate", cur["project_id"], did, origin=out.get("origin"))
         return self.defect(did)
 
+    # ---- 23.11.0: Integration Comparison defects go through the one Defect Review and TFS publishing service -----
+
+    def _cmp_facts(self, cur: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        """What the comparison recorded for this defect, in either shape (workspace rows keyed by application id, or
+        the earlier source/target defects). Nothing is added that the run did not record."""
+        d = cur["data"] or {}
+        row = d.get("row") or {}
+        names = d.get("names") or {}
+        apps = list(d.get("applications") or [])
+        if not apps:
+            apps = [names[k] for k in ("source", "target") if names.get(k)] or [v for v in names.values() if v]
+        rule = row.get("rule")
+        rule_status = rule.get("status") if isinstance(rule, dict) else None
+        if rule_status is None and isinstance(row.get("mapping"), dict):
+            rule_status = row["mapping"].get("status")
+        result = row.get("result") or ("FAIL" if cur["status"] in ("confirmed", "new", "under_review") and
+                                       d.get("category") not in ("needs_review", "incomplete") else None)
+        facts = {
+            "result": result, "applications": apps, "record_key": d.get("record_key") or row.get("record_key"),
+            "field": d.get("field") or row.get("field"),
+            "expected": d.get("expected", d.get("source_value")), "actual": d.get("actual", d.get("target_value",
+                                                                                          d.get("displayed"))),
+            "difference": d.get("difference"), "calculation": d.get("calculation") or row.get("calculation"),
+            "mapping": row.get("mapping") if isinstance(row.get("mapping"), (str, dict)) else None,
+            "rule_status": rule_status, "explanation": d.get("explanation") or row.get("explanation"),
+            "category_detail": d.get("category"), "comparison_defect": cur["id"],
+            "execution_id": cur.get("execution_id"), "application": apps[-1] if apps else None,
+        }
+        evidence_ids = [e for e in (d.get("screenshots") or row.get("evidence") or []) if isinstance(e, str)]
+        return facts, evidence_ids
+
+    def _cmp_html(self, cur: dict[str, Any], facts: dict[str, Any], tri: dict[str, Any],
+                  evidence: list[dict[str, Any]], missing: list[str]) -> str:
+        def e(v: Any) -> str:
+            return html.escape("" if v is None else str(v))
+
+        result = facts.get("result") or "unknown"
+        status = ("Confirmed mismatch (deterministic comparison)" if result == "FAIL" else
+                  {"INCOMPLETE": "Not confirmed: extraction did not complete",
+                   "NEEDS_REVIEW": "Not confirmed: mapping or rule uncertain or not approved",
+                   "NOT_COMPARABLE": "Not confirmed: values not comparable",
+                   "WARNING": "Not confirmed: a value was not read or a status is not mapped"}.get(
+                      result, f"Not confirmed ({result})"))
+        rows = [("Result", status), ("Applications", ", ".join(facts.get("applications") or [])),
+                ("Record key", facts.get("record_key") or "missing: the record cannot be identified in both applications"),
+                ("Field", facts.get("field")), ("Expected", facts.get("expected")), ("Actual", facts.get("actual")),
+                ("Difference", facts.get("difference")), ("Calculation / chart rule", facts.get("calculation")),
+                ("Rule status", facts.get("rule_status")),
+                ("Mapping", facts["mapping"] if isinstance(facts.get("mapping"), str) else
+                 (facts.get("mapping") or {}).get("name") if isinstance(facts.get("mapping"), dict) else None),
+                ("Classification", f"{tri['label']} ({int(tri['confidence'] * 100)}%)"),
+                ("Comparison run", facts.get("execution_id")), ("Comparison defect", cur["id"])]
+        table = "".join(f"<tr><td><b>{e(k)}</b></td><td>{e(v)}</td></tr>" for k, v in rows if v not in (None, "", []))
+        steps = "".join(f"<li>{e(s)}</li>" for s in cur.get("repro_steps") or [])
+        reasons = "".join(f"<li>{e(r)}</li>" for r in tri.get("evidence") or [])
+        files = ", ".join(e(Path(x["path"]).name) for x in evidence) or "none captured"
+        return (f"<p><b>Integration Comparison discrepancy</b></p><table border='1' cellpadding='4'>{table}</table>"
+                f"<p><b>Steps to reproduce</b></p><ol>{steps}</ol><p><b>Why</b></p><ul>{reasons}</ul>"
+                + (f"<p><b>Explanation</b>: {e(facts.get('explanation'))}</p>" if facts.get("explanation") else "")
+                + f"<p><b>Evidence attached</b>: {files}"
+                + (f" (not available: {e(', '.join(missing))})" if missing else "") + "</p>")
+
+    def review_draft(self, did: str) -> dict[str, Any]:
+        """The Defect Review draft of a comparison defect (made once, then the same one)."""
+        from ..defects import triage
+
+        cur = self.defect(did)
+        row = self.db.query_one("SELECT id FROM defect_drafts WHERE source = 'comparison' AND source_ref = ? "
+                                "ORDER BY id DESC LIMIT 1", (did,))
+        if row:
+            return self.rt.defects.get(row["id"])
+        facts, evidence_ids = self._cmp_facts(cur)
+        evidence, missing = [], []
+        for ev in evidence_ids:
+            try:
+                path = self.evidence_file(ev)
+                if path.is_file():
+                    evidence.append({"kind": "screenshot", "path": str(path), "evidence_id": ev})
+                else:
+                    missing.append(ev)
+            except QAError as exc:
+                missing.append(f"{ev} ({exc.message})")
+        tri = triage.rules_classify("comparison", facts)
+        draft = {"source": "comparison", "source_run_id": cur.get("execution_id") or did, "source_ref": did,
+                 "signature": f"comparison:{did}", "category": "comparison",
+                 "product_defect": tri["classification"] in triage.PRODUCT_CLASSES, "title": cur["title"][:250],
+                 "severity": int(cur.get("severity") or 3), "priority": int(cur.get("priority") or 3),
+                 "repro_steps": self._cmp_html(cur, facts, tri, evidence, missing), "facts": facts,
+                 "evidence": evidence, "triage": tri}
+        saved = self.rt.defects._store(draft)
+        return self.rt.defects.get(saved["id"])
+
+    def on_review_published(self, draft: dict[str, Any]) -> None:
+        """A comparison defect published from the Defect Review: link the work item back to the comparison."""
+        if draft.get("source") != "comparison" or not draft.get("source_ref"):
+            return
+        did = draft["source_ref"]
+        row = self.db.query_one("SELECT id, project_id, tfs_id FROM cmp_defects WHERE id = ?", (did,))
+        if not row or row["tfs_id"]:
+            return
+        self.db.execute("UPDATE cmp_defects SET tfs_id = ?, status = 'created_in_tfs', tfs_sync = ?, updated_at = ? "
+                        "WHERE id = ?", (draft["tfs_id"], dumps({"created_at": draft.get("published_at") or now_iso(),
+                                                                  "url": draft.get("tfs_url"),
+                                                                  "review_draft": draft["id"]}), now_iso(), did))
+        self._history(did, "created in TFS", {"tfs_id": draft["tfs_id"], "status": "created_in_tfs",
+                                               "url": draft.get("tfs_url")})
+        self.audit("defect.tfs", row["project_id"], did, tfs_id=draft["tfs_id"])
+
     def create_in_tfs(self, did: str, area_path: str | None = None, iteration_path: str | None = None,
-                      assigned_to: str | None = None, force: bool = False) -> dict[str, Any]:
+                      assigned_to: str | None = None, force: bool = False,
+                      fields: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Create in TFS (an explicit action by a person allowed to approve and publish). 23.11.0: goes through the
+        Defect Review service, so mandatory fields come from TFS Preferences, the evidence is attached, a lost
+        response is reconciled, and the result is the work item TFS returned."""
         cur = self.defect(did)
         if cur.get("tfs_id"):
             raise QAError("CMP_DEFECT_IN_TFS", f"Already created as #{cur['tfs_id']}.", status=409)
         if cur["status"] not in ("confirmed", "under_review", "new"):
             raise QAError("CMP_DEFECT_STATUS", "Only open defects can be created in TFS.", status=422)
-        names = cur["data"].get("names") or {"source": "A", "target": "B"}
-        draft = {"title": cur["title"], "repro_steps": "\n".join(cur["repro_steps"]), "facts": {}}
+        draft = self.review_draft(did)
+        if draft["status"] == "created" and draft.get("tfs_id"):
+            self.on_review_published(draft)
+            return self.defect(did)
         if not force:
-            try:
-                from ..defects.service import POSSIBLE_DUPLICATE, similarity
-
-                dups = []
-                for bug in self.rt.defects._open_bugs():
-                    score, reasons = similarity(draft, bug)
-                    if score >= POSSIBLE_DUPLICATE:
-                        dups.append({"id": bug["id"], "title": bug["title"], "score": round(score, 2), "reasons": reasons})
-                if dups:
-                    dups.sort(key=lambda d: -d["score"])
-                    self.db.execute("UPDATE cmp_defects SET tfs_sync = ? WHERE id = ?",
-                                    (dumps({"duplicates": dups[:5], "at": now_iso()}), did))
-                    raise QAError("CMP_POSSIBLE_DUPLICATE", f"A similar open defect exists (#{dups[0]['id']}). "
-                                  "Review it, or create anyway.", status=409, details={"duplicates": dups[:5]})
-            except QAError as exc:
-                if exc.code == "CMP_POSSIBLE_DUPLICATE":
-                    raise
-                if exc.code in OFFLINE_CODES:
-                    return self._queue_tfs(did, exc.message)
-                raise
-        bug_type = (self.rt.tfs.types_for("bug") or ["Bug"])[0]
-        values = {"title": cur["title"], "repro_steps": investigate.bug_html(cur, names),
-                  "priority": cur["priority"], "area_path": area_path,
-                  "iteration_path": iteration_path, "assigned_to": assigned_to,
-                  "tags": "DataComparison; " + str(cur["data"].get("category") or ""),
-                  "Microsoft.VSTS.TCM.SystemInfo": f"{branding.name()} Data Comparison Agent; execution "
-                                                   f"{cur.get('execution_id')}; {names['source']} vs {names['target']}"}
+            dups = [d for d in self.rt.defects.check_duplicates(draft["id"])]
+            if dups:
+                self.db.execute("UPDATE cmp_defects SET tfs_sync = ? WHERE id = ?",
+                                (dumps({"duplicates": dups, "at": now_iso()}), did))
+                raise QAError("CMP_POSSIBLE_DUPLICATE", f"A similar open defect exists (#{dups[0]['id']}). "
+                              "Review it, or create anyway.", status=409, details={"duplicates": dups})
+        names = [n for n in (draft["facts"].get("applications") or [])]
+        extra = {"area_path": area_path, "iteration_path": iteration_path, "assigned_to": assigned_to,
+                 "Microsoft.VSTS.TCM.SystemInfo": f"{branding.name()} Integration Comparison; execution "
+                                                  f"{cur.get('execution_id')}; {' vs '.join(names)}"}
         try:
-            created = self.rt.tfs.create(bug_type, values)
+            if draft["status"] in ("draft", "needs_review") or not draft.get("approved_by"):
+                self.rt.defects.approve(draft["id"], "Create in TFS from Integration Comparison")
+            out = self.rt.defects.publish(draft["id"], fields=fields, allow_duplicate=True, extra=extra)
         except QAError as exc:
-            if exc.code in OFFLINE_CODES:
+            if exc.error_code in OFFLINE_CODES:
                 return self._queue_tfs(did, exc.message)
             raise
-        tfs_id = created["item"]["id"]
-        self.db.execute("UPDATE cmp_defects SET tfs_id = ?, status = 'created_in_tfs', tfs_sync = ?, updated_at = ? "
-                        "WHERE id = ?", (tfs_id, dumps({"created_at": now_iso(), "fields": created.get("fields_report")}),
-                                         now_iso(), did))
-        self._history(did, "created in TFS", {"tfs_id": tfs_id, "status": "created_in_tfs"})
-        aura.learn("known_defect", names.get("target"), f"tfs:{tfs_id}", {"title": cur["title"],
-                   "category": cur["data"].get("category")}, source="data comparison", agent="comparison")
-        self.audit("defect.tfs", cur["project_id"], did, tfs_id=tfs_id)
-        return self.defect(did)
+        self.on_review_published(out)
+        aura.learn("known_defect", names[-1] if names else None, f"tfs:{out['tfs_id']}", {
+            "title": cur["title"], "category": cur["data"].get("category")}, source="data comparison", agent="comparison")
+        return {**self.defect(did), "review_draft": out["id"], "tfs_url": out.get("tfs_url"),
+                "correlation_id": out.get("correlation_id")}
 
     def _queue_tfs(self, did: str, reason: str) -> dict[str, Any]:
         """TFS cannot be reached: kept in the sync queue and sent by ``sync_queue`` later (nothing is lost)."""

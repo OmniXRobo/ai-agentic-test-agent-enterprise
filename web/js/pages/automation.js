@@ -9,12 +9,14 @@ import { discoveryPanel as discoveryPanelImpl } from "./discovery.js";
 import { confirmDelete } from "../confirm-delete.js";
 import { mountAiReport, openShots } from "../ai-report.js";
 import { hasRule, openRuleBuilder, previewRule, ruleLabel } from "../date-rules.js";
+import { bulkWaits, editWait, waitLabel, waitSettings } from "../smart-wait-ui.js";
+import { mountPythonEditor } from "../python-editor.js";
 
 const ACTIONS = ["goto", "click", "dblclick", "fill", "type", "select", "pick_date", "check", "uncheck", "press", "hover", "wait",
   "expect_visible", "expect_hidden", "expect_text", "expect_value", "expect_url", "screenshot",
   "upload_file", "download_file", "expect_file_name", "expect_file_text", "expect_excel_cell",
   // 23.7.1: listed so that Save keeps them (a step whose action was not in this list was saved as "goto")
-  "choose_option", "set_count", "dismiss"];
+  "choose_option", "set_count", "dismiss", "wait_until"];
 // 23.3.17: what the Value means for the file steps (shown as the field's placeholder).
 const VALUE_HINT = { upload_file: "file name(s) from Files, e.g. invoice.pdf; photo.png", download_file: "save as (optional)",
   set_count: "counter=number, e.g. Adults=2", choose_option: "the option's text",
@@ -390,12 +392,14 @@ function stepRow(s, i, suggestions, pairs) {
     <td><select data-f="action">${(ACTIONS.includes(s.action) ? ACTIONS : [...ACTIONS, s.action]).map((a) => `<option ${a === s.action ? "selected" : ""}>${a}</option>`).join("")}</select></td>
     <td><input data-f="selector" value="${esc(t.selector || "")}" placeholder="${["expect_file_name", "expect_file_text", "expect_excel_cell", "goto", "wait", "expect_url"].includes(s.action) ? "(no element)" : "selector"}" style="width:100%">
       ${t.alternates?.length ? `<div class="muted" title="${esc(t.alternates.join("\n"))}">${t.alternates.length} alternate locator(s)</div>` : ""}</td>
-    <td><div class="value-cell"><input data-f="value" value="${esc(s.value ?? "")}" placeholder="${esc(VALUE_HINT[s.action] || "value")}">${ruleBtn}</div>${valueHint(s, i, suggestions, pairs)}</td>
+    <td>${s.action === "wait_until" ? `<div class="value-cell"><input data-f="value" value="" hidden><button type="button" class="btn small" data-wait="${i}" title="Change this Smart Wait">${esc(waitLabel(s.wait))}</button></div>`
+      : `<div class="value-cell"><input data-f="value" value="${esc(s.value ?? "")}" placeholder="${esc(VALUE_HINT[s.action] || "value")}">${ruleBtn}</div>${valueHint(s, i, suggestions, pairs)}`}</td>
     <td><input data-f="description" value="${esc(s.description || "")}" style="width:100%"></td>
     <td><input type="checkbox" data-f="optional" ${s.optional ? "checked" : ""} title="Optional step"></td>
     <td class="row" style="gap:4px;flex-wrap:nowrap">
       <button class="link-btn" data-move="-1" title="Move up">↑</button><button class="link-btn" data-move="1" title="Move down">↓</button>
       <button class="link-btn" data-del title="Delete step">✕</button>
+      <button class="link-btn" data-addwait="${i}" title="+ Wait: add a Smart Wait after this step">+W</button>
       <a class="link-btn" data-rec-at="${i + 1}" title="Record new steps before this step (Hybrid: the browser plays the steps before it first)">⏺</a>
       <a class="link-btn" data-rerec="${i + 1}" title="Re-record this step (healing): the recorded steps replace it">⟲</a></td></tr>`;
 }
@@ -543,7 +547,7 @@ function healingHtml(items) {
 async function renderEditor(view, scriptId) {
   dataCtx.columns = []; dataCtx.row = {};
   const sid = encodeURIComponent(scriptId);
-  const [{ script, python, python_file, versions, files: attached = [], date_suggestions: suggestions = {}, converted = [] },
+  const [{ script, python, python_state, python_versions, python_file, versions, files: attached = [], date_suggestions: suggestions = {}, converted = [] },
     { items: results }, { items: healing }, data, { items: dataRuns = [] }] = await Promise.all([
     api(`/api/automation/scripts/${sid}`),
     api(`/api/automation/results?script_id=${sid}&limit=20`),
@@ -576,6 +580,8 @@ async function renderEditor(view, scriptId) {
     <div class="card" style="margin-top:12px">
       <div class="row"><h3 style="margin:0">Steps</h3><span class="spacer"></span>
         <button class="btn" id="addStep">Add step</button>
+        <button class="btn" id="waitSettings" title="Wait automatically after each step (Smart, Fixed or Smart + Minimum), saved with the script">Wait settings${script.wait_policy?.enabled ? " (on)" : ""}</button>
+        <button class="btn" id="bulkWaits" title="Insert, update or remove waits after every step, selected steps, clicks, dropdowns, navigation or data loading">Insert waits…</button>
         <a class="btn" href="#/hybrid-automation?append=${esc(script.id)}">Record more steps</a>
         <button class="btn" id="semUpgrade" title="Turn calendar-cell, option and page-background clicks of an older recording into date, option and close-pop-up steps (saved as a new version)">Semantic upgrade</button>
         <button class="btn primary" id="save">Save</button></div>
@@ -595,18 +601,17 @@ async function renderEditor(view, scriptId) {
       <div class="card"><h3>Self-healing</h3><div id="healing">${healingHtml(healing)}</div></div>
     </div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(360px,1fr));margin-top:12px">
-      <div class="card"><div class="row"><h3 style="margin:0">Python test (pytest + Playwright)</h3><span class="spacer"></span>
-        <a class="btn" href="/api/automation/scripts/${esc(script.id)}/export">Download ${esc(python_file)}</a>
-        <button class="btn" id="zipOne" title="With pytest.ini, requirements.txt, README.txt and RUN_TESTS.cmd">Download ready-to-run .zip</button></div>
-        <p class="muted">Runs with <code>pytest</code> (one test per data set of the Test Case) or with <code>python ${esc(python_file)}</code>. Passwords are read from environment variables, never stored in the file.</p>
-        <pre class="code">${esc(python)}</pre></div>
+      <div class="card" id="pyCard"></div>
       <div class="card"><h3>Version history</h3>
         <table class="data"><tbody>${versions.slice().reverse().map((v) => `<tr><td>v${v.version}</td><td>${esc(v.reason)}</td><td>${esc(dateTimeOf(v.timestamp))}</td>
           <td>${v.version < script.version ? `<button class="link-btn" data-restore="${v.version}">Restore</button>` : '<span class="muted">current</span>'}</td></tr>`).join("")}</tbody></table>
         <p><button class="btn danger" id="archive">Delete this script</button></p></div>
     </div>`;
 
-  view.querySelector("#zipOne").addEventListener("click", () => downloadTests({ script_ids: [script.id] }, python_file.replace(/\.py$/, ".zip")));
+  // 23.11.0: the editable Python test (Edit Script, Save, Validate, Run, Format, Revert, Version History, Download)
+  mountPythonEditor(view.querySelector("#pyCard"), { script, python, python_state, python_versions, python_file,
+    downloadZip: () => downloadTests({ script_ids: [script.id] }, python_file.replace(/\.py$/, ".zip")) }, {
+    onRun: (id) => { runId = id; view.querySelector("#runBox").hidden = false; view.querySelector("#feed").innerHTML = ""; } });
   const table = view.querySelector("#steps");
   const dataCard = view.querySelector("#dataCard");
   renderFiles(view.querySelector("#filesCard"), script, attached);
@@ -649,6 +654,23 @@ async function renderEditor(view, scriptId) {
         toast(`Steps ${i + 1}–${i + 2} are now one date step: ${label}. Check its locator points at the date field or its calendar icon, then Save.`, "success");
       }, { title: "Date for the calendar", recorded: `day ${dayOf(steps[i + 1])} (month and year were not recorded)` });
     }));
+    // 23.11.0: + Wait after a step, and editing a wait step
+    table.querySelectorAll("[data-addwait]").forEach((b) => (b.onclick = async () => {
+      steps = readSteps(table, steps);
+      const i = Number(b.dataset.addwait);
+      const w = await editWait({ kind: "ajax" });
+      if (!w) return;
+      steps.splice(i + 1, 0, { action: "wait_until", target: null, value: null, description: null, optional: false, timeout_ms: Math.min(w.timeout_ms, 300000), wait: w });
+      redraw();
+      toast("Wait added. Save to keep it.", "success");
+    }));
+    table.querySelectorAll("[data-wait]").forEach((b) => (b.onclick = async () => {
+      steps = readSteps(table, steps);
+      const i = Number(b.dataset.wait);
+      const w = await editWait(steps[i].wait || {});
+      if (!w) return;
+      steps[i].wait = w; redraw();
+    }));
     table.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
       steps = readSteps(table, steps); steps.splice(Number(b.closest("tr").dataset.i), 1); redraw();
     }));
@@ -675,6 +697,8 @@ async function renderEditor(view, scriptId) {
   view.querySelector("#addStep").addEventListener("click", () => {
     steps = readSteps(table, steps); steps.push({ action: "click", target: null, value: null, description: null, optional: false, timeout_ms: 10000 }); redraw();
   });
+  view.querySelector("#waitSettings").addEventListener("click", () => waitSettings(script, () => renderEditor(view, scriptId)));
+  view.querySelector("#bulkWaits").addEventListener("click", () => bulkWaits(script, () => save(), () => renderEditor(view, scriptId)));
   const save = async () => {
     const f = new FormData(view.querySelector("#meta"));
     const body = { ...script, name: f.get("name"), base_url: f.get("base_url") || null, test_case_id: f.get("test_case_id") || null,

@@ -1,0 +1,121 @@
+{
+ "orders": [
+  {
+   "Order ID": "ORD-1001",
+   "Customer": "Ahmed Khan",
+   "City": "Dubai",
+   "Product": "Laptop",
+   "Quantity": "2",
+   "Unit Price": "3500.00",
+   "Line Total": "7000.00",
+   "Subtotal": "7000.00",
+   "Discount": "200.00",
+   "Tax": "340.00",
+   "Final Amount": "7140.00"
+  },
+  {
+   "Order ID": "ORD-1002",
+   "Customer": "Sara Ali",
+   "City": "Abu Dhabi",
+   "Product": "Monitor",
+   "Quantity": "3",
+   "Unit Price": "850.00",
+   "Line Total": "2550.00",
+   "Subtotal": "2550.00",
+   "Discount": "0.00",
+   "Tax": "127.50",
+   "Final Amount": "2677.50"
+  },
+  {
+   "Order ID": "ORD-1003",
+   "Customer": "John Smith",
+   "City": "Sharjah",
+   "Product": "Printer",
+   "Quantity": "1",
+   "Unit Price": "1200.00",
+   "Line Total": "1200.00",
+   "Subtotal": "1200.00",
+   "Discount": "50.00",
+   "Tax": "57.50",
+   "Final Amount": "1207.50"
+  },
+  {
+   "Order ID": "ORD-1004",
+   "Customer": "Fatima Noor",
+   "City": "Dubai",
+   "Product": "Keyboard",
+   "Quantity": "5",
+   "Unit Price": "150.00",
+   "Line Total": "750.00",
+   "Subtotal": "750.00",
+   "Discount": "25.00",
+   "Tax": "36.25",
+   "Final Amount": "761.25"
+  },
+  {
+   "Order ID": "ORD-1005",
+   "Customer": "Ravi Patel",
+   "City": "Ajman",
+   "Product": "Laptop",
+   "Quantity": "1",
+   "Unit Price": "3500.00",
+   "Line Total": "3500.00",
+   "Subtotal": "3500.00",
+   "Discount": "100.00",
+   "Tax": "170.00",
+   "Final Amount": "3570.00"
+  },
+  {
+   "Order ID": "ORD-1006",
+   "Customer": "Maria Lopez",
+   "City": "Abu Dhabi",
+   "Product": "Desk Chair",
+   "Quantity": "4",
+   "Unit Price": "620.00",
+   "Line Total": "2480.00",
+   "Subtotal": "2480.00",
+   "Discount": "80.00",
+   "Tax": "120.00",
+   "Final Amount": "2520.00"
+  },
+  {
+   "Order ID": "ORD-1007",
+   "Customer": "Omar Hassan",
+   "City": "Dubai",
+   "Product": "Monitor",
+   "Quantity": "2",
+   "Unit Price": "850.00",
+   "Line Total": "1700.00",
+   "Subtotal": "1700.00",
+   "Discount": "0.00",
+   "Tax": "85.00",
+   "Final Amount": "1785.00"
+  },
+  {
+   "Order ID": "ORD-1008",
+   "Customer": "Li Wei",
+   "City": "Sharjah",
+   "Product": "Tablet",
+   "Quantity": "3",
+   "Unit Price": "1450.00",
+   "Line Total": "4350.00",
+   "Subtotal": "4350.00",
+   "Discount": "150.00",
+   "Tax": "210.00",
+   "Final Amount": "4410.00"
+  }
+ ],
+ "city_line_total": {
+  "Dubai": "9450.00",
+  "Sharjah": "5550.00",
+  "Abu Dhabi": "5030.00",
+  "Ajman": "3500.00"
+ },
+ "bar_shown": {
+  "Dubai": "8950.00",
+  "Sharjah": "5550.00",
+  "Abu Dhabi": "5030.00",
+  "Ajman": "3500.00"
+ },
+ "wrong_bar": "Dubai"
+}

@@ -300,7 +300,8 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
     try:
         b = browsers.launch(pw, args.browser, headless=args.headless)
         report["browser_version"] = b.version
-        ctx = b.new_context(viewport={"width": 1366, "height": 860}, locale="en-US")
+        # 23.9.0: maximized when visible; headless keeps a fixed 1366 x 860 viewport
+        ctx = browsers.new_context(b, args.headless, viewport={"width": 1366, "height": 860}, locale="en-US")
         from .browser import js
         ctx.add_init_script(js("components"))
         for i, values in enumerate(sets, 1):

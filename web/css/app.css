@@ -743,6 +743,9 @@ table.data.compact th, table.data.compact td { padding: 4px 8px; font-size: 13px
 .ws-map select, .ws-map .ws-fname { width: 100%; min-width: 120px; }
 .ws-map tr.ws-st-unmapped td { color: var(--muted); }
 .pill.ACC { background: var(--accent-soft); color: var(--accent); }
+.pill.REVIEW { background: rgba(124, 58, 237, .12); color: #7c3aed; }
+.pill.NC { background: var(--surface-2); color: var(--text); border: 1px dashed var(--muted); }
+.pill.INC { background: var(--warn-soft); color: var(--warn); border: 1px dashed var(--warn); }
 .pill.IDLE { background: var(--surface-2); color: var(--muted); }
 .ws-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .ws-tile { display: grid; gap: 2px; padding: 10px 12px; }
@@ -763,3 +766,23 @@ table.data.compact th, table.data.compact td { padding: 4px 8px; font-size: 13px
 .ws-dec { gap: 6px; flex-wrap: wrap; }
 .ws-log summary { cursor: pointer; font-weight: 600; }
 @media (max-width: 640px) { .ws-apps { grid-template-columns: 1fr; } .ws-pick select { min-width: 0; width: 100%; } }
+/* 23.9.0 filters */
+.ws-flt { display: grid; gap: 8px; align-content: start; }
+.ws-flt-table select, .ws-flt-table input[type="text"], .ws-flt-table input[type="date"] { max-width: 220px; }
+.ws-flt-table tr.muted td { opacity: .65; }
+.ws-note { margin: 0; padding: 6px 10px; border-radius: 6px; background: var(--warn-bg, rgba(255, 170, 0, .12)); }
+.ws-preview-img { max-width: 100%; height: auto; border: 1px solid var(--border, #ccc); }
+.ws-flts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr)); gap: 12px; margin-bottom: 12px; }
+.ws-flt { min-width: 0; overflow-x: auto; }
+.ws-flt-table { width: 100%; table-layout: auto; }
+.ws-flt-table td { vertical-align: middle; }
+.ws-why { font-size: 12px; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 23.11.0: editable Python test */
+.pyed { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; max-height: 620px; overflow: auto; }
+.pyed pre, .pyed .pyed-ta { margin: 0; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; line-height: 1.5; padding: 10px; tab-size: 4; white-space: pre; }
+.pyed .gutter { color: var(--muted); text-align: right; user-select: none; border-right: 1px solid var(--border); background: var(--surface); border-radius: 0; border-top: 0; border-bottom: 0; border-left: 0; }
+.pyed-stack { position: relative; min-width: 0; }
+.pyed-stack .pyed-hl { border: 0; background: transparent; max-height: none; overflow: visible; }
+.pyed-stack .pyed-ta { position: absolute; inset: 0; border: 0; outline: none; resize: none; overflow: hidden; background: transparent; color: transparent; caret-color: var(--text); min-height: 100%; }
+.pyed-stack .pyed-ta::selection { background: rgba(80, 140, 255, .35); color: transparent; }

@@ -39,13 +39,13 @@ from .llm import extract_json
 from .rules import parse_date, parse_time
 from .util import digest, dumps, loads, norm, now_iso
 
-COMMIT_WORDS = re.compile(r"\b(save|submit|create|add|store|approve|authori[sz]e|confirm|send|update|accept|record|"
+COMMIT_WORDS = re.compile(r"\b(save|submit|create|add|store|approve|authori[sz]e|authenticate|confirm|send|update|accept|record|"
                           r"register|book|assign|apply|finish|complete|mark|post|publish|reject|decline|cancel|"
                           r"delete|remove|close|archive|restore|verify|release|dispatch|issue|pay|transfer|"
                           r"process|generate|upload|import|reserve|order|checkout|check out)\b", re.I)
 NOT_COMMIT = re.compile(r"^\s*(search|find|filter|go|next|previous|prev|back|more|show|view|open|details?|refresh|"
                         r"reset|clear|sort|expand|collapse|menu|close dialog|sign ?in|log ?in|login)\b", re.I)
-SUCCESS_WORDS = re.compile(r"\b(success(fully)?|created|saved|added|approved|authori[sz]ed|updated|recorded|"
+SUCCESS_WORDS = re.compile(r"\b(success(fully)?|created|saved|added|approved|authori[sz]ed|authenticated|updated|recorded|"
                            r"accepted|submitted|completed|booked|confirmed|registered|assigned|deleted|removed|"
                            r"cancell?ed|rejected|published|sent|done|thank you)\b", re.I)
 REFUSAL_WORDS = re.compile(r"\b(not allowed|not authori[sz]ed|permission|access denied|forbidden|cannot access|"
@@ -66,6 +66,17 @@ IDENTITY_PATTERNS = [
 ]
 ROLE_PATTERN = r"\brole\s*[:\-]\s*(?P<role>[A-Za-z][\w -]{1,30}?)(?=\s*(?:\||$|,|\n|  ))"
 MAX_FLOWS = 60
+# 23.11.1: a bare Cancel / Close / Back on a form leaves the form without saving. It is navigation, not a business task
+# (the reported "Cancel lab" task was learned from the Cancel button of a checkout form). A cancel of a record is a row
+# action ("Cancel" in a trip's row) or a labelled button ("Cancel trip"), and those are still learned.
+DISMISS_WORDS = re.compile(r"^\s*(cancel|close|discard|dismiss|back|go back|abort|exit|never ?mind|no|x|\u00d7)\s*$", re.I)
+# 23.11.1: a button that moves a multi-step form to its next page ("Continue", "Next", "Proceed"). The values typed on
+# each page belong to the task that the last page commits ("Finish", "Place order").
+STEP_WORDS = re.compile(r"^\s*(continue|next|next step|proceed|go on)\b", re.I)
+GENERIC_COMMITS = {"finish", "submit", "complete", "confirm", "done", "send", "ok", "process", "apply"}
+# a record number the application generates ("Order ORD-1001 placed", "Trip TRP-0007 created")
+GENERATED_KEY = re.compile(r"(?<![\w-])([A-Z]{1,6}-?\d{2,}|\d{4,})(?![\w-])")
+KEY_GROUP = r"(?P<record_key>[A-Za-z]{0,6}-?\d+)"
 
 
 # ---- small text helpers ----------------------------------------------------------------------------------------------
@@ -99,6 +110,18 @@ def tokens(text: Any) -> list[str]:
              "authorise": "authorize", "authorised": "authorized"}.get(w, w)
         out.append(singular(w) if not w.isdigit() else w)
     return out
+
+
+def page_problems(p: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """The application's error messages and invalid fields on a page."""
+    errors = [m["text"] for m in p.get("messages", []) if m.get("kind") == "error"
+              or (re.search(r"\b(error|invalid|required|already|cannot|not available|must|failed)\b",
+                            m.get("text") or "", re.I) and not SUCCESS_WORDS.search(m.get("text") or ""))]
+    invalid = [f"{f['label']}: {f.get('validation') or 'invalid'}" for f in p.get("fields", []) if f.get("invalid")]
+    return errors, invalid
+
+
+DETAIL_STATUS = re.compile(r"\bstatus\s*[:\-]?\s*\n?\s*([A-Z][A-Za-z]+(?:[ -][A-Z][A-Za-z]+){0,3})")
 
 
 def path_template(url: str) -> str:
@@ -343,6 +366,7 @@ class Miner:
         self.links_seen: dict[str, str] = {}
         self.query_keys: list[tuple[str, str, str]] = []  # (path, query param, value)
         self.pages_logged_in = 0
+        self.step_failures: list[dict[str, Any]] = []  # 23.11.1: a Continue the application refused
         self.app_words = {singular(w) for w in re.findall(r"[a-z]+", norm(app.get("name")))} | \
             {w for w in re.findall(r"[a-z]+", norm(app.get("name")))}
 
@@ -409,6 +433,32 @@ class Miner:
                                                   "screen": screen["id"], "path": urlsplit(p.get("url") or "").path,
                                                   "entity": screen.get("entity") or ""})
 
+    def _record_in_url(self, url: str) -> dict[str, Any] | None:
+        """23.11.1: a record's own page (/trips/TRP-0001): the URL holds the key of a record seen in a list."""
+        segs = [x for x in urlsplit(url or "").path.split("/") if x]
+        for i, seg in enumerate(segs):
+            sights = self.sightings.get(norm(seg))
+            if sights:
+                listed = next((x for x in sights if x.get("key_column") and x.get("from_list", True)), sights[0])
+                return {"value": seg, "index": i, "key_column": listed["key_column"],
+                        "status_column": listed.get("status_column"), "entity": listed.get("entity") or "",
+                        "list_path": listed.get("path")}
+        return None
+
+    def _track_detail(self, p: dict[str, Any], obs_id: int, role: str | None, screen: dict[str, Any]) -> None:
+        """The status a record's own page shows ("Status: Approved") is a sighting of that record too."""
+        rk = self._record_in_url(p.get("url") or "")
+        if not rk:
+            return
+        m = DETAIL_STATUS.search(str(p.get("text") or ""))
+        if not m:
+            return
+        self.sightings[norm(rk["value"])].append({
+            "obs": obs_id, "key": rk["value"], "key_column": rk["key_column"],
+            "status_column": rk["status_column"] or "Status", "status": m.group(1).strip(), "row": {}, "role": role,
+            "screen": screen["id"], "path": rk["list_path"] or urlsplit(p.get("url") or "").path,
+            "entity": rk["entity"], "from_list": False})
+
     # -- the pass ------------------------------------------------------------------------------------------------
 
     def run(self, entries: list[dict[str, Any]]) -> dict[str, Any]:
@@ -428,6 +478,9 @@ class Miner:
         login_user: str | None = None
         login_events: list[dict[str, Any]] = []
         last_commit: dict[str, Any] | None = None
+        chain: list[dict[str, Any]] = []  # 23.11.1: earlier pages of a multi-step form
+        chain_next: str | None = None
+        step: dict[str, Any] | None = None
         for it in items:
             if it.get("_t") == "page":
                 p = it
@@ -466,6 +519,7 @@ class Miner:
                     self.refusals.append({"role": role_key, "screen": screen["id"], "message": msg,
                                           "path": urlsplit(p.get("url") or "").path})
                 self._track_records(p, it["_id"], role_key, screen)
+                self._track_detail(p, it["_id"], role_key, screen)
                 if user and not auth.get("password_fields"):
                     for ln in p.get("links", []):
                         if ln.get("label") and not re.search(r"\d", ln.get("href") or ""):
@@ -482,6 +536,20 @@ class Miner:
                         edge["count"] += 1
                         if last_click:
                             edge["via"][last_click] += 1
+                if step is not None:
+                    errors, invalid = page_problems(p)
+                    if screen["id"] == step["screen"] and (errors or invalid):
+                        # the application refused this page of the form: its messages become rules of the task
+                        self.step_failures.append({"screen": step["screen"], "messages": errors, "invalid": invalid,
+                                                   "values": step["values"], "user": user, "role": role_key})
+                        buffer = step["events"][:-1] + buffer
+                        step = None
+                    elif screen["id"] != step["screen"]:
+                        chain.append(step)
+                        chain_next = screen["id"]
+                        step = None
+                elif chain and screen["id"] != chain_next:
+                    chain, chain_next = [], None  # the person left the form
                 if pending is not None and self._outcome(pending, p):
                     pending.pop("_events", None)
                     self.instances.append(pending)
@@ -504,6 +572,9 @@ class Miner:
                     (not ev.get("at") or not last_commit.get("at") or abs(int(ev["at"]) - int(last_commit["at"])) < 2500):
                 last_commit = None
                 continue  # the click on the submit button already counted
+            if ev["kind"] == "submit" and step is not None and \
+                    (ev.get("url") or "").split("#")[0] == (step["url"] or "").split("#")[0]:
+                continue  # the form submitted by its Continue button: already counted as the step
             if pending is not None:
                 # an action before the page told us the outcome: decide with what we have
                 self._outcome(pending, last_page or {}, final=True)
@@ -517,13 +588,26 @@ class Miner:
             if ev["kind"] == "click":
                 last_click = label
             ev = {**ev, "_label": label}
+            if step is None and self._is_step(ev, last_page, buffer):
+                url = (last_page or {}).get("url") or ev.get("url") or ""
+                mine = [e for e in buffer if (e.get("url") or url).split("#")[0] == url.split("#")[0]]
+                step = {"screen": self.screen_id(last_page) if last_page else f"{path_template(url)}#", "url": url,
+                        "events": mine + [ev], "label": label, "values": {
+                            (e.get("_label") or field_label(e.get("element") or {})): e.get("value") or ""
+                            for e in mine if e["kind"] in ("fill", "select", "check") and not e.get("secret")}}
+                buffer = [e for e in buffer if e not in mine]
+                continue
             if self._is_commit(ev, last_page):
                 ev["_commit"] = True
                 if ev["kind"] == "submit":
                     btn = next((b["label"] for b in (last_page or {}).get("buttons", [])
-                                if not b.get("in_row") and COMMIT_WORDS.search(b.get("label") or "")), "Submit")
+                                if not b.get("in_row") and COMMIT_WORDS.search(b.get("label") or "")
+                                and not DISMISS_WORDS.match(b.get("label") or "")), "Submit")
                     ev["_label"] = btn
-                pending = self._instance(buffer + [ev], ev, last_page, user, role)
+                here = self.screen_id(last_page) if last_page else None
+                pending = self._instance(buffer + [ev], ev, last_page, user, role,
+                                         chain=chain if chain and here == chain_next else None)
+                chain, chain_next = [], None
                 pending["_events"] = buffer + [ev]
                 last_commit = ev
                 buffer = []
@@ -550,16 +634,48 @@ class Miner:
             el.get("role") in ("button", "menuitem")
         if not buttonish or not label or NOT_COMMIT.search(label):
             return False
+        if DISMISS_WORDS.match(label) and not el.get("table"):
+            return False  # leaves the form without saving: navigation, not a task
         return bool(COMMIT_WORDS.search(label))
 
+    @staticmethod
+    def _is_step(ev: dict[str, Any], page: dict[str, Any] | None, buffer: list[dict[str, Any]]) -> bool:
+        """A Continue / Next button of a multi-step form, pressed after the person filled something on this page."""
+        el = ev.get("element") or {}
+        if ev["kind"] != "click" or el.get("table"):
+            return False
+        buttonish = el.get("tag") == "button" or el.get("type") in ("submit", "button", "image") or \
+            el.get("role") in ("button",)
+        url = (page or {}).get("url") or ev.get("url") or ""
+        filled = any(e["kind"] in ("fill", "select", "check") and not e.get("secret")
+                     and (e.get("url") or url).split("#")[0] == url.split("#")[0] for e in buffer)
+        return bool(buttonish and filled and STEP_WORDS.match(ev.get("_label") or ""))
+
     def _instance(self, events: list[dict[str, Any]], commit: dict[str, Any], page: dict[str, Any] | None,
-                  user: str | None, role: str | None) -> dict[str, Any]:
+                  user: str | None, role: str | None, chain: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         url = commit.get("url") or (page or {}).get("url") or ""
         same = [e for e in events if (e.get("url") or url).split("#")[0] == url.split("#")[0]]
         values: dict[str, str] = {}
         meta: dict[str, dict[str, Any]] = {}
         order: list[str] = []
         touched: set[str] = set()
+        stages: list[dict[str, Any]] = []
+        for st in chain or []:  # 23.11.1: the earlier pages of a multi-step form, in order
+            labels: list[str] = []
+            for e in st["events"][:-1]:
+                if e["kind"] not in ("fill", "select", "check") or e.get("secret"):
+                    continue
+                el = e.get("element") or {}
+                label = e.get("_label") or field_label(el)
+                values[label] = e.get("value") or ""
+                meta[label] = {"tag": el.get("tag"), "type": el.get("type"), "options": e.get("options") or [],
+                               "required": bool(e.get("required"))}
+                for lst in (order, labels):
+                    if label in lst:
+                        lst.remove(label)
+                    lst.append(label)
+                touched.add(label)
+            stages.append({"screen": st["screen"], "url": st["url"], "fields": labels, "step": st["label"]})
         if page and page.get("url", "").split("#")[0] == url.split("#")[0]:
             for f in page.get("fields", []):
                 if f.get("label") and not f.get("secret") and f.get("value") not in (None, "") and \
@@ -592,6 +708,19 @@ class Miner:
                 "user": user, "role": norm(role or (f"user {user}" if user else "")) or None,
                 "obs": commit.get("_id"), "outcome": None, "messages": [], "invalid": [], "row": None,
                 "page_heading": (page or {}).get("heading") or "", "page_title": (page or {}).get("title") or ""}
+        if stages:
+            inst["chain"] = stages
+        rk = None if row else self._record_in_url(url)
+        if rk:  # 23.11.1: an action on a record's own page
+            inst["record_key"] = rk
+        secrets_typed = []
+        for e in same[:-1]:
+            if e["kind"] == "fill" and e.get("secret"):
+                lbl = e.get("_label") or field_label(e.get("element") or {})
+                if lbl and lbl not in secrets_typed:
+                    secrets_typed.append(lbl)
+        if secrets_typed:
+            inst["secrets"] = secrets_typed  # only the field names: a code typed by a person is never kept
         if row and page:
             inst["row"] = self._row_of(page, row.get("row") if isinstance(row, dict) else str(row))
         return inst
@@ -609,10 +738,7 @@ class Miner:
                 "headers": []}
 
     def _outcome(self, inst: dict[str, Any], p: dict[str, Any], final: bool = False) -> bool:
-        errors = [m["text"] for m in p.get("messages", []) if m.get("kind") == "error"
-                  or (re.search(r"\b(error|invalid|required|already|cannot|not available|must|failed)\b",
-                                m.get("text") or "", re.I) and not SUCCESS_WORDS.search(m.get("text") or ""))]
-        invalid = [f"{f['label']}: {f.get('validation') or 'invalid'}" for f in p.get("fields", []) if f.get("invalid")]
+        errors, invalid = page_problems(p)
         success = [m["text"] for m in p.get("messages", []) if m.get("kind") == "success"
                    or SUCCESS_WORDS.search(m.get("text") or "")]
         success = [s for s in success if s not in errors]
@@ -682,6 +808,7 @@ class Miner:
                 "screens": screens, "navigation": nav, "flows": flows, "lifecycles": lifecycles, "rules": rules,
                 "roles": roles, "entities": entities, "login": login,
                 "identity": {"pattern": identity} if identity else None,
+                "login_users": sorted({str(x.get("user")) for x in self.logins if x.get("user")})[:20],
                 "records": dict(list(records.items())[-500:])}
 
     def _screens_out(self) -> list[dict[str, Any]]:
@@ -711,6 +838,15 @@ class Miner:
             if flow:
                 flow["group"] = gk
                 flows.append(flow)
+        for f in flows:  # 23.11.1: a page of a multi-step form that the application refused belongs to its task
+            screens = {st["screen"] for st in f.get("chain") or []}
+            fails = [x for x in self.step_failures if x["screen"] in screens]
+            for x in fails:
+                groups[f["group"]].append({"outcome": "failure", "messages": x["messages"], "invalid": x["invalid"],
+                                           "values": x["values"], "screen": x["screen"], "role": x["role"]})
+            if fails:
+                f["failures"] += len(fails)
+                f["failure_messages"] = (f.get("failure_messages") or []) + [m for x in fails for m in x["messages"]]
         # one title per flow: two different screens doing "Create trip" get their screen name added
         seen: Counter[str] = Counter(f["title"] for f in flows)
         for f in flows:
@@ -734,7 +870,7 @@ class Miner:
         ref = (succ or insts)[-1]
         screen = self.screens.get(ref["screen"]) or {}
         row = bool(ref.get("row"))
-        op = self._operation(ref["commit"], ref.get("page_heading") or "", row)
+        op = self._operation(ref["commit"], ref.get("page_heading") or "", row or bool(ref.get("record_key")))
         entity = screen.get("entity") or entity_of(ref["commit"], ref.get("page_heading") or "", exclude=self.app_words)
         if row:
             sight = next((s for i in reversed(succ or insts) for s in [self.sightings.get(
@@ -742,7 +878,23 @@ class Miner:
                 None)
             if sight:
                 entity = sight[-1]["entity"] or entity
-        title = f"{op.capitalize()} {entity}".strip() if entity else ref["commit"]
+        chain = next((i.get("chain") for i in reversed(succ or insts) if i.get("chain")), None)
+        if chain and not row:
+            # 23.11.1: a multi-step form ("Checkout: Your Information" -> Continue -> "Overview" -> Finish) is named
+            # after what its first page says it is, and after the record the application reports at the end
+            first = (self.screens.get(chain[0]["screen"]) or {}).get("name") or ""
+            hm = COMMIT_WORDS.search(first)
+            if norm(op) in GENERIC_COMMITS and hm:
+                op = {"check out": "checkout"}.get(norm(hm.group(1)), norm(hm.group(1)))
+            msgs = [m for i in succ for m in i["messages"]]
+            km = next((re.search(r"\b([A-Za-z]{3,})\s+(?:no\.?\s*|number\s*|#\s*)?" + GENERATED_KEY.pattern, m)
+                       for m in msgs if re.search(r"\b([A-Za-z]{3,})\s+(?:no\.?\s*|number\s*|#\s*)?"
+                                                  + GENERATED_KEY.pattern, m)), None)
+            if km and norm(km.group(1)) not in GENERIC_WORDS:
+                entity = singular(norm(km.group(1)))
+            elif entity in ("information", "detail", "info"):
+                entity = ""
+        title = f"{op.capitalize()} {entity}".strip() if entity else (op.capitalize() if chain else ref["commit"])
         roles = Counter(i["role"] for i in succ if i.get("role"))
         base = {"title": title[:80], "operation": op, "entity": entity, "screen": ref["screen"],
                 "screen_name": screen.get("name") or "", "commit": ref["commit"], "kind": "row_action" if row else "form",
@@ -752,6 +904,8 @@ class Miner:
                 "success_messages": [m for i in succ for m in i["messages"]][:5]}
         if row:
             return self._row_flow(base, insts, succ)
+        if ref.get("record_key"):
+            return self._detail_flow(base, insts, succ, ref)
         if not succ:
             base["parameters"] = self._params(insts, insts)
             base["usable"] = False
@@ -760,8 +914,10 @@ class Miner:
         if not params:
             return None
         base["parameters"] = params
-        base["start_url"] = urlsplit(ref["url"]).path + (f"?{urlsplit(ref['url']).query}" if urlsplit(ref["url"]).query
-                                                          else "")
+        start = (ref.get("chain") or [{}])[0].get("url") or ref["url"]
+        base["start_url"] = urlsplit(start).path + (f"?{urlsplit(start).query}" if urlsplit(start).query else "")
+        if ref.get("chain"):
+            base["chain"] = ref["chain"]
         base["steps"] = self._steps(succ, params, ref)
         base["verify"] = self._success_pattern(succ, params)
         key = self._key_param(params, succ)
@@ -786,7 +942,8 @@ class Miner:
                 if label not in order:
                     order.append(label)
         form = list((self.screens.get(succ[-1]["screen"]) or {}).get("fields", {}).keys())
-        order.sort(key=lambda lbl: (form.index(lbl) if lbl in form else len(form) + order.index(lbl)))
+        seen_at = {lbl: n for n, lbl in enumerate(order)}  # (list.index is not usable while the list is sorted)
+        order.sort(key=lambda lbl: (form.index(lbl) if lbl in form else len(form) + seen_at[lbl]))
         params = []
         used_names: set[str] = set()
         for label in order:
@@ -822,6 +979,8 @@ class Miner:
         return params
 
     def _steps(self, succ: list[dict[str, Any]], params: list[dict[str, Any]], ref: dict[str, Any]) -> list[dict[str, Any]]:
+        if ref.get("chain"):
+            return self._chain_steps(params, ref)
         steps: list[dict[str, Any]] = [{"action": "navigate", "url": urlsplit(ref["url"]).path +
                                         (f"?{urlsplit(ref['url']).query}" if urlsplit(ref["url"]).query else "")}]
         screen = safe_key(f"{(self.screens.get(ref['screen']) or {}).get('name') or ''}")
@@ -854,17 +1013,57 @@ class Miner:
         steps.append({"action": "click", "screen": screen, "target": ref["commit"], "commit": True})
         return steps
 
+    def _chain_steps(self, params: list[dict[str, Any]], ref: dict[str, Any]) -> list[dict[str, Any]]:
+        """23.11.1: each page of a multi-step form: its fields, then its Continue button; then the last page."""
+        start = ref["chain"][0]["url"]
+        steps: list[dict[str, Any]] = [{"action": "navigate", "url": urlsplit(start).path +
+                                        (f"?{urlsplit(start).query}" if urlsplit(start).query else "")}]
+        by_label = {p["field"]: p for p in params}
+        placed: set[str] = set()
+
+        def fill(label: str, screen: str) -> None:
+            p = by_label.get(label)
+            if not p or label in placed:
+                return
+            placed.add(label)
+            act = {"select": "select", "check": "check"}.get(p["type"], "fill")
+            steps.append({"action": act, "screen": screen, "target": label, "param": p["name"],
+                          **({"optional": True} if p.get("optional") else {})})
+
+        for st in ref["chain"]:
+            screen = safe_key((self.screens.get(st["screen"]) or {}).get("name") or "")
+            for label in st["fields"]:
+                fill(label, screen)
+            steps.append({"action": "click", "screen": screen, "target": st["step"], "next_page": True})
+        screen = safe_key((self.screens.get(ref["screen"]) or {}).get("name") or "")
+        for p in params:
+            fill(p["field"], screen)
+        steps.append({"action": "click", "screen": screen, "target": ref["commit"], "commit": True})
+        return steps
+
     @staticmethod
     def _success_pattern(succ: list[dict[str, Any]], params: list[dict[str, Any]]) -> dict[str, Any]:
         patterns: Counter[str] = Counter()
         for i in succ:
             for m in i["messages"]:
-                pattern = re.escape(m[:160])
+                typed = {norm(v) for v in i["values"].values() if v}
+                # 23.11.1: a record number the application generated becomes a capture group, so the agent can
+                # read the real number after its own submission ("Order ORD-1002 placed")
+                parts, last = [], 0
+                for km in GENERATED_KEY.finditer(m[:160]):
+                    if norm(km.group(1)) in typed:
+                        continue
+                    parts.append(re.escape(m[last:km.start(1)]))
+                    parts.append("\x00KEY\x00")
+                    last = km.end(1)
+                    break
+                parts.append(re.escape(m[last:160]))
+                pattern = "".join(parts)
                 for p in sorted(params, key=lambda p: -len(str(i["values"].get(p["field"]) or ""))):
                     ex = str(i["values"].get(p["field"]) or "")
                     if len(ex) >= 2 and re.escape(ex) in pattern:
                         pattern = pattern.replace(re.escape(ex), "{" + p["name"] + "}")
-                patterns[pattern] += 1
+                patterns[pattern.replace("\x00KEY\x00", KEY_GROUP)] += 1
         if not patterns:
             return {}
         best, _ = max(patterns.items(), key=lambda kv: (kv[1], "{" in kv[0]))
@@ -963,6 +1162,66 @@ class Miner:
                 base["verify"]["record_listed"] = {"url": url, "column": kc, "param": key, "status_column": sc}
         return base
 
+    def _detail_flow(self, base: dict[str, Any], insts: list[dict[str, Any]], succ: list[dict[str, Any]],
+                     ref: dict[str, Any]) -> dict[str, Any] | None:
+        """23.11.1: an action on a record's own page (open trip TRP-0001, press Approve; or fill the recording
+        fields and press Record). The record's key comes from the address; a code the person typed there (driver
+        authentication) becomes a step the person completes in the browser at run time."""
+        rk = ref["record_key"]
+        kc = rk["key_column"]
+        key = param_name(kc)
+        segs = [x for x in urlsplit(ref["url"]).path.split("/")]
+        nonempty = [i for i, x in enumerate(segs) if x]
+        segs[nonempty[rk["index"]]] = "{" + key + "}"
+        url = "/".join(segs)
+        entity = rk.get("entity") or base.get("entity")
+        op = base["operation"]
+        title = f"{op.capitalize()} {entity}".strip() if entity else base["title"]
+        form = self._params(succ, insts) if succ else []
+        params = [{"name": key, "field": kc, "type": "text", "required": True, "example": rk["value"]}] + \
+            [p for p in form if p["name"] != key]
+        screen = safe_key((self.screens.get(ref["screen"]) or {}).get("name") or "")
+        steps: list[dict[str, Any]] = [{"action": "navigate", "url": url}]
+        for p in params[1:]:
+            act = {"select": "select", "check": "check"}.get(p["type"], "fill")
+            steps.append({"action": act, "screen": screen, "target": p["field"], "param": p["name"],
+                          **({"optional": True} if p.get("optional") else {})})
+        for lbl in next((i.get("secrets") for i in reversed(succ or insts) if i.get("secrets")), []) or []:
+            steps.append({"action": "manual_secret", "screen": screen, "target": lbl})
+        steps.append({"action": "click", "screen": screen, "target": ref["commit"], "commit": True})
+        before, after = Counter(), Counter()
+        for i in succ:
+            sights = [x for x in self.sightings.get(norm((i.get("record_key") or {}).get("value") or ""), [])
+                      if x.get("status")]
+            prior = [x for x in sights if (x["obs"] or 0) < (i["obs"] or 0)]
+            if prior:
+                before[prior[-1]["status"]] += 1
+            nxt = self._next_status(i["record_key"]["value"], i["obs"], prior[-1]["status"] if prior else None)
+            if nxt:
+                after[nxt] += 1
+        sc = rk.get("status_column") or "Status"
+        base.update({"title": title[:80], "entity": entity, "parameters": params, "start_url": url, "key_param": key,
+                     "target_kind": "existing", "steps": steps, "kind": "form", "usable": bool(succ),
+                     "detail_page": True})
+        if rk.get("list_path"):
+            base["exists_check"] = {"url": rk["list_path"], "list_url": rk["list_path"], "column": kc, "param": key,
+                                    "status_column": sc}
+        for i in succ:  # the key in the address is this record's: the success message names it, not a new one
+            i["values"].setdefault(kc, i["record_key"]["value"])
+        pattern = self._success_pattern(succ, params) if succ else {}
+        if pattern:
+            for i in succ:
+                v = (i.get("record_key") or {}).get("value")
+                if v and re.escape(v) in pattern["success_pattern"]:
+                    pattern["success_pattern"] = pattern["success_pattern"].replace(re.escape(v), "{" + key + "}")
+        base["verify"] = pattern
+        base["target"] = {"status_column": sc}
+        if before:
+            base["target"]["requires_status"] = before.most_common(1)[0][0]
+        if after:
+            base["expected_status"] = after.most_common(1)[0][0]
+        return base
+
     def _next_status(self, key: str | None, obs: int | None, current: str | None) -> str | None:
         for s in self.sightings.get(norm(key or ""), []):
             if obs and s["obs"] and s["obs"] <= obs:
@@ -992,8 +1251,11 @@ class Miner:
                 if st not in lc["statuses"]:
                     lc["statuses"].append(st)
             first_obs, first_status, _ = statuses[0]
-            creator = next((i for i in commits if not i.get("row") and (i["obs"] or 0) < (first_obs or 0)
-                            and any(norm(v) == key for v in i["values"].values())), None)
+            creator = next((i for i in commits if not i.get("row") and not i.get("record_key")
+                            and (i["obs"] or 0) < (first_obs or 0)
+                            and (any(norm(v) == key for v in i["values"].values())
+                                 or any(re.search(rf"(?<![\w-]){re.escape(key)}(?![\w-])", norm(m))
+                                        for m in i["messages"]))), None)
             if creator:
                 lc["initial"][(first_status, flow_title(creator), creator.get("role") or "")] += 1
             prev = statuses[0]
@@ -1005,7 +1267,8 @@ class Miner:
                 for i in commits:
                     if (prev[0] or 0) < (i["obs"] or 0) < (cur[0] or 0):
                         row = (i.get("row") or {}).get("row") or {}
-                        if any(norm(v) == key for v in row.values()) or any(norm(v) == key for v in i["values"].values()):
+                        if any(norm(v) == key for v in row.values()) or any(norm(v) == key for v in i["values"].values()) \
+                                or norm((i.get("record_key") or {}).get("value")) == key:
                             cause = i
                 tk = f"{prev[1]}>{cur[1]}"
                 t = lc["transitions"].setdefault(tk, {"from": prev[1], "to": cur[1], "count": 0, "actions": Counter(),
@@ -1443,6 +1706,9 @@ class Understanding:
             if validate_rule(rule):
                 continue
             rule["description"] = r["text"]
+            rule["observations"] = int(r.get("seen") or 1)  # 23.11.1: one sighting is a candidate, not proof
+            if r.get("evidence"):
+                rule["evidence"] = [str(x)[:200] for x in r["evidence"][:5]]
             propose("rule", r["key"], rule, "discovered" if r["source"] == "application message" else "ai_suggested",
                     r["confidence"], f"{r['source']}" + (f": {r['evidence'][0]}" if r["evidence"] else ""))
         for role in model["roles"]:

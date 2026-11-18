@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Virtual grid</title><script src="data.js"></script>
+<style>body{font-family:Arial;margin:20px}#vp{height:220px;overflow-y:auto;border:1px solid #999;position:relative;width:640px}
+[role=row]{display:flex;height:30px;align-items:center}[role=gridcell],[role=columnheader]{width:150px;padding:0 6px}</style></head>
+<body><h2>Invoices (virtualized grid)</h2>
+<div role="grid" id="g" aria-rowcount="26">
+  <div role="row" aria-rowindex="1"><div role="columnheader">Invoice No</div><div role="columnheader">City</div><div role="columnheader">Status</div><div role="columnheader">Amount</div></div>
+  <div id="vp"><div id="spacer" style="height:750px;position:relative"></div></div>
+</div>
+<script>
+const vp = document.getElementById("vp"), sp = document.getElementById("spacer");
+function render() { // only the rows in view exist in the page
+  const first = Math.floor(vp.scrollTop / 30), last = Math.min(INVOICES.length, first + 9);
+  sp.innerHTML = INVOICES.slice(first, last).map((r, k) => `<div role="row" aria-rowindex="${first + k + 2}" style="position:absolute;top:${(first + k) * 30}px">
+    <div role="gridcell">${r.id}</div><div role="gridcell">${r.city}</div><div role="gridcell">${r.status}</div><div role="gridcell">${fmt(r.amount)}</div></div>`).join("");
+}
+vp.addEventListener("scroll", render); render();
+</script></body></html>

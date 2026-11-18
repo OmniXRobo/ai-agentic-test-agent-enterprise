@@ -62,3 +62,20 @@ goes to the companion's local speech recognizer; the text appears in the chat bo
 
 Every sign-in, approval, preview, confirmation, result, pause and manual step, with the companion user, the
 application account and time. The tab shows whether the hash chain is intact.
+
+## 8. Record for Integration Comparison (1.2.0)
+
+SkyGuard's Integration Comparison reads reports from two applications and compares them. Instead of typing the way to
+the report, record it in your own Edge or Chrome:
+
+1. Open the reporting application in a tab and keep that tab active.
+2. In the side panel, open **Learn** and press **Start recording in the active tab** (allow the site if asked).
+3. Sign in, open the menus and the report, set its filters and press its Search or Apply button. Go to the next page
+   and open one detail record if the comparison needs the detail lines.
+4. Press **Stop and save file**. A file `skyguard-navigation-<site>.json` is downloaded.
+5. In SkyGuard: Integration Comparison, the application's **Connect** dialog, **Import from browser extension**, choose
+   the file. Edit the steps or the filter values there, then **Replay & Verify**.
+
+Nothing is changed in the application: sign-in steps, passwords and clicks such as Save, Delete or Approve are never
+kept. Pagination is not replayed; SkyGuard reads every page itself. A detail page becomes an address with the record's
+key (for example `/orders/{key}`), so the detail of every record is read.

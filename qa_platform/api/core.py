@@ -237,16 +237,28 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
         raise QAError("SETTINGS_INVALID", "sidebar_collapsed must be true or false.")
     pb = patch.get("playback", {})
     # final patch: Browser Manager window placement
-    if "window_mode" in pb and pb["window_mode"] not in ("maximized", "default"):
-        raise QAError("SETTINGS_INVALID", "Window mode must be 'maximized' or 'default'.")
+    if "window_mode" in pb and pb["window_mode"] not in ("maximized", "fixed", "default"):
+        raise QAError("SETTINGS_INVALID", "Window mode must be 'maximized', 'fixed' or 'default'.")
+    for dim, lo, hi in (("viewport_width", 320, 7680), ("viewport_height", 240, 4320)):  # 23.9.0 fixed window size
+        if dim in pb and not (isinstance(pb[dim], int) and lo <= pb[dim] <= hi):
+            raise QAError("SETTINGS_INVALID", f"{dim} must be a whole number between {lo} and {hi}.")
     if "monitor" in pb and not (pb["monitor"] in ("auto", "primary") or (isinstance(pb["monitor"], int) and 0 <= pb["monitor"] <= 16)):
         raise QAError("SETTINGS_INVALID", "Monitor must be 'auto', 'primary' or a monitor number.")
     for flag in ("headless", "headless_recording"):
         if flag in pb and pb[flag] is not None and not isinstance(pb[flag], bool):
             raise QAError("SETTINGS_INVALID", f"{flag} must be true or false.")
     cmp = patch.get("comparison", {})
-    if set(cmp) - {"headless", "browser", "tesseract_path"}:
+    if set(cmp) - {"headless", "browser", "tesseract_path", "tessdata_path", "ocr_engine", "ocr_runtime_path",
+                   "ocr_timeout_seconds", "data_timeout_ms", "concept_words", "strict_hosts"}:
         raise QAError("SETTINGS_INVALID", "Unknown comparison settings.")
+    if "ocr_engine" in cmp and cmp["ocr_engine"] not in ("auto", "rapidocr", "windows", "tesseract"):
+        raise QAError("SETTINGS_INVALID", "The OCR engine must be auto, rapidocr, windows or tesseract.")
+    for num, lo, hi in (("ocr_timeout_seconds", 10, 1800), ("data_timeout_ms", 1000, 120000)):
+        if num in cmp and not (isinstance(cmp[num], (int, float)) and lo <= cmp[num] <= hi):
+            raise QAError("SETTINGS_INVALID", f"{num} must be between {lo} and {hi}.")
+    if "concept_words" in cmp and not (isinstance(cmp["concept_words"], dict) and all(
+            isinstance(v, list) and all(isinstance(w, str) for w in v) for v in cmp["concept_words"].values())):
+        raise QAError("SETTINGS_INVALID", "concept_words must map a concept to a list of words.")
     if "browser" in cmp and cmp["browser"] not in (None, "chromium", "chrome", "msedge"):
         raise QAError("SETTINGS_INVALID", "The comparison browser must be chromium, chrome or msedge.")
     if "tesseract_path" in cmp and cmp["tesseract_path"] and not str(cmp["tesseract_path"]).lower().endswith("tesseract.exe") \

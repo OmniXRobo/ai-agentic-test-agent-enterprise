@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Web component table</title><script src="data.js"></script></head>
+<body><h2>Invoices (web component)</h2><invoice-list></invoice-list>
+<script>
+customElements.define("invoice-list", class extends HTMLElement {
+  connectedCallback() { const root = this.attachShadow({mode: "open"});
+    root.innerHTML = "<table><tr><th>Invoice No</th><th>City</th><th>Amount</th></tr>" +
+      INVOICES.slice(0, 8).map(r => `<tr><td>${r.id}</td><td>${r.city}</td><td>${fmt(r.amount)}</td></tr>`).join("") + "</table>"; }
+});
+</script></body></html>

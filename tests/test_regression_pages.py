@@ -83,6 +83,8 @@ def test_every_page_loads_like_before(tmp_path):
     added |= {"ops-agent"}
     # 23.8.0: the comparison pages are one Integration Comparison workspace
     added |= {"integration-comparison"}
+    # 23.10.0: the simple AI Agent page replaces the Operations Agent nav entry (which stays for admins only)
+    added |= {"ai-agent"}
     assert set(old) == set(new) - added and len(new) >= 30
     for r in added & set(new):
         assert not new[r]["failed"] and not new[r]["errors"], (r, new[r])

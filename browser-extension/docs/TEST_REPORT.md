@@ -1,3 +1,33 @@
+# Test report: SkyGuard Adaptive AI Browser Extension 1.3.0
+
+Run on 17 November 2026. Only tests that were actually executed are reported as passed. Environment: Linux
+container, Python 3.13, Playwright's Chromium (new headless mode) with the extension loaded unpacked, the companion
+running, and stand-in applications. No Windows PC, no Google Chrome or Microsoft Edge build and none of your own
+applications were available (see COMPATIBILITY.md).
+
+## 1.3.0 tests (executed)
+
+| Test | What it covers | Result |
+| --- | --- | --- |
+| `tests/test_extension_130.py::test_versions_are_130` | manifest, companion and agent core are 1.3.0 | passed |
+| `::test_side_panel_has_no_fixed_examples_or_permanent_warning` | no fixed example text or permanent warning in the side panel | passed |
+| `::test_least_privilege_is_unchanged` | permissions `storage`, `sidePanel`, `scripting`, `tabs`, `notifications`; site access optional | passed |
+| `::test_companion_suggestions_save_and_preview` | `/v1/simple/suggestions`, `/learn/{app}/save` (analysis and retrieval test), `/verify/{app}`, `/runs/{id}`; a viewer gets 403 for save and no operations in suggestions; "navigate to online store" is a navigation | passed |
+| `::test_g_start_learning_browse_disconnect_stop_save_and_use` | Start learning (REC badge), browsing the shop in a normal tab, the companion unreachable mid-way (status offline, actions queued), the companion back (the queue empties), Stop & save learning ("Learning saved and tested"), *Checkout order* learned and nothing named after *Cancel*, a suggestion chip in Chat, "navigate to online store" opens the page | passed |
+
+Earlier extension tests, run again with 1.3.0 in the same full-suite run (975 passed, 0 failed):
+`tests/test_extension_e2e.py`, `tests/test_extension_static.py` (including the check that `lib/agent_dom.js` is
+identical to SkyGuard's), `tests/test_extension_120.py`, `tests/test_companion_security.py`.
+
+## Not executed for 1.3.0
+
+* Microsoft Edge and Google Chrome on Windows; enterprise policies that restrict site access.
+* `UPDATE_EXTENSION.cmd` on Windows (no PowerShell here). 1.3.0 changes only the version numbers and texts in it;
+  the script checks the files it copies against `SHA256_CHECKSUM.txt`, which the package build writes.
+* A live local Qwen.
+
+---
+
 # Test report: SkyGuard Adaptive AI Browser Extension 1.0.0
 
 Only tests that were actually executed are reported as passed. Environment: Linux container, Python 3.13, Playwright's

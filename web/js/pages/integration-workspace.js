@@ -9,11 +9,13 @@ import { canEdit } from "../auth.js";
 
 const BASE = "/api/comparison/workspace";
 const KEY = "qa.ws.comparison";
-const RESULT_CLASS = { PASS: "PASS", "PASS*": "PASS", ACCEPTED: "ACC", FAIL: "FAIL", WARNING: "WARN" };
-const RESULT_TEXT = { PASS: "PASS", "PASS*": "PASS*", ACCEPTED: "EXPECTED", FAIL: "FAIL", WARNING: "WARNING" };
+const RESULT_CLASS = { PASS: "PASS", "PASS*": "PASS", ACCEPTED: "ACC", FAIL: "FAIL", WARNING: "WARN", NEEDS_REVIEW: "REVIEW", NOT_COMPARABLE: "NC", INCOMPLETE: "INC" };
+const RESULT_TEXT = { PASS: "PASS", "PASS*": "PASS*", ACCEPTED: "EXPECTED", FAIL: "FAIL", WARNING: "WARNING", NEEDS_REVIEW: "NEEDS REVIEW", NOT_COMPARABLE: "NOT COMPARABLE", INCOMPLETE: "INCOMPLETE" };
+const OPEN = ["FAIL", "WARNING", "NEEDS_REVIEW", "NOT_COMPARABLE", "INCOMPLETE"];
+const EXTRACTION_TEXT = { COMPLETE: "Read completely", PARTIAL: "Partly read", FAILED: "Could not be read", NEEDS_REVIEW: "Read, needs review" };
 const STATUS_TEXT = { auto_mapped: "Auto-mapped", needs_review: "Needs review", unmapped: "Unmapped", approved: "Approved", rejected: "Not the same" };
-const DECISIONS = [["valid_business_difference", "Valid business difference"], ["expected_calculation_difference", "Expected calculation difference"],
-  ["false_positive", "False positive"], ["actual_defect", "Actual defect"], ["investigate", "Requires further investigation"]];
+const DECISIONS = [["actual_defect", "Genuine defect"], ["valid_business_difference", "Expected difference"], ["expected_calculation_difference", "Expected calculation difference"],
+  ["false_positive", "False positive"], ["investigate", "Further review"]];
 const SOURCE_TEXT = { screenshot: "Screenshot", live: "Live application", file: "Exported file" };
 
 let st = null; // { id, data, cfg, run, filter }
@@ -28,7 +30,7 @@ const appName = (id) => (appsOf().find((a) => a.id === id) || {}).name || id;
 const letterOf = (id) => (appsOf().find((a) => a.id === id) || {}).letter || "?";
 
 async function load(id) {
-  st = { id, data: await api(`${BASE}/${encodeURIComponent(id)}`), cfg: null, run: null, filter: "all" };
+  st = { id, data: await api(`${BASE}/${encodeURIComponent(id)}`), cfg: null, run: null, filter: "all", flt: null };
   if (st.data.analysis) st.cfg = structuredClone(st.data.analysis.config);
   if (st.data.runs?.length) {
     try { st.run = (await api(`${BASE}/runs/${st.data.runs[0].id}`)).run; } catch { st.run = null; }
@@ -92,6 +94,7 @@ function render() {
     </div>
     <ol class="ws-steps">${steps.map(([t, done], i) => `<li class="${done ? "done" : ""}"><b>${i + 1}</b> ${esc(t)}</li>`).join("")}</ol>
     <section class="ws-sec"><h3>Step 1 · Add applications</h3><div class="ws-apps" id="wsApps"></div></section>
+    <section class="ws-sec" id="wsFilterSec"><h3>Filters (optional) · compare the same scope</h3><div id="wsFilters"></div></section>
     <section class="ws-sec"><h3>Step 2 · Analyze applications</h3>
       <div class="row"><button class="btn primary ws-big" id="wsAnalyze" ${canEdit() ? "" : "disabled"}>ANALYZE &amp; DETECT DATA</button>
       <label class="ws-check"><input type="checkbox" id="wsAI"> Ask the local AI about field names it cannot match</label>
@@ -115,6 +118,7 @@ function render() {
   root.querySelector("#wsRun").addEventListener("click", runComparison);
   root.querySelector("#wsRuns")?.addEventListener("change", async (e) => { st.run = (await api(`${BASE}/runs/${e.target.value}`)).run; renderResults(); });
   renderApps();
+  renderFilters();
   renderPreview();
   renderMapping();
   renderResults();
@@ -182,28 +186,119 @@ function renderApps() {
   host.querySelectorAll("[data-connect]").forEach((b) => b.addEventListener("click", () => connect(appsOf().find((a) => a.id === b.dataset.connect))));
 }
 
+// 23.10.0: Connect to Application = Guided Browser Automation. The tester signs in and goes to the report in a
+// maximized browser; SkyGuard records the navigation, keeps the filters editable, notices pagination (every page is
+// read automatically) and turns a click into a detail page into a parameterized address. Typed steps stay available
+// under Advanced (manual navigation).
 function connect(a) {
   const { el, close } = openModal(`Connect to ${a.name}`, `<form class="grid" id="cf" autocomplete="off">
-    <p class="muted">The page is opened in the browser and only read. Nothing is changed in the application.</p>
-    <label>Page address <input name="url" value="${esc(a.url || "")}" placeholder="https://reports.company.local/orders" required></label>
+    <p class="muted">The application is only read. Nothing is changed in it: a recorded click that looks like a change (Save, Delete, Approve…) is never kept.</p>
+    <label>Start address <input name="url" value="${esc(a.url || "")}" placeholder="https://reports.company.local/" required></label>
     <label>Sign-in <select name="auth_method">${[["none", "No sign-in"], ["form", "Login form (username and password)"], ["windows", "Windows sign-in"], ["basic", "Basic"], ["manual", "I sign in myself (SSO / MFA)"]]
       .map(([v, t]) => `<option value="${v}" ${v === a.auth_method ? "selected" : ""}>${t}</option>`).join("")}</select></label>
     <label>Username <input name="username" value="${esc(a.username || "")}" autocomplete="off"></label>
     <label>Password <input name="password" type="password" autocomplete="new-password" placeholder="${a.has_password ? "Saved. Leave blank to keep it" : "Kept in Windows Credential Manager"}"></label>
-    <details><summary>Advanced: steps to reach the page</summary>
-      <label>Steps (one per line: click Text, or fill Label = value) <textarea name="steps" rows="3" placeholder="click Reports\nclick Order Summary"></textarea></label></details>
-    <div class="row"><button class="btn primary" name="go" value="capture">Save and capture data</button><button class="btn" name="go" value="save">Save only</button></div></form>`, { wide: true });
-  el.querySelector("#cf").addEventListener("submit", async (e) => {
+    <div class="card" id="gr" style="margin:6px 0"><p class="muted">Loading the recording…</p></div>
+    <details><summary>Advanced (manual navigation)</summary>
+      <label>Steps (one per line: click Text, or fill Label = value) <textarea name="steps" rows="3" placeholder="click Reports\nclick Order Summary"></textarea></label>
+      <div class="row"><button class="btn" name="go" value="capture">Save and capture with these steps</button><button class="btn" name="go" value="save">Save only</button></div></details>
+    </form>`, { wide: true });
+  const form = el.querySelector("#cf");
+  const values = () => Object.fromEntries(new FormData(form));
+  const saveApp = async () => {
+    const f = values();
+    await api(`${BASE}/applications/${a.id}`, { method: "PATCH", body: { url: f.url, auth_method: f.auth_method, username: f.username || null, password: f.password || null } });
+  };
+  let timer = null;
+  const box = el.querySelector("#gr");
+  const stopTimer = () => { if (timer) clearInterval(timer); timer = null; };
+  const guard = (fn) => async (e) => { const b = e.currentTarget; b.disabled = true; try { await fn(); } catch (err) { toast(err.message, "error"); } finally { if (b.isConnected) b.disabled = false; } };
+  async function show() {
+    if (!box.isConnected) { stopTimer(); return; }
+    const g = await api(`${BASE}/applications/${a.id}/guided`);
+    const rec = g.saved;
+    if (g.recording) {
+      const live = g.live || {};
+      box.innerHTML = `<h4 style="margin-top:0">Guided recording ${'<span class="pill INFO">Recording</span>'}</h4>
+        <p>Use the browser window that opened: sign in, open the menus and the report, set its filters, go through a page or two and open one detail record if you need them.</p>
+        <p class="muted">${live.events || 0} action(s) seen${live.last ? ` · last: ${esc(live.last.kind)} ${esc(live.last.what || "")}` : ""}${g.session?.state === "paused" ? " · waiting for you to sign in" : ""}</p>
+        <div class="row"><button type="button" class="btn primary" data-g="stop">Stop &amp; Save</button></div>`;
+      if (!timer) timer = setInterval(() => show().catch(() => stopTimer()), 2000);
+    } else {
+      stopTimer();
+      box.innerHTML = rec ? `<h4 style="margin-top:0">Recorded navigation <span class="pill PASS">Saved</span></h4>
+        <p class="muted">${esc(dateTimeOf(rec.edited_at || rec.recorded_at))} · ${rec.steps.length} step(s)${rec.pagination_seen ? " · pagination noticed: every page is read automatically" : ""}${(rec.dropped || []).length ? ` · ${rec.dropped.length} action(s) left out` : ""}</p>
+        <label>Recorded steps (edit if needed) <textarea id="gSteps" rows="${Math.min(10, Math.max(3, rec.steps.length + 1))}">${esc(g.steps_text)}</textarea></label>
+        ${(rec.filters || []).length ? `<p><b>Filters</b> (change the values here; no new recording needed)</p>${rec.filters.map((f) => `<label>${esc(f.label)} <input data-fv="${esc(f.label)}" value="${esc(f.value ?? "")}"></label>`).join("")}` : '<p class="muted">No filters were set while recording.</p>'}
+        ${rec.detail ? `<p><b>Detail pages</b>: for every record, open <code>${esc(rec.detail.url_template)}</code> with its ${esc(rec.detail.key_column)}.
+          <label style="display:inline"><input type="checkbox" id="gDet" ${rec.detail_disabled ? "" : "checked"}> read the detail pages</label>
+          <label style="display:inline">at most <input id="gLim" type="number" min="1" max="2000" style="width:6em" value="${rec.detail.limit || 200}"> records</label></p>` : ""}
+        ${(rec.tables || []).length ? `<details><summary>View captured tables (${rec.tables.length})</summary>${rec.tables.map((t) => `<p class="muted">${esc(t.row_count)} row(s) on the page${t.method ? ` · ${esc(t.method)}` : ""}</p><div class="table-wrap"><table class="data"><thead><tr>${(t.headers || []).map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${(t.rows || []).map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`).join("")}</details>` : ""}
+        ${(rec.dropped || []).length ? `<details><summary>Left out of the recording</summary><ul>${rec.dropped.slice(0, 30).map((d) => `<li>${esc(d.what || "")}: ${esc(d.why)}</li>`).join("")}</ul></details>` : ""}
+        <div class="row"><button type="button" class="btn" data-g="save">Save edits</button><button type="button" class="btn primary" data-g="replay">Replay &amp; Verify</button><button type="button" class="btn" data-g="start">Re-record</button><button type="button" class="btn" data-g="import" title="A recording made with the SkyGuard Edge/Chrome extension (Record for Integration Comparison)">Import from browser extension</button><input type="file" accept=".json,application/json" data-g="file" hidden></div>`
+        : `<h4 style="margin-top:0">Guided recording</h4>
+        <p>Press Start, then sign in and go to the report as you always do: menus, the report, its filters, the next page, a detail record. SkyGuard records the way there; passwords are never recorded.</p>
+        <div class="row"><button type="button" class="btn primary" data-g="start">Start Guided Recording</button><button type="button" class="btn" data-g="import" title="A recording made with the SkyGuard Edge/Chrome extension (Record for Integration Comparison)">Import from browser extension</button><input type="file" accept=".json,application/json" data-g="file" hidden></div>
+        <p class="muted">Already recorded the way to the report in Edge or Chrome with the SkyGuard extension? Import its file instead.</p>`;
+    }
+    box.querySelector('[data-g="start"]')?.addEventListener("click", guard(async () => {
+      await saveApp();
+      await api(`${BASE}/applications/${a.id}/guided/start`, { method: "POST" });
+      toast("A browser window is opening. Sign in and go to the report.", "success", 7000);
+      await show();
+    }));
+    box.querySelector('[data-g="stop"]')?.addEventListener("click", guard(async () => {
+      const out = await api(`${BASE}/applications/${a.id}/guided/stop`, { method: "POST" });
+      if (out.auth_method === "manual") toast("You signed in by hand while recording. Save the login above for unattended runs, or keep 'I sign in myself'.", "info", 9000);
+      await show();
+    }));
+    const file = box.querySelector('[data-g="file"]');
+    box.querySelector('[data-g="import"]')?.addEventListener("click", () => file && file.click());
+    file?.addEventListener("change", async () => {
+      const f = file.files && file.files[0];
+      if (!f) return;
+      try {
+        if (f.size > 4 * 1024 * 1024) throw new Error("This file is too large for a navigation recording.");
+        let data;
+        try { data = JSON.parse(await f.text()); } catch (e) { throw new Error("This is not a SkyGuard navigation recording (not JSON)."); }
+        await saveApp();
+        const out = await api(`${BASE}/applications/${a.id}/guided/import`, { method: "POST", body: { recording: data.recording || data } });
+        toast(`Imported ${out.saved.steps.length} step(s) from the browser extension.`, "success");
+        if (out.auth_method === "manual") toast("The sign-in was done by hand while recording. Save the login above for unattended runs, or keep 'I sign in myself'.", "info", 9000);
+        await show();
+      } catch (err) { toast(err.message, "error"); } finally { file.value = ""; }
+    });
+    const edits = () => {
+      const fv = {};
+      box.querySelectorAll("[data-fv]").forEach((i) => { fv[i.dataset.fv] = i.value; });
+      const det = box.querySelector("#gDet");
+      return { steps_text: box.querySelector("#gSteps")?.value, filter_values: fv, detail_enabled: det ? det.checked : undefined, detail_limit: Number(box.querySelector("#gLim")?.value) || undefined };
+    };
+    box.querySelector('[data-g="save"]')?.addEventListener("click", guard(async () => {
+      await api(`${BASE}/applications/${a.id}/guided`, { method: "PUT", body: edits() });
+      toast("Recording updated.", "success"); await show();
+    }));
+    box.querySelector('[data-g="replay"]')?.addEventListener("click", guard(async () => {
+      await saveApp();
+      await api(`${BASE}/applications/${a.id}/guided`, { method: "PUT", body: edits() });
+      await api(`${BASE}/applications/${a.id}/guided/replay`, { method: "POST" });
+      toast("Replaying and reading every page… Analyze when it has finished.", "success", 7000);
+      close(); stopTimer(); await reload();
+      setTimeout(() => st && reload(), 6000);
+    }));
+  }
+  show().catch((err) => { box.innerHTML = `<p class="pill FAIL">${esc(err.message)}</p>`; });
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const go = e.submitter?.value || "capture";
-    const f = Object.fromEntries(new FormData(e.target));
+    const go = e.submitter?.value || "save";
+    const f = values();
     try {
-      await api(`${BASE}/applications/${a.id}`, { method: "PATCH", body: { url: f.url, auth_method: f.auth_method, username: f.username || null, password: f.password || null } });
+      await saveApp();
       if (go === "capture") {
         await api(`${BASE}/applications/${a.id}/capture`, { method: "POST", body: { steps: parseSteps(f.steps || "") } });
         toast("Capturing the page… Analyze when it has finished.", "success");
       }
-      close(); await reload();
+      stopTimer(); close(); await reload();
       if (go === "capture") setTimeout(() => st && reload(), 6000);
     } catch (err) { toast(err.message, "error"); }
   });
@@ -261,11 +356,14 @@ function renderPreview() {
         return ch.source === "screenshot" && ch.evidence ? `<td class="ws-low ws-edit" data-ev="${esc(ch.evidence)}" data-where='${esc(JSON.stringify({ kind: "chart", chart: an.apps.find((x) => x.app_id === a.app_id).charts.filter((y) => y.source === "screenshot" && y.evidence === ch.evidence).indexOf(ch), category: c }))}' title="Not readable: click to enter the value you see">?</td>` : "<td>?</td>";
       }).join("")}</tr></tbody></table>${ch.note ? `<p class="muted">${esc(ch.note)}</p>` : ""}</div>`).join("");
     return `<details class="card ws-prev" open><summary><span class="ws-letter">${esc(a.letter)}</span> <b>${esc(a.name)}</b> · ${esc(src)}
-      ${cov.low_confidence ? `<span class="pill WARN">${cov.low_confidence} value(s) to check</span>` : ""} ${cov.complete ? '<span class="pill PASS">complete</span>' : '<span class="pill WARN">partial</span>'}</summary>
+      ${cov.low_confidence ? `<span class="pill WARN">${cov.low_confidence} value(s) to check</span>` : ""} ${cov.complete ? '<span class="pill PASS">complete</span>' : '<span class="pill WARN">partial</span>'}
+      ${cov.extraction ? `<span class="pill ${cov.extraction === "COMPLETE" ? "PASS" : cov.extraction === "FAILED" ? "FAIL" : "WARN"}" title="Extraction status">${esc(EXTRACTION_TEXT[cov.extraction] || cov.extraction)}</span>` : ""}
+      ${cov.scope ? `<span class="muted" title="Scope of the data">${esc({ verified: "all records verified", declared: "all records (declared by you)", visible: "visible records only" }[cov.scope] || cov.scope)}</span>` : ""}</summary>
+      ${(cov.inputs || []).filter((i) => i.status !== "COMPLETE" && (i.issues || []).length).map((i) => `<p class="muted">${esc(i.kind || "input")}: ${esc(EXTRACTION_TEXT[i.status] || i.status)}: ${esc((i.issues || []).join("; "))}</p>`).join("")}
       ${cov.notes.length ? `<ul class="ws-notes">${cov.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
       ${tables}${values}${charts || ""}${!tables && !values && !charts ? '<p class="muted">Nothing was detected.</p>' : ""}</details>`;
   }).join("") + (an.config.notes?.length ? `<div class="card ws-warn">${an.config.notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>` : "")
-    + (an.config.ai ? `<p class="muted">Local AI: ${esc(an.config.ai.used ? `${an.config.ai.added} extra suggestion(s), all marked for review` : an.config.ai.note)}</p>` : "");
+    + (an.config.ai ? `<p class="muted">Local AI: ${esc(an.config.ai.used ? `${an.config.ai.added} extra suggestion(s), all marked for review${an.config.ai.note ? `. ${an.config.ai.note}` : ""}` : an.config.ai.note)}</p>` : "");
   if (!canEdit()) return;
   host.querySelectorAll(".ws-edit").forEach((td) => td.addEventListener("click", () => correct(td)));
 }
@@ -449,10 +547,11 @@ function renderResults() {
   const run = st.run, d = run.detail, s = d.summary;
   const apps = d.apps;
   const tiles = [["Total comparisons", s.total_comparisons], ["Passed", s.passed, "ok"], ["Failed", s.failed, "fail"], ["Warnings", s.warnings, "warn"],
+    ["Needs review", s.needs_review ?? 0, "warn"], ["Not comparable", s.not_comparable ?? 0], ["Incomplete", s.incomplete ?? 0, "warn"],
     ["Records checked", s.records_checked], ["Missing records", s.missing_records], ["Field mismatches", s.field_mismatches],
     ["Calculation mismatches", s.calculation_mismatches], ["Status mismatches", s.status_mismatches], ["Unverified visual values", s.unverified_visual]];
-  const filters = [["all", "All"], ["FAIL", "Failed"], ["WARNING", "Warnings"], ...Object.entries(d.pairs).map(([k, p]) => [k, `${letterOf(p.apps[0])} vs ${letterOf(p.apps[1])}`])];
-  const rows = d.rows.filter((r) => st.filter === "all" ? true : st.filter === "FAIL" || st.filter === "WARNING" ? r.result === st.filter : (() => { const [x, y] = st.filter.split("|"); return r.pairs.includes(x) && r.pairs.includes(y); })());
+  const filters = [["all", "All"], ["FAIL", "Failed"], ["WARNING", "Warnings"], ["NEEDS_REVIEW", "Needs review"], ["NOT_COMPARABLE", "Not comparable"], ["INCOMPLETE", "Incomplete"], ...Object.entries(d.pairs).map(([k, p]) => [k, `${letterOf(p.apps[0])} vs ${letterOf(p.apps[1])}`])];
+  const rows = d.rows.filter((r) => st.filter === "all" ? true : OPEN.includes(st.filter) ? r.result === st.filter : (() => { const [x, y] = st.filter.split("|"); return r.pairs.includes(x) && r.pairs.includes(y); })());
   host.innerHTML = `<h3>Step 5 · Results ${pill(run.result)}</h3>
     ${d.coverage_note ? `<p class="ws-warn">${esc(d.coverage_note)}</p>` : ""}
     <div class="ws-tiles">${tiles.map(([t, v, k]) => `<div class="card ws-tile ${k || ""}"><b>${esc(v)}</b><span>${esc(t)}</span></div>`).join("")}</div>
@@ -506,6 +605,9 @@ function detail(r) {
       ${r.expected !== null && r.expected !== undefined ? `<tr><th>Expected</th><td>${esc(r.expected)}</td><td></td></tr>` : ""}
       ${r.actual !== null && r.actual !== undefined ? `<tr><th>Actual</th><td>${esc(r.actual)}</td><td></td></tr>` : ""}
       ${r.difference !== null && r.difference !== undefined ? `<tr><th>Difference</th><td>${esc(r.difference)}</td><td></td></tr>` : ""}
+      ${r.source_app ? `<tr><th>Source / target application</th><td colspan="2">${esc(r.source_app)}${r.target_app ? ` → ${esc(r.target_app)}` : ""}</td></tr>` : ""}
+      ${r.suggested_label ? `<tr><th>Suggested classification</th><td colspan="2">${esc(r.suggested_label)} <span class="muted">(your decision below is what counts)</span></td></tr>` : ""}
+      ${r.normalized ? `<tr><th>Normalization</th><td colspan="2">Equal after normalization (currency, separators, case or date format)</td></tr>` : ""}
       ${r.mapping ? `<tr><th>Field mapping used</th><td colspan="2">${esc(r.mapping)}</td></tr>` : ""}
       ${r.calculation ? `<tr><th>Calculation used</th><td colspan="2">${esc(r.calculation)}</td></tr>` : ""}
     </tbody></table>
@@ -515,7 +617,7 @@ function detail(r) {
     ${r.decision && !r.original_result ? `<p class="muted">Decision: ${esc(r.decision.label)} by ${esc(r.decision.by)}, ${esc(dateTimeOf(r.decision.at))}</p>` : ""}
     ${edit ? `<h4>Your decision</h4><div class="row ws-dec">${DECISIONS.map(([k, t]) => `<button class="btn" data-dec="${k}">${esc(t)}</button>`).join("")}</div>
     <label class="grid">Note <input id="wsNote" maxlength="1000"></label>
-    <div class="row">${r.result === "FAIL" || r.result === "WARNING" ? '<button class="btn primary" id="wsDefect">CREATE DEFECT / REVIEW</button>' : ""}
+    <div class="row">${OPEN.includes(r.result) ? '<button class="btn primary" id="wsDefect">CREATE DEFECT / REVIEW</button>' : ""}
       <button class="btn" id="wsExplain">Explain with AI</button></div>` : ""}`, { wide: true });
   placeBoxes(el);
   el.querySelectorAll("[data-dec]").forEach((b) => b.addEventListener("click", async () => {
@@ -552,11 +654,15 @@ function showDefect(dft) {
     <tr><th>Steps to reproduce</th><td><ol>${(d.steps || []).map((s) => `<li>${esc(s)}</li>`).join("")}</ol></td></tr>
     <tr><th>Explanation</th><td>${esc(d.explanation || "")}</td></tr>
     <tr><th>Screenshots</th><td>${esc((d.screenshots || []).join(", ") || "none")}</td></tr></tbody></table>
-    <div class="row"><button class="btn primary" id="wsTfs">Send to TFS</button><span class="muted">It stays listed under "Defects and tester decisions" below the results.</span></div>`, { wide: true });
+    <div class="row"><button class="btn primary" id="wsTfs">Send to TFS</button><button class="btn" id="wsReview">Open in Defect Review</button><span class="muted">It stays listed under "Defects and tester decisions" below the results. Sending approves it in your name.</span></div>`, { wide: true });
+  el.querySelector("#wsReview").addEventListener("click", async () => {
+    try { const { draft } = await api(`/api/comparison/defects/${dft.id}/review`, { method: "POST", body: {} }); location.hash = `#/defect-review?id=${draft.id}`; }
+    catch (err) { toast(err.message, "error"); }
+  });
   el.querySelector("#wsTfs").addEventListener("click", async (e) => {
     e.target.disabled = true;
     const send = (force) => api(`/api/comparison/defects/${dft.id}/tfs`, { method: "POST", body: { force } });
-    try { const r = await send(false); toast(r.defect.tfs_id ? `Created TFS #${r.defect.tfs_id}` : "TFS is not reachable: queued", "success"); }
+    try { const r = await send(false); toast(r.defect.tfs_id ? `Created TFS #${r.defect.tfs_id}` : `TFS is not reachable: kept for retry${r.defect.tfs_sync?.reason ? ` (${r.defect.tfs_sync.reason})` : ""}`, r.defect.tfs_id ? "success" : "info"); }
     catch (err) {
       if (err.code === "CMP_POSSIBLE_DUPLICATE" && confirm(`${err.message}\n\nCreate it anyway?`)) { try { await send(true); } catch (e2) { toast(e2.message, "error"); } }
       else toast(err.message, "error");
@@ -576,4 +682,255 @@ async function renderLog() {
       <p class="muted">Decisions never change an approved mapping or calculation. A difference marked as valid, expected or a false positive is shown as EXPECTED on the next runs while the values stay the same.</p>`;
     host.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => showDefect(defects.find((x) => x.id === b.dataset.open))));
   } catch (err) { host.textContent = err.message; }
+}
+
+// ---- 23.9.0 filters: discover, configure, apply & fetch, sync equivalent filters, filter sets ------------------------
+// The page's own filter controls are used through its UI in one browser session per application. Nothing here bypasses
+// sign-in, MFA or CAPTCHA: the session pauses and the tester continues in the visible browser, then clicks Resume.
+
+const SESSION_TEXT = { none: "No browser session", starting: "Opening…", ready: "Session ready", busy: "Working…", paused: "Paused: your help is needed", closed: "Session closed", failed: "Session failed" };
+const SESSION_CLASS = { ready: "PASS", busy: "REVIEW", starting: "REVIEW", paused: "WARN", failed: "FAIL" };
+
+async function pollJob(job, onProgress) {
+  for (;;) {
+    const j = await api(`/api/comparison/jobs/${encodeURIComponent(job)}`);
+    onProgress?.(j);
+    if (j.status !== "running") return j;
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+}
+
+async function loadFilters() {
+  const live = appsOf().filter((a) => a.url);
+  const out = { apps: {}, links: [], fields: {}, sets: [], values: st.flt?.values || {}, sync: st.flt?.sync || null, setsJob: st.flt?.setsJob || null };
+  await Promise.all(live.map(async (a) => {
+    try { out.apps[a.id] = await api(`${BASE}/applications/${a.id}/filters`); } catch { out.apps[a.id] = { session: { state: "none" }, filters: null, applied: {}, runs: [] }; }
+    if (!out.values[a.id]) {
+      out.values[a.id] = {};
+      for (const c of out.apps[a.id].filters?.controls || []) if (c.is_filter && c.default !== undefined && c.default !== null) out.values[a.id][c.id] = c.default;
+    }
+  }));
+  if (live.length >= 2) {
+    try { const l = await api(`${BASE}/${st.id}/filter-links`); out.links = l.links || []; out.fields = l.fields || {}; } catch { /* no links yet */ }
+    try { out.sets = (await api(`${BASE}/${st.id}/filter-sets`)).sets || []; } catch { /* none */ }
+  }
+  st.flt = out;
+}
+
+function controlInput(aid, c) {
+  const v = st.flt.values[aid]?.[c.id] ?? "";
+  const dis = canEdit() && c.is_filter ? "" : "disabled";
+  const attrs = `data-fv="${esc(c.id)}" data-app="${esc(aid)}" ${dis} aria-label="${esc(c.display || c.label)}"`;
+  if ((c.options || []).length && ["select", "radio", "custom_dropdown", "autocomplete", "multi_select"].includes(c.kind)) {
+    return `<select ${attrs}><option value="">(leave as it is)</option>${c.options.map((o) => `<option ${String(o) === String(v) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+  }
+  if (c.kind === "checkbox") return `<select ${attrs}><option value="">(leave)</option><option value="true" ${v === true || v === "true" ? "selected" : ""}>checked</option><option value="false" ${v === false || v === "false" ? "selected" : ""}>not checked</option></select>`;
+  return `<input ${attrs} type="${c.kind === "date" ? "date" : "text"}" value="${esc(v)}">`;
+}
+
+async function renderFilters() {
+  const host = root?.querySelector("#wsFilters");
+  if (!host) return;
+  const live = appsOf().filter((a) => a.url);
+  if (!live.length) {
+    host.innerHTML = '<p class="muted">Connect an application (Step 1) to use its own filters: Region, City, Status, dates… The data are then fetched with the filters applied and compared on the same scope.</p>';
+    return;
+  }
+  if (!st.flt) { host.innerHTML = '<p class="muted">Loading filters…</p>'; await loadFilters(); if (!root) return; }
+  const f = st.flt;
+  const cards = live.map((a) => {
+    const info = f.apps[a.id] || {};
+    const ss = info.session || { state: "none" };
+    const ctl = info.filters?.controls || [];
+    const applied = Object.entries(info.applied || {});
+    const last = (info.runs || []).slice(-1)[0];
+    return `<div class="card ws-flt" data-app="${esc(a.id)}">
+      <div class="row"><span class="ws-letter">${esc(a.letter)}</span><b>${esc(a.name)}</b><span class="spacer"></span>
+        <span class="pill ${SESSION_CLASS[ss.state] || "INC"}">${esc(SESSION_TEXT[ss.state] || ss.state)}</span></div>
+      ${ss.state === "paused" ? `<p class="ws-note">${esc(ss.paused?.message || ss.message || "Continue in the browser window, then click Resume.")}</p>` : ""}
+      ${ss.state === "failed" && ss.message ? `<p class="ws-note">${esc(ss.message)}</p>` : ""}
+      ${ctl.length ? `<table class="table ws-flt-table"><thead><tr><th>Filter</th><th>Kind</th><th>Value</th><th>Why</th></tr></thead><tbody>
+        ${ctl.map((c) => `<tr class="${c.is_filter ? "" : "muted"}"><td><label class="ws-check"><input type="checkbox" data-isf="${esc(c.id)}" ${c.is_filter ? "checked" : ""} ${canEdit() ? "" : "disabled"}> ${esc(c.display || c.label)}</label>
+          ${c.depends_on ? `<div class="muted">depends on ${esc((ctl.find((x) => x.id === c.depends_on) || {}).label || c.depends_on)}</div>` : ""}</td>
+          <td>${esc(c.kind)}${c.range ? ` (${esc(c.range.role)})` : ""}</td><td>${controlInput(a.id, c)}</td><td class="muted ws-why" title="${esc(c.reason || "")}">${esc(c.reason || "")}</td></tr>`).join("")}
+      </tbody></table>` : `<p class="muted">${info.filters ? "No filter controls were found on this page." : "Filters not discovered yet."}</p>`}
+      ${applied.length ? `<p class="muted">Applied now: ${applied.map(([k, v]) => `${esc(k)} = ${esc(Array.isArray(v) ? v.join(", ") : v)}`).join(" · ")}</p>` : ""}
+      ${last ? `<p class="muted">Last fetch ${esc(dateTimeOf(last.at))}: ${esc(last.records ?? 0)} record(s)${last.expected_total ? ` of ${esc(last.expected_total)}` : ""}${last.complete ? "" : ' · <span class="pill INC">INCOMPLETE</span>'}${last.set ? ` · set ${esc(last.set)}` : ""}</p>` : ""}
+      <p class="muted ws-job" data-job="${esc(a.id)}"></p>
+      ${canEdit() ? `<div class="row ws-actions">
+        <button class="btn" data-fdisc="${esc(a.id)}">Discover &amp; configure filters</button>
+        <label class="ws-check"><input type="checkbox" data-fvis="${esc(a.id)}"> Show the browser</label>
+        ${ctl.length ? `<button class="btn" data-fsave="${esc(a.id)}">Save filter configuration</button>
+        <button class="btn primary" data-fapply="${esc(a.id)}">Apply filters &amp; fetch data</button>` : ""}
+        ${ss.state !== "none" && ss.state !== "closed" ? `<button class="btn" data-fprev="${esc(a.id)}">Preview</button>
+        <button class="btn" data-freset="${esc(a.id)}">Reset filters</button>
+        ${ss.state === "paused" ? `<button class="btn primary" data-fres="${esc(a.id)}">Resume</button>` : ""}
+        <button class="btn" data-fclose="${esc(a.id)}">Close session</button>` : ""}</div>` : ""}
+    </div>`;
+  }).join("");
+  host.innerHTML = `<div class="ws-flts">${cards}</div>${live.length >= 2 ? linksHtml() + setsHtml() : ""}`;
+  bindFilters(host);
+}
+
+function linksHtml() {
+  const f = st.flt;
+  const live = appsOf().filter((a) => a.url);
+  if (!f.links.length) return '<div class="card"><h4>Equivalent filters</h4><p class="muted">Discover the filters of at least two applications to link equivalent ones (Region = Territory, Status = Order State…).</p></div>';
+  const rows = f.links.map((l, i) => `<tr data-link="${i}"><td><input class="ws-lname" value="${esc(l.name)}" maxlength="80" ${canEdit() ? "" : "disabled"}></td>
+    ${live.map((a) => {
+      const m = l.members?.[a.id] || {};
+      const ctl = (f.apps[a.id]?.filters?.controls || []).filter((c) => c.is_filter);
+      const fields = f.fields[a.id] || [];
+      return `<td><select data-lm="${esc(a.id)}" ${canEdit() ? "" : "disabled"}><option value="">(none)</option>
+        ${ctl.map((c) => `<option value="f:${esc(c.id)}" ${m.filter === c.id ? "selected" : ""}>${esc(c.display || c.label)}</option>`).join("")}
+        ${fields.length ? `<optgroup label="No filter: filter the fetched data on">${fields.map((x) => `<option value="l:${esc(x)}" ${m.local_field === x ? "selected" : ""}>${esc(x)} (local)</option>`).join("")}</optgroup>` : ""}</select></td>`;
+    }).join("")}
+    <td>${l.confidence !== undefined ? pct(l.confidence) : ""} <span class="muted">${esc(l.reason || "")}</span></td>
+    <td><label class="ws-check"><input type="checkbox" data-lok ${l.status === "approved" ? "checked" : ""} ${canEdit() ? "" : "disabled"}> Approved</label></td></tr>`).join("");
+  return `<div class="card"><h4>Equivalent filters</h4>
+    <p class="muted">Suggested from the meaning of the labels and their options. Approve a link before it is used. An application without the filter can filter its fetched data locally on a column.</p>
+    <table class="table"><thead><tr><th>Filter</th>${live.map((a) => `<th>${esc(a.letter)} · ${esc(a.name)}</th>`).join("")}<th>Confidence</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    ${canEdit() ? `<div class="row ws-actions"><button class="btn" id="wsLinkAdd">+ Add a link</button><button class="btn" id="wsLinkSave">Save links</button>
+      <label class="ws-check">Use the values of <select id="wsSyncSrc">${live.map((a) => `<option value="${esc(a.id)}">${esc(a.letter)} · ${esc(a.name)}</option>`).join("")}</select></label>
+      <button class="btn" id="wsSync">Sync equivalent filters</button>
+      <button class="btn primary" id="wsFltCompare">Compare filtered data</button></div>` : ""}
+    ${f.sync ? `<p class="muted">${f.sync.unresolved?.length ? `Not translated (choose the value yourself): ${f.sync.unresolved.map((u) => `${esc(appName(u.app))} › ${esc(u.filter)} for “${esc(u.value)}”`).join("; ")}` : "Equivalent values filled in. Check them, then Apply filters & fetch data for each application."}</p>` : ""}</div>`;
+}
+
+function setsHtml() {
+  const f = st.flt;
+  const job = f.setsJob;
+  return `<div class="card"><h4>Filter sets</h4>
+    <p class="muted">Saved scenarios (for example North / Paid). Run All runs only the approved sets, never every combination.</p>
+    ${f.sets.length ? `<table class="table"><thead><tr><th>Name</th><th>Values</th><th></th><th></th></tr></thead><tbody>${f.sets.map((x, i) => `<tr><td>${esc(x.name)}</td>
+      <td class="muted">${Object.entries(x.values || {}).map(([aid, v]) => `${esc(letterOf(aid))}: ${Object.entries(v).map(([k, val]) => `${esc(labelOfFilter(aid, k))} = ${esc(val)}`).join(", ")}`).join(" · ")}</td>
+      <td><label class="ws-check"><input type="checkbox" data-sok="${i}" ${x.approved ? "checked" : ""} ${canEdit() ? "" : "disabled"}> Approved</label></td>
+      <td>${canEdit() ? `<button class="icon-btn" data-sdel="${i}" aria-label="Remove">✕</button>` : ""}</td></tr>`).join("")}</tbody></table>` : '<p class="muted">No filter sets yet.</p>'}
+    ${canEdit() ? `<div class="row ws-actions"><input id="wsSetName" placeholder="Name of the set, e.g. North paid" maxlength="80">
+      <button class="btn" id="wsSetAdd">Save current values as a set</button>
+      <button class="btn primary" id="wsSetsRun" ${f.sets.some((x) => x.approved) ? "" : "disabled"}>Run all approved sets</button></div>` : ""}
+    ${job ? `<p class="muted">${esc(job.progress || "")}${job.error ? ` · <span class="pill FAIL">${esc(job.error)}</span>` : ""}</p>
+      ${(job.results || []).map((r) => `<div class="row">${esc(r.set)} ${pill(r.result)} <button class="link-btn" data-srun="${esc(r.run)}">Open results</button></div>`).join("")}` : ""}</div>`;
+}
+
+function labelOfFilter(aid, id) {
+  if (String(id).startsWith("local:")) return `${String(id).slice(6)} (local)`;
+  const c = (st.flt.apps[aid]?.filters?.controls || []).find((x) => x.id === id);
+  return c ? (c.display || c.label) : id;
+}
+
+function readLinks(host) {
+  return [...host.querySelectorAll("[data-link]")].map((tr) => {
+    const l = st.flt.links[Number(tr.dataset.link)] || {};
+    const members = {};
+    tr.querySelectorAll("[data-lm]").forEach((sel) => {
+      const aid = sel.dataset.lm;
+      const v = sel.value;
+      if (v.startsWith("f:")) {
+        const c = (st.flt.apps[aid]?.filters?.controls || []).find((x) => x.id === v.slice(2));
+        members[aid] = { filter: v.slice(2), label: c ? (c.display || c.label) : v.slice(2) };
+      } else if (v.startsWith("l:")) members[aid] = { local_field: v.slice(2) };
+    });
+    return { ...l, name: tr.querySelector(".ws-lname").value || l.name, members, approve: tr.querySelector("[data-lok]").checked };
+  });
+}
+
+function bindFilters(host) {
+  const f = st.flt;
+  const job = (aid, text) => { const p = host.querySelector(`[data-job="${CSS.escape(aid)}"]`); if (p) p.textContent = text; };
+  const refresh = async () => { await loadFilters(); renderFilters(); };
+  const guard = (fn) => async (e) => { const b = e.currentTarget; b.disabled = true; try { await fn(b); } catch (err) { toast(err.message, "error"); } finally { if (b.isConnected) b.disabled = false; } };
+  host.querySelectorAll("[data-fv]").forEach((inp) => inp.addEventListener("change", () => {
+    const vals = (f.values[inp.dataset.app] ||= {});
+    if (inp.value === "") delete vals[inp.dataset.fv]; else vals[inp.dataset.fv] = inp.value;
+  }));
+  host.querySelectorAll("[data-fdisc]").forEach((b) => b.addEventListener("click", guard(async () => {
+    const aid = b.dataset.fdisc;
+    job(aid, "Opening the application and looking for its filters…");
+    const visible = host.querySelector(`[data-fvis="${CSS.escape(aid)}"]`)?.checked || undefined;
+    const r = await api(`${BASE}/applications/${aid}/filters/discover`, { method: "POST", body: { visible } });
+    toast(`${r.filters.controls.filter((c) => c.is_filter).length} filter(s) found`, "success");
+    await refresh();
+  })));
+  host.querySelectorAll("[data-fsave]").forEach((b) => b.addEventListener("click", guard(async () => {
+    const aid = b.dataset.fsave;
+    const card = host.querySelector(`.ws-flt[data-app="${CSS.escape(aid)}"]`);
+    const controls = [...card.querySelectorAll("[data-isf]")].map((c) => ({ id: c.dataset.isf, is_filter: c.checked, default: f.values[aid]?.[c.dataset.isf] ?? null }));
+    await api(`${BASE}/applications/${aid}/filters`, { method: "PUT", body: { controls } });
+    toast("Filter configuration saved", "success");
+    await refresh();
+  })));
+  host.querySelectorAll("[data-fapply]").forEach((b) => b.addEventListener("click", guard(async () => {
+    const aid = b.dataset.fapply;
+    const { job: id } = await api(`${BASE}/applications/${aid}/filters/apply`, { method: "POST", body: { values: f.values[aid] || {} } });
+    const j = await pollJob(id, (x) => job(aid, x.progress || ""));
+    if (j.status === "done") toast(`${appName(aid)}: ${j.progress}${j.verified === false ? " (filter values could not be verified)" : ""}. Analyze again to use the new data.`, j.verified === false ? "error" : "success");
+    else toast(`${appName(aid)}: ${j.error || "failed"}`, "error");
+    st.data = await api(`${BASE}/${st.id}`);
+    renderApps();
+    await refresh();
+  })));
+  host.querySelectorAll("[data-fprev]").forEach((b) => b.addEventListener("click", guard(async () => {
+    const r = await api(`${BASE}/applications/${b.dataset.fprev}/filters/preview`, { method: "POST" });
+    openModal(`Preview · ${appName(b.dataset.fprev)}`, `<img class="ws-preview-img" src="/api/comparison/evidence/${esc(r.evidence)}" alt="Page after applying the filters">`, { wide: true });
+  })));
+  host.querySelectorAll("[data-freset]").forEach((b) => b.addEventListener("click", guard(async () => {
+    await api(`${BASE}/applications/${b.dataset.freset}/filters/reset`, { method: "POST" });
+    f.values[b.dataset.freset] = {};
+    await refresh();
+  })));
+  host.querySelectorAll("[data-fres]").forEach((b) => b.addEventListener("click", guard(async () => {
+    await api(`${BASE}/applications/${b.dataset.fres}/filters/resume`, { method: "POST" });
+    await refresh();
+  })));
+  host.querySelectorAll("[data-fclose]").forEach((b) => b.addEventListener("click", guard(async () => {
+    await api(`${BASE}/applications/${b.dataset.fclose}/filters/close`, { method: "POST" });
+    await refresh();
+  })));
+  host.querySelector("#wsLinkAdd")?.addEventListener("click", () => { f.links = readLinks(host).concat([{ name: "Filter", members: {}, status: "suggested" }]); renderFilters(); });
+  host.querySelector("#wsLinkSave")?.addEventListener("click", guard(async () => {
+    const r = await api(`${BASE}/${st.id}/filter-links`, { method: "PUT", body: { links: readLinks(host) } });
+    toast(`${r.links.filter((l) => l.status === "approved").length} approved link(s) saved`, "success");
+    await refresh();
+  }));
+  host.querySelector("#wsSync")?.addEventListener("click", guard(async () => {
+    const src = host.querySelector("#wsSyncSrc").value;
+    const r = await api(`${BASE}/${st.id}/filters/sync`, { method: "POST", body: { source_app: src, values: f.values[src] || {} } });
+    for (const [aid, vals] of Object.entries(r.values || {})) f.values[aid] = { ...(f.values[aid] || {}), ...vals };
+    f.sync = r;
+    renderFilters();
+  }));
+  host.querySelector("#wsFltCompare")?.addEventListener("click", () => {
+    if (!st.data.saved_mapping) { toast("Analyze and approve the mapping first (Steps 2 and 3).", "error"); return; }
+    runComparison();
+  });
+  host.querySelector("#wsSetAdd")?.addEventListener("click", guard(async () => {
+    const name = host.querySelector("#wsSetName").value.trim();
+    if (!name) { toast("Name the filter set first.", "error"); return; }
+    const values = Object.fromEntries(Object.entries(f.values).filter(([, v]) => Object.keys(v || {}).length));
+    f.sets = (await api(`${BASE}/${st.id}/filter-sets`, { method: "PUT", body: { sets: [...f.sets, { name, values, approved: false }] } })).sets;
+    renderFilters();
+  }));
+  host.querySelectorAll("[data-sok]").forEach((c) => c.addEventListener("change", guard(async () => {
+    const sets = f.sets.map((x, i) => (i === Number(c.dataset.sok) ? { ...x, approved: c.checked } : x));
+    f.sets = (await api(`${BASE}/${st.id}/filter-sets`, { method: "PUT", body: { sets } })).sets;
+    renderFilters();
+  })));
+  host.querySelectorAll("[data-sdel]").forEach((b) => b.addEventListener("click", guard(async () => {
+    f.sets = (await api(`${BASE}/${st.id}/filter-sets`, { method: "PUT", body: { sets: f.sets.filter((_, i) => i !== Number(b.dataset.sdel)) } })).sets;
+    renderFilters();
+  })));
+  host.querySelector("#wsSetsRun")?.addEventListener("click", guard(async () => {
+    const { job: id } = await api(`${BASE}/${st.id}/filter-sets/run`, { method: "POST" });
+    f.setsJob = { progress: "starting", results: [] };
+    renderFilters();
+    f.setsJob = await pollJob(id, (x) => { f.setsJob = x; const p = root?.querySelector("#wsFilters .card:last-child p.muted:last-of-type"); if (p) p.textContent = x.progress || ""; });
+    st.data = await api(`${BASE}/${st.id}`);
+    render();
+  }));
+  host.querySelectorAll("[data-srun]").forEach((b) => b.addEventListener("click", async () => {
+    st.run = (await api(`${BASE}/runs/${b.dataset.srun}`)).run;
+    renderResults();
+    root.querySelector("#wsResults")?.scrollIntoView({ behavior: "smooth" });
+  }));
 }

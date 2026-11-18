@@ -67,12 +67,21 @@ try {
     Step "Unpacking the bundled Python 3.13.17"
     $rt = Join-Path $Target "runtime"
     $py = Join-Path $rt "python"
-    if (Test-Path $py) { Remove-Item -Recurse -Force $py }
-    $tmp = Join-Path $env:TEMP "sg-agent-$Stamp"
+    # 1.2.1: the runtime folder is created first (a new installation has none, and moving the unpacked Python into
+    # a folder whose parent does not exist failed with "Could not find a part of the path"). Python is unpacked in
+    # a staging folder inside runtime\ (same drive as the target, so the final rename never crosses volumes even
+    # when %TEMP% is on another drive), checked, and only then put in place.
+    New-Item -ItemType Directory -Force -Path $rt | Out-Null
+    $tmp = Join-Path $rt "staging-$Stamp"
     New-Item -ItemType Directory -Force -Path $tmp | Out-Null
     Copy-Item (Join-Path $Pkg "offline\python.3.13.17.nupkg") (Join-Path $tmp "python.zip")
     Expand-Archive -Path (Join-Path $tmp "python.zip") -DestinationPath (Join-Path $tmp "python") -Force
-    Move-Item (Join-Path $tmp "python\tools") $py
+    $newPy = Join-Path $tmp "python\tools"
+    if (-not (Test-Path (Join-Path $newPy "python.exe"))) { throw "The bundled Python package has no tools\python.exe." }
+    & (Join-Path $newPy "python.exe") -E -s -c "import sys, sqlite3, ctypes; print(sys.version.split()[0], sqlite3.sqlite_version)"
+    if ($LASTEXITCODE -ne 0) { throw "The bundled Python does not start." }
+    if (Test-Path $py) { Remove-Item -Recurse -Force $py }
+    Move-Item -LiteralPath $newPy -Destination $py
     $PyExe = Join-Path $py "python.exe"; $PywExe = Join-Path $py "pythonw.exe"
     & $PyExe -E -s -c "import sys, sqlite3, ctypes; print(sys.version.split()[0], sqlite3.sqlite_version)"
     if ($LASTEXITCODE -ne 0) { throw "The bundled Python does not start." }
@@ -102,9 +111,11 @@ try {
     if (-not (Test-Path $cfg)) { Set-Content -Path $cfg -Encoding UTF8 -Value ("{`"port`": $Port}") }
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 } catch {
+    $why = $_.Exception.Message
     Write-Host "Restoring the previous program files..." -ForegroundColor Yellow
+    if ($tmp -and (Test-Path $tmp)) { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
     if ($had) { foreach ($d in @("app", "extension")) { $b = Join-Path $backup $d; if (Test-Path $b) { $p = Join-Path $Target $d; if (Test-Path $p) { Remove-Item -Recurse -Force $p }; Copy-Item -Recurse $b $p } } }
-    Fail "$($_.Exception.Message) Your data folder was not touched."
+    Fail "$why Your data folder was not touched."
 }
 
 Step "Sign-in start and Start menu shortcuts (this user only)"

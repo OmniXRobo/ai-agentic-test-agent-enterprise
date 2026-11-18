@@ -35,6 +35,9 @@ def _param_names(p: dict[str, Any]) -> list[str]:
     for n in names:
         n = norm(n).replace("_", " ")
         variants = {n}
+        bare = re.sub(r"\s*\([^)]*\)\s*", " ", n).strip()  # 23.11.1: "odometer end (km)" is also "odometer end"
+        if bare and bare != n:
+            variants.add(bare)
         if re.search(r"\bno\b", n):
             variants.add(re.sub(r"\bno\b", "number", n))
         if re.search(r"\bnumber\b", n):
