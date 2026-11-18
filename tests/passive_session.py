@@ -90,7 +90,14 @@ def browse(agent: Any, browser: Any, app_id: str, base: str, script: list[Callab
     def tick(d: PlaywrightDriver) -> None:
         if steps:
             step = steps.pop(0)
-            step(d.page)
+            try:
+                step(d.page)
+            except Exception as exc:  # say which page the scripted person was on (CI diagnostics)
+                try:
+                    where = f"{d.page.url} | {d.page.inner_text('body')[:300]!r}"
+                except Exception as inner:  # noqa: BLE001
+                    where = f"page not readable: {inner}"
+                raise AssertionError(f"scripted step failed on {where}: {exc}") from exc
         else:
             d.page.close()
 
