@@ -6,7 +6,11 @@ import { confirmDelete } from "../confirm-delete.js";
 
 const BROWSERS = [["chromium", "Chromium"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"]];
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const PAGES = ["AI-Driven Automation", "Guided Browser Automation", "Hybrid Test Automation", "Application Discovery & Update"];
+const PAGES = ["AI-Driven Automation", "Guided Browser Automation", "Hybrid Test Automation", "Application Discovery & Update", "API Testing", "Integration Comparison"];
+// 23.12.0: API Testing and Integration Comparison items run without a browser (Authorized API / data comparison).
+const NO_BROWSER = new Set(["API Testing", "Integration Comparison"]);
+const MODES = [["visible", "Visible browser"], ["headless", "Headless (hidden browser)"], ["smart", "Smart Auto (chooses per item and shows why)"]];
+const tz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "this PC's time zone"; } catch { return "this PC's time zone"; } };
 const pill = (status) => status ? `<span class="pill ${esc({ PASSED: "PASS", FAILED: "FAIL", ERROR: "FAIL", RUNNING: "RUNNING", QUEUED: "WAITING", STOPPED: "WARN" }[status] || "WAITING")}">${esc(status)}</span>` : '<span class="muted">-</span>';
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const inAMinute = () => { const d = new Date(Date.now() + 5 * 60000); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
@@ -20,23 +24,26 @@ function scheduleForm(selected, current = {}, { runNow = false, emailReady = fal
   const c = { repeat: "daily", time: inAMinute(), start_date: today(), browsers: [chosenBrowser], parallel: 1, headless: false,
     data_rows: "first", catch_up: true, publish_tfs: false, email: { enabled: false, to: "", cc: "", on: "always" }, days: [0, 1, 2, 3, 4], every_hours: 1, ...current };
   const em = c.email || {};
+  const browserless = selected.length && selected.every((s) => NO_BROWSER.has(s.page));
+  const mode = c.mode || (c.headless ? "headless" : "visible");
   return `<form class="grid" id="schForm" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
     <p style="grid-column:1/-1;margin:0"><strong>${selected.length} script(s):</strong> ${selected.map((s) => esc(s.name)).join(", ")}</p>
     ${runNow ? "" : `<label>Schedule name <input name="name" value="${esc(c.name || "")}" placeholder="e.g. Nightly regression"></label>
     <label>Repeat <select name="repeat">
       ${[["once", "Once (a future date and time)"], ["daily", "Every day"], ["weekdays", "Monday to Friday"], ["weekly", "Chosen days of the week"], ["hourly", "Every few hours"]]
         .map(([v, l]) => `<option value="${v}" ${c.repeat === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-    <label>Time (this PC) <input name="time" type="time" required value="${esc(c.time)}"></label>
+    <label>Time (this PC, ${esc(tz())}) <input name="time" type="time" required value="${esc(c.time)}"></label>
     <label><span data-start-label>${c.repeat === "once" ? "Date" : "Start date"}</span> <input name="start_date" type="date" required value="${esc(c.start_date)}"></label>
     <label data-end>Until (empty = continues) <input name="end_date" type="date" value="${esc(c.end_date || "")}"></label>
     <label data-hours>Every (hours) <input name="every_hours" type="number" min="1" max="24" value="${esc(c.every_hours || 1)}"></label>
     <div data-days style="grid-column:1/-1"><span class="muted">Days</span><div class="chips" style="margin-top:4px">
       ${DAYS.map((d, i) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" name="day" value="${i}" style="width:auto;margin:0" ${(c.days || []).includes(i) ? "checked" : ""}>${d}</label>`).join("")}</div></div>`}
-    <div style="grid-column:1/-1"><span class="muted">Browsers (each script runs in each one)</span><div class="chips" style="margin-top:4px">
+    ${browserless ? `<p class="muted" style="grid-column:1/-1;margin:0">Test type: ${esc([...new Set(selected.map((s) => s.test_type || s.page))].join(", "))}. These run without a browser: API tests send authorized HTTP requests to the configured targets only.</p>` : ""}
+    <div style="grid-column:1/-1" ${browserless ? "hidden" : ""}><span class="muted">Browsers (each script runs in each one)</span><div class="chips" style="margin-top:4px">
       ${BROWSERS.map(([v, l]) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" name="browser" value="${v}" style="width:auto;margin:0" ${(c.browsers || []).includes(v) ? "checked" : ""}>${l}</label>`).join("")}</div></div>
     <label>Runs at the same time <input name="parallel" type="number" min="1" max="8" value="${esc(c.parallel)}"></label>
-    <label>Excel / CSV data <select name="data_rows"><option value="first" ${c.data_rows === "first" ? "selected" : ""}>Row 1 only</option><option value="all" ${c.data_rows === "all" ? "selected" : ""}>Every row (one run per row)</option></select></label>
-    <label>Browser window <select name="headless"><option value="0" ${!c.headless ? "selected" : ""}>Visible</option><option value="1" ${c.headless ? "selected" : ""}>Hidden (headless)</option></select></label>
+    <label ${browserless ? "hidden" : ""}>Excel / CSV data <select name="data_rows"><option value="first" ${c.data_rows === "first" ? "selected" : ""}>Row 1 only</option><option value="all" ${c.data_rows === "all" ? "selected" : ""}>Every row (one run per row)</option></select></label>
+    <label ${browserless ? "hidden" : ""}>Execution mode <select name="mode">${MODES.map(([v, l]) => `<option value="${v}" ${mode === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="publish_tfs" style="width:auto;margin:0" ${c.publish_tfs ? "checked" : ""}>Write Passed / Failed to TFS test runs</label>
     ${runNow ? "" : `<label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="catch_up" style="width:auto;margin:0" ${c.catch_up ? "checked" : ""}>Run a missed time when the app opens</label>`}
     <fieldset style="grid-column:1/-1;border:1px solid var(--border);border-radius:8px;padding:10px 12px"><legend>Email report (Outlook)</legend>
@@ -66,11 +73,11 @@ function wireForm(root) {
   return f;
 }
 
-function readForm(f, ids) {
+function readForm(f, ids, browserless = false) {
   const fd = new FormData(f);
   const body = {
     script_ids: ids, browsers: fd.getAll("browser"), parallel: Number(fd.get("parallel")) || 1,
-    headless: fd.get("headless") === "1", data_rows: fd.get("data_rows"), publish_tfs: fd.get("publish_tfs") === "on",
+    mode: fd.get("mode") || "visible", headless: fd.get("mode") === "headless" || fd.get("mode") === "smart", data_rows: fd.get("data_rows"), publish_tfs: fd.get("publish_tfs") === "on",
     email: { enabled: fd.get("email_enabled") === "on", to: fd.get("email_to") || "", cc: fd.get("email_cc") || "", on: fd.get("email_on") },
   };
   if (fd.has("repeat")) {
@@ -79,6 +86,7 @@ function readForm(f, ids) {
       catch_up: fd.get("catch_up") === "on" });
     if (body.repeat === "once") body.end_date = null;
   }
+  if (!body.browsers.length && browserless) body.browsers = [chosenBrowser];
   if (!body.browsers.length) throw new Error("Choose at least one browser.");
   return body;
 }
@@ -92,11 +100,11 @@ function batchHtml(b) {
       ${pill(b.status)}<strong>${esc(b.name)}</strong><span class="muted">${esc(dateTimeOf(b.started_at))} · ${b.trigger === "schedule" ? "scheduled" : b.trigger === "missed" ? "missed time, run when the app opened" : "run now"} ·
       ${b.status === "RUNNING" ? `${done}/${b.items.length} done` : `${c.PASSED || 0}/${b.items.length} passed`}</span></summary>
     ${extra ? `<p class="muted" style="margin:8px 0">${extra}</p>` : ""}
-    <table class="data"><thead><tr><th>Script</th><th>Browser</th><th>Data row</th><th>Result</th><th>Time</th><th>Failure</th><th>Run</th></tr></thead><tbody>
-    ${b.items.map((i) => `<tr><td>${esc(i.name)}</td><td>${esc(i.browser || "")}</td><td>${i.row != null ? `${i.row + 1}` : ""}</td><td>${pill(i.status)}</td>
+    <table class="data"><thead><tr><th>Script</th><th>Mode</th><th>Data row</th><th>Result</th><th>Time</th><th>Failure</th><th>Run</th></tr></thead><tbody>
+    ${b.items.map((i) => `<tr><td>${esc(i.name)}</td><td title="${esc(i.mode_reason || "")}">${esc(i.browser || (i.mode === "api" ? "Authorized API" : i.mode === "comparison" ? "Comparison" : ""))}${i.mode && i.browser ? `<div class="muted" style="font-size:12px">${esc(i.mode)}</div>` : ""}</td><td>${i.row != null ? `${i.row + 1}` : ""}</td><td>${pill(i.status)}</td>
       <td>${i.duration_ms != null ? `${(i.duration_ms / 1000).toFixed(1)} s` : ""}</td>
       <td style="max-width:420px">${i.failed_step ? `Step ${esc(i.failed_step)}: ` : ""}${esc(i.error || "")}</td>
-      <td>${i.run_id && !["QUEUED"].includes(i.status) ? `<a href="#/history?run=${esc(i.run_id)}">${esc(i.run_id)}</a>` : ""}</td></tr>`).join("")}
+      <td>${i.link && !["QUEUED"].includes(i.status) ? `<a href="${esc(i.link)}">Open</a>${i.counts ? `<div class="muted" style="font-size:12px">${esc(Object.entries(i.counts).filter(([, v]) => v).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(", "))}</div>` : ""}` : i.run_id && !["QUEUED"].includes(i.status) ? `<a href="#/history?run=${esc(i.run_id)}">${esc(i.run_id)}</a>` : ""}</td></tr>`).join("")}
     </tbody></table></details>`;
 }
 
@@ -109,7 +117,7 @@ async function mountSchedules(view) {
       <select id="fApp"><option value="">All applications</option></select>
       <input id="fText" placeholder="Filter by name or test case" style="min-width:220px">
       <label class="row" style="gap:6px"><input type="checkbox" id="fSched" style="width:auto;margin:0">Only scheduled</label></div>
-      <p class="muted" style="margin:6px 0 10px">Tick scripts, then <strong>Schedule</strong> (a future date and time, or repeating every day, Monday to Friday, chosen days or every few hours, until a date or continuing) or <strong>Run now</strong>. Times are this PC's clock; the application must be running.</p>
+      <p class="muted" style="margin:6px 0 10px">Tick scripts, then <strong>Schedule</strong> (a future date and time, or repeating every day, Monday to Friday, chosen days or every few hours, until a date or continuing) or <strong>Run now</strong>. Times are this PC's clock (${esc(tz())}); the application must be running. API Testing and Integration Comparison items are listed here too.</p>
       <div class="row" style="gap:8px;margin-bottom:8px"><button class="btn primary" id="schBtn" disabled>Schedule</button><button class="btn" id="runBtn" disabled>Run now</button>
         <span class="muted" id="selCount"></span><span class="spacer"></span>
         <label class="row" style="gap:6px">Runs at the same time (Run all, Play selected) <input id="parallelRuns" type="number" min="1" max="8" style="width:70px"></label></div>
@@ -123,7 +131,7 @@ async function mountSchedules(view) {
     const shown = scripts.filter((s) => (!state.filterPage || s.page === state.filterPage) && (!state.filterApp || (s.application || "") === state.filterApp)
       && (!state.onlyScheduled || s.schedules.length) && (!t || `${s.name} ${s.id} ${s.test_case_id || ""}`.toLowerCase().includes(t)));
     const box = view.querySelector("#scriptList");
-    box.innerHTML = shown.length ? `<table class="data"><thead><tr><th><input type="checkbox" id="selAll" style="width:auto;margin:0"></th><th>Script</th><th>Page</th><th>Test case</th><th>Application</th><th>Steps</th><th>Data rows</th><th>Schedules</th></tr></thead><tbody>
+    box.innerHTML = shown.length ? `<table class="data"><thead><tr><th><input type="checkbox" id="selAll" style="width:auto;margin:0"></th><th>Script</th><th>Page / test type</th><th>Test case</th><th>Application</th><th>Steps</th><th>Data rows</th><th>Schedules</th></tr></thead><tbody>
       ${shown.map((s) => `<tr><td><input type="checkbox" data-sel="${esc(s.id)}" style="width:auto;margin:0" ${state.selected.has(s.id) ? "checked" : ""}></td>
         <td><strong>${esc(s.name)}</strong><div class="muted" style="font-size:12px">${esc(s.id)}</div></td><td>${esc(s.page)}</td><td>${esc(s.test_case_id || "")}</td>
         <td>${esc(s.application || "")}</td><td>${esc(s.steps ?? "")}</td><td>${s.rows || ""}</td>
@@ -174,7 +182,7 @@ async function mountSchedules(view) {
     f.addEventListener("submit", async (e) => {
       e.preventDefault();
       try {
-        const body = readForm(f, ids);
+        const body = readForm(f, ids, selected.every((s) => NO_BROWSER.has(s.page)));
         if (runNow) {
           await api("/api/schedule-runs", { method: "POST", body: { ...body, name: selected.length === 1 ? selected[0].name : `Run now (${selected.length} scripts)` } });
           toast("Started. Progress is in Run history.", "success");

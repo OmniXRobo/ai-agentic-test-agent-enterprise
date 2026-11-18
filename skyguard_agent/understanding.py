@@ -285,6 +285,11 @@ def derive_identity_pattern(text: str, user: str) -> str | None:
     words = re.findall(r"[A-Za-z][A-Za-z,:]*", before.split("|")[-1])[-3:]
     if not words:
         return None
+    # 23.12.0: a list of sign-in names or help text ("Accepted usernames are: standard_user locked_out_user ...",
+    # "Password for all users") names users; it does not show who is signed in
+    if re.search(r"(?i)\b(usernames|users|accepted|password|demo|sample|test accounts?)\b", " ".join(words)) or \
+            re.search(r"(?i)password for all users|accepted usernames", text):
+        return None
     prefix = r"\s+".join(re.escape(w) for w in words)
     after = text[m.end():m.end() + 60]
     pat = prefix + r"\s*(?P<user>[\w.@-]+)"
@@ -745,6 +750,7 @@ class Miner:
         changed = self.screen_id(p) != inst["screen"] or (p.get("url") or "") != inst["url"]
         inst["after_url"] = p.get("url")
         inst["after_screen"] = self.screen_id(p) if p else None
+        inst["after_title"] = (p.get("heading") or p.get("title") or "") if p else None
         if any(REFUSAL_WORDS.search(e) for e in errors):
             inst["outcome"], inst["messages"] = "refused", errors
             return True
@@ -1065,7 +1071,17 @@ class Miner:
                         pattern = pattern.replace(re.escape(ex), "{" + p["name"] + "}")
                 patterns[pattern.replace("\x00KEY\x00", KEY_GROUP)] += 1
         if not patterns:
-            return {}
+            # 23.12.0: the application showed no message, but after the submit it moved on to its own page
+            # (Swag Labs: "Thank you for your order!" at /checkout-complete.html). That page is the success.
+            pages: Counter[tuple[str, str]] = Counter()
+            for i in succ:
+                after = urlsplit(i.get("after_url") or "").path
+                if after and after != urlsplit(i.get("url") or "").path and not i.get("messages"):
+                    pages[(after, str(i.get("after_title") or ""))] += 1
+            if not pages:
+                return {}
+            (path, title), _ = pages.most_common(1)[0]
+            return {"success_page": {"path": path, "title": title[:120]}}
         best, _ = max(patterns.items(), key=lambda kv: (kv[1], "{" in kv[0]))
         return {"success_pattern": best}
 
@@ -1147,7 +1163,7 @@ class Miner:
                              **({"status_column": sc} if sc else {})},
             "usable": bool(succ)})
         pattern = self._success_pattern(succ, base["parameters"])
-        if pattern:
+        if pattern.get("success_pattern"):
             for i in succ:
                 v = ((i.get("row") or {}).get("row") or {}).get(kc)
                 if v and re.escape(v) in pattern["success_pattern"]:
@@ -1209,7 +1225,7 @@ class Miner:
         for i in succ:  # the key in the address is this record's: the success message names it, not a new one
             i["values"].setdefault(kc, i["record_key"]["value"])
         pattern = self._success_pattern(succ, params) if succ else {}
-        if pattern:
+        if pattern.get("success_pattern"):
             for i in succ:
                 v = (i.get("record_key") or {}).get("value")
                 if v and re.escape(v) in pattern["success_pattern"]:

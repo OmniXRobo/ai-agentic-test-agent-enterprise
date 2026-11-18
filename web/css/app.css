@@ -779,10 +779,19 @@ table.data.compact th, table.data.compact td { padding: 4px 8px; font-size: 13px
 .ws-why { font-size: 12px; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 23.11.0: editable Python test */
-.pyed { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; max-height: 620px; overflow: auto; }
+.pyed { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; height: 520px; min-height: 160px; overflow: auto; resize: vertical; }
+.pyed .gutter .err { display: inline-block; width: 100%; color: #fff; background: var(--fail, #d33); border-radius: 3px; }
+.pyed-full { position: fixed !important; inset: 0; z-index: 1000; margin: 0 !important; border-radius: 0; overflow: auto; background: var(--bg, #0b1220) !important; backdrop-filter: none; display: flex; flex-direction: column; }
+.pyed-full .pyed { flex: 1 1 auto; height: auto !important; max-height: none; resize: none; }
 .pyed pre, .pyed .pyed-ta { margin: 0; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; line-height: 1.5; padding: 10px; tab-size: 4; white-space: pre; }
 .pyed .gutter { color: var(--muted); text-align: right; user-select: none; border-right: 1px solid var(--border); background: var(--surface); border-radius: 0; border-top: 0; border-bottom: 0; border-left: 0; }
 .pyed-stack { position: relative; min-width: 0; }
 .pyed-stack .pyed-hl { border: 0; background: transparent; max-height: none; overflow: visible; }
 .pyed-stack .pyed-ta { position: absolute; inset: 0; border: 0; outline: none; resize: none; overflow: hidden; background: transparent; color: transparent; caret-color: var(--text); min-height: 100%; }
 .pyed-stack .pyed-ta::selection { background: rgba(80, 140, 255, .35); color: transparent; }
+/* 23.12.0: API Testing response viewer (JSON tree) */
+.jtree { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; max-height: 480px; overflow: auto; }
+.jtree details.jt { margin-left: 14px; } .jtree > details.jt { margin-left: 0; }
+.jtree summary { cursor: pointer; } .jtree .jt-leaf { margin-left: 14px; white-space: pre-wrap; word-break: break-all; }
+.jtree .jt-key { color: var(--accent, #5aa0ff); } .jtree .jt-str { color: #4caf50; } .jtree .jt-num { color: #e0a030; } .jtree .jt-lit { color: #c678dd; }
+textarea.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }

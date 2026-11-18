@@ -54,8 +54,11 @@ BLOCKED_PREFIXES = ("os.exec", "os.spawn", "os.posix_spawn")
 MAX_SOURCE = 400_000
 
 
-def validate(source: str) -> dict[str, Any]:
-    """{ok, errors: [{line, column, message, kind}]}. kind is "syntax" or "policy"."""
+def validate(source: str, allowed: set[str] | None = None, browser: bool = True) -> dict[str, Any]:
+    """{ok, errors: [{line, column, message, kind}]}. kind is "syntax" or "policy". 23.12.0: ``allowed`` and
+    ``browser`` let API Testing check its scripts with its own import list (httpx, no Playwright)."""
+    allowed = ALLOWED_IMPORTS if allowed is None else allowed
+    ok_pkgs = ("playwright",) if browser else ()
     errors: list[dict[str, Any]] = []
     if len(source) > MAX_SOURCE:
         return {"ok": False, "errors": [{"line": 1, "column": 1, "kind": "policy",
@@ -79,12 +82,12 @@ def validate(source: str) -> dict[str, Any]:
         line, col = getattr(node, "lineno", 1), getattr(node, "col_offset", 0) + 1
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name not in ALLOWED_IMPORTS and alias.name.split(".")[0] not in ("playwright",):
+                if alias.name not in allowed and alias.name.split(".")[0] not in ok_pkgs:
                     errors.append({"line": line, "column": col, "kind": "policy",
                                    "message": f"import {alias.name} is not allowed in a SkyGuard test."})
         elif isinstance(node, ast.ImportFrom):
             mod = node.module or ""
-            if node.level or (mod not in ALLOWED_IMPORTS and mod.split(".")[0] != "playwright"):
+            if node.level or (mod not in allowed and mod.split(".")[0] not in ok_pkgs):
                 errors.append({"line": line, "column": col, "kind": "policy",
                                "message": f"from {mod or '.'} import ... is not allowed in a SkyGuard test."})
         elif isinstance(node, ast.Call):

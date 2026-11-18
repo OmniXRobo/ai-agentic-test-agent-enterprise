@@ -54,6 +54,13 @@ VOICE_COMMAND_FAILED = "voice.command.failed"
 # The command moved from the Voice Command Agent to the agent that does the work (and back).
 VOICE_HANDOFF = "voice.handoff"
 
+# 23.12.0: API Testing
+API_RUN_COMPLETED = "api.run.completed"
+API_RUN_FAILED = "api.run.failed"
+API_CONNECTION_FAILED = "api.connection.failed"
+SCHEDULE_STARTED = "schedule.started"
+DEFECT_APPROVED = "defect.approved"
+
 REPORT_STARTED = "report.started"
 REPORT_COMPLETED = "report.completed"
 REPORT_FAILED = "report.failed"

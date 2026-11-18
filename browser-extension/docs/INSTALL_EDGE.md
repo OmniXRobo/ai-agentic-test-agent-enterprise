@@ -1,6 +1,6 @@
 # Microsoft Edge
 
-Microsoft Edge 116 or later. Install the companion first (INSTALL_WINDOWS11.md, step 1).
+Microsoft Edge 116 or later. Install the companion first (INSTALL_WINDOWS11.md, step 1). INSTALL.cmd opens the extensions page and the folder for you and puts the folder path on the clipboard.
 
 ## Load unpacked (Developer mode), current user
 
@@ -10,8 +10,7 @@ Microsoft Edge 116 or later. Install the companion first (INSTALL_WINDOWS11.md, 
    (type the path into the folder box: `%LOCALAPPDATA%` works there).
 4. The card *SkyGuard Adaptive AI Agent 1.0.0* appears with ID `fmiiaecpdgbhhhbbkkfhnjfkbmllladb`.
 5. Extensions icon (puzzle piece) > eye icon *Show in toolbar*.
-6. Right-click the icon > **Options**, then pair and sign in (INSTALL_WINDOWS11.md, step 4).
-7. Click the icon: the side panel opens on the right.
+6. Click the icon: the side panel opens on the right. The extension has already connected and signed in by itself.
 
 Edge may show *Turn off extensions in developer mode* at start-up. Choose **Keep on** or close the notice. This is
 normal for Load unpacked; publishing through the Microsoft Edge Add-ons store or IT policy avoids it (ENTERPRISE_DEPLOYMENT.md).

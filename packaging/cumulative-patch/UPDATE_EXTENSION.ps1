@@ -1,12 +1,12 @@
 <#
-  SkyGuard Adaptive AI Browser Extension - update to 1.3.1 (missing information answered field by field), part of the SkyGuard QA
+  SkyGuard Adaptive AI Browser Extension - update to 1.4.0 (sets itself up: no pairing code, no sign-in), part of the SkyGuard QA
   23.11.2 release. For a companion already installed with Install-SkyGuardAgent.ps1. No administrator rights; works offline.
 
   What it does (all inside %LOCALAPPDATA%\SkyGuardAgent, nothing machine-wide):
     1. checks the update files against SHA256_CHECKSUM.txt,
     2. stops the running companion,
-    3. backs up the current app\ and extension\ folders to backups\update-1.3.1-<time> (data\ is never touched),
-    4. replaces app\ (companion and agent core) and extension\ with the 1.3.1 files,
+    3. backs up the current app\ and extension\ folders to backups\update-1.4.0-<time> (data\ is never touched),
+    4. replaces app\ (companion and agent core) and extension\ with the 1.4.0 files,
     5. starts the companion and checks it answers on 127.0.0.1; on any failure puts the backup back.
   Afterwards open chrome://extensions (or edge://extensions) and press the reload button on the SkyGuard card.
 
@@ -23,7 +23,7 @@ function Step([string]$m) { Write-Host ""; Write-Host "== $m" -ForegroundColor C
 function Say([string]$m) { Write-Host $m }
 function Fail([string]$m) { Write-Host ""; Write-Host "UPDATE FAILED: $m" -ForegroundColor Red; exit 1 }
 
-Step "SkyGuard browser extension and companion: update to 1.3.1 (current user only)"
+Step "SkyGuard browser extension and companion: update to 1.4.0 (current user only)"
 if (-not (Test-Path (Join-Path $Target "app\companion_main.py"))) { Fail "No companion installation in $Target. Install the browser extension package first (INSTALL.cmd)." }
 $PyExe = Join-Path $Target "runtime\python\python.exe"
 $PywExe = Join-Path $Target "runtime\python\pythonw.exe"
@@ -49,8 +49,8 @@ function Restore-From([string]$b) {
 }
 
 if ($Rollback) {
-    $last = Get-ChildItem (Join-Path $Target "backups") -Directory -Filter "update-1.3.1-*" -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1
-    if (-not $last) { Fail "No 1.3.1 update backup found in $Target\backups." }
+    $last = Get-ChildItem (Join-Path $Target "backups") -Directory -Filter "update-1.4.0-*" -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1
+    if (-not $last) { Fail "No 1.4.0 update backup found in $Target\backups." }
     Step "Putting back $($last.FullName)"
     Stop-Companion
     Restore-From $last.FullName
@@ -78,21 +78,21 @@ Step "Stopping the companion"
 Stop-Companion
 
 Step "Backing up the current application files"
-$backup = Join-Path $Target "backups\update-1.3.1-$Stamp"
+$backup = Join-Path $Target "backups\update-1.4.0-$Stamp"
 New-Item -ItemType Directory -Force -Path $backup | Out-Null
 foreach ($d in @("app", "extension")) { $p = Join-Path $Target $d; if (Test-Path $p) { Copy-Item -Recurse -Force $p (Join-Path $backup $d) } }
 Say "Saved in $backup (data\ is kept in place)."
 
 try {
-    Step "Copying the 1.3.1 companion, agent core and extension"
+    Step "Copying the 1.4.0 companion, agent core and extension"
     foreach ($d in @("app", "extension")) {
         $p = Join-Path $Target $d
         if (Test-Path $p) { Remove-Item -Recurse -Force $p }
         Copy-Item -Recurse (Join-Path $Src $d) $p
     }
     $v = & $PyExe -E -s -c "import sys; sys.path.insert(0, r'$Target\app'); import skyguard_companion, skyguard_agent.understanding; print(skyguard_companion.VERSION)"
-    if ($LASTEXITCODE -ne 0 -or "$v".Trim() -ne "1.3.1") { throw "The new companion does not load (got '$v')." }
-    Say "Companion and agent core 1.3.1 load."
+    if ($LASTEXITCODE -ne 0 -or "$v".Trim() -ne "1.4.0") { throw "The new companion does not load (got '$v')." }
+    Say "Companion and agent core 1.4.0 load."
 } catch {
     Write-Host "Putting back the previous application files..." -ForegroundColor Yellow
     Restore-From $backup
@@ -104,10 +104,16 @@ Step "Starting the companion"
 $h = Start-Companion
 if ($h) { Say "Companion $($h.version) answers on http://127.0.0.1:$Port (this PC only)." } elseif (-not $NoStart) { Write-Warning "The companion did not answer yet; see $Target\data\logs\companion.log" }
 
+Step "Automatic set-up of the extension (no pairing code, no sign-in)"
+$ErrorActionPreference = "Continue"
+& $PyExe -E -s (Join-Path $Target "app\companion_main.py") install-ticket (Join-Path $Target "extension\auto-setup.json")
+$ErrorActionPreference = "Stop"
+
 Step "Next"
-Say "1. Open chrome://extensions (or edge://extensions) and press the reload button on the SkyGuard card."
-Say "2. Open the side panel, tab Learn, choose the application and press Start learning; use the application, then press Stop & save learning."
-Say "3. Stop & save tests that every learned task and page can be found again by a command, and shows the result."
-Say "4. New in 1.3.1: answers to 'Missing information' are read field by field and kept; only what is still missing is asked."
+Say "Press the reload button on the SkyGuard card in edge://extensions (or chrome://extensions). That is all:"
+Say "the extension pairs and signs in by itself. Then open the side panel and use it."
 Say "To undo: UPDATE_EXTENSION.cmd -Rollback"
+foreach ($b in @(@{exe="msedge.exe"; url="edge://extensions"}, @{exe="chrome.exe"; url="chrome://extensions"})) {
+    try { Start-Process -FilePath $b.exe -ArgumentList $b.url -ErrorAction Stop; break } catch { }
+}
 exit 0

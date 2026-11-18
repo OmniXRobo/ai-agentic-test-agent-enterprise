@@ -64,7 +64,7 @@ def status(app_dir: Path = APP_ROOT) -> dict[str, Any]:
         "path": str(path) if path else None,
         "launcher": str(launcher(app_dir)),
         "launcher_exists": launcher(app_dir).is_file(),
-        "note": ("Starts QA Enterprise AI minimised when you sign in to Windows (no administrator rights needed). "
+        "note": ("Starts QA Enterprise AI minimised when you sign in to Windows. "
                  "Schedules then run without opening the application by hand.") if folder else
                 "Start at sign-in is available on Windows only.",
     }

@@ -32,6 +32,11 @@ COMMIT_WORDS = re.compile(r"\b(save|submit|create|add|approve|authori[sz]e|confi
 MAX_PAGES_DEFAULT = 25
 
 
+# names that end like a record number but are shared by many records (23.12.0: "Zip/Postal Code must be unique")
+NOT_UNIQUE = re.compile(r"(zip|postal|post|pin|area|country|currency|phone|dial|language|lang|region|state|city|"
+                        r"promo|coupon|discount|tax|vat|color|colour|size)[_ ]?(code|no|number)$|^(phone|mobile|tel)",
+                        re.I)
+
 def screen_key(snap: dict[str, Any]) -> str:
     """A readable, stable name for a screen: its heading (or title) and path."""
     head = (snap.get("heading") or snap.get("title") or "").strip()
@@ -418,7 +423,8 @@ class Learning:
             if p.get("type") == "select" and p.get("options"):
                 out.append(("allowed", f"{p['field']} must be an offered option",
                             {"type": "allowed_values", "field": p["name"], "source": "options", "applies_to": wf_key}))
-            if re.search(r"(number|no|code|ref)$", p["name"]):
+            # a record's own number or reference; never a postal, area, country, currency or phone code (23.12.0)
+            if re.search(r"(number|no|code|ref)$", p["name"]) and not NOT_UNIQUE.search(p["name"]):
                 out.append(("unique", f"{p['field']} must be unique", {"type": "unique", "field": p["name"],
                                                                          "applies_to": wf_key}))
         entries = [self.kb.propose(app["id"], "rule", f"{wf_key}: {name}", rule, source="guided_learning",

@@ -12,9 +12,9 @@ def test_health(client):
 
 def test_agents_endpoint_lists_all_agents_waiting(client):
     data = client.get("/api/agents").json()
-    assert len(data["agents"]) == len(AGENTS) == 18
+    assert len(data["agents"]) == len(AGENTS) == 24  # 23.12.0: six agents added
     assert {a["status"] for a in data["agents"]} == {"WAITING"}
-    assert len({a["robot"] for a in data["agents"]}) == 18  # every agent has its own robot
+    assert len({a["robot"] for a in data["agents"]}) == 24  # every agent has its own robot
 
 
 def test_unknown_api_route_returns_structured_json(client):

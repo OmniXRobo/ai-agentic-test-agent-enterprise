@@ -11,6 +11,7 @@ function short(name) { return name.replace(/ Agent$/, ""); }
 function activityText(a, s) {
   if (s.state === "WAITING") return `Queued behind ${short(state.agents.get(s.waiting_for)?.name || s.waiting_for)}`;
   if (s.state === "READY") return a.activity && a.finished_at ? `Last: ${a.activity}` : "Ready for tasking";
+  if (s.state === "UNAVAILABLE") return a.unavailable_reason || "Unavailable on this PC";
   return a.activity || "";
 }
 

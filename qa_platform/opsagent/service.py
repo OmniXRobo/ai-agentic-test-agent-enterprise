@@ -48,9 +48,53 @@ class _BrowserJob:
         self.url: str | None = None  # the page the window shows now
 
 
+class _CardReporter:
+    """23.12.0: the AI Application Learning & Operations Agent card on Agent Workflow reports the agent's real work:
+    RUNNING while a learning window or an execution is open, PAUSED when the execution waits for the person,
+    COMPLETED or FAILED with the execution's own outcome."""
+
+    LABELS = {"run": "Executing", "discovery": "Exploring", "watch": "Learning", "guided": "Learning (guided)",
+              "view": "Opening"}
+
+    def __init__(self, bus: Any) -> None:
+        from ..agents.base import BaseAgent
+        from ..events import names
+
+        class AiOperationsAgent(BaseAgent):
+            agent_id = "ai_operations"
+
+        self.names = names
+        self.agent = AiOperationsAgent(bus) if bus is not None else None
+
+    def started(self, job: Any, what: str) -> None:
+        if self.agent is not None and job.kind != "view":
+            self.agent.emit(self.names.AGENT_STARTED, f"{self.LABELS.get(job.kind, job.kind)}: {what}", run_id=job.ref,
+                            status="RUNNING", progress=0)
+
+    def ended(self, job: Any, status: str | None, reason: str | None) -> None:
+        if self.agent is None or job.kind == "view":
+            return
+        n = self.names
+        label = self.LABELS.get(job.kind, job.kind)
+        if job.error:
+            self.agent.emit(n.AGENT_FAILED, f"{label} stopped: {job.error}", run_id=job.ref, status="FAILED",
+                            details={"error": job.error})
+        elif status in ("completed",):
+            self.agent.emit(n.AGENT_COMPLETED, f"{label} completed and verified", run_id=job.ref, status="PASSED",
+                            progress=100)
+        elif status in ("failed", "partial", "stopped", "cancelled"):
+            self.agent.emit(n.AGENT_FAILED, f"{label} {status}" + (f": {reason}" if reason else ""), run_id=job.ref,
+                            status="FAILED", details={"error": reason or status})
+        elif status:  # paused / awaiting the person: the card says so instead of claiming success
+            self.agent.emit(n.AGENT_PAUSED, f"{label} paused: {reason or status}", run_id=job.ref)
+        else:
+            self.agent.emit(n.AGENT_COMPLETED, f"{label} finished", run_id=job.ref, status="PASSED", progress=100)
+
+
 class OpsAgentService:
     def __init__(self, rt: Any) -> None:
         self.rt = rt
+        self.card = _CardReporter(getattr(rt, "bus", None))
         self.folder = Path(rt.paths.root) / "opsagent"
         try:
             vault = Vault(SecretStoreBackend(rt.secrets)) if rt.secrets.available else Vault(None)
@@ -94,6 +138,7 @@ class OpsAgentService:
 
         cfg = self.config()
         pw = browser_manager.start_playwright()
+        self.card.started(job, job.app_id or job.ref)
         browser = None
         try:
             browser = browser_manager.launch(pw, job.browser or cfg.get("browser"), headless=bool(cfg.get("headless")))
@@ -122,6 +167,19 @@ class OpsAgentService:
                 with self._lock:
                     if self.jobs.get(job.ref) is job:
                         self.jobs.pop(job.ref, None)
+                status = reason = None
+                if job.kind in ("run", "discovery"):
+                    try:
+                        run = self.agent.engine.run(job.ref)
+                        status = run.get("status")
+                        pause = (run.get("checkpoint") or {}).get("pause") or {}
+                        reason = pause.get("message") or (run.get("summary") or {}).get("error")
+                    except Exception:
+                        pass
+                try:
+                    self.card.ended(job, status, reason)
+                except Exception:  # the card never breaks the agent
+                    pass
 
     def _start(self, kind: str, ref: str, body: Any, browser: str | None = None, app_id: str | None = None) -> None:
         with self._lock:

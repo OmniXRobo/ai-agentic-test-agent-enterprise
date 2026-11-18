@@ -72,6 +72,9 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app.include_router(comparison_api.router)  # final patch: Application Data Comparison Agent
     app.include_router(opsagent_api.router)  # 23.5.0: Adaptive AI Application Learning & Operations Agent
     app.include_router(agent_simple_api.router)  # 23.10.0: the simple AI Agent (four tabs)
+    from .api import apitesting as apitesting_api
+
+    app.include_router(apitesting_api.router)  # 23.12.0: API Testing
     opsagent_api.install(app)
     auth_api.install(app)  # 23.3.34: every API request needs an account allowed to make it (runs after the guard)
     guard.install(app)  # 23.3.32: only the dashboard itself may use the API

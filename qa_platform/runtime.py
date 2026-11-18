@@ -72,6 +72,7 @@ class Runtime:
     ai_reports: Any = None  # 23.3.31: AI analysis reports with PDF and email
     aura: Any = None  # final patch: AURA learning memory
     comparison: Any = None  # final patch: Application Data Comparison Agent
+    apitesting: Any = None  # 23.12.0: API Testing
     opsagent: Any = None  # 23.5.0: Adaptive AI Application Learning & Operations Agent
 
     def close(self) -> None:
@@ -223,3 +224,21 @@ def _final_patch(rt: Runtime, ai_transport: Any) -> None:
         rt.defects.on_published.append(rt.comparison.on_review_published)  # 23.11.0
     except Exception as exc:
         log.warning(f"Data Comparison Agent did not start: {exc}")
+    # 23.12.0: API Testing, the Scheduled Execution Agent card, and API / Integration Comparison in Scheduled Runs
+    from .agents.base import BaseAgent
+
+    class ScheduledExecutionAgent(BaseAgent):
+        agent_id = "scheduled_execution"
+
+    rt.scheduler.agent = ScheduledExecutionAgent(rt.bus)
+    try:
+        from .apitesting.service import ApiScheduleProvider, ApiTestingService
+
+        rt.apitesting = ApiTestingService(rt)
+        rt.scheduler.providers.append(ApiScheduleProvider(rt.apitesting))
+    except Exception as exc:  # SkyGuard starts without it; the API Testing page and its cards say why
+        log.warning(f"API Testing did not start: {exc}")
+    if rt.comparison is not None:
+        from .comparison.schedule import ComparisonScheduleProvider
+
+        rt.scheduler.providers.append(ComparisonScheduleProvider(rt))

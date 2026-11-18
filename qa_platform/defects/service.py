@@ -51,7 +51,7 @@ STATUS_LABELS = {"draft": "Draft", "needs_review": "Needs Review", "approved": "
                  "linked": "Duplicate"}
 SOURCE_LABELS = {"functional": "Guided Browser Automation", "framework": "AI-Driven Automation",
                  "python": "Guided Browser Automation (Python)", "comparison": "Integration Comparison",
-                 "performance": "Performance"}
+                 "performance": "Performance", "api": "API Testing"}
 MAX_ATTACHMENT = 20 * 1024 * 1024
 
 
@@ -423,10 +423,16 @@ class DefectService:
         draft = self.get(draft_id)
         by = by or (auth.current_user() or auth.LOCAL_PROGRAM).username
         facts = self._facts_for_triage(draft)
-        category = "comparison" if draft["source"] == "comparison" else draft["category"]
+        category = "comparison" if draft["source"] == "comparison" else "api" if draft["source"] == "api" \
+            else draft["category"]
         rules = triage.rules_classify(category, facts)
-        result = triage.ai_classify(self.ai, facts, rules, timeout=float(
-            self.settings.section("defects").get("ai_timeout_seconds") or 90))
+        timeout = float(self.settings.section("defects").get("ai_timeout_seconds") or 90)
+        if draft["source"] == "api":  # 23.12.0: API failures have their own classes and AI instructions
+            from ..apitesting import analysis as api_analysis
+
+            result = api_analysis.ai_view(self.ai, facts, rules, timeout=timeout)
+        else:
+            result = triage.ai_classify(self.ai, facts, rules, timeout=timeout)
         self.db.execute("UPDATE defect_drafts SET classification = ?, confidence = ?, analysis = ?, updated_at = ?"
                         " WHERE id = ?", (result["classification"], result["confidence"], dumps(result), now_iso(), draft_id))
         ai_used = result.get("ai", {}).get("used")
@@ -445,6 +451,9 @@ class DefectService:
         self.db.execute("UPDATE defect_drafts SET status = 'approved', approved_by = ?, approved_at = ?, updated_at = ?"
                         " WHERE id = ?", (by, now_iso(), now_iso(), draft_id))
         self._event(draft_id, by, "approved", note)
+        self.agent.emit(names.DEFECT_APPROVED, f"Defect draft #{draft_id} approved by {by}: {draft['title'][:120]}",
+                        run_id=draft["source_run_id"], details={"draft_id": draft_id,
+                                                                "link": f"#/defect-review?id={draft_id}"})
         return self.get(draft_id)
 
     def reject(self, draft_id: int, reason: str = "") -> dict[str, Any]:
@@ -493,7 +502,8 @@ class DefectService:
     def _publish_patch(self, draft: dict[str, Any], corr: str,
                        extra: dict[str, Any] | None = None) -> tuple[str, list[dict[str, Any]], list[str]]:
         type_name = self.tfs.default_type("bug")  # Bug, Defect or Issue, from the process
-        kind = {"performance": "Performance", "comparison": "Integration Comparison"}.get(draft["source"], "Functional")
+        kind = {"performance": "Performance", "comparison": "Integration Comparison",
+                "api": "API Testing"}.get(draft["source"], "Functional")
         values: dict[str, Any] = {
             "System.Title": draft["title"],
             "Microsoft.VSTS.TCM.ReproSteps": draft["repro_steps"],

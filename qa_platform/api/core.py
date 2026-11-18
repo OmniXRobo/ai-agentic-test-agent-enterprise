@@ -49,9 +49,42 @@ def meta() -> dict[str, Any]:
     }
 
 
+AI_AGENTS = ("requirements", "test_planning", "test_case_design", "test_data")
+BROWSER_AGENTS = ("app_discovery", "automation_engineering", "guided_browser", "test_execution", "self_healing",
+                  "manual_playback", "ai_operations", "integration_comparison")
+
+
+def _availability(rt: Runtime) -> dict[str, str]:
+    """23.12.0: agents whose engine or dependency is known to be unavailable, with the reason. Only facts already
+    known are used (services that did not start, the last On-Premise AI status check); nothing is probed here."""
+    import importlib.util
+
+    out: dict[str, str] = {}
+    if getattr(rt, "opsagent", None) is None:
+        out["ai_operations"] = "The AI Agent did not start on this PC (see the application log)."
+    if getattr(rt, "comparison", None) is None:
+        out["integration_comparison"] = "Integration Comparison did not start on this PC (see the application log)."
+    if getattr(rt, "apitesting", None) is None:
+        for a in ("api_testing", "api_failure_analysis", "api_contract"):
+            out[a] = "API Testing did not start on this PC (see the application log)."
+    if getattr(rt, "scheduler", None) is None:
+        out["scheduled_execution"] = "The scheduler is not running."
+    if importlib.util.find_spec("playwright") is None:
+        for a in BROWSER_AGENTS:
+            out.setdefault(a, "Playwright is not installed.")
+    health = getattr(rt, "health", None)
+    hit = getattr(health, "_cache", {}).get("ai") if health is not None else None
+    if hit and (hit[1] or {}).get("status") == "FAIL":
+        for a in AI_AGENTS:
+            out.setdefault(a, "On-Premise AI is offline: " + str((hit[1] or {}).get("detail") or "")[:160])
+    return out
+
+
 def _agents_payload(rt: Runtime) -> list[dict[str, Any]]:
     states = {s["agent_id"]: s for s in rt.state.snapshot()}
-    return [{**a.to_dict(), **states[a.id]} for a in AGENTS]
+    missing = _availability(rt)
+    return [{**a.to_dict(), **states[a.id], "available": a.id not in missing,
+             "unavailable_reason": missing.get(a.id)} for a in AGENTS]
 
 
 @router.get("/agents")

@@ -295,10 +295,17 @@ def apply(ex: Any, controls: list[dict[str, Any]], values: dict[str, Any], btns:
     b = (btns or {}).get("apply")
     if b:
         try:
-            page.locator(b["css"]).first.click()
+            page.locator(b["css"]).first.click(timeout=5000)
             log(f"clicked {b['text']}")
         except Exception:
-            page.get_by_role("button", name=re.compile(r"(?i)^(apply|search|filter|go|show)")).first.click()
+            # Playwright turns a Python pattern into a JavaScript one: the flag must be re.I, not an inline (?i)
+            alt = page.get_by_role("button", name=re.compile(r"^(apply|search|filter|go|show)", re.I))
+            if alt.count():
+                alt.first.click(timeout=5000)
+                log("clicked the apply button")
+            else:
+                # many tables filter as you type (no apply button): the values are already in place
+                log("no apply button: the table filters as the values are typed")
     ex._settle()
     # wait until the data changed (or settled) after applying
     end = time.monotonic() + 10
