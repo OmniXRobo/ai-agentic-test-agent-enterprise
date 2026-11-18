@@ -25,6 +25,14 @@ _LABELLED = re.compile(rf"\b(?P<word>{_SECRET_WORDS})\b\s*(?P<sep>is|was|=|:|-|w
 _CODE_WORD = re.compile(r"^(?:otp|one[\s-]?time|verification|auth|security|2fa|mfa|totp|access|driver|recovery|"
                         r"backup)", re.I)
 _CODE_IS = re.compile(r"\b(?:code|pin)\b\s*(?:is|=|:)\s*(?P<value>\d{4,10})\b", re.I)
+# 23.11.2: "Zip/Postal Code: 54000", "area code 04", "product code: 1234" name ordinary data, not a credential
+_NOT_A_SECRET_CODE = re.compile(r"\b(?:postal|zip|post|area|country|dial(?:ling)?|phone|product|item|sku|airport|city|"
+                                r"currency|language|hs|tax|cost|branch|station|route|order|invoice|reference|booking)"
+                                r"\s*$", re.I)
+
+
+def _ordinary_code(text: str, m: re.Match[str]) -> bool:
+    return bool(_NOT_A_SECRET_CODE.search(text[:m.start()]))
 # "login admin/Secret123", "user: bob pass: x" handled by _LABELLED; "admin / P@ssw0rd!" (user/password pairs)
 _PAIR = re.compile(r"\b(?:log\s?in|login|username|user|id|account)\b[^\n]{0,40}?\b(?P<user>[\w.@-]{2,})\s*[/|:]\s*"
                    r"(?P<value>\S{4,})", re.I)
@@ -89,8 +97,9 @@ def inspect(text: str, known_secrets: Iterable[str] = ()) -> Inspection:
         if _CODE_WORD.match(word) and not m.group("sep") and not re.search(r"\d", value):
             continue  # "the OTP Operator account", "MFA settings": a name, not a code
         kinds.append(_kind(word))
-    for _m in _CODE_IS.finditer(text):
-        kinds.append("a one-time or authentication code")
+    for m in _CODE_IS.finditer(text):
+        if not _ordinary_code(text, m):
+            kinds.append("a one-time or authentication code")
     for m in _PAIR.finditer(text):
         value = m.group("value")
         if value.lower().strip(".") in _HARMLESS_VALUES or value.startswith(("http://", "https://")):
@@ -108,7 +117,8 @@ def redact_text(text: str, known_secrets: Iterable[str] = ()) -> str:
         return text
     out = _LABELLED.sub(lambda m: m.group(0) if m.group("value").lower().strip(".!?") in _HARMLESS_VALUES
                         else m.group(0).replace(m.group("value"), REDACTED), text)
-    out = _CODE_IS.sub(lambda m: m.group(0).replace(m.group("value"), REDACTED), out)
+    out = _CODE_IS.sub(lambda m: m.group(0) if _ordinary_code(m.string, m)
+                       else m.group(0).replace(m.group("value"), REDACTED), out)
     for secret in known_secrets:
         if secret and len(secret) >= 3:
             out = out.replace(secret, REDACTED)

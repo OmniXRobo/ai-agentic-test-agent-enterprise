@@ -34,8 +34,9 @@ EXT = ROOT / "browser-extension" / "extension"
 def test_versions_are_130():
     from skyguard_agent import __version__ as core
     from skyguard_companion import VERSION
-    assert VERSION == "1.3.0" and core == "1.3.0"
-    assert json.loads((EXT / "manifest.json").read_text())["version"] == "1.3.0"
+    # 1.3.1 (SkyGuard 23.11.2) keeps every 1.3.0 feature and adds the missing-information follow-up
+    assert VERSION == "1.3.1" and core == "1.3.1"
+    assert json.loads((EXT / "manifest.json").read_text())["version"] == "1.3.1"
 
 
 def test_side_panel_has_no_fixed_examples_or_permanent_warning():

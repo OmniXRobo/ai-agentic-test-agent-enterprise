@@ -382,6 +382,8 @@ def run_to_preview(tms, rid: str, act: Callable[[dict[str, Any]], None]) -> dict
         seen["done"] = drv.run(tms["agent"].engine, rid, on_wait=on_wait, poll_s=0.1)
     finally:
         drv.close()
+    if "acted" not in seen:  # the preview was never reached: keep why, for the assertion message
+        seen["events"] = [(e.get("kind"), e.get("message")) for e in tms["agent"].engine.events(rid)][-12:]
     return seen
 
 
@@ -453,8 +455,8 @@ def test_e_plan_from_another_request_is_refused(tms):
             err.append(exc.code)
         tms["agent"].engine.stop(rid, by="tester")
 
-    run_to_preview(tms, rid, at_preview)
-    assert err == ["PLAN_UNRELATED"]
+    seen = run_to_preview(tms, rid, at_preview)
+    assert err == ["PLAN_UNRELATED"], seen
     assert trip(no)["status"] == "Pending Approval"
 
 

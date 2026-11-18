@@ -106,12 +106,16 @@ class SessionState:
         self.role: str | None = d.get("role")
         self.verified: bool = bool(d.get("verified"))
         self.role_verified: bool = bool(d.get("role_verified"))
+        # 23.11.2: the application accepted the account's own sign-in (its credentials were typed into the sign-in
+        # form, and the sign-in page went away with no error), but the application never displays who is signed in.
+        self.sign_in_confirmed: bool = bool(d.get("sign_in_confirmed"))
         self.context: str | None = d.get("context")  # SkyGuard: isolated browser context name
 
     def to_dict(self) -> dict[str, Any]:
         return {"account_id": self.account_id, "identity": self.identity, "role": self.role, "verified": self.verified,
-                "role_verified": self.role_verified, "context": self.context}
+                "role_verified": self.role_verified, "sign_in_confirmed": self.sign_in_confirmed,
+                "context": self.context}
 
     def clear(self) -> None:
         self.account_id = self.identity = self.role = None
-        self.verified = self.role_verified = False
+        self.verified = self.role_verified = self.sign_in_confirmed = False
