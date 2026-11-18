@@ -36,6 +36,7 @@ import * as opsAgent from "./pages/ops-agent.js";
 import * as aiAgent from "./pages/ai-agent.js";
 import { ensureSignedIn, initUserMenu, isAdmin, canEdit } from "./auth.js";
 import * as integrationWorkspace from "./pages/integration-workspace.js";
+import { apiTesting } from "./pages/api-testing.js";
 import { tfsIntegration, browserManager, auraMemory } from "./pages/preferences-final.js";
 
 // route -> { title, page }
@@ -62,6 +63,7 @@ const NAV = [
     ["guided-automation", "Guided Browser Automation", guidedAutomation],
     ["discovery", "Application Discovery & Update", discovery],
     ["hybrid-automation", "Hybrid Test Automation", hybridAutomation],
+    ["api-testing", "API Testing", apiTesting],
     ["scheduled-runs", "Scheduled Runs", scheduledRuns],
   ]],
   ["Performance Testing", [
@@ -155,7 +157,7 @@ const ICON_BY_ROUTE = [
   [/history|schedul|perf-schedules/, "clock"], [/test-data|perf-data|cmp-import|cmp-extract/, "data"],
   [/discovery|cmp-discovery|explorer|investigation/, "search"], [/test-|stories|acceptance|plans|suites/, "check"],
   [/automation/, "bot"], [/perf-live|perf-load|perf-stress|perf-spike|perf-soak/, "gauge"], [/perf-/, "play"],
-  [/integration-comparison/, "compare"], [/defect/, "bug"], [/report|results|aggregate/, "chart"], [/^cmp-/, "compare"], [/credential/, "key"], [/users/, "user"],
+  [/integration-comparison/, "compare"], [/api-testing/, "data"], [/defect/, "bug"], [/report|results|aggregate/, "chart"], [/^cmp-/, "compare"], [/credential/, "key"], [/users/, "user"],
   [/aura/, "data"], [/browser-manager/, "grid"], [/tfs-integration/, "check"], [/setup|settings|email/, "gear"],
 ];
 function iconFor(route) {

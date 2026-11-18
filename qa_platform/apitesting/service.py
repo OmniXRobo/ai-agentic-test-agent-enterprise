@@ -34,7 +34,7 @@ from ..events import names
 from ..logging_setup import get_logger
 from ..storage.db import dumps, loads
 from . import analysis, assertions as asserts, generator, importers, safety, scriptgen
-from .client import NAMESPACE, Sender, UnresolvedVariable, build_base_url
+from .client import NAMESPACE, Sender, UnresolvedVariable, build_base_url, substitute
 from .safety import METHODS, Policy, is_state_changing, normalize_target, split_host_port
 
 log = get_logger("apitesting")
@@ -933,6 +933,9 @@ class ApiTestingService:
         local = {**variables, **(row or {})}
         try:
             req = sender.build(t, local)
+            # a data row or an extracted value can be the expected value too ({{status}} in an assertion)
+            checks = [{**x, **{k: substitute(x[k], local) for k in ("value", "expected", "name") if k in x}}
+                      for x in (t.get("assertions") or [{"type": "status", "expected": ["2xx"]}])]
         except UnresolvedVariable as exc:
             name = str(exc)
             if name in failed_vars:
@@ -940,17 +943,14 @@ class ApiTestingService:
                                     "step of the chain failed.", row=row_label)
             return self._result(run_id, t, "FAILED", error=f"The variable {name} is not defined (set it from an earlier "
                                 "step, or in the test data).", row=row_label, error_kind="variable")
-        if t.get("timeout_ms"):
-            sender.cfg = {**sender.cfg, "timeout_ms": t["timeout_ms"]}
-        rec = sender.send(req, auth=str(t.get("auth") or "app"))
+        rec = sender.send(req, auth=str(t.get("auth") or "app"), timeout_ms=t.get("timeout_ms"))
         if rec.get("blocked"):
             res = self._result(run_id, t, "BLOCKED", error=rec.get("error"), row=row_label, request=rec.get("request"),
                                response=sender.public(rec), error_kind=rec.get("error_kind"))
             for x in t.get("extract") or []:
                 failed_vars.add(x["name"])
             return res
-        results = [asserts.evaluate(x, rec, spec_root=spec_root) for x in (t.get("assertions") or
-                                                                         [{"type": "status", "expected": ["2xx"]}])]
+        results = [asserts.evaluate(x, rec, spec_root=spec_root) for x in checks]
         passed = all(r["passed"] for r in results) and not rec.get("error")
         extracted = {}
         if passed:
@@ -1333,10 +1333,10 @@ class ApiTestingService:
 
 
 def _junit_cases(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
+    if not path.is_file() or path.stat().st_size > 20 * 1024 * 1024:  # our own pytest's report; never a huge file
         return []
     try:
-        root = ET.parse(path).getroot()
+        root = ET.parse(path).getroot()  # nosec B314: written by the pytest run SkyGuard started (no DTD is resolved)
     except ET.ParseError:
         return []
     out = []

@@ -14,10 +14,10 @@ const MODES = {
 const STATUS_PILL = { draft: "WAITING", needs_review: "WARN", approved: "RUNNING", publishing: "RUNNING", created: "PASS",
   publication_failed: "FAIL", dismissed: "WAITING", linked: "PASS" };
 const CLASS_PILL = { application_defect: "FAIL", automation_script: "WARN", test_data: "WARN", environment: "WARN",
-  timing: "WARN", inconclusive: "WAITING" };
+  timing: "WARN", inconclusive: "WAITING", api_contract: "FAIL", authentication: "WARN", performance: "WARN" };
 const SEVERITY = { 1: "1 - Critical", 2: "2 - High", 3: "3 - Medium", 4: "4 - Low" };
 const SOURCES = [["", "All modules"], ["framework", "AI-Driven Automation"], ["functional", "Guided Browser"],
-  ["python", "Guided Browser (Python)"], ["comparison", "Integration Comparison"], ["performance", "Performance"]];
+  ["python", "Guided Browser (Python)"], ["comparison", "Integration Comparison"], ["api", "API Testing"], ["performance", "Performance"]];
 const STATUSES = [["open", "Open"], ["approved", "Approved"], ["publication_failed", "Publication Failed"],
   ["created", "Published to TFS"], ["dismissed", "Rejected"], ["linked", "Duplicate"], ["all", "All"]];
 
@@ -37,6 +37,7 @@ function fmtFact(v) {
 function sourceLink(d) {
   if (d.source === "performance") return `#/perf-results?run=${encodeURIComponent(d.source_run_id)}`;
   if (d.source === "comparison") return "#/integration-comparison";
+  if (d.source === "api") return `#/api-testing?run=${encodeURIComponent(d.source_run_id)}`;
   return `#/history?run=${encodeURIComponent(d.source_run_id)}`;
 }
 

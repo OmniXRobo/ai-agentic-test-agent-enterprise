@@ -343,7 +343,8 @@ class Sender:
         return {"method": (test.get("method") or "GET").upper(), "url": url, "query": query, "headers": headers,
                 "body": body, "content_type": ctype}
 
-    def send(self, req: dict[str, Any], *, auth: str = "app", max_bytes: int | None = None) -> dict[str, Any]:
+    def send(self, req: dict[str, Any], *, auth: str = "app", max_bytes: int | None = None,
+             timeout_ms: int | None = None) -> dict[str, Any]:
         """Send and record. Never raises for HTTP or network problems: they are part of the result."""
         max_bytes = int(max_bytes or self.cfg.get("max_response_bytes") or 5 * 1024 * 1024)
         method = req["method"]
@@ -396,7 +397,8 @@ class Sender:
             self.limiter.wait(self.app["id"], rate)
             started = time.perf_counter()
             try:
-                resp, body, truncated, hops = self._exchange(method, url, headers, query, content, max_bytes, provider)
+                resp, body, truncated, hops = self._exchange(method, url, headers, query, content, max_bytes, provider,
+                                                             timeout_ms)
             except QAError as exc:
                 record.update(error=exc.message, error_kind="policy", blocked=True)
                 return record
@@ -431,15 +433,17 @@ class Sender:
             return record
 
     def _exchange(self, method: str, url: str, headers: dict[str, str], query: list[tuple[str, str]],
-                  content: bytes | None, max_bytes: int, provider: AuthProvider | None) -> tuple[Any, bytes, bool, list[str]]:
+                  content: bytes | None, max_bytes: int, provider: AuthProvider | None,
+                  timeout_ms: int | None = None) -> tuple[Any, bytes, bool, list[str]]:
         hops: list[str] = []
         origin = urlsplit(url).netloc
         cur_method, cur_url, cur_query, cur_content = method, url, query, content
         cur_headers = dict(headers)
         for _ in range(6):
             self.policy.check_url(cur_url)
+            extra = {"timeout": httpx.Timeout(max(0.1, min(600.0, timeout_ms / 1000)))} if timeout_ms else {}
             with self.client().stream(cur_method, cur_url, params=cur_query or None, headers=cur_headers,
-                                      content=cur_content) as resp:
+                                      content=cur_content, **extra) as resp:
                 if resp.is_redirect and self.cfg.get("follow_redirects", True) and len(hops) < 5:
                     loc = resp.headers.get("location") or ""
                     nxt = urljoin(str(resp.url), loc)

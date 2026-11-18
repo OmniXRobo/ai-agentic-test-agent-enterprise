@@ -279,9 +279,13 @@ def make_cert(folder: Path, hostname: str = "localhost") -> dict[str, str]:
     ca_key, ca, key, csr, crt, ext = (folder / n for n in ("ca.key", "ca.pem", "srv.key", "srv.csr", "srv.pem", "ext.cnf"))
     run = lambda *a: subprocess.run(list(a), check=True, capture_output=True)  # noqa: E731
     run("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(ca_key), "-out", str(ca), "-days", "2",
-        "-subj", "/CN=SkyGuard Test CA")
+        "-subj", "/CN=SkyGuard Test CA",
+        "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
     run("openssl", "req", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(csr), "-subj", f"/CN={hostname}")
-    ext.write_text(f"subjectAltName=DNS:{hostname},IP:127.0.0.1\nbasicConstraints=CA:FALSE\n")
+    # Python 3.13 verifies strictly (VERIFY_X509_STRICT): key usage and the authority key identifier must be present
+    ext.write_text(f"subjectAltName=DNS:{hostname},IP:127.0.0.1\nbasicConstraints=CA:FALSE\n"
+                   "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n"
+                   "authorityKeyIdentifier=keyid,issuer\nsubjectKeyIdentifier=hash\n")
     run("openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca), "-CAkey", str(ca_key), "-CAcreateserial", "-out", str(crt),
         "-days", "2", "-extfile", str(ext))
     return {"ca": str(ca), "cert": str(crt), "key": str(key)}
