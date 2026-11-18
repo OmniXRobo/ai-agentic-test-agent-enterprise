@@ -31,6 +31,9 @@ kept. If any step fails, the previous version is restored automatically (this wa
 * **AI Agent:** "Finish lab" on SauceDemo no longer refused with "The signed-in identity has not been verified".
   Simpler to read: no extra "again" message after saving a password, *Learned* instead of *Uncertain*, a *Why* line
   when a task did not finish.
+* **AI Agent on Swag Labs:** a completed "Finish lab" order ("Thank you for your order!") is now shown as
+  Completed instead of FAILED / Uncertain; "buy item" is found by its name; no "Zip/Postal Code must be unique"
+  guess. The extension's companion gets the same fix.
 * **Integration Comparison:** *Apply filters* InvalidSelectorError fixed; a last page whose Next button stays active
   is no longer reported as INCOMPLETE.
 

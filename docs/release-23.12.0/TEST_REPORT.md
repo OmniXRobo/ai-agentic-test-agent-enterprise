@@ -207,3 +207,18 @@ All of the following ran on 18 November 2026, with python-multipart uninstalled,
 Not verified: saucedemo.com and tabulizer.com themselves (the network refused both; stand-ins with the same
 behaviour were used) and SmartScreen on a real Windows PC.
 
+## 10. Finish lab on Swag Labs shown as FAILED after a complete order (reported)
+
+* **Reproduced on the SauceDemo stand-in**, learned the way a person uses it (sign in, add to cart, checkout, the
+  three fields, Continue, Finish, "Thank you for your order!"), then asked "Finish saucedemo" and answered
+  "bilal; ahmed; 3432". Before the fix every step ran and the record ended *unknown* with "no success message or
+  record was found after submitting", as in the screenshots. After the fix it ends **Completed**: "the application
+  showed its result page "Thank you for your order!"" (`test_swag_labs_checkout_reaching_thank_you_page_is_completed`).
+* The result-page rule (`test_result_page_rules`): the learned page confirms; another page, the page that was
+  submitted, a page with a sign-in form, or (for tasks learned before 23.12.0) a new page that says nothing about the
+  result, do not.
+* "buy item" is found by its own name; approve / cancel requests never reach it. Zip/Postal Code, country and
+  phone codes are never guessed unique; order and invoice numbers still are.
+* AI Agent suites (agent core, end to end, passive learning, autopilot, missing information, repair, the AI Agent
+  pages in Chromium): **179 passed** (`ai-agent-231200-r3.xml`).
+

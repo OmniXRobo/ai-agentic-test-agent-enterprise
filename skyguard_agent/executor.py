@@ -22,13 +22,17 @@ from __future__ import annotations
 import re
 import threading
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlsplit
 
 from . import authz, guard, locator, rules as rule_engine, sessions
 from .knowledge import KnowledgeBase, origin_of
 from .planner import build_preview, rules_for
 from .store import Store
 from .util import AgentError, dumps, loads, norm, now_iso
+
+# words with which a result page says the submission went through ("Thank you for your order!", "Order complete")
+_DONE_WORDS = re.compile(r"\b(thank you|thanks for|successfully|has been (?:placed|created|submitted|saved|dispatched|received)|"
+                         r"order (?:is )?(?:complete|confirmed|placed)|checkout: complete)", re.I)
 
 FINAL = {"completed", "partial", "failed", "stopped", "cancelled"}
 ITEM_FINAL = {"confirmed_success", "confirmed_failure", "skipped"}
@@ -923,6 +927,7 @@ class Engine:
                 cp["heal_waits"] = 0
                 commit = bool(step.get("commit"))
                 if commit:
+                    cp["commit_url"] = snap.get("url")
                     d = self._authorize(run, cp, stage, wf_entry, item)
                     if d:
                         return d
@@ -954,6 +959,7 @@ class Engine:
                 cp["heal_pending"] = pending
             cp["step"] += 1
             if step.get("commit"):
+                cp["commit_url"] = snap.get("url")
                 d = self._authorize(run, cp, stage, wf_entry, item)
                 if d:
                     cp["step"] -= 1
@@ -1018,6 +1024,22 @@ class Engine:
 
     # -- verification --
 
+    @staticmethod
+    def _success_page(cp: dict[str, Any], snap: dict[str, Any], ver: dict[str, Any]) -> str | None:
+        """23.12.0: the page the application moves on to after a successful submit, for applications that show no
+        success message (Swag Labs: "Thank you for your order!"). Only a different page than the one submitted, with
+        no error, no invalid field and no sign-in form, counts."""
+        url = urlsplit(snap.get("url") or "").path
+        if not url or url == urlsplit(cp.get("commit_url") or "").path or (snap.get("auth") or {}).get("password_fields"):
+            return None
+        heading = (snap.get("heading") or snap.get("title") or "").strip()
+        page = ver.get("success_page") or {}
+        if page.get("path"):
+            return (page.get("title") or heading or url) if url == page["path"] else None
+        # knowledge learned before 23.12.0 has no result page: the new page must say so itself
+        m = _DONE_WORDS.search(" ".join([heading, snap.get("text") or ""])[:3000])
+        return (heading or m.group(0)) if m else None
+
     def _verify(self, run: dict[str, Any], cp: dict[str, Any], snap: dict[str, Any], app: dict[str, Any],
                 stage: dict[str, Any], wf: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
         record = item["record"]
@@ -1044,6 +1066,13 @@ class Engine:
                                        f"{item['seq']} because the application rejected it: \"{detail}\". I am paused "
                                        "on this page. Correct the data and run the record again, or Resume to "
                                        "continue with the next record.")
+                return self._next_item(run, cp)
+            reached = None if (success_msg or ver.get("record_listed")) else self._success_page(cp, snap, ver)
+            if reached:
+                self._promote_heal(app["id"], cp.pop("heal_pending", None))
+                self._stage_result(run, item, stage["index"], "confirmed_success",
+                                   f"the application showed its result page \"{reached}\"",
+                                   evidence={"page": reached, "url": snap.get("url")})
                 return self._next_item(run, cp)
             if success_msg and not ver.get("record_listed"):
                 self._promote_heal(app["id"], cp.pop("heal_pending", None))

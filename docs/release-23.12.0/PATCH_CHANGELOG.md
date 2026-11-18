@@ -96,4 +96,15 @@
   on tables whose Next button stays active on the last page (the tabulizer.com sorting / pagination demo). The last
   page is now confirmed from the application's own record count or its last page number; only when the application
   shows neither does the capture stay INCOMPLETE, with that reason.
+* **AI Agent: "Finish lab" on Swag Labs shown as FAILED / Uncertain although the order was placed.** All steps ran
+  in the browser up to "Thank you for your order!", but the run said "no success message or record was found".
+  Swag Labs shows no success message; it moves on to its result page. That page now counts as the success, also
+  for tasks learned with an earlier version (the page must then say so itself, for example "Thank you"). The
+  browser extension's companion uses the same agent code and gets the fix through UPDATE_EXTENSION.cmd.
+* **AI Agent: a recorded task is found by its own name.** "buy item" was recorded, but asking "buy item" answered
+  "I have not learned how to create item", because its last click (Finish) is another kind of operation. Tasks seen
+  only while recording show *Recorded · not run yet* instead of *Learned · seen 0×*.
+* **AI Agent: "Zip/Postal Code must be unique" is no longer guessed** for a recorded task (postal, country, phone,
+  currency and similar codes are shared by many records). A rule an administrator already confirmed is kept; reject
+  it in Applications & Knowledge if it is wrong.
 

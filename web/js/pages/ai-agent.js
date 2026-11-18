@@ -400,7 +400,7 @@ async function connectTab(body) {
 async function knowledgeTab(body) {
   if (!state.app) { body.innerHTML = `<div class="card"><p class="muted">Connect a website first (Connect & Learn).</p></div>`; return; }
   const k = await api(`/api/ops/simple/knowledge/${encodeURIComponent(state.app)}`);
-  const certainty = (t) => t.usable ? (t.certainty === "verified" ? pill("PASS", `Verified · seen ${t.seen}×`) : pill("INFO", `Learned · seen ${t.seen}×`)) : pill("INFO", t.state);
+  const certainty = (t) => t.usable ? (t.certainty === "verified" ? pill("PASS", `Verified · seen ${t.seen}×`) : (t.seen ? pill("INFO", `Learned · seen ${t.seen}×`) : pill("INFO", "Recorded · not run yet"))) : pill("INFO", t.state);
   const rv = k.retrieval || {};
   const ls = k.last_session;
   body.innerHTML = `
