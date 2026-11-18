@@ -23,7 +23,16 @@ kept. If any step fails, the previous version is restored automatically (this wa
 * **Agent Workflow**: six missing agents added to the same page, in the same layout; a card says UNAVAILABLE with the
   reason instead of READY when its engine cannot work.
 * **Python editor**: full screen, taller / shorter, resizable, error lines marked.
-* **Setup**: the footer shows only "SkyGuard QA 23.12.0", as asked.
+* **Setup**: the footer shows only "SkyGuard QA 23.12.0", as asked. The publisher **Muhammad Tufail** is on the
+  Welcome page and in Setup.exe's properties.
+
+**Fixed after the first package** (PATCH_CHANGELOG.md, last section):
+
+* **AI Agent:** "Finish lab" on SauceDemo no longer refused with "The signed-in identity has not been verified".
+  Simpler to read: no extra "again" message after saving a password, *Learned* instead of *Uncertain*, a *Why* line
+  when a task did not finish.
+* **Integration Comparison:** *Apply filters* InvalidSelectorError fixed; a last page whose Next button stays active
+  is no longer reported as INCOMPLETE.
 
 Details: PATCH_CHANGELOG.md, USER_GUIDE.md, ROOT_CAUSE_ANALYSIS.md.
 
@@ -37,6 +46,8 @@ Details: PATCH_CHANGELOG.md, USER_GUIDE.md, ROOT_CAUSE_ANALYSIS.md.
   upgrade's own verification, one in a page list), both fixed; those tests were run again and passed.
 * **Installer:** apply, verify, rollback and apply again on 14 of 14 earlier releases, 23.3.35 to 23.11.2
   (27 passed).
+* **Second round of fixes** (TEST_REPORT.md section 9): AI Agent and comparison 132 passed, 9 skipped; API and pages
+  31 passed, 1 skipped; installer and browser 31 passed; Setup under Wine with the publisher: every check passed.
 * **Setup under Wine** over a real 23.11.2 installation: the first build was refused at Verify and **rolled back by
   itself with no data lost**; after the fix the upgrade completed (TEST_REPORT.md section 6). OCR gives a WARN under
   Wine, as in every release.
@@ -56,8 +67,16 @@ contacted; SkyGuard's own port, metadata addresses and unauthorized redirects ar
 run; TLS verification is on by default; tests that change data need confirmation and never run on Production from a
 schedule; nothing goes to TFS without approval. Residual risks are listed in the report.
 
+## About "Unknown publisher"
+
+Windows SmartScreen takes the publisher only from a digital signature. Setup.exe now names Muhammad Tufail as its
+publisher, but it is not signed, so SmartScreen still says *Unknown publisher* (choose *More info*, *Run anyway*).
+To change that, Setup.exe must be signed with a code-signing certificate issued to Muhammad Tufail; the build signs it
+automatically when the certificate is given (INSTALLATION_GUIDE.md).
+
 ## Not verified
 
 * A real Windows 10 / 11 PC, Microsoft Edge and Google Chrome (Wine and Chromium were used).
-* saucedemo.com (the network refused it; the stand-in was used). Run *Finish lab* once after installing.
+* saucedemo.com and tabulizer.com (the network refused them; stand-ins with the same behaviour were used). Run
+  *Finish lab* and the comparison once after installing.
 * A live local Qwen, your own APIs, and a live IPv6 request.

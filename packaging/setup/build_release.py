@@ -27,6 +27,8 @@ import argparse
 import hashlib
 import json
 import shutil
+import tempfile
+import os
 import subprocess
 import sys
 import uuid
@@ -134,6 +136,39 @@ def build_setup(stage: Path, work: Path, out_exe: Path) -> None:
         shutil.copy2(stage / f, payload / f)
     run(["makensis", "-V2", "-NOCD", f"-DVERSION={VERSION}", f"-DPAYLOAD={payload}", f"-DOUTFILE={out_exe}",
          str(HERE / "SkyGuardSetup.nsi")], cwd=str(HERE))
+    sign_setup(out_exe)
+
+
+def sign_setup(exe: Path) -> bool:
+    """Authenticode-sign Setup.exe when a code-signing certificate is supplied (optional).
+
+    Windows SmartScreen shows "Unknown publisher" for any unsigned program; the publisher name in the file's
+    properties does not change that. Only a signature from a code-signing certificate issued to the publisher does.
+    The certificate is read from SKYGUARD_SIGN_PFX (a .pfx file) and its password from SKYGUARD_SIGN_PASSWORD; the
+    password is passed to osslsigncode through a file that is deleted afterwards and is never printed or logged.
+    """
+    pfx, password = os.environ.get("SKYGUARD_SIGN_PFX"), os.environ.get("SKYGUARD_SIGN_PASSWORD", "")
+    if not pfx:
+        print("Setup.exe is not signed (no SKYGUARD_SIGN_PFX): Windows will show 'Unknown publisher'.")
+        return False
+    if not shutil.which("osslsigncode"):
+        raise SystemExit("SKYGUARD_SIGN_PFX is set but osslsigncode is not installed")
+    signed = exe.with_suffix(".signed.exe")
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".txt") as pw:
+        pw.write(password)
+    try:
+        cmd = ["osslsigncode", "sign", "-pkcs12", pfx, "-readpass", pw.name, "-n", "SkyGuard QA " + VERSION + " Setup",
+               "-h", "sha256", "-in", str(exe), "-out", str(signed)]
+        ts = os.environ.get("SKYGUARD_SIGN_TIMESTAMP_URL")
+        if ts:
+            cmd[2:2] = ["-ts", ts]
+        if subprocess.run(cmd, capture_output=True).returncode != 0:
+            raise SystemExit("signing Setup.exe failed (check the certificate and its password)")
+    finally:
+        os.unlink(pw.name)
+    signed.replace(exe)
+    print("Setup.exe signed with", Path(pfx).name)
+    return True
 
 
 def build_extension(out: Path, cache: str | None, name: str = EXT_NAME) -> tuple[Path, dict]:

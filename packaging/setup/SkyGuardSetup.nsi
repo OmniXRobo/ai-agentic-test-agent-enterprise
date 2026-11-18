@@ -51,7 +51,12 @@ VIAddVersionKey "ProductName" "SkyGuard QA"
 VIAddVersionKey "FileDescription" "SkyGuard QA ${VERSION} cumulative upgrade (from 23.3.35)"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
-VIAddVersionKey "LegalCopyright" "SkyGuard QA"
+!ifndef PUBLISHER
+  !define PUBLISHER "Muhammad Tufail"
+!endif
+VIAddVersionKey "CompanyName" "${PUBLISHER}"
+VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
+VIAddVersionKey "Comments" "Published by ${PUBLISHER}"
 
 Var AppDir        ; folder the person chose (holds app or qa_platform)
 Var App           ; the folder that holds qa_platform
@@ -85,8 +90,8 @@ Var hStop
 !define MUI_ABORTWARNING
 !define MUI_ABORTWARNING_TEXT "Cancel the upgrade? Nothing has been changed yet."
 !define MUI_WELCOMEPAGE_TITLE "Upgrade SkyGuard QA to ${VERSION}"
-!define MUI_WELCOMEPAGE_TEXT "This wizard upgrades an installed SkyGuard QA (version 23.3.35 or any later release up to 23.11.2) to ${VERSION} in one step. It includes every release in between.$\r$\n$\r$\n\
-What you get: API Testing in Automation Studio (OpenAPI / Swagger import, generated tests, Python scripts, failures as Defect Review drafts), API tests and Integration Comparisons in Scheduled Runs, the new Agent Workflow agents and a larger Python editor; and everything from 23.4.0 to 23.11.2 (including the AI Agent, editable Python tests, Smart Wait and Defect Review).$\r$\n$\r$\n\
+!define MUI_WELCOMEPAGE_TEXT "Publisher: ${PUBLISHER}$\r$\n$\r$\nThis wizard upgrades an installed SkyGuard QA (version 23.3.35 or any later release up to 23.11.2) to ${VERSION} in one step. It includes every release in between.$\r$\n$\r$\n\
+New: API Testing, scheduled API tests and Integration Comparisons, more Agent Workflow agents, a larger Python editor and AI Agent fixes.$\r$\n$\r$\n\
 It works offline, needs no administrator rights and changes nothing outside the SkyGuard QA folders. Your data is backed up first and is never deleted; if anything fails, the previous version is restored automatically.$\r$\n$\r$\n\
 Close SkyGuard QA if it is open, then press Next."
 !insertmacro MUI_PAGE_WELCOME

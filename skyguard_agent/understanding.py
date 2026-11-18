@@ -285,6 +285,11 @@ def derive_identity_pattern(text: str, user: str) -> str | None:
     words = re.findall(r"[A-Za-z][A-Za-z,:]*", before.split("|")[-1])[-3:]
     if not words:
         return None
+    # 23.12.0: a list of sign-in names or help text ("Accepted usernames are: standard_user locked_out_user ...",
+    # "Password for all users") names users; it does not show who is signed in
+    if re.search(r"(?i)\b(usernames|users|accepted|password|demo|sample|test accounts?)\b", " ".join(words)) or \
+            re.search(r"(?i)password for all users|accepted usernames", text):
+        return None
     prefix = r"\s+".join(re.escape(w) for w in words)
     after = text[m.end():m.end() + 60]
     pat = prefix + r"\s*(?P<user>[\w.@-]+)"

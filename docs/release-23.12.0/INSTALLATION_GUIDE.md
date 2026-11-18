@@ -28,13 +28,24 @@ What you need:
 
 Double-click **SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe**.
 
-> Setup.exe is not code-signed (no company certificate was available to the build). Windows SmartScreen may show
-> *Windows protected your PC*. Choose *More info*, then *Run anyway*. If your company blocks unsigned programs, use
-> the manual install in section 5, which does the same thing without an .exe.
+> The publisher of Setup.exe is **Muhammad Tufail**. It is shown on the Welcome page and in the file's properties
+> (right-click > Properties > Details: Company, Copyright).
+>
+> Setup.exe is not code-signed (no code-signing certificate was available to the build). Because of that, Windows
+> SmartScreen still shows *Windows protected your PC* and *Publisher: Unknown publisher*: Windows takes the publisher
+> only from a digital signature, never from the file's properties. Choose *More info*, then *Run anyway*. If your
+> company blocks unsigned programs, use the manual install in section 5, which does the same thing without an .exe.
+>
+> To make SmartScreen show the publisher name, Setup.exe has to be signed with a code-signing certificate issued to
+> Muhammad Tufail (bought from a certificate authority such as DigiCert, Sectigo or SSL.com, or issued by your
+> company). The build signs it automatically when the certificate is given: set `SKYGUARD_SIGN_PFX` to the .pfx file
+> and `SKYGUARD_SIGN_PASSWORD` to its password (optionally `SKYGUARD_SIGN_TIMESTAMP_URL`) before running
+> `packaging/setup/build_release.py`. A new certificate may still get a SmartScreen warning until it has built up
+> reputation; an EV certificate does not.
 
 | Page | What happens |
 |---|---|
-| **Welcome** | Explains the upgrade. |
+| **Welcome** | Shows the publisher (Muhammad Tufail) and explains the upgrade. |
 | **Detect** | Setup finds the installation (by default `%LOCALAPPDATA%\Programs\AIAgenticTestAgent`; use *Browse* for another folder). With the application's own Python, it reads the installed version, the data folder, whether the application folder can be written and whether SkyGuard QA is running. *Next* is available only for a supported version. For any other version, Setup says why and changes nothing. |
 | **Backup** | Shows where the backup goes (`patch-backups\<from>-to-23.12.0-<time>`): every file that is replaced, the database and the agent's knowledge database (consistent SQLite copies), and `settings.json`. If SkyGuard QA is running, it is closed after you agree. If the application folder is protected, Setup installs a patched copy beside it (section 4). |
 | **Install** | Checks the SHA-256 of every file and every OCR wheel, checks free space and permissions, backs up, copies, installs the offline OCR runtime (unpacked into a staging folder and swapped in when complete), migrates, and verifies. Every message is shown and written to `logs\setup-23.12.0-<time>.txt`. **If any step fails, the previous files, the previous OCR runtime and the database copy are restored automatically.** |

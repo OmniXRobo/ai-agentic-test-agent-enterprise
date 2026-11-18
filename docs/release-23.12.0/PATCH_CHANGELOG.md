@@ -76,3 +76,24 @@
 
 * The wizard's footer shows only "SkyGuard QA 23.12.0". The words "offline, no administrator rights" were removed,
   as asked. The upgrade itself is still offline and per user.
+
+## Fixed after the first delivery (reported on the first 23.12.0 package)
+
+* **Setup publisher.** Setup.exe names **Muhammad Tufail** as its publisher: on the Welcome page and in the file's
+  properties (Company, Copyright). Windows SmartScreen keeps saying *Unknown publisher* until Setup.exe is signed with
+  a code-signing certificate; the build signs it when a certificate is given (INSTALLATION_GUIDE.md).
+* **AI Agent: "Finish lab" on SauceDemo was refused** with *not authorized: The signed-in identity has not been
+  verified from the application*. The sign-in had worked. Fixed; an application that has kept the wrong learned rule
+  works again without forgetting anything (ROOT_CAUSE_ANALYSIS.md).
+* **AI Agent, easier to read.** After you save a password the request continues by itself without an extra "again"
+  message in the chat. Tasks seen once are shown as *Learned* (they can be used, with the preview first) instead of
+  *Uncertain*. A task that ended without doing its records shows a *Why* line with the reason next to the result.
+  Records that have not run yet show *Waiting*.
+* **Integration Comparison: Apply filters** failed with *InvalidSelectorError* on
+  `button[name=/(?i)^(apply|search|filter|go|show)/i]`. Fixed; a table that filters as you type (no Apply button) is
+  recognised and logged as such.
+* **Integration Comparison: live capture INCOMPLETE** with *page 6 repeats an earlier page (Next did not move on)*
+  on tables whose Next button stays active on the last page (the tabulizer.com sorting / pagination demo). The last
+  page is now confirmed from the application's own record count or its last page number; only when the application
+  shows neither does the capture stay INCOMPLETE, with that reason.
+

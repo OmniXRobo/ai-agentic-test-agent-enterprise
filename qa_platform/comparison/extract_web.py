@@ -159,6 +159,22 @@ NEXT_JS = r"""
 }
 """
 
+# The highest page number shown next to the Next control (1 2 3 4 5 Next): the last page of the table.
+LAST_PAGE_JS = r"""
+() => {
+  const next = document.querySelector('[data-qa-next]');
+  if (!next) return null;
+  const visible = (e) => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+  let box = next.parentElement;
+  for (let i = 0; i < 4 && box; i++, box = box.parentElement) {
+    const nums = [...box.querySelectorAll('a, button, span, li')].filter(visible)
+      .map(e => (e.innerText || '').trim()).filter(t => /^\d{1,5}$/.test(t)).map(Number);
+    if (nums.length >= 2) return Math.max(...nums);
+  }
+  return null;
+}
+"""
+
 CHARTS_JS = r"""
 () => {
   const out = [];
@@ -674,8 +690,11 @@ class WebExtractor:
                 break
             sig = hashlib.sha1(json.dumps(data["rows"]).encode()).hexdigest()
             if sig in seen and data["rows"]:
-                complete, reason = False, f"page {pages + 1} repeats an earlier page (Next did not move on)"
-                failures.append(reason)
+                # Next was clickable but showed a page already read: many tables keep Next enabled on the last page
+                # (or go back to page 1). That is the end of the pages when the application's own count agrees.
+                complete, reason = self._end_of_pages(target, pages, len(records), shown_total)
+                if reason:
+                    failures.append(reason)
                 break
             seen.add(sig)
             pages += 1
@@ -747,6 +766,28 @@ class WebExtractor:
         self.log("read a virtualized grid by scrolling", rows=len(ordered), announced=first.get("rowCount"))
         return {**first, "rows": ordered, "method": f"{first.get('method')} (virtualized, scrolled)",
                 "complete": False}
+
+    def _end_of_pages(self, target: dict[str, Any], pages: int, records: int,
+                      shown_total: int | None) -> tuple[bool, str | None]:
+        """Next did not move on after ``pages`` pages: complete only when the application confirms it."""
+        total = shown_total if shown_total is not None else self._shown_total(target)
+        if total is not None:
+            if total == records:
+                self.log(f"Next stayed active after the last page ({pages}); the application shows {total} records, "
+                         "all read")
+                return True, None
+            return False, (f"Next did not move on after page {pages}: read {records} records but the application "
+                           f"shows {total}")
+        try:
+            self.page.evaluate(NEXT_JS, target.get("next_selector"))  # mark Next again (the pager may be redrawn)
+            last = self.page.evaluate(LAST_PAGE_JS)
+        except Exception:
+            last = None
+        if last and int(last) == pages:
+            self.log(f"Next stayed active after the last page; the page numbers end at {last}, all pages read")
+            return True, None
+        return False, (f"Next did not move on after page {pages}, and the application shows neither its record "
+                       "count nor its last page number, so the end could not be confirmed")
 
     def _shown_total(self, target: dict[str, Any]) -> int | None:
         """The record total the application displays: from the configured element, else the page text."""

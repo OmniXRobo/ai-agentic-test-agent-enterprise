@@ -159,3 +159,38 @@ person's PC. Cause and fix: ROOT_CAUSE_ANALYSIS.md (last row). What was run afte
 * The installer tests gained `test_setup_repairs_an_installed_23_12_0`. The Windows CI jobs also found one test
   that built a Python script with a Windows path inside a string (a syntax error on Windows only); the test now uses
   a forward-slash path.
+
+## 9. Second round of fixes (reported on the first 23.12.0 package)
+
+All of the following ran on 18 November 2026, with python-multipart uninstalled, as in the offline Windows runtime.
+
+* **AI Agent, "Finish lab" refused with "The signed-in identity has not been verified".** Reproduced by storing the
+  rule an earlier version learned from SauceDemo's help text ("Accepted usernames are: ..."); with the 23.11.2 code the
+  run stops without placing the order; with the fix the checkout on the stand-in online store completes and the order is placed
+  (`tests/test_ai_agent_231200.py`, 3 passed). The help text itself never becomes a rule any more, and a real
+  "Logged in as ..." line still does. The SauceDemo stand-in now has SauceDemo's help text on its sign-in page.
+* **AI Agent page and flows:** the agent suites, the AI Agent page in Chromium (the reported conversation up to the
+  order placed, no JavaScript error), the Integration Comparison browser tests and the SauceDemo stand-in tests:
+  **132 passed, 9 skipped** (`ai-agent-comparison-231200-r2.xml`). The skips are the same Windows-only and OCR-runtime
+  tests as before.
+* **Integration Comparison:** *Apply filters* with the reported button pattern works and no longer raises
+  InvalidSelectorError; a table without an Apply button is logged as "filters as the values are typed". On a stand-in
+  of the tabulizer.com demo whose Next button stays active on the last page, the capture is **complete** when the
+  record count or the last page number confirms it (4 variants), and stays INCOMPLETE, with the reason, when the page
+  shows neither (`test_integration_ocr_browser_23900.py`).
+* **API, comparison schedule, agent and page tests:** 31 passed, 1 skipped (live IPv6)
+  (`agent-api-comparison-231200-r2.xml`). **Installer and browser tests:** 31 passed
+  (`ui-installer-231200-r2.xml`), apply / verify / rollback / apply again on all 14 releases.
+* **Setup publisher:** the built Setup.exe carries Company "Muhammad Tufail", Copyright "Copyright (C) 2026 Muhammad
+  Tufail" and Product "SkyGuard QA" (read from the file's version information). Under Wine the Welcome page shows
+  "Publisher: Muhammad Tufail" (`evidence/setup-1-welcome.png`); the upgrade of 23.11.2 completed with every check
+  passed except the usual OCR WARN under Wine: "Patched 23.11.2 -> 23.12.0"
+  (`setup-publisher-build-23.11.2-to-23.12.0.txt`, screenshots `evidence/setup-*.png`).
+* **Signing:** the optional signing step of the build was run with a throw-away self-signed test certificate
+  (deleted afterwards, not used for the delivered file): the signature was written and `osslsigncode verify` read it
+  back. **The delivered Setup.exe is not signed**, because no code-signing certificate was available, so SmartScreen
+  still says *Unknown publisher* (KNOWN_LIMITATIONS.md).
+
+Not verified: saucedemo.com and tabulizer.com themselves (the network refused both; stand-ins with the same
+behaviour were used) and SmartScreen on a real Windows PC.
+

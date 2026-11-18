@@ -706,8 +706,14 @@ class Engine:
                 role_ok = True
             # The application accepted this account's own sign-in but shows no user name and has no learned identity
             # rule: recorded as a confirmed sign-in, which authz accepts only for operations no role restricts.
-            confirmed = (check["identity"] == "unverified" and bool(login.get("submitted"))
-                         and not profile.get("identity"))
+            # 23.12.0: also when a learned identity rule finds nothing on this page. On Swag Labs a rule learned from
+            # the sign-in page's help text ("Accepted usernames are: standard_user ...") never matches a signed-in
+            # page, and every run was refused with "identity has not been verified". A user name that the page does
+            # show and that differs is still a mismatch above, which stops the run.
+            confirmed = check["identity"] == "unverified" and bool(login.get("submitted"))
+            if confirmed and (profile.get("identity") or {}).get("pattern"):
+                self._event(run["id"], "session", "The learned rule for reading the signed-in user found nothing on "
+                                                  "this page; the application's acceptance of the sign-in is used.")
             sess = sessions.SessionState({"account_id": account["id"], "identity": check["displayed_user"] or
                                           account["login_id"], "role": role, "verified": check["identity"] == "verified",
                                           "role_verified": role_ok, "sign_in_confirmed": confirmed,

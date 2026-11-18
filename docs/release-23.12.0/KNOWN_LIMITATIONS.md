@@ -54,4 +54,6 @@ Stated plainly so that nobody has to discover them.
 
 ## Packaging
 
-* Setup.exe is not code-signed, so Windows SmartScreen may warn. See INSTALLATION_GUIDE.md.
+* Setup.exe is not code-signed, so Windows SmartScreen warns and says *Unknown publisher*, although the file names
+  Muhammad Tufail as its publisher. Only a code-signing certificate removes that; the build signs Setup.exe when one is
+  given. See INSTALLATION_GUIDE.md.

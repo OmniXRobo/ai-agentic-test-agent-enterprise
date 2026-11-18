@@ -20,7 +20,7 @@ import { looksSecret, SECRET_WARNING } from "../secret-check.js";
 import { isAdmin, canEdit } from "../auth.js";
 
 const TABS = [["chat", "AI Chat & Voice"], ["connect", "Connect & Learn"], ["knowledge", "Applications & Knowledge"], ["tasks", "Tasks & History"]];
-const OUTCOME = { confirmed_success: ["PASS", "Completed"], confirmed_failure: ["FAIL", "Failed"], skipped: ["WARN", "Skipped"], unknown: ["WARN", "Uncertain: check in the application"], pending: ["INFO", "Pending"], running: ["INFO", "Running"] };
+const OUTCOME = { confirmed_success: ["PASS", "Completed"], confirmed_failure: ["FAIL", "Failed"], skipped: ["WARN", "Skipped"], unknown: ["WARN", "Uncertain: check in the application"], pending: ["INFO", "Waiting"], running: ["INFO", "Running"] };
 const FINAL = ["completed", "partial", "failed", "stopped", "cancelled"];
 
 const state = { tab: "chat", app: null, apps: [], conversation: null, runs: new Map(), poll: null, view: null, watching: [], lastRun: null, ack: new Map(), sig: new Map(), suggestAt: 0, input: null, log: null };
@@ -152,12 +152,13 @@ function bubble(log, who, html, runId) {
   return div;
 }
 
-async function send(text, source, log, input) {
+async function send(text, source, log, input, quiet = false) {
   text = (text || "").trim();
   if (!text) return;
   if (looksSecret(text)) { toast(SECRET_WARNING, "error", 8000); return; }
   if (input) input.value = "";
-  bubble(log, "user", esc(text) + (source === "voice" ? ' <span class="muted">(voice)</span>' : ""));
+  // quiet: SkyGuard continues the same request by itself (after a password was saved); nothing typed is shown
+  if (!quiet) bubble(log, "user", esc(text) + (source === "voice" ? ' <span class="muted">(voice)</span>' : ""));
   const wait = bubble(log, "agent", '<span class="muted">Working…</span>');
   try {
     const out = await api("/api/ops/simple/command", { method: "POST", body: { text, conversation: state.conversation, app_id: state.app, source } });
@@ -187,7 +188,7 @@ function renderReply(log, r) {
   const div = bubble(log, "agent", html, r.type === "run" ? r.run_id : null);
   if (r.type === "need_credential" && r.account_id) {
     if (r.security_notice) div.insertAdjacentHTML("beforeend", `<p class="muted">🔒 ${esc(r.security_notice)}</p>`);
-    div.appendChild(credentialForm(r.account_id, r.account, () => send("again", "typed", log)));
+    div.appendChild(credentialForm(r.account_id, r.account, () => send("again", "typed", log, null, true)));
   }
   if (r.type === "secret_intercepted") div.insertAdjacentHTML("afterbegin", pill("WARN", "Withheld") + " ");
 }
@@ -293,6 +294,9 @@ async function renderRun(runId, el) {
     mid += `<p>${Object.entries(counts).map(([k, n]) => `${esc(k)}: <b>${n}</b>`).join(" · ")}</p>
       <details${FINAL.includes(r.status) ? "" : " open"}><summary>Records</summary>${table(["#", "Record", "Result", "Reason"], data.items.map((i) => `<tr><td>${i.seq}</td><td>${esc(Object.entries(i.record).filter(([k]) => !k.startsWith("_")).map(([k, v]) => `${k}=${v}`).join(", "))}</td><td>${pill(...(OUTCOME[i.status] || ["INFO", i.status]))}</td><td>${esc(i.result?.reason || "")}</td></tr>`))}</details>`;
   }
+  // a task that ended without doing a record says why, in plain words, next to the result (not only under Records)
+  const why = [...new Set(data.items.filter((i) => i.status !== "confirmed_success" && i.result?.reason).map((i) => i.result.reason))];
+  if (FINAL.includes(r.status) && r.status !== "completed" && why.length) mid += `<p>${pill("WARN", "Why")} ${why.slice(0, 3).map(esc).join("; ")}</p>`;
   if (s.result) mid += `<p><b>${esc(s.result)}</b></p>`;
   else if (r.summary?.message) mid += `<p><b>${esc(r.summary.message)}</b></p>`;
   el.innerHTML = head + mid;
@@ -396,7 +400,7 @@ async function connectTab(body) {
 async function knowledgeTab(body) {
   if (!state.app) { body.innerHTML = `<div class="card"><p class="muted">Connect a website first (Connect & Learn).</p></div>`; return; }
   const k = await api(`/api/ops/simple/knowledge/${encodeURIComponent(state.app)}`);
-  const certainty = (t) => t.usable ? (t.certainty === "verified" ? pill("PASS", `Verified · seen ${t.seen}×`) : pill("WARN", `Uncertain · seen ${t.seen}×`)) : pill("INFO", t.state);
+  const certainty = (t) => t.usable ? (t.certainty === "verified" ? pill("PASS", `Verified · seen ${t.seen}×`) : pill("INFO", `Learned · seen ${t.seen}×`)) : pill("INFO", t.state);
   const rv = k.retrieval || {};
   const ls = k.last_session;
   body.innerHTML = `
@@ -409,7 +413,7 @@ async function knowledgeTab(body) {
     <div class="card" style="margin-top:8px"><h3>Tasks I can do</h3>
       ${table(["Task", "Who does it", "Fields", "Status", ""], k.tasks.map((t) => `<tr><td><b>${esc(t.title)}</b>${t.consequential ? ' <span class="muted">(asks for confirmation)</span>' : ""}</td><td>${esc((t.roles || []).join(", "))}</td><td>${esc(t.fields.join(", "))}</td><td>${certainty(t)}</td>
         <td>${canEdit() && t.usable ? `<button class="link-btn" data-try="${esc(t.title)}" title="Prepares a preview in the chat; nothing runs without your confirmation">Test learned workflow</button> · ` : ""}${canEdit() ? `<button class="link-btn" data-forget="${t.id}">This is wrong</button>` : ""}</td></tr>`))}
-      <p class="muted">Verified: I saw it done successfully at least twice. Uncertain: seen once; I still show the preview before doing it.</p></div>
+      <p class="muted">Both can be used. Learned: I saw it done once. Verified: I saw it done successfully at least twice. I always show the preview before doing it.</p></div>
     <div class="card" style="margin-top:8px"><h3>Pages learned</h3>
       ${table(["Page", "Address", "Kind", "Visits"], (k.pages || []).slice(0, 60).map((p) => `<tr><td>${esc(p.title)}</td><td>${esc(p.path)}</td><td>${esc(p.type || "")}</td><td>${p.visits ?? ""}</td></tr>`))}</div>
     <div class="card" style="margin-top:8px"><h3>Rules the application enforces</h3>
