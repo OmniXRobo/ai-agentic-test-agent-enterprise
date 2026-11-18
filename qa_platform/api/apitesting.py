@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -140,9 +140,14 @@ def set_secret(app_id: str, body: SecretIn, s: Any = Depends(svc)) -> dict[str, 
 
 
 @router.post("/apps/{app_id}/certificates")
-async def upload_cert(app_id: str, kind: str = Form(...), file: UploadFile = File(...), s: Any = Depends(svc)) -> dict[str, Any]:
-    data = await file.read(1024 * 1024 + 1)
-    return {"ok": True, "app": await run_in_threadpool(s.upload_certificate, app_id, kind, file.filename or "", data)}
+async def upload_cert(app_id: str, request: Request, kind: str, name: str = "", s: Any = Depends(svc)) -> dict[str, Any]:
+    # The file is the raw request body (no multipart form), so no extra form-parsing package is needed.
+    data = b""
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > 1024 * 1024:
+            break  # upload_certificate refuses anything over 1 MB with a clear message
+    return {"ok": True, "app": await run_in_threadpool(s.upload_certificate, app_id, kind, name, data)}
 
 
 @router.post("/apps/{app_id}/test-connection")

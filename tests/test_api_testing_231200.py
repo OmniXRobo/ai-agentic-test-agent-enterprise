@@ -201,7 +201,8 @@ def test_https_with_uploaded_ca_and_verification(env, tmp_path):
         res = d["results"][0]
         assert "certificate" in (res["error"] or "").lower() or "tls" in (res["error"] or "").lower()
         with open(certs["ca"], "rb") as fh:
-            r = c.post(f"{A}/apps/{a['id']}/certificates", data={"kind": "ca_file"}, files={"file": ("ca.pem", fh.read())})
+            r = c.post(f"{A}/apps/{a['id']}/certificates", params={"kind": "ca_file", "name": "ca.pem"}, content=fh.read(),
+                       headers={"Content-Type": "application/octet-stream"})
         assert r.status_code == 200, r.text
         steps = {s["step"]: s for s in c.post(f"{A}/apps/{a['id']}/test-connection").json()["steps"]}
         assert steps["TLS certificate"]["status"] == "PASS"

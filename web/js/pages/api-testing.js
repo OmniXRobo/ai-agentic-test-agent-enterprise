@@ -212,8 +212,9 @@ function renderConfig(host, creating) {
   }));
   host.querySelectorAll("[data-cert]").forEach((inp) => inp.addEventListener("change", () => guarded(null, async () => {
     const file = inp.files[0]; if (!file) return;
-    const fd = new FormData(); fd.append("kind", inp.dataset.cert); fd.append("file", file);
-    const r = await fetch(`${BASE}/apps/${encodeURIComponent(a.id)}/certificates`, { method: "POST", body: fd });
+    const q = new URLSearchParams({ kind: inp.dataset.cert, name: file.name });
+    const r = await fetch(`${BASE}/apps/${encodeURIComponent(a.id)}/certificates?${q}`,
+      { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.message || `HTTP ${r.status}`);
     await selectApp(a.id); render(); toast("Certificate saved.", "success");
