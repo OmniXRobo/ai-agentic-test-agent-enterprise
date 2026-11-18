@@ -8,7 +8,11 @@
        hash-checked wheels (offline, no download),
     4. copies the companion and the unpacked extension, writes the default configuration,
     5. adds a per-user sign-in entry (HKCU\...\Run) and Start menu shortcuts,
-    6. starts the companion, checks it answers on 127.0.0.1, runs the prerequisite check and shows the pairing code.
+    6. starts the companion, checks it answers on 127.0.0.1 and runs the prerequisite check,
+    7. 1.4.0: copies the AI and speech models when a SkyGuard QA installation on this PC has them (hash-checked),
+       and leaves a one-time install ticket in the extension folder, so the extension pairs and signs in by itself
+       (no pairing code, no user to create, no password),
+    8. opens the browser's extensions page and the folder to load, with the folder path on the clipboard.
   It does not change browser policies and does not install the extension into the browser for you: Chrome and Edge
   only allow that through Load unpacked (Developer mode), the Chrome Web Store / Edge Add-ons, or your IT policy.
 
@@ -139,6 +143,11 @@ Shortcut "SkyGuard Agent - Pairing code" (Join-Path $Target "SkyGuardAgent.cmd")
 Shortcut "SkyGuard Agent - Check prerequisites" "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $Target 'Check-Prerequisites.ps1')`"" ""
 Shortcut "SkyGuard Agent - Uninstall" "powershell.exe" "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $Target 'Uninstall-SkyGuardAgent.ps1')`"" ""
 
+Step "AI and speech models (copied from SkyGuard QA on this PC when it has them)"
+$ErrorActionPreference = "Continue"
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Target "Install-Models.ps1")
+$ErrorActionPreference = "Stop"
+
 $health = $null
 if (-not $NoStart) {
     Step "Starting the companion"
@@ -162,13 +171,26 @@ foreach ($b in @(@{n="Chrome"; k="Software\Policies\Google\Chrome"}, @{n="Edge";
     }
 }
 
-Step "Pairing code"
-& $PyExe -E -s $main pair
+Step "Automatic set-up of the extension (no pairing code, no sign-in)"
+$ErrorActionPreference = "Continue"
+& $PyExe -E -s $main install-ticket (Join-Path $Target "extension\auto-setup.json")
+$ok = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = "Stop"
+if (-not $ok) { Write-Warning "Automatic set-up was not prepared; pair with a code instead (Start menu: SkyGuard Agent - Pairing code)." }
 
-Step "Next steps"
-Say "1. Optional: install the AI and speech models:  powershell -ExecutionPolicy Bypass -File `"$Target\Install-Models.ps1`""
-Say "2. Chrome: open chrome://extensions  |  Edge: open edge://extensions"
-Say "   Turn on Developer mode, press 'Load unpacked' and choose:  $Target\extension"
-Say "3. Open the extension's Options, type the pairing code above, create your companion user and sign in."
-Say "Details: docs\INSTALL_CHROME.md, docs\INSTALL_EDGE.md, docs\COMPANION_SETUP.md"
+$extDir = Join-Path $Target "extension"
+try { Set-Clipboard -Value $extDir } catch { }
+Step "One last step in the browser (Edge or Chrome only allow this by hand)"
+Say "  1. On the extensions page that opens now, switch on 'Developer mode'."
+Say "  2. Press 'Load unpacked' and choose this folder (it is on your clipboard, paste it with Ctrl+V):"
+Say "       $extDir"
+Say "  That is all. The extension connects and signs in by itself. Click its icon to open the side panel."
+Say "Details: docs\INSTALL_EDGE.md, docs\INSTALL_CHROME.md"
+$opened = $false
+foreach ($b in @(@{exe="msedge.exe"; url="edge://extensions"}, @{exe="chrome.exe"; url="chrome://extensions"})) {
+    if ($opened) { break }
+    try { Start-Process -FilePath $b.exe -ArgumentList $b.url -ErrorAction Stop; $opened = $true } catch { }
+}
+if (-not $opened) { Say "Open edge://extensions or chrome://extensions in your browser." }
+try { Start-Process -FilePath "explorer.exe" -ArgumentList "`"$extDir`"" } catch { }
 exit 0

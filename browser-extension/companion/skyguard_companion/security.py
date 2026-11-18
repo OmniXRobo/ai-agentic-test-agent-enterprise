@@ -8,6 +8,12 @@ Layers, all required for every request except GET /health:
    extensions have other IDs. Requests without an Origin (another local program) are refused.
 3. Pairing: the first time, the person types the pairing code the companion shows (single use, 10 minutes,
    5 attempts). The extension then holds a device secret; the companion stores only its SHA-256.
+   1.4.0: the installer can instead leave a one-time install ticket (256 bits, single use, 7 days, 5 attempts)
+   in the extension folder it installs in the person's own profile. The extension pairs with it by itself, and the
+   device it pairs is bound to this PC's owner user, which the extension may sign in without a password
+   (POST /v1/auth/device). Only the person's own Windows account can write that folder or the companion's data,
+   so this adds no access a local program of that account did not already have; another browser, another
+   extension or a web page still cannot reach the companion (layers 1 and 2).
 4. Sign-in: a companion user (PBKDF2-SHA256, 310 000 iterations) gets a short-lived bearer token (15 minutes,
    refreshed while in use, at most 8 hours). Tokens live in memory only and are bound to the paired device.
 5. Roles: admin (everything), operator (learn, run, accounts), viewer (read only).
@@ -33,6 +39,7 @@ ROLES = ("admin", "operator", "viewer")
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,40}$")
 PAIRING_TTL_S = 600
 PAIRING_ATTEMPTS = 5
+TICKET_TTL_S = 7 * 24 * 3600
 
 
 class Refused(Exception):
@@ -164,6 +171,52 @@ class Pairing:
             _write(self.devices_file, devices)
             return {"device_id": device["id"], "device_secret": secret}
 
+    # 1.4.0: install ticket -----------------------------------------------------------------------------------------
+
+    @property
+    def ticket_file(self) -> Path:
+        return self.devices_file.with_name("install-ticket.json")
+
+    def new_ticket(self, owner: str | None) -> str:
+        """A single-use ticket the installer puts in the extension folder; ``owner`` is the user it signs in."""
+        with self._lock:
+            ticket = secrets.token_urlsafe(32)
+            _write(self.ticket_file, {"sha256": _sha(ticket), "expires": time.time() + TICKET_TTL_S, "attempts": 0,
+                                      "owner": owner or None})
+            return ticket
+
+    def pair_ticket(self, ticket: str, extension_id: str, name: str) -> dict[str, Any]:
+        with self._lock:
+            state = _read(self.ticket_file, None)
+            if not state or time.time() > state.get("expires", 0):
+                self._drop(self.ticket_file)
+                raise Refused(409, "TICKET_CLOSED", "This installation ticket was used or has expired. Run "
+                                                    "INSTALL.cmd again, or pair with a code (Options).")
+            state["attempts"] = state.get("attempts", 0) + 1
+            if state["attempts"] > PAIRING_ATTEMPTS:
+                self._drop(self.ticket_file)
+                raise Refused(429, "PAIRING_LOCKED", "Too many wrong tickets. Run INSTALL.cmd again.")
+            _write(self.ticket_file, state)
+            if not hmac.compare_digest(_sha(ticket or ""), state["sha256"]):
+                raise Refused(401, "TICKET_WRONG", "That installation ticket is not correct.")
+            self._drop(self.ticket_file)
+            secret = secrets.token_urlsafe(32)
+            device = {"id": "dev-" + secrets.token_hex(6), "extension_id": extension_id, "name": (name or "")[:60],
+                      "paired_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "secret_sha256": _sha(secret),
+                      "owner": state.get("owner"), "via": "install"}
+            devices = [d for d in _read(self.devices_file, []) if not (d.get("via") == "install"
+                                                                      and d.get("extension_id") == extension_id)]
+            devices.append(device)
+            _write(self.devices_file, devices)
+            return {"device_id": device["id"], "device_secret": secret, "owner": state.get("owner")}
+
+    @staticmethod
+    def _drop(f: Path) -> None:
+        try:
+            f.unlink()
+        except OSError:
+            pass
+
     def device(self, device_id: str | None, secret: str | None, extension_id: str) -> dict[str, Any]:
         if not device_id or not secret:
             raise Refused(401, "NOT_PAIRED", "Pair the extension with the companion first.")
@@ -276,6 +329,47 @@ class Users:
                 self._tokens.pop(_sha(token), None)
                 raise Refused(401, "AUTH_EXPIRED", "Your sign-in expired. Sign in again.")
             return s
+
+    # 1.4.0: this PC's owner ------------------------------------------------------------------------------------------
+
+    def owner_for_ticket(self, windows_user: str) -> str | None:
+        """The user an install ticket signs in: a new admin named after the Windows user when nobody is set up yet,
+        the only admin when there is exactly one, otherwise none (the extension then asks for a sign-in)."""
+        users = _read(self.file, [])
+        if not users:
+            name = re.sub(r"[^A-Za-z0-9._-]", "", windows_user or "")[:40]
+            name = name if USERNAME_RE.match(name) else "owner"
+            self.create(name, secrets.token_urlsafe(24) + "-1a", "admin")
+            with self._lock:
+                users = _read(self.file, [])
+                for u in users:
+                    if u["username"] == name:
+                        u["device_owner"] = True
+                _write(self.file, users)
+            return name
+        admins = [u for u in users if u["role"] == "admin"]
+        if len(admins) == 1:
+            with self._lock:
+                for u in users:
+                    if u["username"] == admins[0]["username"]:
+                        u["device_owner"] = True
+                _write(self.file, users)
+            return admins[0]["username"]
+        return None
+
+    def device_login(self, device: dict[str, Any]) -> dict[str, Any]:
+        owner = device.get("owner")
+        user = next((u for u in _read(self.file, []) if owner and u["username"] == owner and u.get("device_owner")),
+                    None)
+        if not user:
+            raise Refused(401, "AUTH_REQUIRED", "Sign in to the companion (Options).")
+        now = time.time()
+        with self._lock:
+            token = secrets.token_urlsafe(32)
+            self._tokens[_sha(token)] = Session(user["username"], user["role"], device["id"], now + self.ttl,
+                                                now + self.max_age)
+            self._sweep(now)
+        return {"token": token, "expires_in": self.ttl, "user": {"username": user["username"], "role": user["role"]}}
 
     def refresh(self, token: str, device_id: str) -> dict[str, Any]:
         s = self.session(token, device_id)

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0 (companion 1.4.0, agent core shared with SkyGuard QA 23.12.0)
+
+Simpler offline install: no command to type and no pairing or port to configure.
+
+* The installer copies the AI and speech models when it finds them on this PC, writes a one-time set-up ticket into
+  the extension folder, opens the browser's extensions page and puts the extension folder path on the clipboard.
+* On first start the extension pairs with the companion by itself using that ticket and signs in as the PC owner
+  (the first admin is created for the Windows user). The ticket is single use, valid 7 days and deleted once used.
+* A device paired with the ticket may sign in again without a password only as that owner; code pairing is unchanged.
+* UPDATE_EXTENSION writes a fresh ticket, so an update also needs no pairing.
+* Still by hand, because Edge and Chrome require it: Developer mode and Load unpacked, once.
+
 ## 1.3.1 (companion 1.3.1, agent core shared with SkyGuard QA 23.11.2)
 
 * **Answers to missing information**: when the agent says "I still need: First Name, Last Name, Zip/Postal Code", an

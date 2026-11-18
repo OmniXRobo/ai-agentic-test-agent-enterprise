@@ -26,5 +26,5 @@ Layers (each a module):
   agent          the facade both interfaces call
 """
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 AGENT_NAME = "SkyGuard Adaptive AI Application Learning & Operations Agent"

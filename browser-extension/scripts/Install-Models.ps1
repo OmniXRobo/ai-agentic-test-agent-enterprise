@@ -41,4 +41,4 @@ if (-not $SkipSpeech) {
         if ($dest) { Write-Host "Speech model installed: $dest" }
     }
 }
-Write-Host "Restart the companion (Start menu: SkyGuard Agent (start companion), after closing the running one) to use the models."
+Write-Host "The companion uses the models the next time it starts (INSTALL.cmd starts it for you)."

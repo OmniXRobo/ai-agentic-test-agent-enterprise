@@ -48,7 +48,16 @@ async function saveLearning() {
 // ---- side panel ------------------------------------------------------------------------------------------------
 chrome.runtime.onInstalled.addListener(async () => {
   if (chrome.sidePanel?.setPanelBehavior) await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  await setUp();
 });
+// 1.4.0: pair and sign in by itself with the installer's ticket; retried while the companion is still starting
+async function setUp() {
+  for (let i = 0; i < 20; i++) {
+    try { const r = await api.autoSetup(); if (r.done) { broadcast({ type: "setup-done", owner: r.owner || "" }); return; } return; }
+    catch (e) { if (e.code !== "COMPANION_OFFLINE") return; await sleep(3000); }
+  }
+}
+chrome.runtime.onStartup.addListener(() => { setUp().catch(() => {}); });
 // Browsers without the side panel API: open the same page in a small window instead.
 chrome.action.onClicked.addListener(async () => {
   if (!chrome.sidePanel) await chrome.windows.create({ url: "sidepanel.html", type: "popup", width: 460, height: 760 });

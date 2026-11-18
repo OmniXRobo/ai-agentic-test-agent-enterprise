@@ -277,6 +277,10 @@ jobs:
             if (-not (Test-Path "$env:LOCALAPPDATA\SkyGuardAgent\$f")) { throw "$f missing" }
           }
           if (Get-ChildItem "$env:LOCALAPPDATA\SkyGuardAgent\runtime" -Filter "staging-*") { throw "staging folder left behind" }
+          # 1.4.0: the extension sets itself up (no pairing code, no sign-in): the one-time ticket is in its folder
+          $auto = Get-Content "$env:LOCALAPPDATA\SkyGuardAgent\extension\auto-setup.json" -Raw | ConvertFrom-Json
+          if (-not $auto.ticket -or $auto.port -ne 8790) { throw "auto-setup.json has no ticket" }
+          if ($out -notmatch "pair and sign in by itself") { throw "the automatic set-up was not prepared" }
       - name: The fixed installer runs again over the existing installation
         shell: powershell
         run: |

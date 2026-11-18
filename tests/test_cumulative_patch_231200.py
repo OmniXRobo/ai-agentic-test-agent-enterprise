@@ -112,7 +112,7 @@ def test_patch_contents(built):
     wheels = json.loads((built / "ocr-runtime" / "WHEELS.json").read_text())
     assert manifest["ocr_wheels"] == len(wheels) >= 5
     assert any(w.startswith("rapidocr-") for w in wheels) and any(w.startswith("onnxruntime-") for w in wheels)
-    assert manifest["extension_version"] == "1.3.1"
+    assert manifest["extension_version"] == "1.4.0"
     files = manifest["files"]
     for must in ("qa_platform/__init__.py", "qa_platform/automation/components.py",
                  "qa_platform/automation/js/components.js", "qa_platform/automation/semantic.py",
@@ -148,7 +148,7 @@ def test_patch_contents(built):
     for crlf in ("APPLY_PATCH.cmd", "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "DIAGNOSE_SITE.cmd", "DIAGNOSE_SITE.ps1"):
         assert b"\r\n" in (built / crlf).read_bytes(), crlf
     ext = built / "browser-extension-update"
-    assert json.loads((ext / "extension" / "manifest.json").read_text())["version"] == "1.3.1"
+    assert json.loads((ext / "extension" / "manifest.json").read_text())["version"] == "1.4.0"
     for must in ("app/companion_main.py", "app/skyguard_companion/server.py", "app/skyguard_agent/understanding.py",
                  "extension/background.js", "extension/lib/agent_dom.js", "app/skyguard_agent/navrec.py",
                  "app/skyguard_agent/autopilot.py", "app/skyguard_agent/intent.py"):

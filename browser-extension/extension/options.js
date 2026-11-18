@@ -20,6 +20,8 @@ async function refresh() {
   const pill = $("#conn");
   let online = true, err = "";
   try { await api.hello(); } catch (e) { online = false; err = e.message; }
+  if (online && !s.device_id) await api.autoSetup().catch(() => null);  // 1.4.0: set up by the installer
+  if (online && s.owner && !(await api.currentUser())) await api.deviceLogin().catch(() => null);
   const user = await api.currentUser();
   if (gen !== refreshGen) return;
   if (!online) msg("#connErr", err);

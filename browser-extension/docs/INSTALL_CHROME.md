@@ -1,6 +1,6 @@
 # Google Chrome
 
-Chrome 116 or later. Install the companion first (INSTALL_WINDOWS11.md, step 1).
+Chrome 116 or later. Install the companion first (INSTALL_WINDOWS11.md, step 1). INSTALL.cmd opens the extensions page and the folder for you and puts the folder path on the clipboard.
 
 ## Load unpacked (Developer mode), current user
 
@@ -10,8 +10,7 @@ Chrome 116 or later. Install the companion first (INSTALL_WINDOWS11.md, step 1).
    (type the path into the folder box: `%LOCALAPPDATA%` works there).
 4. The card *SkyGuard Adaptive AI Agent 1.0.0* appears with ID `fmiiaecpdgbhhhbbkkfhnjfkbmllladb`.
 5. Puzzle-piece icon > pin *SkyGuard Adaptive AI Agent*.
-6. Right-click the icon > **Options**, then pair and sign in (INSTALL_WINDOWS11.md, step 4).
-7. Click the icon: the side panel opens on the right.
+6. Click the icon: the side panel opens on the right. The extension has already connected and signed in by itself.
 
 Chrome may show *Disable developer mode extensions* at start-up. Choose **Keep** (or close the notice). This is
 normal for Load unpacked; publishing through the Chrome Web Store or IT policy avoids it (ENTERPRISE_DEPLOYMENT.md).

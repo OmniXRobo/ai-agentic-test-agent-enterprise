@@ -126,8 +126,17 @@ def hello(x: Ctx) -> dict[str, Any]:
 
 @route("POST", "/v1/pair", "public", "pair")
 def pair(x: Ctx) -> dict[str, Any]:
-    b = validate(x.body, {"code": ("str", True, 20), "name": ("str", False, 60)})
-    out = x.c.pairing.pair(b["code"], x.extension_id, b.get("name") or "browser")
+    b = validate(x.body, {"code": ("str", False, 20), "ticket": ("str", False, 64), "name": ("str", False, 60)})
+    if b.get("ticket"):  # 1.4.0: the installer's one-time ticket (no code to type)
+        out = x.c.pairing.pair_ticket(b["ticket"], x.extension_id, b.get("name") or "browser")
+        try:  # used: the copy in the installed extension folder is removed too
+            (x.c.paths.root / "extension" / "auto-setup.json").unlink()
+        except OSError:
+            pass
+    elif b.get("code"):
+        out = x.c.pairing.pair(b["code"], x.extension_id, b.get("name") or "browser")
+    else:
+        raise Refused(400, "BODY_INVALID", "Send the pairing code.")
     x.c.agent.audit.record("companion.paired", interface="extension", details={"device": out["device_id"]})
     return out
 
@@ -145,6 +154,15 @@ def setup(x: Ctx) -> dict[str, Any]:
     user = x.c.users.create(b["username"], b["password"], "admin")
     x.c.agent.audit.record("companion.first_admin", actor=user["username"], interface="extension")
     return {"user": user}
+
+
+@route("POST", "/v1/auth/device", "device", "login")
+def device_login(x: Ctx) -> dict[str, Any]:
+    """1.4.0: a browser paired by this PC's installer signs in as this PC's owner, without a password."""
+    out = x.c.users.device_login(x.device)
+    x.c.agent.audit.record("companion.login", actor=out["user"]["username"], interface="extension",
+                           details={"method": "installed device"})
+    return out
 
 
 @route("POST", "/v1/auth/login", "device", "login")
