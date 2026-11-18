@@ -115,7 +115,19 @@ application files came from commit `8e8df0d`. Screenshots are in `evidence/setup
 
 ## 5. Windows (GitHub Actions), pull request #56
 
-CI_RESULT
+Two runs on the pull request, at commits `d116afd` (run 44147769003) and `89c7e5a` (run 44157838760).
+
+| Job | Result |
+|---|---|
+| `setup-exe-windows` on real **23.3.35**, **23.11.0** and **23.11.1** installations | **passed** in both runs. Setup.exe refuses an unsupported version and changes nothing. The unattended upgrade and verify ran, the rollback restored the baseline, and the upgrade ran again with `APPLY_PATCH.ps1` under Windows PowerShell 5.1. |
+| Full suite, Ubuntu, Python 3.11 / 3.12 / 3.13 | **passed** in both runs |
+| Full suite, Windows, Python 3.11 | **passed** in both runs |
+| Full suite, Windows, Python 3.12 | **passed** in the second run. In the first run, one 23.3.28 performance-report test failed (`PermissionError` reading `qa-report.pdf` while the report service was still writing it). 23.11.2 does not touch that code. |
+| Full suite, Windows, Python 3.13 | **failed in both runs**, each time in the 23.11.1 tests that use the stand-in transport application. In the first run one test never reached its preview. In the second run the scripted person who teaches the transport application did not see the *Create Trip* form within 30 seconds, so the 15 tests that need that learning could not start. The same tests passed on Windows 3.11 and 3.12, on Ubuntu, and locally. The cause is not known yet. A third run carries diagnostics that report the page shown at the failed step. |
+| `extension-install-windows`, `offline-package`, `offline-package-download`, `setup-exe-build`, `security-audit` | **passed** in both runs |
+
+The tests of the reported fault (`test_missing_info_231102.py`) and the installer tests (`test_cumulative_patch_231102.py`)
+passed on every Windows and Ubuntu job of both runs.
 
 ## 6. Not executed
 

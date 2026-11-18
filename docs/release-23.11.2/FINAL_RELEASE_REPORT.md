@@ -37,7 +37,7 @@ The details are in ROOT_CAUSE_ANALYSIS.md.
 * **Installer:** apply, verify, rollback and apply again on 13 of 13 earlier releases, 23.11.1 included (25 passed).
 * **Setup under Wine** over a real 23.11.1 installation: "Patched 23.11.1 -> 23.11.2", and every check passed. The OCR
   check gives a WARN under Wine, as before.
-* **Windows CI on pull request #56:** CI_SUMMARY.
+* **Windows CI on pull request #56:** 13 of 14 jobs passed. That includes Setup.exe on real 23.3.35, 23.11.0 and 23.11.1 installations, and the full suite on Ubuntu (3.11 to 3.13) and Windows (3.11, 3.12). The Windows 3.13 full-suite job failed twice in 23.11.1's tests that use the stand-in transport application. The tests of this fix passed there. The cause is being investigated (TEST_REPORT.md, section 5).
 * See TEST_REPORT.md.
 
 ## Not verified
