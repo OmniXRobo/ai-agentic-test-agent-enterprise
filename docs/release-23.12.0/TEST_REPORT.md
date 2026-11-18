@@ -119,7 +119,8 @@ Python 3.13 runtime, a database holding data). Screenshots: `evidence/setup-*.pn
 end of the install and the one on the Verify page), among them *API Testing and new agents (23.12.0)*,
 *Python editor, Smart Wait, Defect Review (23.11.0)*, *Missing information follow-up (23.11.2)*, *Database
 migrations: schema version 21* and *No data lost*; the only exception is the OCR WARN above. Finish says "SkyGuard QA
-23.12.0 is installed". Logs: `test-results/setup-final-*.txt`.
+23.12.0 is installed". This upgrade run was repeated with the build that has the python-multipart fix (section 8):
+the same result.
 
 The walkthrough script itself was improved on the way: it now waits for the Setup log to show both verifications (it
 used to look for a log file that Setup no longer writes, and took the last screenshots too early), and it turns off
@@ -135,3 +136,26 @@ Wine's crash window, which otherwise held the install for 10 minutes until a cli
 * **A live local Qwen.** Failure classification ran with the rules only; AI test suggestions were not run.
 * **Your own APIs and OpenAPI documents**, OAuth 2.0 password grant, client certificate against a server that demands
   one, cookie sign-in against a real login, proxies, and a live IPv6 request (KNOWN_LIMITATIONS.md).
+
+## 8. Found by CI after the first delivery: SkyGuard did not start (python-multipart)
+
+The first 23.12.0 package installed and passed Setup's checks, but the application then stopped at start with
+*"Form data requires python-multipart to be installed"*. This was seen by the pull request's Linux CI jobs and on a
+person's PC. Cause and fix: ROOT_CAUSE_ANALYSIS.md (last row). What was run after the fix:
+
+* The API, comparison, agent-registry and page tests (**37 passed, 1 skipped**) and the browser and installer tests
+  (**30 passed**), all **with python-multipart uninstalled**, as in the offline Windows runtime
+  (`api-comparison-231200.xml`, `ui-installer-231200.xml`).
+* *Application loads* now imports every API module: with the old upload code it fails with "pip install
+  python-multipart"; with the fix it passes.
+* **The person's situation, reproduced:** 23.11.2 upgraded with the first build, the application then fails to start
+  with the same message; the fixed package applied over it ("Patched 23.12.0 -> 23.12.0"), the application starts,
+  and the row added before the first upgrade is still there.
+* **Setup repair under Wine:** an installed 23.12.0 with the old upload code (it fails under the Windows runtime with
+  "pip install python-multipart"). The fixed Setup's Detect page says *"SkyGuard QA 23.12.0 is already installed.
+  Setup can apply it again (repair) or verify it."* (`evidence/setup-repair-2-detect.png`); Install and Verify passed
+  every check (OCR WARN under Wine) and the module now loads. Log: `test-results/setup-repair-over-broken-23.12.0-*.txt`.
+* Upgrade 23.11.2 → 23.12.0 under Wine with the fixed build: every check passed (screenshots `evidence/setup-*.png`).
+* The installer tests gained `test_setup_repairs_an_installed_23_12_0`. The Windows CI jobs also found one test
+  that built a Python script with a Windows path inside a string (a syntax error on Windows only); the test now uses
+  a forward-slash path.

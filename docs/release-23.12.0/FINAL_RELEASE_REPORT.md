@@ -41,6 +41,13 @@ Details: PATCH_CHANGELOG.md, USER_GUIDE.md, ROOT_CAUSE_ANALYSIS.md.
   itself with no data lost**; after the fix the upgrade completed (TEST_REPORT.md section 6). OCR gives a WARN under
   Wine, as in every release.
 
+## If you installed the first 23.12.0 package
+
+It did not start ("Form data requires python-multipart"). Run this package's Setup.exe over it: Detect says
+23.12.0 is already installed and offers a repair, which replaces the files and keeps your data. Or run
+`patch-tools\23.12.0\ROLLBACK_PATCH.cmd` in the SkyGuard QA folder to go back to the previous version first.
+Details in TEST_REPORT.md section 8.
+
 ## Security (SECURITY_REPORT.md)
 
 bandit: no injectable query (5 B608 findings read one by one, all bound parameters); one XML finding fixed.
