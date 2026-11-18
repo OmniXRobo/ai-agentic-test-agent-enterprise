@@ -108,3 +108,7 @@
   currency and similar codes are shared by many records). A rule an administrator already confirmed is kept; reject
   it in Applications & Knowledge if it is wrong.
 
+* **Browser extension 1.4.0: simple offline install.** No command to type and no pairing or port to configure. The
+  installer copies the models it finds, writes a one-time set-up ticket (single use, 7 days) and opens the browser's
+  extensions page with the folder path on the clipboard. After *Load unpacked* the extension pairs and signs in as
+  this PC's owner by itself. Developer mode and Load unpacked stay manual, as Edge and Chrome require.

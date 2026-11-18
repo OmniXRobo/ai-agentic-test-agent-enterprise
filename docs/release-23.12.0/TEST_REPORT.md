@@ -222,3 +222,18 @@ behaviour were used) and SmartScreen on a real Windows PC.
 * AI Agent suites (agent core, end to end, passive learning, autopilot, missing information, repair, the AI Agent
   pages in Chromium): **179 passed** (`ai-agent-231200-r3.xml`).
 
+
+## 11. Browser extension 1.4.0: simple offline install (asked for after the Swag Labs fix)
+
+* `tests/test_extension_easy_install_140.py`, **6 passed**: the installer's ticket pairs once and signs in the PC
+  owner; a wrong ticket, another origin or a sixth attempt is refused; a device paired with a code cannot use the
+  owner sign-in; the owner is chosen correctly (new install, one admin, several admins); the `install-ticket` command
+  writes the file; and the real extension, loaded unpacked into headless Chromium with that file, pairs and signs in
+  by itself (Options shows the owner), with nothing typed.
+* Extension and companion suites (extension 1.3.0 tests, end to end side panel run, companion security, cumulative
+  patch checks): **54 passed, 10 skipped** (the skips are 23.7.0 tests superseded by the 23.7.1 patch).
+* Security: bandit on the companion reports only Low findings (fixed runtime executables run with argument lists,
+  try/except/pass); pip-audit on the bundled Faster-Whisper requirements finds no known vulnerabilities.
+* Not executed here: the PowerShell installer on a real Windows 11 PC (CI `extension-install-windows` runs it on
+  Windows Server and checks the ticket file and message), and real Edge/Chrome builds. Load unpacked still needs
+  Developer mode, once, by hand: Edge and Chrome require it and SkyGuard does not get around it.
