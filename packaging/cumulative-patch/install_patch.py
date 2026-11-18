@@ -371,7 +371,11 @@ def side_by_side(app: Path, data: Path, target: Path, python: str) -> Path:
 MIGRATE = ("import sys; sys.path.insert(0, '.'); from qa_platform.config import Paths; "
            "from qa_platform.storage.db import Database; p = Paths().ensure(); d = Database(p.db_file); "
            "print(d.query_one('SELECT MAX(version) AS v FROM schema_version')['v']); d.close()")
-LOADS = "import sys; sys.path.insert(0, '.'); import qa_platform, qa_platform.main; print(qa_platform.__version__)"
+# Every API module is imported too: create_app imports them only when the server starts, so a route that needs a
+# package the runtime lacks (23.12.0 found python-multipart this way, in CI) would otherwise pass this check.
+LOADS = ("import sys; sys.path.insert(0, '.'); import importlib, pkgutil, qa_platform, qa_platform.main, qa_platform.api as p; "
+         "[importlib.import_module('qa_platform.api.' + m.name) for m in pkgutil.iter_modules(p.__path__)]; "
+         "print(qa_platform.__version__)")
 AGENT_LOADS = ("import sys; sys.path.insert(0, '.'); import skyguard_agent, skyguard_agent.agent, qa_platform.opsagent.service, "
                "qa_platform.api.opsagent; print(skyguard_agent.__version__)")
 COMPONENTS_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automation import components, semantic, runner, site_diagnostic, live_check; "
