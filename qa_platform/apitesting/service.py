@@ -907,13 +907,17 @@ class ApiTestingService:
                        "status_codes": sorted({r["status_code"] for r in results if r.get("status_code")}),
                        "warnings": sorted(set(sender.warnings))}
             duration = int((time.monotonic() - t0) * 1000)
-            self.db.execute("UPDATE api_runs SET status = ?, counts = ?, finished_at = ?, duration_ms = ?, summary = ? "
-                            "WHERE id = ?", (status, dumps(counts), now_iso(), duration, dumps(summary), run_id))
             act.complete(f"API run {run_id} {status}: {counts['PASSED']} passed, {counts['FAILED']} failed, "
                          f"{counts['BLOCKED']} blocked, {counts['SKIPPED']} skipped")
         self._cancel.discard(run_id)
         failures = [r for r in results if r["status"] == "FAILED"]
-        drafts = self._analyse(a, failures, run_id) if failures else []
+        # 23.12.0: the run is marked finished only after its failures are classified, so the page (and a person
+        # opening the result) never sees a finished run whose failures have no classification or draft yet
+        try:
+            drafts = self._analyse(a, failures, run_id) if failures else []
+        finally:
+            self.db.execute("UPDATE api_runs SET status = ?, counts = ?, finished_at = ?, duration_ms = ?, summary = ? "
+                            "WHERE id = ?", (status, dumps(counts), now_iso(), duration, dumps(summary), run_id))
         env_only = failures and all((r.get("classification") or {}).get("classification") == "environment" for r in failures)
         event = names.API_RUN_COMPLETED if status == "PASSED" else names.API_CONNECTION_FAILED if env_only else names.API_RUN_FAILED
         self.agent.emit(event, f"API run {a['name']} {status}: {counts['PASSED']}/{counts['total']} passed"

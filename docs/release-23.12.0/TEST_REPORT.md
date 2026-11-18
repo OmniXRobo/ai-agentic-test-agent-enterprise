@@ -191,6 +191,12 @@ All of the following ran on 18 November 2026, with python-multipart uninstalled,
   back. **The delivered Setup.exe is not signed**, because no code-signing certificate was available, so SmartScreen
   still says *Unknown publisher* (KNOWN_LIMITATIONS.md).
 
+* **Found by the Windows CI job (3.13):** `test_response_time_timeout_and_connection_failure` read a finished API run
+  whose failures had no classification yet (KeyError 'classification'): the run was marked finished a moment before
+  its failures were classified, which the page could also show. A run is now marked finished only after the
+  classification and the Defect Review drafts are saved. API and comparison tests after the change: 27 passed,
+  1 skipped.
+
 Not verified: saucedemo.com and tabulizer.com themselves (the network refused both; stand-ins with the same
 behaviour were used) and SmartScreen on a real Windows PC.
 
