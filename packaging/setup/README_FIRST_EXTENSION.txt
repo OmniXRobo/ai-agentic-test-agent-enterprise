@@ -2,7 +2,7 @@ SkyGuard Offline Edge/Chrome Agent Extension 1.3.1 (with SkyGuard QA 23.12.0)
 ============================================================================
 
 The Manifest V3 extension for Microsoft Edge and Google Chrome (116 or later) and its local companion, which runs on
-this PC only (127.0.0.1). Offline, per user, no administrator rights.
+this PC only (127.0.0.1). Offline, per user.
 
 ALREADY INSTALLED (1.0, 1.1, 1.2 or 1.3.0)
   Double-click UPDATE_EXTENSION.cmd. It checks the files (SHA-256), backs up, updates the companion and the

@@ -4,7 +4,7 @@ SkyGuard QA 23.12.0 - cumulative upgrade from SGQA-23.3.35 (API Testing, schedul
 WHAT THIS IS
   One upgrade that brings any installed SkyGuard QA from 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1,
   23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1 or 23.11.2 to 23.12.0, including every release in between. Any
-  other version is refused and nothing is changed. No administrator rights. No internet. Windows 10 (1909 or later)
+  other version is refused and nothing is changed. No internet. Windows 10 (1909 or later)
   or Windows 11.
 
   New in 23.12.0:

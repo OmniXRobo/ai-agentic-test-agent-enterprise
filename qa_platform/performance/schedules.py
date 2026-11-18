@@ -775,5 +775,5 @@ class PerfScheduler:
             "explain": (f"Schedules run only while {branding.name()} runs on this PC. Closing the browser does not stop "
                         "a run or a schedule. Closing the application stops a running load test (kept as INTERRUPTED)"
                         " and no schedule starts until the application runs again; times passed meanwhile are "
-                        "recorded as missed. Start at Windows sign-in starts it for you without administrator rights."),
+                        "recorded as missed. Start at Windows sign-in starts it for you."),
         }

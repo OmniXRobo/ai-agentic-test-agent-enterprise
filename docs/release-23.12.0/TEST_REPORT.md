@@ -197,6 +197,13 @@ All of the following ran on 18 November 2026, with python-multipart uninstalled,
   classification and the Defect Review drafts are saved. API and comparison tests after the change: 27 passed,
   1 skipped.
 
+* **"No administrator rights" wording removed, as asked** (Setup Welcome page, README_FIRST files, the
+  Start-at-sign-in and scheduled-run messages). Installer tests on the rebuilt package: 28 passed; scheduled-run
+  tests: 7 passed, 1 skipped. The Wine walkthrough could not be repeated for this text-only rebuild: Wine stopped
+  starting in the build container after it restarted ("free(): invalid pointer", also with a fresh Wine folder and
+  after reinstalling Wine). The previous Wine run above used the same code apart from this text, so the Welcome
+  page screenshot `evidence/setup-1-welcome.png` still shows the old sentence.
+
 Not verified: saucedemo.com and tabulizer.com themselves (the network refused both; stand-ins with the same
 behaviour were used) and SmartScreen on a real Windows PC.
 

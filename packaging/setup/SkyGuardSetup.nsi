@@ -92,7 +92,7 @@ Var hStop
 !define MUI_WELCOMEPAGE_TITLE "Upgrade SkyGuard QA to ${VERSION}"
 !define MUI_WELCOMEPAGE_TEXT "Publisher: ${PUBLISHER}$\r$\n$\r$\nThis wizard upgrades an installed SkyGuard QA (version 23.3.35 or any later release up to 23.11.2) to ${VERSION} in one step. It includes every release in between.$\r$\n$\r$\n\
 New: API Testing, scheduled API tests and Integration Comparisons, more Agent Workflow agents, a larger Python editor and AI Agent fixes.$\r$\n$\r$\n\
-It works offline, needs no administrator rights and changes nothing outside the SkyGuard QA folders. Your data is backed up first and is never deleted; if anything fails, the previous version is restored automatically.$\r$\n$\r$\n\
+It works offline and changes nothing outside the SkyGuard QA folders. Your data is backed up first and is never deleted; if anything fails, the previous version is restored automatically.$\r$\n$\r$\n\
 Close SkyGuard QA if it is open, then press Next."
 !insertmacro MUI_PAGE_WELCOME
 Page custom DetectPage DetectLeave

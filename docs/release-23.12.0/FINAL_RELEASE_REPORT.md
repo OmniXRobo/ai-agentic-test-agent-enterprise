@@ -8,7 +8,7 @@
 | `SkyGuard_Offline_Edge_Chrome_Agent_Extension.zip` | Extension and companion 1.3.1 (unchanged in 23.12.0). `UPDATE_EXTENSION.cmd` updates an installed one; `INSTALL.cmd` is for new installs. |
 | `.sha256` files | The SHA-256 of each zip. |
 
-No administrator rights and no internet are needed. Your data, and what the agent learned, are backed up first and
+No internet is needed. Your data, and what the agent learned, are backed up first and
 kept. If any step fails, the previous version is restored automatically (this was seen happen, see below).
 
 ## What is new
