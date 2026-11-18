@@ -1,6 +1,6 @@
 <#
-  SkyGuard QA - 23.11.1 cumulative upgrade (the manual alternative to Setup.exe): the AI Agent repair, and every
-  release from 23.4.0 to 23.11.0, for 23.3.35 to 23.11.0.
+  SkyGuard QA - 23.11.2 cumulative upgrade (the manual alternative to Setup.exe): the missing-information follow-up,
+  and every release from 23.4.0 to 23.11.1, for 23.3.35 to 23.11.1.
   Any other version is refused before anything is changed. No administrator rights needed; works offline.
   Windows PowerShell 5.1 (Windows 10 1909 and later).
 
@@ -11,8 +11,8 @@
   fails. Then starts the application and checks /api/health.
 
   A protected application folder (one this user cannot write, e.g. a machine-wide programs folder) is never forced: the patch
-  stops and explains. -SideBySide installs a patched copy in %LOCALAPPDATA%\SkyGuardQA\app-23.11.1 instead (or the
-  folder given), with START_SKYGUARD_23.11.1.cmd; the original installation and the data are not changed.
+  stops and explains. -SideBySide installs a patched copy in %LOCALAPPDATA%\SkyGuardQA\app-23.11.2 instead (or the
+  folder given), with START_SKYGUARD_23.11.2.cmd; the original installation and the data are not changed.
 
   Usage (PowerShell, in the extracted patch folder):
     powershell -ExecutionPolicy Bypass -File .\APPLY_PATCH.ps1
@@ -32,13 +32,13 @@ param(
     [string]$SideBySideDir = ""
 )
 $ErrorActionPreference = "Stop"
-$PatchVersion = "23.11.1"
+$PatchVersion = "23.11.2"
 $Here = $PSScriptRoot
 function Say([string]$msg) { Write-Host $msg }
 function Step([string]$msg) { Write-Host ""; Write-Host "== $msg" -ForegroundColor Cyan }
 function Fail([string]$msg) { Write-Host ""; Write-Host "PATCH FAILED: $msg" -ForegroundColor Red; exit 1 }
 
-Say "SkyGuard QA ${PatchVersion}: cumulative upgrade from 23.3.35 (includes 23.4.0 to 23.11.0)"
+Say "SkyGuard QA ${PatchVersion}: cumulative upgrade from 23.3.35 (includes 23.4.0 to 23.11.1)"
 $roots = @()
 if ($InstallDir) { $roots += $InstallDir }
 $roots += (Join-Path $env:LOCALAPPDATA "Programs\AIAgenticTestAgent")
@@ -121,7 +121,7 @@ elseif ($NoStart) { Say "Done. Start it with START_QA_PLATFORM.cmd." }
 else { Say "Done, but the health check did not answer within 90 seconds. Look at the application window." }
 Say "Press Ctrl+F5 once in the browser. Log: $Log"
 if (Test-Path (Join-Path $env:LOCALAPPDATA "SkyGuardAgent\app\companion_main.py")) {
-    Say "The SkyGuard browser extension is installed for this user: run UPDATE_EXTENSION.cmd in this folder to bring it to 1.3.0 (Start/Stop learning, reconnect, suggestions)."
+    Say "The SkyGuard browser extension is installed for this user: run UPDATE_EXTENSION.cmd in this folder to bring it to 1.3.1 (answers to missing information kept field by field)."
 }
 try { Stop-Transcript | Out-Null } catch { }
 exit 0

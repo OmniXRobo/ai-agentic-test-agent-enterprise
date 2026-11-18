@@ -554,7 +554,7 @@ class Engine:
         profile = app.get("profile") or {}
         login = cp.setdefault("login", {})
         account = self.kb.account(stage["account_id"])
-        if sess.account_id == stage["account_id"] and sess.verified and not login.get("phase"):
+        if sess.account_id == stage["account_id"] and (sess.verified or sess.sign_in_confirmed) and not login.get("phase"):
             if snap and sessions.logged_out(snap, profile):  # the application ended the session
                 self._event(run["id"], "session", "The application session ended (sign-in page shown). Signing in "
                                                   "again with the same account.")
@@ -656,6 +656,7 @@ class Engine:
             if res.status != "found":
                 return self._locate_problem(run, cp, res, lp.get("submit") or "the sign-in button")
             login["phase"] = "login_verify"
+            login["submitted"] = True  # the account's own credentials were submitted through the sign-in form
             return {"action": {"type": "click", "handle": res.element["h"], "target": lp.get("submit") or "Sign in"}}
         if login["phase"] == "login_verify":
             challenge = sessions.auth_challenge(snap) if snap else None
@@ -703,15 +704,21 @@ class Engine:
                                                   f"{account['label']}, not '{account.get('role_key')}'. The verified "
                                                   "role is used for authorization.")
                 role_ok = True
+            # The application accepted this account's own sign-in but shows no user name and has no learned identity
+            # rule: recorded as a confirmed sign-in, which authz accepts only for operations no role restricts.
+            confirmed = (check["identity"] == "unverified" and bool(login.get("submitted"))
+                         and not profile.get("identity"))
             sess = sessions.SessionState({"account_id": account["id"], "identity": check["displayed_user"] or
                                           account["login_id"], "role": role, "verified": check["identity"] == "verified",
-                                          "role_verified": role_ok, "context": account["id"]})
+                                          "role_verified": role_ok, "sign_in_confirmed": confirmed,
+                                          "context": account["id"]})
             cp["session"] = sess.to_dict()
             self.kb.mark_account(account["id"], auth_status="verified" if sess.verified else "signed_in_unverified",
                                  identity=sess.identity, role=role if role_ok else None)
             login.clear()
-            self._event(run["id"], "session", f"Signed in as {account['label']}: identity "
-                                              f"{'verified' if sess.verified else 'NOT verified'}, role "
+            shown = ("verified" if sess.verified else "confirmed by the application accepting the sign-in (it does "
+                     "not display the user name)" if confirmed else "NOT verified")
+            self._event(run["id"], "session", f"Signed in as {account['label']}: identity {shown}, role "
                                               f"{role if role_ok else 'not verified'}.")
             self._stage_roles(run, stage, sess)
             return None
