@@ -21,6 +21,10 @@ CLASSES: dict[str, str] = {
     "environment": "Likely environment/connectivity failure",
     "timing": "Likely timing/synchronization issue",
     "inconclusive": "Inconclusive",
+    # 23.12.0: API Testing classes (qa_platform/apitesting/analysis.py)
+    "api_contract": "Likely API contract defect",
+    "authentication": "Authentication/authorization issue",
+    "performance": "Timeout/performance issue",
 }
 RECOMMENDATIONS = {
     "none": "No change to the script is suggested.",
@@ -73,6 +77,15 @@ def rules_classify(category: str, facts: dict[str, Any]) -> dict[str, Any]:
         return {"classification": cls, "label": CLASSES[cls], "confidence": round(conf, 2), "evidence": ev[:6],
                 "recommendation": rec, "recommendation_text": RECOMMENDATIONS[rec], "origin": "rules"}
 
+    if category == "api":  # 23.12.0: the API Testing rules decided when the test failed; keep their view
+        from ..apitesting.analysis import RECOMMENDATIONS as API_REC
+
+        saved = facts.get("api_triage") or {}
+        cls = saved.get("classification") if saved.get("classification") in CLASSES else "inconclusive"
+        rec = saved.get("recommendation") if saved.get("recommendation") in API_REC else "none"
+        return {"classification": cls, "label": CLASSES[cls], "confidence": float(saved.get("confidence") or 0.3),
+                "evidence": list(saved.get("evidence") or [])[:6], "recommendation": rec,
+                "recommendation_text": API_REC[rec], "origin": "rules"}
     if category == "comparison":
         result = facts.get("result")
         if result == "FAIL":

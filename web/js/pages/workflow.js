@@ -64,7 +64,7 @@ function statusStripHtml() {
   for (const a of state.agents.values()) {
     const st = agentState(a, state.agents).state;
     if (st === "RUNNING" || st === "PAUSED") counts.RUNNING++;
-    else if (st === "FAILED") counts.FAILED++;
+    else if (st === "FAILED" || st === "UNAVAILABLE") counts.FAILED++;
     else counts.READY++;
   }
   return `<div class="wf-strip">
@@ -86,7 +86,7 @@ export async function mount(view) {
     ${backdropHtml()}
     ${heroHtml()}
     <div class="row" style="margin-bottom:14px">
-      <p class="muted" style="margin:0">Cards change only when an agent reports real work: READY, WAITING (queued in the same run), RUNNING, PAUSED (waiting for you), COMPLETED or FAILED.</p>
+      <p class="muted" style="margin:0">Cards change only when an agent reports real work: READY, WAITING (queued in the same run), RUNNING, PAUSED (waiting for you), COMPLETED or FAILED. UNAVAILABLE: its engine or dependency is not available on this PC.</p>
       <span class="spacer"></span>
       <button class="btn primary" id="runDiag">Run system diagnostics</button>
     </div>

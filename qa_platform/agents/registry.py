@@ -62,6 +62,23 @@ AGENTS: tuple[AgentDef, ...] = (
              "Produces HTML/PDF reports and analytics.", "reports.engine", "reporting", 8),
     AgentDef("voice_command", "Voice Command Agent",
              "Understands spoken QA commands and answers by voice.", "voice.engine", "voice", 7),
+    # 23.12.0: capabilities that existed without a card, and the new API Testing agents. Added at the end so the
+    # existing cards keep their places; the page itself is unchanged.
+    AgentDef("ai_operations", "AI Application Learning & Operations Agent",
+             "Connects to websites, learns workflows and executes authorized instructions.", "opsagent", "aiops", 9),
+    AgentDef("integration_comparison", "Integration Comparison Agent",
+             "Captures, extracts, normalizes and compares data between applications.", "comparison.workspace",
+             "comparison", 9),
+    AgentDef("api_testing", "API Testing Agent",
+             "Configures, generates, executes and validates API tests.", "apitesting.runner", "api", 9),
+    AgentDef("api_failure_analysis", "API Failure Analysis Agent",
+             "Separates API defects from configuration, environment, authentication and test problems.",
+             "apitesting.analysis + ai.gateway", "apianalysis", 9),
+    AgentDef("api_contract", "API Contract Validation Agent",
+             "Validates responses against OpenAPI, Swagger and JSON Schema contracts.", "apitesting.schema",
+             "contract", 9),
+    AgentDef("scheduled_execution", "Scheduled Execution Agent",
+             "Runs saved UI, API and Integration Comparison tests on schedule.", "scheduler", "scheduler", 9),
 )
 
 AGENTS_BY_ID: dict[str, AgentDef] = {a.id: a for a in AGENTS}

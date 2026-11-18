@@ -12,6 +12,8 @@ const PIPELINES = [
 export function agentState(a, agents, at = Date.now()) {
   const last = a.status === "PASSED" ? "COMPLETED" : a.status === "FAILED" ? "FAILED" : null;
   if (a.status === "RUNNING") return { state: a.paused ? "PAUSED" : "RUNNING", last_result: null, waiting_for: null };
+  // 23.12.0: an agent whose engine or dependency is unavailable is never shown as READY
+  if (a.available === false) return { state: "UNAVAILABLE", last_result: last, waiting_for: null };
   for (const p of PIPELINES) {
     const mine = p.indexOf(a.id);
     if (mine < 0) continue;

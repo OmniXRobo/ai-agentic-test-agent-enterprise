@@ -152,6 +152,8 @@ class Scheduler:
         self.clock = clock
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self.providers: list[Any] = []  # 23.12.0: API Testing and Integration Comparison items (handles/info/items/run)
+        self.agent: Any = None  # 23.12.0: the Scheduled Execution Agent card
         self.active: dict[str, dict[str, Any]] = {}  # batch id -> live progress
         self._running_schedules: set[str] = set()
         self._lock = threading.Lock()
@@ -255,6 +257,14 @@ class Scheduler:
         s["parallel"] = max(1, min(8, int(s.get("parallel") or 1)))
         s["every_hours"] = max(1, min(24, int(s.get("every_hours") or 1)))
         s["data_rows"] = s.get("data_rows") if s.get("data_rows") in ("first", "all") else "first"
+        # 23.12.0: execution mode. Visible and Headless are Playwright; API items always use Authorized API/HTTP;
+        # Smart chooses per item and records why (scheduled browser tests run headless in the background).
+        mode = s.get("mode") if s.get("mode") in ("visible", "headless", "smart") else None
+        if mode == "visible":
+            s["headless"] = False
+        elif mode in ("headless", "smart"):
+            s["headless"] = True
+        s["mode"] = mode or ("headless" if s.get("headless") else "visible")
         s["headless"] = bool(s.get("headless", False))
         s["catch_up"] = bool(s.get("catch_up", True))
         s["publish_tfs"] = bool(s.get("publish_tfs", False))
@@ -342,7 +352,13 @@ class Scheduler:
 
     # ---- scripts -------------------------------------------------------------------------------
 
+    def _provider(self, sid: str) -> Any:
+        return next((p for p in self.providers if p.handles(sid)), None)
+
     def script_info(self, sid: str) -> dict[str, Any]:
+        prov = self._provider(sid)
+        if prov is not None:
+            return prov.info(sid)
         if sid.startswith("FWS-"):
             if self.studio is None:
                 raise QAError("SCRIPT_NOT_FOUND", f"Script {sid} does not exist.", status=404)
@@ -381,6 +397,11 @@ class Scheduler:
                 continue
             info["steps"] = s.get("steps") if isinstance(s, dict) else len(s.steps)
             out.append(info)
+        for prov in self.providers:  # 23.12.0: API tests, suites, scripts and Integration Comparisons
+            try:
+                out.extend(prov.items())
+            except Exception as exc:
+                log.info(f"Scheduled items of {type(prov).__name__} not listed: {exc}")
         planned: dict[str, list[str]] = {}
         for sch in self.store.read()["schedules"]:
             for sid in sch.get("script_ids") or []:
@@ -408,6 +429,12 @@ class Scheduler:
                 items.append({"script_id": script_id, "name": script_id, "browser": None, "status": "ERROR",
                               "error": exc.message})
                 continue
+            if self._provider(script_id) is not None:  # 23.12.0: API Testing / Integration Comparison: no browser loop
+                items.append({"script_id": script_id, "name": info["name"], "browser": None, "row": None, "rows": 0,
+                              "test_case_id": None, "status": "QUEUED", "run_id": new_run_id("RUN"),
+                              "test_type": info.get("test_type"), "mode": info.get("mode") or "api",
+                              "mode_reason": info.get("mode_reason") or "API tests run without a browser."})
+                continue
             rows: list[int | None] = [None]
             if info["kind"] != "ai" and info["rows"]:
                 rows = list(range(info["rows"])) if s.get("data_rows") == "all" else [0]
@@ -423,9 +450,19 @@ class Scheduler:
             self.active[batch_id] = batch
             if s.get("id"):
                 self._running_schedules.add(s["id"])
+        for it in items:
+            if it.get("mode") is None:
+                it["mode"] = "headless" if s.get("headless") else "visible"
+                it["mode_reason"] = ("Smart: a scheduled browser test runs headless in the background." if
+                                     s.get("mode") == "smart" else f"{it['mode'].capitalize()} browser (chosen on the schedule).")
         agent = self.automation.runner.execution
         agent.emit(names.AGENT_LOG, f"Scheduled run started: {batch['name']} ({len(items)} run(s))", run_id=batch_id,
                    details={"link": "#/scheduled-runs"})
+        if self.agent is not None:  # 23.12.0: the Scheduled Execution Agent card and a notification
+            self.agent.emit(names.AGENT_STARTED, f"Scheduled run {batch['name']} ({len(items)} item(s), {trigger})",
+                            run_id=batch_id, status="RUNNING", progress=0)
+            self.agent.emit(names.SCHEDULE_STARTED, f"Scheduled run started: {batch['name']}", run_id=batch_id,
+                            details={"link": "#/scheduled-runs"})
 
         def one(item: dict[str, Any]) -> None:
             if item["status"] != "QUEUED":
@@ -434,7 +471,10 @@ class Scheduler:
             item["status"] = "RUNNING"
             started = time.monotonic()
             try:
-                if item["script_id"].startswith("FWS-"):
+                prov = self._provider(item["script_id"])
+                if prov is not None:
+                    res = prov.run(item["script_id"], item["run_id"], s)
+                elif item["script_id"].startswith("FWS-"):
                     res = self.studio.run(item["script_id"], headless=s.get("headless"), background=False,
                                           browser=item["browser"], run_id=item["run_id"])
                 else:
@@ -448,6 +488,10 @@ class Scheduler:
                                                      run_id=item["run_id"])
                 item["status"] = str(res.get("status") or "FAILED")
                 item["error"] = res.get("error")
+                if res.get("counts"):
+                    item["counts"] = res["counts"]
+                if res.get("link"):
+                    item["link"] = res["link"]
                 fs = res.get("failed_step")
                 item["failed_step"] = fs + 1 if isinstance(fs, int) else fs
                 item["started_at"], item["finished_at"] = res.get("started_at"), res.get("finished_at")
@@ -458,6 +502,10 @@ class Scheduler:
             finally:
                 item["duration_ms"] = int((time.monotonic() - started) * 1000)
                 self.automation._exec_lock.limit_for_thread(None)
+                if self.agent is not None:
+                    done = sum(1 for i in items if i["status"] not in ("QUEUED", "RUNNING"))
+                    self.agent.emit(names.AGENT_PROGRESS, f"{item['name'][:100]}: {item['status']}", run_id=batch_id,
+                                    progress=int(done * 100 / max(1, len(items))))
 
         def work() -> None:
             try:
@@ -508,6 +556,11 @@ class Scheduler:
         event = names.EXECUTION_COMPLETED if batch["status"] == "PASSED" else names.EXECUTION_FAILED
         agent.emit(event, f"Scheduled run {batch['name']} {batch['status']}: {summary}", run_id=batch["batch_id"],
                    details={"link": "#/scheduled-runs"})
+        if self.agent is not None:
+            end = names.AGENT_COMPLETED if batch["status"] == "PASSED" else names.AGENT_FAILED
+            self.agent.emit(end, f"Scheduled run {batch['name']} {batch['status']}: {summary}", run_id=batch["batch_id"],
+                            status="PASSED" if batch["status"] == "PASSED" else "FAILED", progress=100,
+                            details={"error": summary} if batch["status"] != "PASSED" else None)
 
     def _publish(self, batch: dict[str, Any]) -> dict[str, Any]:
         try:

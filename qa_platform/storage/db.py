@@ -786,6 +786,126 @@ MIGRATIONS: list[str] = [
         updated_at TEXT NOT NULL
     );
     """,
+    # 21 - 23.12.0: API Testing (applications, tests, suites, runs, results, script versions, audit). Secrets are
+    # never stored here: they live in the OS credential store under the "apicred" namespace.
+    """
+    CREATE TABLE IF NOT EXISTS api_apps (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        environment TEXT NOT NULL DEFAULT 'Test',
+        description TEXT,
+        api_type TEXT NOT NULL DEFAULT 'REST',
+        config TEXT NOT NULL DEFAULT '{}',
+        targets TEXT NOT NULL DEFAULT '[]',
+        authorized_by TEXT,
+        authorized_at TEXT,
+        spec TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS api_tests (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'manual',
+        operation TEXT,
+        origin TEXT,
+        status TEXT NOT NULL DEFAULT 'ready',
+        review_reason TEXT,
+        definition TEXT NOT NULL,
+        destructive INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        version INTEGER NOT NULL DEFAULT 1,
+        position INTEGER NOT NULL DEFAULT 0,
+        last_status TEXT,
+        last_run_id TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_tests_app ON api_tests(app_id, position);
+    CREATE TABLE IF NOT EXISTS api_test_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        test_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        definition TEXT NOT NULL,
+        note TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS api_suites (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        test_ids TEXT NOT NULL DEFAULT '[]',
+        chain INTEGER NOT NULL DEFAULT 0,
+        parallel INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS api_runs (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        suite_id TEXT,
+        label TEXT,
+        trigger TEXT NOT NULL DEFAULT 'manual',
+        mode TEXT NOT NULL DEFAULT 'api',
+        mode_reason TEXT,
+        status TEXT NOT NULL,
+        counts TEXT,
+        environment TEXT,
+        started_by TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        duration_ms INTEGER,
+        summary TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_runs_app ON api_runs(app_id, started_at);
+    CREATE TABLE IF NOT EXISTS api_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        test_id TEXT,
+        test_name TEXT NOT NULL,
+        test_version INTEGER,
+        row_label TEXT,
+        status TEXT NOT NULL,
+        request TEXT,
+        response TEXT,
+        assertions TEXT,
+        error TEXT,
+        classification TEXT,
+        draft_id INTEGER,
+        time_ms INTEGER,
+        status_code INTEGER,
+        at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_results_run ON api_results(run_id, id);
+    CREATE TABLE IF NOT EXISTS api_scripts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        app_id TEXT NOT NULL,
+        suite_id TEXT,
+        version INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        edited INTEGER NOT NULL DEFAULT 0,
+        note TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_scripts_app ON api_scripts(app_id, version);
+    CREATE TABLE IF NOT EXISTS api_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        by TEXT,
+        action TEXT NOT NULL,
+        app_id TEXT,
+        target TEXT,
+        detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_audit_app ON api_audit(app_id, id);
+    """,
 ]
 
 

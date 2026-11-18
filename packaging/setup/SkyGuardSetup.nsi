@@ -43,7 +43,7 @@ SetCompressorDictSize 64
 Name "SkyGuard QA ${VERSION} Upgrade"
 Caption "SkyGuard QA ${VERSION} Upgrade"
 OutFile "${OUTFILE}"
-BrandingText "SkyGuard QA ${VERSION} - offline, no administrator rights"
+BrandingText "SkyGuard QA ${VERSION}"
 ShowInstDetails show
 InstallDir "$LOCALAPPDATA\Programs\AIAgenticTestAgent"
 VIProductVersion "${VERSION}.0"

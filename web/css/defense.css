@@ -200,3 +200,7 @@ a.pr-row:hover .pr-lab { color: var(--accent); }
 :root[data-theme="light"] .wf-hero .wf-strip { background: rgba(255, 255, 255, .9); border-color: #bcd3ea; }
 :root[data-theme="light"] .wf-hero .wf-count { color: #475569; }
 :root[data-theme="light"] .wf-hero .wf-count b { color: #0f172a; }
+
+/* 23.12.0: an agent whose engine or dependency is unavailable */
+.agent-card.UNAVAILABLE { border-color: var(--warn, #e0a02a); }
+.agent-card.UNAVAILABLE .robot-svg { opacity: .45; filter: grayscale(.7); }

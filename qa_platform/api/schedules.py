@@ -33,6 +33,7 @@ class ScheduleIn(BaseModel):
     browsers: list[str] | None = None
     parallel: int | None = Field(default=None, ge=1, le=8)
     headless: bool | None = None
+    mode: str | None = Field(default=None, max_length=20)  # 23.12.0: visible | headless | smart
     data_rows: str | None = None
     catch_up: bool | None = None
     publish_tfs: bool | None = None

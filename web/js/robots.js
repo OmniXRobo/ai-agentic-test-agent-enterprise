@@ -22,6 +22,13 @@ const E = {
   playback: '<path d="M1 2v12l7-6zM8 2v12l7-6z" fill="#fff"/>',
   reporting: '<path d="M8 1.5A6.5 6.5 0 1 0 14.5 8H8z" fill="#fff"/><path d="M9.5 0.5v6h6a6 6 0 0 0-6-6z" fill="rgba(255,255,255,.6)"/>',
   voice: '<rect x="5" y="1" width="6" height="9" rx="3" fill="#fff"/><path d="M2.5 7.5a5.5 5.5 0 0 0 11 0M8 13v2.5M5 15.5h6" fill="none" stroke="#fff" stroke-width="1.5"/>',
+  // 23.12.0
+  aiops: '<circle cx="8" cy="8" r="6.5" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M1.5 8h13M8 1.5c2.2 2 2.2 11 0 13M8 1.5c-2.2 2-2.2 11 0 13" fill="none" stroke="#fff" stroke-width="1.2"/>',
+  comparison: '<rect x="1" y="2" width="6" height="12" rx="1" fill="none" stroke="#fff" stroke-width="1.5"/><rect x="9" y="2" width="6" height="12" rx="1" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M3 6h2M3 9h2M11 6h2M11 9h2" stroke="#fff" stroke-width="1.4"/>',
+  api: '<path d="M2 4h12M2 8h12M2 12h12" stroke="#fff" stroke-width="1.2" opacity=".5"/><path d="M5 3 2 8l3 5M11 3l3 5-3 5" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="8" cy="8" r="1.6" fill="#fff"/>',
+  apianalysis: '<circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="#fff" stroke-width="1.6"/><path d="m10 10 5 5" stroke="#fff" stroke-width="2"/><path d="M4.5 6.5h4" stroke="#fff" stroke-width="1.4"/>',
+  contract: '<path d="M3 1h7l3 3v11H3z" fill="none" stroke="#fff" stroke-width="1.5"/><path d="m5.5 9 2 2 3.5-4" fill="none" stroke="#fff" stroke-width="1.7"/>',
+  scheduler: '<circle cx="8" cy="8" r="6.5" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M8 4v4l3 2" fill="none" stroke="#fff" stroke-width="1.7"/>',
 };
 
 // type: pilot | drone; hue: squadron colour; visor: gold | cobalt | emerald (pilots only)
@@ -44,6 +51,12 @@ const STYLE = {
   playback:       { type: "drone", hue: 160 },
   reporting:      { type: "pilot", hue: 245, visor: "emerald" },
   voice:          { type: "pilot", hue: 305, visor: "cobalt" },
+  aiops:          { type: "pilot", hue: 185, visor: "gold" },
+  comparison:     { type: "drone", hue: 260 },
+  api:            { type: "pilot", hue: 95,  visor: "emerald" },
+  apianalysis:    { type: "drone", hue: 300 },
+  contract:       { type: "drone", hue: 55 },
+  scheduler:      { type: "drone", hue: 205 },
 };
 
 const VISOR = {
