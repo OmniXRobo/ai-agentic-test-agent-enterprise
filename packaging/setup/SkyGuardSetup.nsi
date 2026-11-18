@@ -461,9 +461,9 @@ Function FinishPre
   ${If} $Result == "ok"
     StrCpy $FinishTitle "SkyGuard QA ${VERSION} is installed"
     ${If} $Warnings > 0
-      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION}. Every check passed except $Warnings warning(s) on the Verify page (see the log).$\r$\n$\r$\nIn the browser press Ctrl+F5 once. New: answers to Missing information are kept. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
+      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION}. Every check passed except $Warnings warning(s) on the Verify page (see the log).$\r$\n$\r$\nIn the browser press Ctrl+F5 once. New: API Testing in Automation Studio. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
     ${Else}
-      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION} and every check passed.$\r$\n$\r$\nIn the browser press Ctrl+F5 once. New: answers to Missing information are kept. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
+      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION} and every check passed.$\r$\n$\r$\nIn the browser press Ctrl+F5 once. New: API Testing in Automation Studio. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
     ${EndIf}
   ${Else}
     StrCpy $FinishTitle "The upgrade did not complete"

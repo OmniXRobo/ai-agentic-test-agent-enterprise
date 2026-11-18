@@ -781,7 +781,7 @@ table.data.compact th, table.data.compact td { padding: 4px 8px; font-size: 13px
 /* 23.11.0: editable Python test */
 .pyed { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; height: 520px; min-height: 160px; overflow: auto; resize: vertical; }
 .pyed .gutter .err { display: inline-block; width: 100%; color: #fff; background: var(--fail, #d33); border-radius: 3px; }
-.pyed-full { position: fixed !important; inset: 0; z-index: 1000; margin: 0 !important; border-radius: 0; overflow: auto; background: var(--bg, var(--surface)); display: flex; flex-direction: column; }
+.pyed-full { position: fixed !important; inset: 0; z-index: 1000; margin: 0 !important; border-radius: 0; overflow: auto; background: var(--bg, #0b1220) !important; backdrop-filter: none; display: flex; flex-direction: column; }
 .pyed-full .pyed { flex: 1 1 auto; height: auto !important; max-height: none; resize: none; }
 .pyed pre, .pyed .pyed-ta { margin: 0; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; line-height: 1.5; padding: 10px; tab-size: 4; white-space: pre; }
 .pyed .gutter { color: var(--muted); text-align: right; user-select: none; border-right: 1px solid var(--border); background: var(--surface); border-radius: 0; border-top: 0; border-bottom: 0; border-left: 0; }

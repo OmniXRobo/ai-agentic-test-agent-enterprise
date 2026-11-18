@@ -85,6 +85,8 @@ def test_every_page_loads_like_before(tmp_path):
     added |= {"integration-comparison"}
     # 23.10.0: the simple AI Agent page replaces the Operations Agent nav entry (which stays for admins only)
     added |= {"ai-agent"}
+    # 23.12.0: API Testing under Automation Studio
+    added |= {"api-testing"}
     assert set(old) == set(new) - added and len(new) >= 30
     for r in added & set(new):
         assert not new[r]["failed"] and not new[r]["errors"], (r, new[r])

@@ -440,7 +440,7 @@ RELEASE_2311_LOAD = ("import sys; sys.path.insert(0, '.'); from pathlib import P
                      "v = python_scripts.validate('import subprocess\\n'); "
                      "print('ok' if smart_wait.clean_policy({'enabled': True, 'mode': 'smart'})['enabled'] "
                      "and '# --- SMART WAIT BEGIN' in smart_wait.embedded_source() and not v['ok'] "
-                     "and 'publication_failed' in ds.OPEN_STATUSES and len(triage.CLASSES) == 6 "
+                     "and 'publication_failed' in ds.OPEN_STATUSES and {'application_defect', 'automation_script', 'test_data', 'environment', 'timing', 'inconclusive'} <= set(triage.CLASSES) "
                      "and any(r.path.endswith('/publish') for r in dapi.router.routes) "
                      "and Path('web/js/python-editor.js').is_file() and Path('web/js/smart-wait-ui.js').is_file() "
                      "else 'Python editor, Smart Wait or Defect Review incomplete')")

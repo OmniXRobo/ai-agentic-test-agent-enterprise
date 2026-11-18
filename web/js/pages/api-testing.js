@@ -533,7 +533,7 @@ async function showRun(runId, poll) {
         const x = await draw();
         if (!x || x.status !== "RUNNING") {
           stopTimers();
-          if (x) { st.runs = (await api(`${BASE}/runs?app_id=${encodeURIComponent(st.app.id)}&limit=30`)).runs; const t = await api(`${BASE}/apps/${encodeURIComponent(st.app.id)}/tests`); st.tests = t.tests; }
+          if (x) { st.runs = (await api(`${BASE}/runs?app_id=${encodeURIComponent(st.app.id)}&limit=30`)).runs; const t = await api(`${BASE}/apps/${encodeURIComponent(st.app.id)}/tests`); st.tests = t.tests; if (st.tab === "runs") render(); }
         }
       } catch { stopTimers(); }
     }, 1500));

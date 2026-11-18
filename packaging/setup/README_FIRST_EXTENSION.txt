@@ -1,4 +1,4 @@
-SkyGuard Offline Edge/Chrome Agent Extension 1.3.1 (with SkyGuard QA 23.11.2)
+SkyGuard Offline Edge/Chrome Agent Extension 1.3.1 (with SkyGuard QA 23.12.0)
 ============================================================================
 
 The Manifest V3 extension for Microsoft Edge and Google Chrome (116 or later) and its local companion, which runs on
@@ -12,6 +12,9 @@ ALREADY INSTALLED (1.0, 1.1, 1.2 or 1.3.0)
 NEW INSTALL
   Double-click INSTALL.cmd and follow docs\INSTALL_EDGE.md or docs\INSTALL_CHROME.md (Load unpacked, pairing).
   Then copy the AI model files with scripts\Install-Models.ps1 (from your SkyGuard installation or offline media).
+
+UNCHANGED IN SKYGUARD QA 23.12.0
+  The extension and companion stay 1.3.1. API Testing does not use the extension.
 
 NEW IN 1.3.1
   - Chat: when the agent asks for missing information, answer in your own words ("First Name; muhammad",
