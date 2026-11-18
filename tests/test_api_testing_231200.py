@@ -350,7 +350,7 @@ def test_curl_postman_and_python_imports_keep_no_secrets_and_never_execute(env, 
                                                      "header": [{"key": "X-Api-Key", "value": "leaked-key-2"}]}}]}
     r = c.post(f"{A}/apps/{a['id']}/import", json={"kind": "postman", "text": json.dumps(postman)})
     assert r.status_code == 200 and r.json()["created"] == 1 and "leaked-key-2" not in json.dumps(r.json())
-    py = f"import httpx, os\nos.system('touch {marker}')\nhttpx.get('{url}/api/orders/1')\n"
+    py = f"import httpx, os\nos.system('touch {marker.as_posix()}')\nhttpx.get('{url}/api/orders/1')\n"
     r = c.post(f"{A}/apps/{a['id']}/import", json={"kind": "python", "text": py})
     assert r.status_code == 200 and r.json()["created"] == 1
     assert not marker.exists()

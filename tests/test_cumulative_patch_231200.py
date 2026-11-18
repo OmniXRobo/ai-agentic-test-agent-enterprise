@@ -417,6 +417,21 @@ def test_detect_reports_what_setup_shows(built, tmp_path, version):
     assert _version(app) == version  # nothing changed
 
 
+def test_setup_repairs_an_installed_23_12_0(built, tmp_path):
+    """Setup over 23.12.0 itself (for example an install that does not start) is offered as a repair and re-applies."""
+    app, data = _install(tmp_path / "inst", "23.11.2")
+    assert _run(built, "apply", "--app", str(app), "--data", str(data)).returncode == 0
+    (app / "qa_platform" / "api" / "apitesting.py").write_text("raise RuntimeError('broken')\n")  # a damaged install
+    ini = tmp_path / "detect.ini"
+    r = subprocess.run([sys.executable, str(built / "install_patch.py"), "detect", "--app", str(app.parent), "--python", sys.executable,
+                        "--ini", str(ini)], capture_output=True, text=True, env={**os.environ, "QA_HOME": str(data)})
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and out["supported"] and out["already_latest"] and "repair" in out["message"]
+    r = _run(built, "apply", "--app", str(app), "--data", str(data))
+    assert r.returncode == 0, r.stderr
+    assert "Patched 23.12.0 -> 23.12.0" in r.stdout and "RuntimeError" not in (app / "qa_platform" / "api" / "apitesting.py").read_text()
+
+
 def test_setup_log_option_writes_every_message(built, tmp_path):
     app, data = _install(tmp_path / "inst", "23.11.2")
     log = tmp_path / "logs" / "setup.txt"

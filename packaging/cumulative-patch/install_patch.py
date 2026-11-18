@@ -870,11 +870,11 @@ def detect(args: argparse.Namespace) -> int:
     python = args.python or find_python(app)
     can_write = writable(app)
     out.update(found=True, app=str(app), root=str(root), data=str(data), version=v, python=python,
-               supported=v in BASELINES, already_latest=v == PATCH_VERSION, writable=can_write,
+               supported=v in BASELINES or v == PATCH_VERSION, already_latest=v == PATCH_VERSION, writable=can_write,
                running=running(port_of(data)), port=port_of(data), free_mb=free_mb(root),
                database=(data / "qa_platform.sqlite3").exists(),
                backup_folder=str(root / "patch-backups"))
-    if v not in BASELINES:
+    if v not in BASELINES and v != PATCH_VERSION:
         out["message"] = (f"SkyGuard QA {v} was found. This upgrade installs on {BASELINE}. "
                           + ("Bring it to 23.3.35 with the earlier patches first." if _older(v) else
                              "This version is not supported; nothing will be changed."))
