@@ -83,6 +83,41 @@ jobs:
           call "%PKG%\INSTALL.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
           call "%RUNNER_TEMP%\qa-install\VALIDATE_OFFLINE.cmd" || exit /b 1
           type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"
+      - name: "23.12.1: first install, repair over it, and the parts the 23.3.35 package lacked"
+        # The reported failure: on a new Windows 11 PC the 23.3.35 INSTALL.cmd stopped with WinError 5 renaming
+        # app.new to app. A first install now copies straight into app (no rename); here it starts with the app.new
+        # the old installer left behind, then INSTALL.cmd runs again over it (repair: data backup, app.new -> app).
+        shell: pwsh
+        env:
+          QA_NO_PAUSE: "1"
+        run: |
+          $pkg = (Resolve-Path dist_offline\SGQA).Path
+          $t = Join-Path $env:RUNNER_TEMP "qa-fresh"
+          New-Item -ItemType Directory -Force "$t\app.new\runtime" | Out-Null
+          "left by the 23.3.35 installer" | Set-Content "$t\app.new\runtime\left.txt"
+          cmd /c "`"$pkg\INSTALL.cmd`" --target `"$t`" --no-shortcuts"
+          if ($LASTEXITCODE -ne 0) { throw "first install failed" }
+          $log = Get-Content (Get-ChildItem "$t\logs\install-*.log" | Select-Object -Last 1).FullName -Raw
+          $log
+          if ($log -notmatch "Installing SkyGuard QA") { throw "not a first install" }
+          if (Test-Path "$t\app.new") { throw "app.new left over" }
+          if (Test-Path "$t\INSTALL_NOT_FINISHED.txt") { throw "marker left over" }
+          if (-not (Test-Path "$t\app\skyguard_agent\__init__.py")) { throw "AI Agent module missing" }
+          if (-not (Test-Path "$t\app\runtime\ocr\site-packages\rapidocr")) { throw "OCR runtime missing" }
+          if (-not (Test-Path "$pkg\Browser_Extension\INSTALL.cmd")) { throw "browser extension missing" }
+          $v = Get-Content (Get-ChildItem "$t\logs\validation-*.txt" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName -Raw
+          $v
+          if ($v -notmatch "\[PASS\] Application modules") { throw "application modules check did not pass" }
+          if ($v -notmatch "\[PASS\] Offline OCR runtime") { throw "OCR runtime check did not pass" }
+          # data for the backup check
+          & "$t\app\runtime\python\python.exe" -E -s -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('CREATE TABLE IF NOT EXISTS ci_probe (x)'); c.execute('INSERT INTO ci_probe VALUES (7)'); c.commit()" "$t\data\qa_platform.sqlite3"
+          cmd /c "`"$pkg\INSTALL.cmd`" --target `"$t`" --no-shortcuts"
+          if ($LASTEXITCODE -ne 0) { throw "repair install failed" }
+          Get-Content (Get-ChildItem "$t\logs\install-*.log" | Select-Object -Last 1).FullName
+          if (-not (Test-Path "$t\app.previous\INSTALLED.json")) { throw "previous version not kept" }
+          $b = Get-ChildItem "$t\backups" -Directory | Select-Object -First 1
+          if (-not $b -or -not (Test-Path "$($b.FullName)\qa_platform.sqlite3")) { throw "data was not backed up" }
+          if (Test-Path "$t\app.new") { throw "app.new left over after repair" }
       - name: Publish the package for download (Actions run page, Artifacts)
         uses: actions/upload-artifact@v4
         with:
@@ -96,9 +131,9 @@ jobs:
       - name: Publish the zip, its checksum and the SBOM (hand these to the security team)
         uses: actions/upload-artifact@v4
         with:
-          name: SGQA-windows-zip
+          name: SkyGuard_QA_Full_Offline_Installer
           path: |
-            dist_offline/SGQA-*.zip
+            dist_offline/SkyGuard_QA_*_Full_Offline_Installer.zip
             dist_offline/SHA256SUMS.txt
             dist_offline/SGQA/sbom.cdx.json
           retention-days: 14

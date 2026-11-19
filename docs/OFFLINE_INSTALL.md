@@ -5,7 +5,7 @@ and enter three things on one screen. No administrator rights, no Internet and n
 
 ## 1. Get the package
 
-GitHub → Actions → the latest green CI run on `main` → Artifacts → **SGQA-windows-zip**. It holds:
+GitHub → Actions → the latest green CI run on `main` → Artifacts → **SkyGuard_QA_Full_Offline_Installer** (before 23.12.1: SGQA-windows-zip). It holds:
 
 | File | What it is for |
 |---|---|

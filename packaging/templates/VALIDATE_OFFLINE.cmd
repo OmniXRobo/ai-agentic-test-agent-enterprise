@@ -1,5 +1,5 @@
 @echo off
-rem Checks this copy without Internet and without administrator rights.
+rem Checks this copy without Internet.
 rem Add --quick to skip starting JMeter and Chromium.
 setlocal
 rem Resolve this folder once: %~dp0 can point elsewhere after "cd" when the script was started by a relative path.

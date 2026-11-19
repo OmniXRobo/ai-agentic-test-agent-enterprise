@@ -1,4 +1,4 @@
-"""INSTALL_OFFLINE / ROLLBACK_OFFLINE: per-user install with automatic rollback. No administrator rights.
+"""INSTALL_OFFLINE / ROLLBACK_OFFLINE: per-user install with automatic rollback.
 
 Layout of an install folder (default ``%LOCALAPPDATA%\\Programs\\AIAgenticTestAgent``)::
 
@@ -8,9 +8,15 @@ Layout of an install folder (default ``%LOCALAPPDATA%\\Programs\\AIAgenticTestAg
     logs\\           install, rollback and validation reports
     START_QA_PLATFORM.cmd, VALIDATE_OFFLINE.cmd, ROLLBACK_OFFLINE.cmd
 
-Install copies the payload next to the current version, checks it, switches folders, validates the installed copy
-and switches back automatically if validation fails. Only one previous version is kept: the one before it is
-removed after a successful install, when nothing points at it any more.
+A first install (no ``app`` folder yet) copies the payload straight into ``app``: there is nothing to switch, so no
+folder is renamed. 23.12.1: renaming a folder of thousands of files that were written seconds earlier failed on new
+Windows 11 PCs with "[WinError 5] Access is denied" (Microsoft Defender or a company antivirus still scanning them).
+
+An upgrade or repair backs up the data first, copies the payload next to the current version (``app.new``), checks it,
+moves the current version aside and switches folders, validates the installed copy and switches back automatically if
+validation fails. Every folder move is retried for about three minutes while Windows reports the folder in use; if the
+new folder still cannot be renamed, its files are copied into place instead (copying only reads them). Only one
+previous version is kept: the one before it is removed after a successful install, when nothing points at it any more.
 """
 
 from __future__ import annotations
@@ -20,9 +26,11 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Callable
 
@@ -65,6 +73,10 @@ class Log:
         line = f"{now().strftime('%H:%M:%S')}  {message}"
         print(line, flush=True)
         self._f.write(line + "\n")
+        self._f.flush()
+
+    def write_only(self, text: str) -> None:
+        self._f.write(text.rstrip() + "\n")
         self._f.flush()
 
     def close(self) -> None:
@@ -119,27 +131,131 @@ def stop_programs_in(folder: Path, log: Callable[[str], None]) -> int:
     return len(running)
 
 
-def move_aside(src: Path, dst: Path, log: Callable[[str], None], *, attempts: int = 10,
+INCOMPLETE_MARKER = "INSTALL_NOT_FINISHED.txt"
+# 23.12.1: waits between attempts to move a folder Windows reports in use (about three minutes in all). Antivirus
+# scanning thousands of new files, the search indexer or a program that is closing release them on their own.
+RETRY_DELAYS = (1, 1, 2, 2, 3, 3, 5, 5, 8, 10, 10, 15, 15, 20, 20, 30, 30)
+
+
+def _retry(op: Callable[[], None], log: Callable[[str], None], what: str, *,
+           delays: tuple[float, ...] | None = None, sleep: Callable[[float], None] = time.sleep,
+           between: Callable[[int], None] | None = None) -> None:
+    """Run a file-system operation, retrying while Windows reports the files in use. Raises the last OSError."""
+    delays = RETRY_DELAYS if delays is None else delays
+    for attempt in range(len(delays) + 1):
+        try:
+            op()
+            if attempt:
+                log(f"{what}: done after {attempt + 1} attempts.")
+            return
+        except OSError as exc:
+            if attempt == len(delays):
+                raise
+            if attempt == 0:
+                log(f"{what}: Windows reports the files in use ({exc.strerror or exc}). Waiting and trying again; "
+                    "this is usually antivirus scanning the new files and can take a few minutes.")
+            if between:
+                between(attempt)
+            sleep(delays[attempt])
+
+
+def move_aside(src: Path, dst: Path, log: Callable[[str], None], *, attempts: int | None = None,
                sleep: Callable[[float], None] = time.sleep,
                stop: Callable[[Path, Callable[[str], None]], int] = stop_programs_in) -> None:
     """Rename a version folder, stopping its programs first and retrying while Windows still holds files open
     (a program that is closing, antivirus or the search indexer reading new files). Raises the last OSError."""
     stop(src, log)
-    for attempt in range(1, attempts + 1):
+    delays = RETRY_DELAYS if attempts is None else tuple(1 + i // 3 for i in range(max(attempts - 1, 0)))
+    _retry(lambda: src.rename(dst), log, f"Moving {src.name} to {dst.name}", delays=delays, sleep=sleep,
+           between=lambda attempt: stop(src, log) if attempt in (2, 5) else None)
+
+
+def _copy_file(src: str, dst: str) -> str:
+    """Copy one file, retrying a few times when antivirus has it locked for a moment."""
+    for wait in (0.5, 1, 2, 4, 0):
         try:
-            src.rename(dst)
-            return
-        except OSError:
-            if attempt == attempts:
+            return shutil.copy2(src, dst)
+        except PermissionError:
+            if not wait:
                 raise
-            if attempt in (3, 6):
-                stop(src, log)
-            sleep(1 + attempt // 3)
+            time.sleep(wait)
+    return dst
+
+
+def remove_tree(folder: Path, log: Callable[[str], None] | None = None, *, tries: int = 3,
+                sleep: Callable[[float], None] = time.sleep) -> bool:
+    """Delete a folder of ours, retrying briefly. Returns False (and leaves it) when Windows keeps files in it open."""
+    for n in range(tries):
+        if not folder.exists():
+            return True
+        shutil.rmtree(folder, ignore_errors=True)
+        if not folder.exists():
+            return True
+        sleep(1 + n)
+    if log:
+        log(f"{folder.name} could not be removed yet (files still in use); it is removed by the next install.")
+    return False
+
+
+def switch_into_place(staged: Path, app: Path, log: Callable[[str], None], *,
+                      sleep: Callable[[float], None] = time.sleep,
+                      stop: Callable[[Path, Callable[[str], None]], int] = stop_programs_in) -> str:
+    """Make the checked copy the running version. Renames the folder, retrying for about three minutes; if Windows
+    still refuses, copies its files into place instead (copying only reads them, which antivirus allows). Returns
+    "renamed" or "copied". Raises OSError when neither worked (``app`` is then removed again)."""
+    try:
+        move_aside(staged, app, log, sleep=sleep, stop=stop)
+        return "renamed"
+    except OSError as exc:
+        log(f"{staged.name} still could not be renamed ({exc}). Copying its files into place instead.")
+    try:
+        shutil.copytree(staged, app, copy_function=_copy_file)
+    except (OSError, shutil.Error) as exc:
+        remove_tree(app, log)
+        raise OSError(f"the new version could not be copied into place ({exc})") from exc
+    remove_tree(staged, log)
+    return "copied"
+
+
+def backup_data(data: Path, backups: Path, label: str, log: Callable[[str], None]) -> Path | None:
+    """Before an upgrade: copy the databases (SQLite online backup, consistent even while open) and settings.json.
+    Evidence, reports and scripts are never changed by an install, so they are not copied."""
+    items = [p for p in (data / "qa_platform.sqlite3", data / "opsagent" / "knowledge.sqlite3",
+                         data / "settings.json") if p.is_file()]
+    if not items:
+        return None
+    dest = backups / label
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in items:
+        out = dest / p.relative_to(data)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if p.suffix == ".sqlite3":
+            src = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+            dst = sqlite3.connect(out)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+                src.close()
+        else:
+            shutil.copy2(p, out)
+    log(f"Backed up your data ({', '.join(str(p.relative_to(data)) for p in items)}) to {dest}")
+    return dest
 
 
 def _still_open_hint(target: Path) -> str:
-    return ("SkyGuard QA's own programs were stopped, so something else still has a file open there: close any "
-            f"Explorer, command or editor window open in {target}, then run the installer again. Nothing was changed.")
+    return ("SkyGuard QA's own programs were stopped, so something else still has a file open there (an Explorer, "
+            f"command or editor window open in {target}, or antivirus still scanning). Close those windows, wait a "
+            "minute, then run INSTALL.cmd again. Nothing was changed.")
+
+
+IN_USE_HELP = (
+    "What to do:\n"
+    "  1. Wait two minutes, then double-click INSTALL.cmd again. It continues safely.\n"
+    "  2. If it happens again, restart the PC and run INSTALL.cmd before opening anything else.\n"
+    "  3. Still not working: ask IT to let Microsoft Defender or the company antivirus skip the folder\n"
+    "     {target}\n"
+    "     (it only needs to skip it while SkyGuard QA installs).")
 
 
 def _dashboard_running(data: Path) -> int | None:
@@ -165,7 +281,7 @@ def _check_target(source: Path, target: Path) -> None:
     if tgt == src or src in tgt.parents or tgt in src.parents:
         raise InstallError(f"Choose an install folder outside the package ({source}).")
     if WINDOWS and any(p.lower() in ("program files", "program files (x86)", "windows") for p in tgt.parts[1:2]):
-        raise InstallError(f"{target} needs administrator rights. Use a folder in your profile, for example {default_target()}.")
+        raise InstallError(f"{target} is a protected Windows folder. Use a folder in your profile, for example {default_target()}.")
     try:
         tgt.mkdir(parents=True, exist_ok=True)
         probe = tgt / ".write_probe"
@@ -178,7 +294,7 @@ def _check_target(source: Path, target: Path) -> None:
 def _write_launchers(target: Path) -> None:
     """Small launchers in the install folder that always run the current version."""
     (target / "START_QA_PLATFORM.cmd").write_text(
-        '@echo off\r\nrem Starts the installed version. No administrator rights needed.\r\n'
+        '@echo off\r\nrem Starts the installed version.\r\n'
         'call "%~dp0app\\START_QA_PLATFORM.cmd" %*\r\n', encoding="utf-8")
     (target / "VALIDATE_OFFLINE.cmd").write_text(
         '@echo off\r\nrem Checks the installed version without Internet.\r\n'
@@ -269,20 +385,52 @@ def _shortcuts(target: Path, log: Log) -> None:
         log(f"Shortcuts were not created ({exc}). Use START_QA_PLATFORM.cmd in {target}.")
 
 
+def _leftovers(target: Path, log: Callable[[str], None]) -> None:
+    """Folders an earlier, interrupted install of ours left behind (app.new, app.old-*, app.failed-*)."""
+    for folder in [target / "app.new", *target.glob("app.new-*"), *target.glob("app.old-*"), *target.glob("app.failed-*")]:
+        if folder.is_dir():
+            log(f"Removing {folder.name}, left over from an earlier install that did not finish.")
+            remove_tree(folder, log)
+
+
+def _version_of(app: Path) -> str:
+    try:
+        return str(json.loads((app / "INSTALLED.json").read_text(encoding="utf-8")).get("version") or "?")
+    except (OSError, ValueError):
+        init = app / "qa_platform" / "__init__.py"
+        try:
+            for line in init.read_text(encoding="utf-8").splitlines():
+                if line.startswith("__version__"):
+                    return line.split("=", 1)[1].strip().strip("'\"")
+        except OSError:
+            pass
+    return "?"
+
+
 def install(source: Path, target: Path, *, validation: Validation = subprocess_validation,
-            shortcuts: bool = True, prefill: dict[str, str] | None = None) -> int:
+            shortcuts: bool = True, prefill: dict[str, str] | None = None,
+            sleep: Callable[[float], None] = time.sleep) -> int:
     source, target = source.resolve(), target.resolve()
     _check_target(source, target)
     stamp = _stamp()
     log = Log(target / "logs" / f"install-{stamp}.log")
-    app, staged, previous = target / "app", target / "app.new", target / "app.previous"
+    app, previous = target / "app", target / "app.previous"
     data = target / "data"
     old_previous: Path | None = None
+    marker = target / INCOMPLETE_MARKER
+    if marker.exists() and app.exists():  # our own first install that stopped half-way: start it again
+        log("Removing the unfinished first installation left by an earlier attempt.")
+        remove_tree(app, log)
+    fresh = not app.exists()
     try:
         manifest = mf.load(source)
         if manifest is None:
             raise InstallError(f"{source} has no {mf.MANIFEST_NAME}; this is not an offline package.")
-        log(f"Installing {APP_NAME} {manifest.get('version')} (built {manifest.get('built_at')}) into {target}")
+        version = manifest.get("version")
+        if fresh:
+            log(f"Installing {APP_NAME} {version} (built {manifest.get('built_at')}) into {target}")
+        else:
+            log(f"Upgrading {APP_NAME} {_version_of(app)} to {version} (built {manifest.get('built_at')}) in {target}")
         log("Checking the package files…")
         diff = mf.verify(source, manifest)
         if diff["missing"] or diff["changed"]:
@@ -291,53 +439,88 @@ def install(source: Path, target: Path, *, validation: Validation = subprocess_v
         port = _dashboard_running(data)
         if port:
             raise InstallError(f"The dashboard is running on port {port}. Close its window, then run the installer again.")
-
-        if staged.exists():  # left over from an interrupted install of ours
-            shutil.rmtree(staged)
-        log(f"Copying {len(manifest['files'])} files…")
-        shutil.copytree(source, staged, ignore=shutil.ignore_patterns("__pycache__", "data"))
-        if mf.verify(staged, manifest)["changed"]:
-            raise InstallError("The copied files do not match the package. Check free disk space and try again.")
-        (staged / "INSTALLED.json").write_text(json.dumps(
-            {"version": manifest.get("version"), "installed_at": now_iso(), "package_built_at": manifest.get("built_at")},
-            indent=1), encoding="utf-8")
+        _leftovers(target, log)
         data.mkdir(parents=True, exist_ok=True)
 
-        log("Checking the new version before switching…")
+        # A first install copies straight into "app": nothing runs from there yet and there is nothing to switch, so
+        # no folder of freshly written files has to be renamed (that rename is what antivirus blocked).
+        staged = app if fresh else target / "app.new"
+        if staged.exists():
+            staged = target / f"app.new-{stamp}"  # app.new could not be removed above
+        if fresh:
+            marker.write_text("A first installation is in progress or did not finish. INSTALL.cmd starts it again.\n",
+                              encoding="utf-8")
+        else:
+            backup_data(data, target / "backups", f"before-{version}-{stamp}", log)
+        log(f"Copying {len(manifest['files'])} files…")
+        shutil.copytree(source, staged, ignore=shutil.ignore_patterns("__pycache__", "data"), copy_function=_copy_file)
+        if mf.verify(staged, manifest)["changed"]:
+            if not fresh:
+                remove_tree(staged, log)
+            raise InstallError("The copied files do not match the package. Check free disk space and try again.")
+        (staged / "INSTALLED.json").write_text(json.dumps(
+            {"version": version, "installed_at": now_iso(), "package_built_at": manifest.get("built_at")},
+            indent=1), encoding="utf-8")
+
+        log("Checking the new version before switching…" if not fresh else "Checking the new version…")
         ok, report = validation(staged, data, True)
         if not ok:
-            shutil.rmtree(staged, ignore_errors=True)
+            remove_tree(staged, log)
             raise InstallError("The new version did not pass its checks; nothing was changed.\n" + report)
 
-        if app.exists():
+        if not fresh:
             if previous.exists():
                 old_previous = target / f"app.old-{stamp}"
                 try:
-                    move_aside(previous, old_previous, log)
+                    move_aside(previous, old_previous, log, sleep=sleep)
                 except OSError as exc:
                     old_previous = None
+                    remove_tree(staged, log)
                     raise InstallError(f"The version before the current one could not be moved aside ({exc}). "
                                        f"{_still_open_hint(target)}") from exc
             try:
-                move_aside(app, previous, log)
+                move_aside(app, previous, log, sleep=sleep)
             except OSError as exc:
+                remove_tree(staged, log)
                 raise InstallError(f"The current version could not be moved aside ({exc}). "
                                    f"{_still_open_hint(target)}") from exc
             log(f"Kept the current version as {previous.name} for rollback.")
-        staged.rename(app)
+            try:
+                how = switch_into_place(staged, app, log, sleep=sleep)
+            except OSError as exc:
+                log(f"The new version could not be put in place ({exc}). Switching back to the current version.")
+                try:
+                    move_aside(previous, app, log, sleep=sleep, stop=lambda f, lg: 0)
+                    if old_previous is not None:
+                        move_aside(old_previous, previous, log, sleep=sleep, stop=lambda f, lg: 0)
+                        old_previous = None
+                except OSError as exc2:
+                    raise InstallError(f"Windows kept the install folder in use, and switching back also failed "
+                                       f"({exc2}). Your version is in {previous}; rename it to 'app' after a restart. "
+                                       "Your data was not changed.") from exc2
+                raise InstallError("Windows kept the new files in use, so the new version could not be put in "
+                                   "place. Your current version is unchanged.\n" + IN_USE_HELP.format(target=target)) from exc
+            if how == "copied":
+                log("The new version was copied into place.")
 
         log("Validating the installed version (Java, JMeter, Chromium, Python packages)…")
         ok, report = validation(app, data, False)
         (target / "logs" / f"validation-{stamp}.txt").write_text(report + "\n", encoding="utf-8")
         if not ok:
             log(report)
+            if fresh:
+                log("Validation failed; the incomplete installation is removed.")
+                if remove_tree(app, log):
+                    marker.unlink(missing_ok=True)
+                return 1
             log("Validation failed; switching back to the previous version.")
             _restore(target, old_previous, log)
             return 1
         log(report)
         if old_previous is not None:
-            shutil.rmtree(old_previous, ignore_errors=True)
+            remove_tree(old_previous, log)
         _write_launchers(target)
+        marker.unlink(missing_ok=True)
         if prefill and any(prefill.values()):
             from ..first_run import prefill as write_prefill
 
@@ -357,8 +540,21 @@ def install(source: Path, target: Path, *, validation: Validation = subprocess_v
         return 0
     except InstallError as exc:
         log(f"Install stopped: {exc}")
+        if fresh and not app.exists():
+            marker.unlink(missing_ok=True)
         if old_previous is not None and not previous.exists():
             old_previous.rename(previous)
+        return 1
+    except Exception as exc:  # never a traceback on screen: a plain message, and the details in the log
+        log.write_only(traceback.format_exc())
+        in_use = isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in (5, 32)
+        log("Install stopped: " + (
+            "Windows reported files in the install folder as in use (Access is denied).\n" + IN_USE_HELP.format(target=target)
+            if in_use else f"{type(exc).__name__}: {exc}. Run INSTALL.cmd again; if it happens again, send the log "
+                           f"file {log.path} to support."))
+        if fresh and app.exists() and marker.exists():
+            remove_tree(app, log)
+        log(f"Details are in {log.path}")
         return 1
     finally:
         log.close()
@@ -367,16 +563,17 @@ def install(source: Path, target: Path, *, validation: Validation = subprocess_v
 def _restore(target: Path, old_previous: Path | None, log: Log) -> None:
     app, previous = target / "app", target / "app.previous"
     failed = target / f"app.failed-{_stamp()}"
+    quiet = lambda f, lg: 0  # noqa: E731
     if app.exists():
-        app.rename(failed)
+        move_aside(app, failed, log, stop=stop_programs_in)
     if previous.exists():
-        previous.rename(app)
+        move_aside(previous, app, log, stop=quiet)
         log("The previous version is active again.")
     else:
         log("There was no previous version; nothing is installed now.")
     if old_previous is not None:
-        old_previous.rename(previous)
-    shutil.rmtree(failed, ignore_errors=True)
+        move_aside(old_previous, previous, log, stop=quiet)
+    remove_tree(failed, log)
 
 
 def rollback(target: Path, *, validation: Validation | None = None) -> int:
@@ -394,11 +591,12 @@ def rollback(target: Path, *, validation: Validation | None = None) -> int:
         version = lambda p: json.loads((p / "INSTALLED.json").read_text(encoding="utf-8")).get("version", "?") \
             if (p / "INSTALLED.json").exists() else "?"  # noqa: E731
         log(f"Rolling back from {version(app)} to {version(previous)}…")
+        quiet = lambda f, lg: 0  # noqa: E731
         if app.exists():
-            app.rename(swap)
-        previous.rename(app)
+            move_aside(app, swap, log)
+        move_aside(previous, app, log, stop=quiet)
         if swap.exists():
-            swap.rename(previous)  # kept, so the newer version can be restored by rolling back again
+            move_aside(swap, previous, log, stop=quiet)  # kept, so the newer version can be restored by rolling back again
         if validation is not None:
             ok, report = validation(app, target / "data", True)
             log(report)
@@ -412,7 +610,7 @@ def rollback(target: Path, *, validation: Validation | None = None) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=f"Install {APP_NAME} for this user, without administrator rights.")
+    ap = argparse.ArgumentParser(description=f"Install {APP_NAME} for this user (first install, upgrade or repair).")
     ap.add_argument("action", nargs="?", choices=("install", "rollback"), default="install")
     ap.add_argument("--source", type=Path, default=APP_ROOT, help="the package's payload folder")
     ap.add_argument("--target", type=Path, default=None, help=f"install folder (default {default_target()})")
@@ -433,6 +631,9 @@ def main(argv: list[str] | None = None) -> int:
                                 "llm_server": args.llm_server, "voice_model": args.voice_model})
     except InstallError as exc:
         print(f"Install stopped: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # before the log exists (for example the folder cannot be created): no traceback
+        print(f"Install stopped: {type(exc).__name__}: {exc}\n" + IN_USE_HELP.format(target=target), file=sys.stderr)
         return 1
 
 
