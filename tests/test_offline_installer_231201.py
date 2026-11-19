@@ -164,7 +164,8 @@ def test_upgrade_backs_up_the_data_first(tmp_path):
     assert copy.execute("SELECT x FROM t").fetchone() == (42,)
     copy.close()
     assert (backups[0] / "settings.json").read_text() == '{"server": {"port": 8899}}'
-    assert (target / "data" / "settings.json").read_text() == '{"server": {"port": 8899}}'
+    # the data folder keeps the user's values (the installer may add defaults, e.g. Edge for test runs)
+    assert json.loads((target / "data" / "settings.json").read_text())["server"]["port"] == 8899
 
 
 def test_unexpected_access_denied_is_a_plain_message_not_a_traceback(tmp_path, monkeypatch, capsys):
