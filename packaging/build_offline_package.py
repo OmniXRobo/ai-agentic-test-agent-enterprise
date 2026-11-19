@@ -61,8 +61,10 @@ MAX_RELATIVE_PATH = 185
 VC_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
            "msvcp140_atomic_wait.dll", "msvcp140_codecvt_ids.dll", "concrt140.dll")
 TEMPLATES = REPO / "packaging" / "templates"
-APP_ITEMS = ("qa_platform", "web", "docs", "README.md", "requirements.txt", "START_QA_PLATFORM.cmd",
-             "ALLOW_NETWORK_ACCESS.cmd")  # 23.3.34
+APP_ITEMS = ("qa_platform", "skyguard_agent", "web", "docs", "README.md", "requirements.txt", "START_QA_PLATFORM.cmd",
+             "ALLOW_NETWORK_ACCESS.cmd")  # 23.3.34; 23.12.1: skyguard_agent (the AI Agent, 23.5.0 on) was missing
+OCR_WHEELS = REPO / "packaging" / "setup" / "ocr-wheels.txt"  # 23.12.1: the same OCR runtime the cumulative patch carries
+EXTENSION_DIR = "Browser_Extension"
 # Pure-Python packages published only as source (hash-checked like the rest); vosk needs srt.
 SOURCE_ONLY = ("srt",)
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
@@ -132,6 +134,59 @@ def stage_app(payload: Path) -> None:
         else:
             shutil.copy2(src, payload / item)
     shutil.copy2(TEMPLATES / "VALIDATE_OFFLINE.cmd", payload / "VALIDATE_OFFLINE.cmd")
+
+
+def _install_patch_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("install_patch_for_build",
+                                                  REPO / "packaging" / "cumulative-patch" / "install_patch.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def stage_ocr(payload: Path, cache: Path, wheels: Path | None = None) -> list[dict]:
+    """23.12.1: the offline OCR runtime (RapidOCR, ONNX Runtime, OpenCV, NumPy, Pillow, Microsoft C++ runtime) in
+    runtime\\ocr\\site-packages, unpacked exactly as the cumulative patch does, so a new installation reads screens in
+    Integration Comparison without a patch. Wheels for 64-bit Windows and Python 3.13, hash-checked by pip."""
+    ip = _install_patch_module()
+    if wheels is None:
+        wheels = cache / "ocr-wheels"
+        log("Downloading the OCR runtime wheels (hash-checked)")
+        run([sys.executable, "-m", "pip", "download", "--no-deps", "--require-hashes", "--only-binary=:all:",
+             "--platform", "win_amd64", "--python-version", "3.13", "--implementation", "cp", "--disable-pip-version-check",
+             "-d", str(wheels), "-r", str(OCR_WHEELS)])
+    pinned = {re.split(r"[=\s]", ln, maxsplit=1)[0].lower().replace("_", "-")
+              for ln in OCR_WHEELS.read_text(encoding="utf-8").splitlines() if "==" in ln and not ln.startswith("#")}
+    files = sorted(w for w in wheels.glob("*.whl") if w.name.split("-")[0].lower().replace("_", "-") in pinned)
+    if len(files) != len(pinned):
+        raise SystemExit(f"OCR runtime: {len(pinned)} wheels pinned, {len(files)} found in {wheels}.")
+    site = payload / "runtime" / "ocr" / "site-packages"
+    for w in files:
+        ip.extract_wheel(w, site)
+    missing = [p for p in ip.OCR_PACKAGES if not (site / p).is_dir()]
+    if missing or not (site / ip.MSVC_DIR / "msvcp140.dll").is_file():
+        raise SystemExit(f"OCR runtime incomplete after unpacking (missing {missing or ip.MSVC_DIR}).")
+    (site / "SKYGUARD_OCR_RUNTIME.json").write_text(json.dumps(
+        {"package": __version__, "python": "win32-cp313-64bit", "wheels": [w.name for w in files]}, indent=1),
+        encoding="utf-8")
+    log(f"OCR runtime staged in {site} ({len(files)} wheels)")
+    return [{"name": f"OCR runtime wheel {w.name}", "version": w.name.split("-")[1], "sha256": sha256(w),
+             "source": "PyPI (packaging/setup/ocr-wheels.txt, --require-hashes)", "license": "see package"} for w in files]
+
+
+def stage_extension(package: Path, cache: Path) -> None:
+    """23.12.1: the Edge/Chrome AI Agent extension and its companion, ready to install after SkyGuard QA (its
+    INSTALL.cmd copies the AI and speech models from the installed SkyGuard QA)."""
+    work = package.parent / "_extension"
+    shutil.rmtree(work, ignore_errors=True)
+    run([sys.executable, str(REPO / "packaging" / "browser-extension" / "build_extension.py"), "--out", str(work),
+         "--cache", str(cache / "extension")])
+    built = next(p for p in work.iterdir() if p.is_dir())
+    shutil.move(str(built), str(package / EXTENSION_DIR))
+    shutil.rmtree(work, ignore_errors=True)
+    log(f"Browser extension staged in {package / EXTENSION_DIR}")
 
 
 def stage_python(payload: Path, cache: Path) -> Path:
@@ -460,6 +515,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--zip", action="store_true", help="also write a .zip of the package")
     ap.add_argument("--no-validate", action="store_true")
     ap.add_argument("--no-models", action="store_true", help="leave out the AI and Faster-Whisper models (quick test builds)")
+    ap.add_argument("--no-ocr", action="store_true", help="leave out the offline OCR runtime")
+    ap.add_argument("--no-extension", action="store_true", help="leave out the browser extension folder")
     args = ap.parse_args(argv)
     if sys.platform != "win32" or platform.machine().lower() not in ("amd64", "x86_64"):
         raise SystemExit("Build the offline package on 64-bit Windows: it bundles Windows Python, Java and Chromium.")
@@ -486,6 +543,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_models:
         components += stage_models(payload, cache)
     components += stage_ai(payload, args.ai_dir)
+    if not args.no_ocr:
+        components += stage_ocr(payload, cache)
     info = {"name": "SkyGuard QA", "version": __version__, "built_at": now_iso(),
             "python": LOCK["python"]["version"], "components": components,
             "packages": packages(python) + fw_packages, "faster_whisper": not args.no_models}
@@ -493,6 +552,8 @@ def main(argv: list[str] | None = None) -> int:
     (payload / "sbom.cdx.json").write_text(json.dumps(sbom(info, payload), indent=1), encoding="utf-8")
     manifest = mf.write(payload, info)
     write_package_files(package)
+    if not args.no_extension:
+        stage_extension(package, cache)
     check_path_lengths(package)
     log(f"Package written: {package} ({len(manifest['files'])} files)")
 
@@ -500,7 +561,8 @@ def main(argv: list[str] | None = None) -> int:
         env = {**os.environ, "QA_NO_PAUSE": "1"}
         run(["cmd", "/c", str(package / "VALIDATE.cmd")], env=env)
     if args.zip:
-        archive = Path(shutil.make_archive(str(args.out / f"{PACKAGE_DIR}-{__version__}"), "zip", root_dir=args.out,
+        archive = Path(shutil.make_archive(str(args.out / f"SkyGuard_QA_{__version__}_Full_Offline_Installer"), "zip",
+                                           root_dir=args.out,
                                            base_dir=package.name))
         sums = write_checksums(archive)
         log(f"Zip written: {archive} ({archive.stat().st_size / 1e9:.2f} GB, sha256 {sha256(archive)}); "

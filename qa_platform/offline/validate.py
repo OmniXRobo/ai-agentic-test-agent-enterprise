@@ -128,6 +128,8 @@ class Validator:
             ("On-Premise AI files", self.check_ai_files),
             ("Offline speech model", self.check_speech_files),
             ("Faster-Whisper speech recognition", self.check_faster_whisper),
+            ("Application modules", self.check_app_modules),
+            ("Offline OCR runtime", self.check_ocr_files),
         ]
         if self.quick:  # used by the installer before switching versions: skip the slow launches
             items = [i for i in items if i[0] not in ("JMeter", "Chromium for Playwright")]
@@ -156,7 +158,45 @@ class Validator:
         admin = is_admin()
         if admin:
             return Check("Administrator rights", "WARN", "Running as administrator. This is not needed; a normal user account is enough.")
-        return Check("Administrator rights", "PASS", "Running as a normal user; no administrator rights are needed.")
+        return Check("Administrator rights", "PASS", "Running as a normal user.")
+
+    def check_app_modules(self) -> Check:
+        """23.12.1: every API module and the AI Agent load (the 23.3.35 package had no skyguard_agent; routes are
+        imported only when the server starts, so a missing part would otherwise show up only on first use)."""
+        import pkgutil
+
+        if not (self.app / "skyguard_agent" / "__init__.py").is_file():
+            return Check("Application modules", "FAIL", "skyguard_agent (the AI Agent) is missing. Copy the package again.")
+        if str(self.app) not in sys.path:
+            sys.path.insert(0, str(self.app))
+        import qa_platform.api as api_pkg
+
+        names = [m.name for m in pkgutil.iter_modules(api_pkg.__path__)]
+        failed = []
+        for name in names:
+            try:
+                importlib.import_module(f"qa_platform.api.{name}")
+            except Exception as exc:
+                failed.append(f"{name} ({type(exc).__name__}: {exc})")
+        try:
+            agent = importlib.import_module("skyguard_agent")
+            agent_version = getattr(agent, "__version__", "?")
+        except Exception as exc:
+            failed.append(f"skyguard_agent ({type(exc).__name__}: {exc})")
+            agent_version = "?"
+        if failed:
+            return Check("Application modules", "FAIL", "Not loadable: " + "; ".join(failed[:3]))
+        from qa_platform import __version__ as qa_version
+
+        return Check("Application modules", "PASS",
+                     f"SkyGuard QA {qa_version}: {len(names)} API modules and the AI Agent {agent_version} load.")
+
+    def check_ocr_files(self) -> Check:
+        site = self.app / "runtime" / "ocr" / "site-packages"
+        if (site / "rapidocr").is_dir() and (site / "onnxruntime").is_dir():
+            return Check("Offline OCR runtime", "PASS", f"RapidOCR and ONNX Runtime in {site}.")
+        return Check("Offline OCR runtime", "WARN", "Not included; Integration Comparison reads screens with Windows OCR "
+                                                    "or Tesseract instead (Preferences > Comparison).")
 
     def check_files(self) -> Check:
         if self.manifest is None:

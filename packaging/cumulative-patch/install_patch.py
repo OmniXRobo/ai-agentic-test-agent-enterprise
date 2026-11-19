@@ -101,6 +101,47 @@ class PatchError(Exception):
     pass
 
 
+# Waits between attempts when Windows reports a file or folder in use (about three minutes in all): Microsoft Defender or
+# a company antivirus scanning files that were just written, or the search indexer. Reported on a new Windows 11 PC as
+# "[WinError 5] Access is denied" when a folder of new files was renamed.
+RETRY_DELAYS = (1, 1, 2, 2, 3, 3, 5, 5, 8, 10, 10, 15, 15, 20, 20, 30, 30)
+_sleep = time.sleep
+
+
+def replace_retry(src, dst, delays=None) -> None:
+    """os.replace, retried while Windows reports the source or the target in use. Raises the last OSError."""
+    delays = RETRY_DELAYS if delays is None else delays
+    for attempt in range(len(delays) + 1):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError as exc:
+            if attempt == len(delays):
+                raise
+            if attempt == 0:
+                say(f"  {Path(src).name}: Windows reports it in use ({exc.strerror or exc}); waiting and trying again "
+                    "(usually antivirus scanning new files).")
+            _sleep(delays[attempt])
+
+
+def move_folder_into_place(staging: Path, live: Path) -> str:
+    """Rename a freshly written folder into place, retrying; if Windows still refuses, copy it (copying only reads the
+    files, which antivirus allows) and remove the staging folder when it can. Returns "renamed" or "copied"."""
+    try:
+        replace_retry(staging, live)
+        return "renamed"
+    except OSError as exc:
+        say(f"  {staging.name} could not be renamed ({exc}); copying its files into place instead.")
+    try:
+        shutil.copytree(staging, live)
+    except (OSError, shutil.Error) as exc:
+        shutil.rmtree(live, ignore_errors=True)
+        raise PatchError(f"Windows kept the new files in use, so they could not be put in place ({exc}). Wait two "
+                         "minutes and run Setup again; if it happens again, restart the PC first.") from exc
+    shutil.rmtree(staging, ignore_errors=True)
+    return "copied"
+
+
 def say(msg: str) -> None:
     print(msg, flush=True)
 
@@ -329,8 +370,13 @@ def install_ocr(patch_dir: Path, app: Path, python: str, stamp: str, force: bool
     previous = None
     if live.exists():
         previous = base / f"site-packages.before-{PATCH_VERSION}-{stamp}"
-        os.replace(live, previous)
-    os.replace(staging, live)
+        replace_retry(live, previous)
+    try:
+        move_folder_into_place(staging, live)
+    except PatchError:
+        if previous is not None and not live.exists():
+            replace_retry(previous, live)
+        raise
     say(f"OCR runtime installed: {live}" + (f" (previous runtime kept as {previous.name})" if previous else ""))
     return {"installed": True, "site": str(live), "previous": str(previous) if previous else None}
 
@@ -342,7 +388,7 @@ def restore_ocr(info: dict | None) -> None:
     if live.exists():
         shutil.rmtree(live, ignore_errors=True)
     if info.get("previous") and Path(info["previous"]).exists():
-        os.replace(info["previous"], live)
+        replace_retry(info["previous"], live)
         say(f"Previous OCR runtime restored: {live}")
     else:
         say(f"OCR runtime removed: {live}")
@@ -731,7 +777,7 @@ def apply(args: argparse.Namespace) -> int:
             dst.parent.mkdir(parents=True, exist_ok=True)
             tmp = dst.with_name(dst.name + ".patch-tmp")
             _copy(src, tmp)
-            os.replace(tmp, dst)
+            replace_retry(tmp, dst)
         (app / f"PATCH_FILES_{PATCH_VERSION}.json").write_text(json.dumps({"version": PATCH_VERSION, "files": files}, indent=1),
                                                      encoding="utf-8")
         say(f"{len(files)} files copied.")
@@ -926,6 +972,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if verify(app, data, args.python or sys.executable)["ok"] else 1
     except PatchError as exc:
         print(f"\nPATCH FAILED: {exc}", file=sys.stderr, flush=True)
+        return 1
+    except OSError as exc:  # never a bare traceback: say what happened and what to do
+        print(f"\nPATCH FAILED: {exc}. If Windows reported a file in use (Access is denied), wait two minutes and run "
+              "it again; if it happens again, restart the PC first. Nothing is lost: a failed upgrade restores the "
+              "previous version.", file=sys.stderr, flush=True)
         return 1
 
 

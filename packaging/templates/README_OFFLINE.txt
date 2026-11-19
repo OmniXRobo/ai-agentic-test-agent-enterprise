@@ -1,8 +1,17 @@
-SkyGuard QA - offline installation (all-in-one package)
-=======================================================
+SkyGuard QA - full offline installer (all-in-one package)
+=========================================================
 
-Everything SkyGuard QA needs is inside this folder. Installing it needs no Internet, no administrator rights, no
-patches and no other software. Only 64-bit Windows 10 or 11 and about 6 GB of free disk space.
+Publisher: Muhammad Tufail
+
+Everything SkyGuard QA needs is inside this folder: the latest version with every release and fix included, so no
+patches are needed afterwards. Installing it needs no Internet and no other software, and installs for your Windows
+user only. Only 64-bit Windows 10 or 11 and about 7 GB of free disk space.
+
+The same INSTALL.cmd does all three:
+  * First install on a PC that never had SkyGuard QA.
+  * Upgrade of an existing installation (any earlier version): your data is backed up first, in the "backups" folder
+    of the installation, and the previous version is kept for rollback (ROLLBACK_OFFLINE.cmd).
+  * Repair: run it again over the same version.
 
 What is inside
 --------------
@@ -14,6 +23,8 @@ What is inside
   payload\runtime\ai              llama-server and the AI model qwen2.5-1.5b-instruct-q4_k_m.gguf (On-Premise AI)
   payload\runtime\faster-whisper  Faster-Whisper speech recognition and its model small.en
   payload\runtime\speech          Vosk small English, the backup speech recognizer
+  payload\runtime\ocr             offline OCR (RapidOCR, ONNX Runtime) for Integration Comparison screen reading
+  payload\skyguard_agent          the AI Agent (learns your applications, plain-language and voice commands)
   sbom.cdx.json                   every component with its version and checksum (CycloneDX), for the security team
   SECURITY.txt                    the security review of this version
   payload\DEPENDENCIES.md         every component and Python package with its version and license
@@ -29,7 +40,7 @@ What is left out, and why
 
 Install
 -------
-1. Check the zip: compare its SHA-256 with SHA256SUMS.txt (PowerShell: Get-FileHash .\SGQA-<version>.zip).
+1. Check the zip: compare its SHA-256 with SHA256SUMS.txt (PowerShell: Get-FileHash .\SkyGuard_QA_<version>_Full_Offline_Installer.zip).
 2. Right-click the zip > Properties > tick "Unblock" > OK. Then right-click > Extract All.
    Keep the extracted folder short, for example Downloads or C:\SGQA. Do not extract inside deep folders.
 3. Optional, recommended: double-click VALIDATE.cmd. Every check runs with the network blocked.
@@ -72,6 +83,11 @@ Troubleshooting
   "The current version could not be moved aside": the installer already stopped SkyGuard QA's own programs, so a
       window is still open in the install folder (Explorer, a command window, an editor). Close it and run INSTALL.cmd
       again; nothing was changed.
+  "Windows reported files in the install folder as in use (Access is denied)": antivirus (Microsoft Defender or the
+      company's) was still scanning the new files. The installer already waited about three minutes. Wait two
+      minutes and run INSTALL.cmd again (it continues safely); if it happens again, restart the PC and run it first
+      thing; still failing, ask IT to let the antivirus skip %LOCALAPPDATA%\Programs\AIAgenticTestAgent while
+      SkyGuard QA installs.
   "Port 8765 is used by another program": close that program, or change server > port in data\settings.json.
   The AI answers slowly: normal on an older CPU for the first request; the model stays loaded afterwards.
   Something else: run VALIDATE_OFFLINE.cmd in the install folder and send logs\validation-latest.txt and data\logs\start.log.
@@ -79,4 +95,4 @@ Troubleshooting
 Uninstall: close SkyGuard QA, delete the install folder and the two SkyGuard QA shortcuts. Nothing else is changed
 on the PC (no services, no registry entries).
 
-Later updates come as small patch zips; this full package is only needed for the first installation.
+Later updates come as small patch zips or a newer full package; either one keeps your data.
