@@ -151,6 +151,13 @@ def test_assignees_come_from_tfs_and_reach_the_defect(env):
     d2 = c.post("/api/defects/manual", json={"module": "Load Tests", "source": "performance", "title": "Slow search"}).json()["draft"]
     assert c.patch(f"/api/defects/drafts/{d2['id']}", json={"assigned_to": "ACME\\sara"}).json()["draft"]["assigned_to"] == "ACME\\sara"
     assert c.patch(f"/api/defects/drafts/{d2['id']}", json={"assigned_to": ""}).json()["draft"]["assigned_to"] is None
+    # "Approve and send now": sent at once, but a second identical defect stops at the duplicate check
+    body = {"module": "Load Tests", "source": "performance", "title": "Checkout times out under load",
+            "repro_steps": "1. Run the load test\nExpected: < 2 s\nActual: timeout", "send_now": True}
+    first = c.post("/api/defects/manual", json=body).json()
+    assert first["draft"]["tfs_id"] and first["draft"]["status"] == "created"
+    second = c.post("/api/defects/manual", json=body).json()
+    assert second["draft"]["id"] == first["draft"]["id"] and "already in TFS" in second["note"]  # not sent twice
 
 
 def test_each_account_has_its_own_tfs_project_and_pat(env):
@@ -196,6 +203,7 @@ def test_welcome_email_carries_the_address_and_the_manual(env, monkeypatch):
                                         "email": "omar@acme.ae", "tfs_project": "Shop", "tfs_pat": PAT}).json()
     assert r["welcome"]["sent"] and sent[0][0] == "omar@acme.ae"
     assert "omar" in sent[0][2] and "Omar-pass-26" in sent[0][2] and "http" in sent[0][2]
+    assert r["user"]["must_change"]  # the emailed password must be changed at the first sign-in
     manual = Path(__file__).resolve().parents[1] / "web" / "manual" / "SkyGuard_QA_User_Manual.pdf"
     assert sent[0][3] == ([manual] if manual.is_file() else [])
     # email not set up: the account is still made and the admin is told why no email went out
@@ -204,6 +212,7 @@ def test_welcome_email_carries_the_address_and_the_manual(env, monkeypatch):
     r = c.post("/api/auth/users", json={"username": "lina", "password": "Lina-pass-26", "role": "tester",
                                         "email": "lina@acme.ae", "tfs_project": "Shop", "tfs_pat": PAT}).json()
     assert r["ok"] and not r["welcome"]["sent"] and "Outlook" in r["welcome"]["reason"]
+    assert not r["user"]["must_change"]
     assert c.post("/api/auth/users", json={"username": "bad", "password": "Badd-pass-26", "role": "tester",
                                            "email": "not-an-email", "tfs_project": "Shop", "tfs_pat": PAT}).json()["error_code"] == "EMAIL_INVALID"
 

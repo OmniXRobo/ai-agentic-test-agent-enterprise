@@ -185,6 +185,9 @@ def create_user(body: UserIn, request: Request, store: UserStore = Depends(users
     if body.send_welcome:
         from ..welcome import send_welcome
         welcome = send_welcome(rt, user, body.password, app_link(request, rt))
+        if welcome.get("sent"):  # the first password travelled by email: it must be changed at the first sign-in
+            store.db.execute("UPDATE users SET must_change = 1 WHERE id = ?", (user["id"],))
+            user = store._public(store._row(user["id"]))
     return {"ok": True, "user": user, "pat_check": check, "welcome": welcome}
 
 
@@ -353,9 +356,11 @@ def trust_https(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     if not https_setup.ready(rt.paths.root):
         raise QAError("HTTPS_NOT_READY", "Turn HTTPS on first (the certificate is made then).", status=409)
     ca = https_setup.files(rt.paths.root)["ca"]
-    args = f"'{c['hostname']}','{c['port']}','\"{ca}\"'"
+    def q(v: object) -> str:  # a PowerShell single-quoted literal: a quote inside a folder name cannot end it
+        return "'" + str(v).replace("'", "''") + "'"
+    args = f"{q(c['hostname'])},{q(int(c['port']))},{q(chr(34) + str(ca) + chr(34))}"
     subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                      f"Start-Process -FilePath '{script}' -ArgumentList {args} -Verb RunAs"],
+                      f"Start-Process -FilePath {q(script)} -ArgumentList {args} -Verb RunAs"],
                      creationflags=0x08000000)  # CREATE_NO_WINDOW
     return {"ok": True, "asked": True}
 

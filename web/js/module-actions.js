@@ -60,11 +60,11 @@ async function openDefect(route, title) {
     const btn = ev.target.querySelector("[type=submit]");
     btn.disabled = true;
     try {
-      const { draft } = await api("/api/defects/manual", { method: "POST", body: {
+      const { draft, note: why } = await api("/api/defects/manual", { method: "POST", body: {
         source: MODULE_SOURCES[route], module: title, title: String(f.get("title")).trim(), severity: Number(f.get("severity")),
         priority: Number(f.get("priority")), repro_steps: String(f.get("repro_steps") || ""), assigned_to: f.get("assigned_to") || null,
         run_id: String(f.get("run_id") || "").trim() || null, send_now: !!f.get("send_now") } });
-      toast(draft.tfs_id ? `Created in TFS as #${draft.tfs_id}` : `Defect draft #${draft.id} is waiting in Defect Review`, "success");
+      toast(why || (draft.tfs_id ? `Created in TFS as #${draft.tfs_id}` : `Defect draft #${draft.id} is waiting in Defect Review`), why ? "info" : "success");
       close();
       if (!draft.tfs_id) location.hash = `#/defect-review?id=${draft.id}`;
     } catch (err) { toast(err.message, "error"); btn.disabled = false; }

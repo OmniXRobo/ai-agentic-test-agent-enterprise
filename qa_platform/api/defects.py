@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
+from ..errors import QAError
 from ..runtime import Runtime
 from .deps import runtime
 
@@ -81,9 +82,18 @@ def manual(body: ManualIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     draft = rt.defects.manual_draft(source=body.source, module=body.module, title=body.title, severity=body.severity,
                                     priority=body.priority, repro_steps=body.repro_steps, assigned_to=body.assigned_to,
                                     run_id=body.run_id)
-    if body.send_now:
-        draft = rt.defects.create(draft["id"])
-    return {"ok": True, "draft": draft}
+    note = ""
+    if draft["status"] in ("created", "linked"):  # the same defect (same signature) was already sent
+        return {"ok": True, "draft": draft, "note": f"This defect is already in TFS as #{draft['tfs_id']}."}
+    if body.send_now:  # approve (needs the approve permission) and send, but never past the duplicate check
+        rt.defects.approve(draft["id"])
+        try:
+            draft = rt.defects.publish(draft["id"])
+        except QAError as exc:
+            if exc.error_code != "DEFECT_LIKELY_DUPLICATE":
+                raise
+            draft, note = rt.defects.get(draft["id"]), exc.message + " It is waiting in Defect Review."
+    return {"ok": True, "draft": draft, "note": note}
 
 
 @router.get("/assignees")

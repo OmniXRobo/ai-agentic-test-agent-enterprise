@@ -1535,7 +1535,9 @@ class Runner:
     def _watch_person(self, context: Any, run_id: str) -> None:
         """Report what a person clicks or changes in the page, but keep it only while this run is paused for help."""
         def seen(_source: Any, payload: Any) -> None:
-            if run_id in self.interventions and isinstance(payload, dict):
+            # the page under test can call this too: only small, well-formed reports, only while paused for help
+            if (run_id in self.interventions and isinstance(payload, dict) and payload.get("type") in ("click", "change")
+                    and isinstance(payload.get("fp"), dict) and len(json.dumps(payload, default=str)) < 20000):
                 bucket = self.taught.setdefault(run_id, [])
                 if len(bucket) < 50:
                     bucket.append(payload)

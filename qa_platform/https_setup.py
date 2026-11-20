@@ -215,7 +215,7 @@ def _public_key_info(key: dict[str, int]) -> bytes:
 
 
 def _key_id(key: dict[str, int]) -> bytes:
-    return hashlib.sha1(_seq(_int(key["n"]), _int(key["e"]))).digest()  # noqa: S324 - RFC 5280 key identifier
+    return hashlib.sha1(_seq(_int(key["n"]), _int(key["e"])), usedforsecurity=False).digest()  # noqa: S324 - RFC 5280 key identifier
 
 
 def _ext(oid: str, value: bytes, critical: bool = False) -> bytes:
