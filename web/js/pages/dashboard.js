@@ -194,7 +194,7 @@ async function render(view) {
     heal ? ms(heal.events, "Locator fixes") + ms(heal.applied, "Kept in the scripts") : "",
     heal ? donut(Object.entries(heal.by_result || {}).map(([k, v], i) => ({ label: k.replace(/_/g, " "), value: v,
       color: { validated: C.ok, taught: C.accent, healed: C.run, failed: C.fail, rejected: C.muted }[k] || MODULE_COLOR[i % MODULE_COLOR.length],
-      href: "#/history" })), { sub: "FIXES", empty: "No locator needed fixing" }) : '<p class="muted small">Not available.</p>');
+      href: "#/history" })), { sub: "FIXES", empty: "No fixes yet" }) : '<p class="muted small">Not available.</p>');
   area.innerHTML = `
     <h3 style="margin:0 0 10px">${esc(tfs.label)}${tfs.project ? " · " + esc(tfs.project) : ""}</h3>
     ${tfs.connected ? "" : `<p class="muted">${esc(tfs.reason)} <a href="#/tfs-settings">TFS connection settings</a>. Figures come only from your configured project; nothing is estimated.</p>`}
