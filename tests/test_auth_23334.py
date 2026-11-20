@@ -25,8 +25,12 @@ def admin(client):
     assert r.status_code == 200, r.text
 
 
+NEW = {"email": "someone@example.ae", "tfs_project": "QA", "tfs_pat": "pat-123456789", "send_welcome": False}  # 23.13.0
+
+
 def make_user(client, username, role, password="Pass-word-1"):
-    r = client.post("/api/auth/users", json={"username": username, "password": password, "role": role}, headers=BROWSER)
+    r = client.post("/api/auth/users", json={"username": username, "password": password, "role": role, **NEW},
+                    headers=BROWSER)
     assert r.status_code == 201, r.text
     return r.json()["user"]
 
@@ -128,9 +132,9 @@ def test_five_wrong_passwords_lock_the_account(client):
 def test_admin_manages_accounts_and_the_last_admin_is_protected(client):
     admin(client)
     dev = make_user(client, "dev2", "developer")
-    assert client.post("/api/auth/users", json={"username": "DEV2", "password": "Pass-word-1", "role": "tester"},
+    assert client.post("/api/auth/users", json={"username": "DEV2", "password": "Pass-word-1", "role": "tester", **NEW},
                        headers=BROWSER).status_code == 409  # names are not case sensitive
-    assert client.post("/api/auth/users", json={"username": "bad name", "password": "Pass-word-1", "role": "tester"},
+    assert client.post("/api/auth/users", json={"username": "bad name", "password": "Pass-word-1", "role": "tester", **NEW},
                        headers=BROWSER).json()["error_code"] == "USERNAME_INVALID"
     me_id = client.get("/api/auth/me", headers=BROWSER).json()["user"]["id"]
     assert client.delete(f"/api/auth/users/{me_id}", headers=BROWSER).json()["error_code"] == "OWN_ACCOUNT"

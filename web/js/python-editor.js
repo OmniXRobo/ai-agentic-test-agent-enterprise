@@ -15,7 +15,7 @@ export function gutterHtml(n, errors = []) {
   return Array.from({ length: n }, (_, i) => bad.has(i + 1) ? `<span class="err" title="${esc(bad.get(i + 1))}">${i + 1}</span>` : `${i + 1}`).join("\n");
 }
 const HKEY = "skyguard.pyed.height";
-export function editorHeight() { try { return Number(localStorage.getItem(HKEY)) || 520; } catch { return 520; } }
+export function editorHeight() { try { return Number(localStorage.getItem(HKEY)) || 720; } catch { return 720; } }
 export function sizeButtons() {
   return '<button class="btn small" data-size="-160" title="Make the editor shorter">Shorter</button><button class="btn small" data-size="160" title="Make the editor taller (or drag its bottom-right corner)">Taller</button><button class="btn small" data-full title="Full screen (Esc to leave)">Full screen</button>';
 }

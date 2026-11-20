@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { subscribe } from "../store.js";
 import { esc, dateTimeOf } from "../util.js";
 import { lineChart, barChart } from "../charts.js";
+import { mountAiReport } from "../ai-report.js";
 
 let unsub = null;
 let timer = null;
@@ -112,8 +113,12 @@ export async function mount(view) {
       <option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select></label>
       <a class="btn" href="#/reports">Generate a report</a></div>
     <h3>Functional testing</h3><div id="functional"><p class="muted">Loading…</p></div>
-    <h3 style="margin-top:24px">Performance testing</h3><div id="performance"><p class="muted">Loading…</p></div>`;
+    <h3 style="margin-top:24px">Performance testing</h3><div id="performance"><p class="muted">Loading…</p></div>
+    <section class="card" style="margin-top:24px"><h3 style="margin:0 0 8px">AI analysis</h3><div id="aiAnalytics"></div></section>`;
   view.querySelector("#days").addEventListener("change", () => render(view));
+  // 23.13.0: AI analysis of the analytics (functional and performance trends) with a PDF to download or email
+  mountAiReport(view.querySelector("#aiAnalytics"), { kind: "module", id: "analytics", analyzeLabel: "Generate AI analysis",
+    intro: "The On-Premise AI reads the functional and performance trends of the last 30 days (pass and failure rates, flaky tests, self-healing, SLA results) and the dashboard figures, and writes what they show, the risks and the next steps. Edit it, then generate the PDF, download it or email it." });
   unsub = subscribe((c) => {
     if (c.type !== "event" || !["agent.completed", "agent.failed"].includes(c.event.name)) return;
     clearTimeout(timer);

@@ -19,6 +19,7 @@ to the open draft as another occurrence instead of a new draft.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 import threading
@@ -196,6 +197,38 @@ class DefectService:
             self.check_duplicates(saved["id"])
             if automatic and self.mode == "automatic":
                 self._auto_create(saved["id"])
+        return self.get(saved["id"])
+
+    def manual_draft(self, *, source: str, module: str, title: str, severity: int = 2, priority: int = 2,
+                     repro_steps: str = "", assigned_to: str | None = None, run_id: str | None = None) -> dict[str, Any]:
+        """23.13.0: "Create TFS defect" on a module page: a draft a person wrote (it still goes through Defect Review's
+        approval and duplicate check before it is sent to TFS)."""
+        by = self._actor("edit")
+        title = (title or "").strip()[:250]
+        if len(title) < 3:
+            raise QAError("VALIDATION_FAILED", "Write a title of at least 3 characters.", status=422)
+        if source not in SOURCE_LABELS:
+            source = "functional"
+        stamp = now_iso()
+        run = (run_id or "").strip()[:80] or f"MANUAL-{stamp.replace(':', '').replace('-', '')[:15]}"
+        steps = repro_steps.strip() or html.escape(title)
+        if "<" not in steps:
+            steps = "<br>".join(html.escape(line) for line in steps.splitlines())
+        draft = {"source": source, "source_run_id": run,
+                 "signature": hashlib.sha256(f"manual|{module}|{title.lower()}".encode()).hexdigest()[:40],
+                 "category": "manual", "product_defect": True, "title": title, "severity": int(severity),
+                 "priority": int(priority), "repro_steps": steps,
+                 "facts": {"module": module, "reported_by": by, "error": "", "manual": True}, "evidence": []}
+        saved = self._store(draft)
+        if assigned_to is not None:
+            self.db.execute("UPDATE defect_drafts SET assigned_to = ? WHERE id = ?",
+                            ((assigned_to or "").strip()[:256] or None, saved["id"]))
+        if saved.get("_new"):
+            self._event(saved["id"], by, "edited", f"Written on {module}")
+            try:
+                self.check_duplicates(saved["id"])
+            except QAError as exc:
+                log.info(f"Duplicate check skipped: {exc.message}")
         return self.get(saved["id"])
 
     def record_draft(self, draft: dict[str, Any]) -> dict[str, Any] | None:
@@ -511,6 +544,8 @@ class DefectService:
             "Microsoft.VSTS.Common.Severity": self._severity_value(type_name, draft["severity"]),
             "System.Tags": f"QA-Automation; {kind}; SkyGuard-{corr}",
         }
+        if draft.get("assigned_to"):  # 23.13.0: chosen in Defect Review from the TFS project's people
+            values["System.AssignedTo"] = draft["assigned_to"]
         values.update(self._environment_values(type_name, draft))  # Environment, System Info
         values.update({k: v for k, v in (extra or {}).items() if v not in (None, "")})
         patch, skipped = self.tfs.build_patch(type_name, values)
@@ -684,7 +719,10 @@ class DefectService:
         if draft["status"] in ("created", "linked", "publishing"):
             raise QAError("DEFECT_LOCKED", "This draft is already in TFS (or being sent); edit the defect there.",
                           status=409)
-        allowed = {k: v for k, v in values.items() if k in ("title", "severity", "priority", "repro_steps") and v is not None}
+        allowed = {k: v for k, v in values.items()
+                   if k in ("title", "severity", "priority", "repro_steps", "assigned_to") and v is not None}
+        if "assigned_to" in allowed:
+            allowed["assigned_to"] = str(allowed["assigned_to"]).strip()[:256] or None
         if not allowed:
             return draft
         by = self._actor("edit")

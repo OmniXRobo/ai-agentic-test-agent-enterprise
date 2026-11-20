@@ -41,9 +41,9 @@ def _host_name(value: str) -> str:
     return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
 
 
-def refusal(method: str, headers: Any, network: bool = False) -> str | None:
-    """Why this request is refused, or None when it may go on."""
-    hosts = allowed_hosts()
+def refusal(method: str, headers: Any, network: bool = False, extra: set[str] | None = None) -> str | None:
+    """Why this request is refused, or None when it may go on. ``extra``: 23.13.0, the friendly HTTPS name."""
+    hosts = allowed_hosts() | (extra or set())
     host = _host_name(headers.get("host", ""))
     if host and host not in hosts and not network:
         return "This address is not this PC. Open the dashboard at http://127.0.0.1."
@@ -65,7 +65,8 @@ def refusal(method: str, headers: Any, network: bool = False) -> str | None:
 def install(app: Any) -> None:
     @app.middleware("http")
     async def same_origin_only(request, call_next):  # type: ignore[no-untyped-def]
-        reason = refusal(request.method, request.headers, bool(getattr(request.app.state, "network_active", False)))
+        reason = refusal(request.method, request.headers, bool(getattr(request.app.state, "network_active", False)),
+                         getattr(request.app.state, "https_hosts", None))
         if reason:
             return JSONResponse(error_body("REQUEST_REFUSED", reason, {}), status_code=403)
         return await call_next(request)

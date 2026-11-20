@@ -34,6 +34,10 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
         rt.bus.bind_loop(asyncio.get_running_loop())
         app.state.runtime = rt
         app.state.users = UserStore(rt.db)  # 23.3.34: accounts and sign-ins
+        rt.tfs.people = app.state.users  # 23.13.0: a personal TFS project per account
+        from . import https_setup  # 23.13.0: the friendly HTTPS name is a name of this PC for the request checks
+        _https = https_setup.config(rt.settings.get())
+        app.state.https_hosts = {_https["hostname"]} if _https["enabled"] else set()
         # 23.3.34: the server listens on the office network only when Network access was on as it started.
         app.state.network_active = auth_api.network_enabled(rt.settings)
         log.info(f"Enterprise QA Runtime {__version__} started; data at {paths.root}")

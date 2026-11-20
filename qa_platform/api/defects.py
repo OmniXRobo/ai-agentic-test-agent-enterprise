@@ -23,6 +23,7 @@ class DraftIn(BaseModel):
     severity: int | None = Field(default=None, ge=1, le=4)
     priority: int | None = Field(default=None, ge=1, le=4)
     repro_steps: str | None = None
+    assigned_to: str | None = Field(default=None, max_length=256)  # 23.13.0: "" clears it
 
 
 class LinkIn(BaseModel):
@@ -60,6 +61,35 @@ def set_mode(body: ModeIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 @router.post("/analyze")
 def analyze(body: AnalyzeIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "draft": rt.defects.analyze(body.kind, body.run_id)}
+
+
+class ManualIn(BaseModel):
+    source: str = Field(default="functional", max_length=40)
+    module: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=3, max_length=250)
+    severity: int = Field(default=2, ge=1, le=4)
+    priority: int = Field(default=2, ge=1, le=4)
+    repro_steps: str = Field(default="", max_length=20000)
+    assigned_to: str | None = Field(default=None, max_length=256)
+    run_id: str | None = Field(default=None, max_length=80)
+    send_now: bool = False  # approve and send in one action (needs both permissions)
+
+
+@router.post("/manual", status_code=201)
+def manual(body: ManualIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.13.0: "Create TFS defect" on the module pages."""
+    draft = rt.defects.manual_draft(source=body.source, module=body.module, title=body.title, severity=body.severity,
+                                    priority=body.priority, repro_steps=body.repro_steps, assigned_to=body.assigned_to,
+                                    run_id=body.run_id)
+    if body.send_now:
+        draft = rt.defects.create(draft["id"])
+    return {"ok": True, "draft": draft}
+
+
+@router.get("/assignees")
+def assignees(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.13.0: the people of the TFS project, for the "Assign to" list of every kind of defect."""
+    return {"ok": True, "people": rt.tfs.assignees()}
 
 
 @router.get("/drafts")

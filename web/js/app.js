@@ -38,6 +38,7 @@ import { ensureSignedIn, initUserMenu, isAdmin, canEdit } from "./auth.js";
 import * as integrationWorkspace from "./pages/integration-workspace.js";
 import { apiTesting } from "./pages/api-testing.js";
 import { tfsIntegration, browserManager, auraMemory } from "./pages/preferences-final.js";
+import { mountModuleActions } from "./module-actions.js";
 
 // route -> { title, page }
 const NAV = [
@@ -217,6 +218,7 @@ async function navigate() {
   document.getElementById("sidebar").classList.remove("open");
   const view = document.getElementById("view");
   view.innerHTML = "";
+  mountModuleActions(document.getElementById("moduleBar"), entry.route, entry.title);  // 23.13.0
   let ok = true, error = null;
   try {
     await entry.page.mount(view, entry);

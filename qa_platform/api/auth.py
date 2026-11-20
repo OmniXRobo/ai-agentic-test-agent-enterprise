@@ -132,6 +132,12 @@ class UserIn(BaseModel):
     password: str = Field(min_length=1, max_length=256)
     role: RoleName
     display_name: str = Field(default="", max_length=80)
+    # 23.13.0: each account has its own email, TFS project and TFS Personal Access Token (mandatory)
+    email: str = Field(min_length=3, max_length=254)
+    tfs_project: str = Field(min_length=1, max_length=200)
+    tfs_pat: str = Field(min_length=8, max_length=512, description="Write-only. Kept in the OS credential store.")
+    tfs_mode: Literal["online", "offline"] | None = None
+    send_welcome: bool = True
 
 
 class UserPatch(BaseModel):
@@ -139,6 +145,10 @@ class UserPatch(BaseModel):
     display_name: str | None = Field(default=None, max_length=80)
     disabled: bool | None = None
     password: str | None = Field(default=None, max_length=256)
+    email: str | None = Field(default=None, max_length=254)
+    tfs_project: str | None = Field(default=None, max_length=200)
+    tfs_pat: str | None = Field(default=None, max_length=512)
+    tfs_mode: Literal["online", "offline"] | None = None
 
 
 @router.get("/users")
@@ -146,24 +156,72 @@ def list_users(store: UserStore = Depends(users)) -> dict[str, Any]:
     return {"ok": True, "users": store.list(), "roles": auth.ROLES}
 
 
+def app_link(request: Request, rt: Runtime) -> str:
+    """The address colleagues open: the friendly HTTPS name when HTTPS is on, otherwise this PC's network name."""
+    from ..https_setup import public_url
+    url = public_url(rt.settings.get())
+    if url:
+        return url
+    port = int((rt.settings.get().get("server") or {}).get("port") or 8765)
+    if network_enabled(rt.settings):
+        return f"http://{addresses()[0]}:{port}/"
+    return f"http://127.0.0.1:{port}/"
+
+
 @router.post("/users", status_code=201)
-def create_user(body: UserIn, store: UserStore = Depends(users)) -> dict[str, Any]:
-    return {"ok": True, "user": store.create(body.username, body.password, body.role, body.display_name)}
+def create_user(body: UserIn, request: Request, store: UserStore = Depends(users),
+                rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    store.check_email(body.email)
+    mode = body.tfs_mode or rt.tfs.active_mode()
+    check = rt.tfs.check_pat(body.tfs_pat, body.tfs_project, mode)  # an invalid PAT stops here (422)
+    user = store.create(body.username, body.password, body.role, body.display_name, email=body.email,
+                        tfs_project=body.tfs_project)
+    try:
+        rt.tfs.save_personal(user["username"], mode, pat=body.tfs_pat)
+    except QAError:
+        store.delete(user["id"])  # no account without its PAT
+        raise
+    welcome: dict[str, Any] = {"sent": False, "reason": "Not asked."}
+    if body.send_welcome:
+        from ..welcome import send_welcome
+        welcome = send_welcome(rt, user, body.password, app_link(request, rt))
+    return {"ok": True, "user": user, "pat_check": check, "welcome": welcome}
 
 
 @router.patch("/users/{user_id}")
-def update_user(user_id: int, body: UserPatch, request: Request, store: UserStore = Depends(users)) -> dict[str, Any]:
+def update_user(user_id: int, body: UserPatch, request: Request, store: UserStore = Depends(users),
+                rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     current = me(request)
     if user_id == current.id and (body.disabled or (body.role and body.role != current.role)):
         raise QAError("OWN_ACCOUNT", "You cannot disable your own account or change your own role.", status=409)
-    return {"ok": True, "user": store.update(user_id, **body.model_dump(exclude_none=True))}
+    values = body.model_dump(exclude_none=True)
+    pat, mode = values.pop("tfs_pat", None), values.pop("tfs_mode", None) or rt.tfs.active_mode()
+    row = store._row(user_id)
+    if pat:
+        rt.tfs.check_pat(pat, values.get("tfs_project") or row.get("tfs_project") or "", mode)
+    user = store.update(user_id, **values)
+    if pat:
+        rt.tfs.save_personal(user["username"], mode, pat=pat)
+    rt.tfs.invalidate()
+    return {"ok": True, "user": user}
+
+
+@router.post("/users/{user_id}/welcome")
+def resend_welcome(user_id: int, request: Request, store: UserStore = Depends(users),
+                   rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.13.0: email the sign-in address and the user manual again (the password is not known any more)."""
+    from ..welcome import send_welcome
+    user = store._public(store._row(user_id))
+    return {"ok": True, "welcome": send_welcome(rt, user, None, app_link(request, rt))}
 
 
 @router.delete("/users/{user_id}")
 def delete_user(user_id: int, request: Request, store: UserStore = Depends(users)) -> dict[str, Any]:
     if user_id == me(request).id:
         raise QAError("OWN_ACCOUNT", "You cannot delete your own account.", status=409)
+    name = store._row(user_id)["username"]
     store.delete(user_id)
+    request.app.state.runtime.tfs.forget_personal(name)
     return {"ok": True}
 
 
@@ -224,6 +282,82 @@ def get_network(request: Request, rt: Runtime = Depends(runtime)) -> dict[str, A
 def put_network(body: NetworkIn, request: Request, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     rt.settings.update({"network": {"enabled": body.enabled}})
     return _network_info(request, rt)
+
+
+class HttpsIn(BaseModel):
+    enabled: bool
+    hostname: str = Field(default="skyguard-qa", max_length=63)
+    port: int = Field(default=443, ge=1, le=65535)
+    renew: bool = False
+
+
+def _https_info(request: Request, rt: Runtime) -> dict[str, Any]:
+    from .. import https_setup
+    info = https_setup.status(rt.paths.root, rt.settings.get())
+    http_port = int((rt.settings.get().get("server") or {}).get("port") or 8765)
+    launcher = getattr(request.app.state, "launcher", None)
+    running = getattr(getattr(launcher, "https_server", None), "started", False)
+    return {"ok": True, **info, "running": bool(running), "restart_needed": bool(info["enabled"]) != bool(running),
+            "network_enabled": network_enabled(rt.settings), "http_port": http_port,
+            "script": str(APP_ROOT / "ENABLE_HTTPS.cmd"), "colleague_script": str(APP_ROOT / "TRUST_SKYGUARD_QA.cmd")}
+
+
+@router.get("/network/https")
+def get_https(request: Request, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    return _https_info(request, rt)
+
+
+@router.put("/network/https")
+def put_https(body: HttpsIn, request: Request, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.13.0: HTTPS with a friendly name; the certificates are made on this PC (offline) the first time."""
+    from .. import https_setup
+    try:
+        hostname = https_setup.check_hostname(body.hostname)
+    except ValueError as exc:
+        raise QAError("HTTPS_NAME_INVALID", str(exc), status=422) from exc
+    http_port = int((rt.settings.get().get("server") or {}).get("port") or 8765)
+    if body.port == http_port:
+        raise QAError("HTTPS_PORT_TAKEN", f"Port {http_port} is the HTTP port. Use 443 (the default) for HTTPS.",
+                      status=422)
+    made = None
+    if body.enabled:
+        current = https_setup.config(rt.settings.get())
+        if body.renew or not https_setup.ready(rt.paths.root) or current["hostname"] != hostname:
+            made = https_setup.make_certificates(rt.paths.root, hostname)
+    rt.settings.update({"server": {"https": {"enabled": body.enabled, "hostname": hostname, "port": body.port}}})
+    return {**_https_info(request, rt), "made": made}
+
+
+@router.get("/https-ca.crt")
+def https_ca(rt: Runtime = Depends(runtime)) -> Any:
+    """The local CA certificate (public, no key): colleagues add it with TRUST_SKYGUARD_QA.cmd."""
+    from starlette.responses import FileResponse
+
+    from .. import https_setup
+    ca = https_setup.files(rt.paths.root)["ca"]
+    if not ca.is_file():
+        raise QAError("HTTPS_NOT_READY", "HTTPS is not set up on this PC.", status=404)
+    return FileResponse(ca, media_type="application/x-x509-ca-cert", filename=https_setup.CA_FILE)
+
+
+@router.post("/network/https/trust")
+def trust_https(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """Run ENABLE_HTTPS.cmd as administrator: trusts the local CA, maps the name to this PC, opens the HTTPS port."""
+    from .. import https_setup
+    c = https_setup.config(rt.settings.get())
+    script = APP_ROOT / "ENABLE_HTTPS.cmd"
+    if sys.platform != "win32":
+        raise QAError("NOT_WINDOWS", "This step can only run on Windows.", status=409)
+    if not script.is_file():
+        raise QAError("HTTPS_SCRIPT_MISSING", f"{script.name} is missing from the application folder.", status=404)
+    if not https_setup.ready(rt.paths.root):
+        raise QAError("HTTPS_NOT_READY", "Turn HTTPS on first (the certificate is made then).", status=409)
+    ca = https_setup.files(rt.paths.root)["ca"]
+    args = f"'{c['hostname']}','{c['port']}','\"{ca}\"'"
+    subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                      f"Start-Process -FilePath '{script}' -ArgumentList {args} -Verb RunAs"],
+                     creationflags=0x08000000)  # CREATE_NO_WINDOW
+    return {"ok": True, "asked": True}
 
 
 @router.post("/network/firewall")
