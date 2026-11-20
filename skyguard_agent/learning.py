@@ -20,7 +20,7 @@ from urllib.parse import urljoin, urlsplit
 
 from . import locator
 from .guard import SYSTEM_RULES, wrap_untrusted
-from .knowledge import KnowledgeBase, origin_of
+from .knowledge import KnowledgeBase, origin_of, same_site
 from .llm import extract_json
 from .util import AgentError, dumps, loads, new_id, norm, now_iso
 
@@ -110,7 +110,7 @@ class Learning:
             if acc["application_id"] != app["id"]:
                 raise AgentError("ACCOUNT_INVALID", "That account belongs to another application.")
         start = urljoin(app["base_url"], start_url or app["base_url"])
-        if origin_of(start) not in app["origins"]:
+        if not same_site(start, app):
             raise AgentError("URL_REFUSED", "Discovery can only start inside the registered application.")
         run_id = f"DISC-{new_id('x')[2:]}"
         now = now_iso()
@@ -140,7 +140,7 @@ class Learning:
         disc = cp["discover"]
         cur = disc.get("current")
         if cur and snap and snap.get("url"):
-            if origin_of(snap["url"]) in app["origins"]:
+            if same_site(snap["url"], app):
                 self._record_screen(run, app, snap, disc, stage)
             disc["current"] = None
         while disc["queue"] and len(disc["visited"]) < disc["max_pages"]:
@@ -295,7 +295,7 @@ class Learning:
             if not isinstance(e, dict) or e.get("kind") not in ("click", "fill", "select", "check", "submit", "navigate"):
                 continue
             url = str(e.get("url") or "")
-            if url and origin_of(url) not in app["origins"]:
+            if url and not same_site(url, app):
                 continue  # only the registered application is learned
             el = e.get("element") or {}
             secret = bool(e.get("secret") or el.get("secret"))

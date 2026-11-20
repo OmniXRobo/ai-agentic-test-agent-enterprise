@@ -20,6 +20,32 @@ from .util import norm
 LOGGED_OUT_WORDS = re.compile(r"\b(sign ?in|log ?in|login)\b", re.I)
 
 
+NO_SIGN_IN_WORDS = re.compile(
+    r"\b(no (need|use) (of|for) (an? )?(account|accou?nt|log ?in|sign ?in)|(there is |there's )?no (account|accou?nt|log ?in|"
+    r"sign ?in)( (is )?(needed|required|necessary))?|(do(es)?n'?t|do(es)? not|don'?t) (need|require) (an? )?"
+    r"(account|log ?in|sign ?in|password)|without (an? )?(account|log ?in|sign ?in)|public (site|website|page)|"
+    r"(log ?in|sign ?in|account) (is )?not (needed|required)|anonymous(ly)?|as a guest|guest user)\b", re.I)
+
+
+def needs_sign_in(app: dict[str, Any], wf: dict[str, Any] | None = None, accounts: list[dict[str, Any]] | None = None) -> bool:
+    """23.13.0: does a task in this application need an account?
+
+    No, when the person said so (application profile ``public``: a site such as a public booking page that is explored
+    without signing in), when the task itself was learned without a sign-in (``public`` on the workflow), or when no
+    sign-in was ever learned for the application and it has no account. Otherwise yes (the engine signs in first)."""
+    prof = app.get("profile") or {}
+    if prof.get("public") is True:
+        return False
+    if prof.get("public") is False:
+        return True
+    if wf is not None and (wf.get("data") or {}).get("public"):
+        return False
+    login = prof.get("login") or {}
+    if login.get("url") or login.get("username") or login.get("manual"):
+        return True
+    return bool(accounts)
+
+
 def logged_out(snapshot: dict[str, Any], profile: dict[str, Any]) -> bool:
     """The page is a sign-in page (password field visible, or the profile's own logged-out signal)."""
     if (snapshot.get("auth") or {}).get("password_fields"):

@@ -38,7 +38,7 @@ class VoiceSettingsIn(BaseModel):
     fw_model: str | None = Field(default=None, max_length=60, pattern=r"^[A-Za-z0-9._-]+$")
     fw_compute_type: Literal["int8", "int8_float32", "float32", "default"] | None = None
     stt_model: str | None = Field(default=None, max_length=120)
-    language: str | None = Field(default=None, pattern=r"^[a-z]{2}(-[A-Za-z]{2})?$")
+    language: str | None = Field(default=None, pattern=r"^([a-z]{2}(-[A-Za-z]{2})?|auto)$")
     speak_replies: bool | None = None
     tts_voice: str | None = Field(default=None, max_length=200)
     tts_rate: float | None = Field(default=None, ge=0.5, le=2)

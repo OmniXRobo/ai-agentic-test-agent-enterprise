@@ -67,6 +67,46 @@ def origin_of(url: str) -> str:
     return f"{p.scheme}://{(p.hostname or '').lower()}{port}"
 
 
+_SECOND_LEVEL = {"co", "com", "org", "net", "gov", "ac", "edu", "mil", "sch", "ltd", "plc", "nic"}
+
+
+def site_of(host: str) -> str:
+    """The registrable part of a host name ("fly4.emirates.com" -> "emirates.com", "www.dubai.gov.ae" ->
+    "dubai.gov.ae"). IP addresses, single-label names (intranet servers) and localhost are their own site."""
+    host = (host or "").lower().strip(".")
+    if not host or host == "localhost" or re.fullmatch(r"[\d.]+|\[?[0-9a-f:]+\]?", host) or "." not in host:
+        return host
+    labels = host.split(".")
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def same_site(url: str, app: dict[str, Any]) -> bool:
+    """23.13.0: is this address part of the registered application? Its own origins, and also the other host names
+    of the same site (www., booking., fly4. ... of the same domain) on the same scheme. Many websites move between
+    such host names and change the path on every visit (dynamic addresses); neither means the person left the
+    application. A different domain is never the same application."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    origins = app.get("origins") or ([origin_of(app["base_url"])] if app.get("base_url") else [])
+    if origin_of(url) in origins:
+        return True
+    host = (parts.hostname or "").lower()
+    mine = site_of(host)
+    if not mine or "." not in mine or mine == host and re.fullmatch(r"[\d.]+", host or ""):
+        return False
+    for o in origins:
+        op = urlsplit(o)
+        if site_of(op.hostname or "") == mine and "." in mine and not re.fullmatch(r"[\d.]+", mine):
+            return True
+    return False
+
+
 def screen_signature(screen: dict[str, Any]) -> dict[str, list[str]]:
     """The parts of a screen whose change means learned workflows must be checked again."""
     return {
@@ -194,6 +234,9 @@ class KnowledgeBase:
             return None
         for app in self.applications():
             if origin in app["origins"]:
+                return app
+        for app in self.applications():  # 23.13.0: another host name of the same site
+            if same_site(url, app):
                 return app
         return None
 

@@ -94,8 +94,11 @@ class Engine:
             log.error("model could not be loaded: %s\n%s", self.error, traceback.format_exc())
 
     def _run(self, audio: Any, language: str | None, prompt: str | None, temperature: float = 0.0) -> str:
+        lang = language or self.language or None
+        if lang in ("auto", "any", "multi"):  # 23.13.0: English and Arabic: the model detects the language
+            lang = None
         segments, _info = self.model.transcribe(
-            audio, language=(language or self.language or None), task="transcribe", beam_size=self.beam_size,
+            audio, language=lang, task="transcribe", beam_size=self.beam_size,
             temperature=temperature or 0.0, initial_prompt=prompt or None, condition_on_previous_text=False,
             without_timestamps=True, vad_filter=True, vad_parameters={"min_silence_duration_ms": 400},
             no_speech_threshold=0.6, log_prob_threshold=-1.0)

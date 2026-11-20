@@ -85,6 +85,7 @@ class Runner:
         # 23.6.0: a visible run started by a person pauses (browser kept open) instead of failing when a control
         # cannot be recognised confidently; the person acts in the browser and answers here.
         self.interventions: dict[str, dict[str, Any]] = {}
+        self.taught: dict[str, list[dict[str, Any]]] = {}  # 23.13.0: what a person did in a paused run
 
     def stop(self, run_id: str) -> bool:
         ev = self.stop_events.get(run_id)
@@ -124,6 +125,7 @@ class Runner:
                 "choices": choices or [], "kind": kind, "since": now_iso(), "answer": None, "choice": None,
                 "_event": ev}
         self.interventions[run_id] = info
+        self.taught[run_id] = []  # 23.13.0: only what the person does during this pause is learned
         act.event(names.AGENT_PAUSED, f"Paused at step {index + 1}: {reason}", step=index,
                   intervention={k: v for k, v in info.items() if not k.startswith("_")})
         deadline = time.monotonic() + minutes * 60
@@ -222,6 +224,12 @@ class Runner:
             if record["status"] == "PASSED" and record["healed"]:
                 self.db.execute("UPDATE healing_events SET result = 'validated' WHERE run_id = ? AND result = 'healed'",
                                 (run_id,))
+            self.taught.pop(run_id, None)
+            if record["healed"] and playback.get("auto_apply_healing", True):
+                try:  # 23.13.0: a healed locator whose step passed is kept, so the next run does not heal it again
+                    record["healing_applied"] = self._keep_healed(script.id, record, run_id)
+                except Exception as exc:  # noqa: BLE001 - never hides the run's own result
+                    record["healing_applied_error"] = str(exc)[:200]
             (evidence_dir / "execution.json").write_text(json.dumps(record, indent=2, default=str), encoding="utf-8")
             self.db.execute(
                 "UPDATE execution_results SET status = ?, finished_at = ?, failed_step = ?, error = ?, steps = ?,"
@@ -272,6 +280,7 @@ class Runner:
             context.add_init_script(js("fingerprint"))
             context.add_init_script(js("calendar"))
             context.add_init_script(js("components"))  # 23.6.0: universal component recognition
+            self._watch_person(context, act.run_id)  # 23.13.0: a paused step is learned from what the person does
             if visual:
                 context.add_init_script(visual_fx.overlay_config(playback))
                 context.add_init_script(js("overlay"))
@@ -502,6 +511,10 @@ class Runner:
                     continue
                 if answer == "continue":
                     record["steps"][-1]["note"] = "done by the person in the browser"
+                    learned = self._learn_from_person(script, step, index, act, record)
+                    if learned:
+                        record["steps"][-1]["note"] = (f"done by the person in the browser; the element was learned "
+                                                       f"({_short(learned)}) and is used from the next run on")
                     return "MANUAL"
                 if answer == "skip":
                     return "SKIPPED"
@@ -1457,6 +1470,123 @@ class Runner:
             self.healer.emit(names.SELFHEALING_FAILED, f"Self-healing failed for step {index + 1}: {exc}", run_id=run_id,
                              test_case_id=script.test_case_id)
             return None
+
+    # ---- 23.13.0: healing that is kept ---------------------------------------------------
+
+    _PERSON_JS = """(() => {
+      if (window.__sgPersonWatch) return; window.__sgPersonWatch = true;
+      const send = (e) => {
+        try {
+          const path = e.composedPath ? e.composedPath() : [e.target];
+          let el = path[0];
+          if (!el || el.nodeType !== 1) return;
+          if (el.closest && el.closest('#__qa_overlay_host, #__qa_rec_host')) return;
+          // a click inside a button / link / option counts as a click on it
+          const owner = el.closest && el.closest('button,a,[role=button],[role=link],[role=option],[role=menuitem],[role=tab],label,select,input,textarea');
+          if (owner && e.type === 'click') el = owner;
+          if (!window.__qaFp || !window.__sgPerson) return;
+          window.__sgPerson({ type: e.type, url: location.href, fp: window.__qaFp.fingerprint(el) });
+        } catch (x) {}
+      };
+      for (const t of ['click', 'change']) document.addEventListener(t, send, true);
+    })();"""
+
+    def _watch_person(self, context: Any, run_id: str) -> None:
+        """Report what a person clicks or changes in the page, but keep it only while this run is paused for help."""
+        def seen(_source: Any, payload: Any) -> None:
+            if run_id in self.interventions and isinstance(payload, dict):
+                bucket = self.taught.setdefault(run_id, [])
+                if len(bucket) < 50:
+                    bucket.append(payload)
+
+        try:
+            context.expose_binding("__sgPerson", seen)
+            context.add_init_script(self._PERSON_JS)
+        except Exception:  # noqa: BLE001 - learning is a convenience; the run never depends on it
+            pass
+
+    def _learn_from_person(self, script: Script, step: Step, index: int, act: Any,
+                           record: dict[str, Any]) -> str | None:
+        """A paused step that the person did in the browser: the element they used becomes the step's locator (the
+        old one is kept as an alternate), saved in the script and in AURA as an approved correction, so the next run
+        finds it at once instead of asking again."""
+        events = self.taught.get(act.run_id) or []
+        if step.target is None or not events:
+            return None
+        wanted = ("change",) if step.action in ("fill", "type", "select", "pick_date", "upload_file") else ("click",)
+        mine = [e for e in events if e.get("type") in wanted and (e.get("fp") or {}).get("selector")]
+        if not mine and step.action in ("check", "uncheck"):
+            mine = [e for e in events if (e.get("fp") or {}).get("selector")]
+        if not mine:
+            return None
+        fp = mine[-1]["fp"] if wanted == ("change",) else mine[0]["fp"]
+        new_sel = str(fp["selector"])[:500]
+        if new_sel == step.target.selector:
+            return None
+        try:
+            stored = self.scripts.get(script.id)
+        except Exception:
+            return None
+        if index >= len(stored.steps) or stored.steps[index].target is None:
+            return None
+        tgt = stored.steps[index].target
+        old_sel = tgt.selector
+        keep = [old_sel] + [a for a in tgt.alternates if a not in (new_sel, old_sel)]
+        keep += [a for a in (fp.get("alternates") or []) if isinstance(a, str) and a not in keep and a != new_sel]
+        tgt.selector = new_sel
+        tgt.alternates = keep[:8]
+        for f in ("tag", "text", "role", "name", "element_id", "test_id", "label", "placeholder", "input_type",
+                  "href", "parent", "nearby_text", "form", "shadow_host"):
+            if fp.get(f):
+                setattr(tgt, f, fp[f])
+        if isinstance(fp.get("classes"), list):
+            tgt.classes = [str(c) for c in fp["classes"]][:6]
+        self.scripts.save(stored, reason=f"step {index + 1}: element shown by a person during a run")
+        step.target.selector = new_sel  # the rest of this run uses it too
+        try:
+            self.db.execute(
+                "INSERT INTO healing_events (timestamp, run_id, script_id, test_case_id, step_index, page_url,"
+                " original_selector, healed_selector, confidence, candidates, screenshot, result, applied)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                (now_iso(), act.run_id, script.id, script.test_case_id, index, mine[-1].get("url"), old_sel, new_sel,
+                 1.0, "[]", None, "taught"))
+        except Exception:
+            pass
+        try:
+            from .. import aura
+
+            aura.learn("approved_correction", script.application, f"locator:{old_sel}", {
+                "original": old_sel, "healed": new_sel, "confidence": 1.0, "script_id": script.id, "step": index,
+                "taught_by_person": True}, source="self_healing.person", approved=True, agent="self_healing")
+        except Exception:
+            pass
+        act.event(names.SELFHEALING_COMPLETED, f"Step {index + 1}: learned the element you used ({_short(new_sel)}); "
+                                               "the next run uses it without asking", step=index)
+        record.setdefault("taught", []).append({"step": index, "original": old_sel, "learned": new_sel})
+        return new_sel
+
+    def _keep_healed(self, script_id: str, record: dict[str, Any], run_id: str) -> list[dict[str, Any]]:
+        """Write each healed locator whose own step passed into the script (the old selector stays an alternate)."""
+        passed = {e["index"] for e in record.get("steps", []) if e.get("status") in ("PASSED", None)}
+        script = self.scripts.get(script_id)
+        applied: list[dict[str, Any]] = []
+        for info in record.get("healed") or []:
+            i = info.get("step")
+            if i not in passed or i is None or i >= len(script.steps) or script.steps[i].target is None:
+                continue
+            tgt = script.steps[i].target
+            if tgt.selector != info.get("original") or not info.get("healed"):
+                continue
+            tgt.alternates = [info["original"]] + [a for a in tgt.alternates if a not in (info["healed"], info["original"])]
+            tgt.selector = info["healed"]
+            applied.append({"step": i, "healing_id": info.get("healing_id"), "selector": info["healed"]})
+        if applied:
+            self.scripts.save(script, reason=f"self-healing of run {run_id} kept ({len(applied)} locator(s))")
+            for a in applied:
+                if a.get("healing_id"):
+                    self.db.execute("UPDATE healing_events SET applied = 1, result = CASE WHEN result = 'healed' "
+                                    "THEN 'validated' ELSE result END WHERE id = ?", (a["healing_id"],))
+        return applied
 
     # ---- history -------------------------------------------------------------------------
 

@@ -795,3 +795,7 @@ table.data.compact th, table.data.compact td { padding: 4px 8px; font-size: 13px
 .jtree summary { cursor: pointer; } .jtree .jt-leaf { margin-left: 14px; white-space: pre-wrap; word-break: break-all; }
 .jtree .jt-key { color: var(--accent, #5aa0ff); } .jtree .jt-str { color: #4caf50; } .jtree .jt-num { color: #e0a030; } .jtree .jt-lit { color: #c678dd; }
 textarea.mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+
+/* 23.13.0: the run / item that was just opened */
+tr.sel td { background: rgba(0, 200, 255, .08); }
+.card.flash { box-shadow: 0 0 0 2px var(--accent, #22d3ee); transition: box-shadow .3s; }

@@ -79,9 +79,26 @@ SUPPORTED = ("chromium", "msedge", "chrome")  # 23.3.32: Firefox and WebKit are 
 
 
 def preferred(requested: str | None = None) -> str:
-    """The browser to use: an explicit request, else Preferences, else the included Chromium."""
-    choice = requested or _playback().get("browser") or "chromium"
-    return choice
+    """The browser to use: an explicit request, else Preferences, else the included Chromium.
+
+    23.13.0: "chromium" was the built-in default of many callers (scripts, discovery, recordings), so on a PC where
+    Microsoft Edge (or Chrome) is chosen in Preferences a request for "chromium" means "the default browser" and
+    follows Preferences. A schedule or voice command that names Edge or Chrome is still honoured as asked."""
+    pref = _playback().get("browser")
+    if requested == "chromium" and pref in ("msedge", "chrome"):
+        return pref
+    return requested or pref or "chromium"
+
+
+def fallback_order(first: str) -> list[str]:
+    """23.13.0: browsers to try, in order, when ``first`` is not installed on this PC: Preferences, then Microsoft
+    Edge (part of Windows 10 / 11), Google Chrome and the included Chromium. Only a browser that is NOT INSTALLED
+    is replaced; a browser that is installed but fails (blocked, crashed) is reported as it is."""
+    order = [first]
+    for alt in (_playback().get("browser"), "msedge", "chrome", "chromium"):
+        if alt in SUPPORTED and alt not in order:
+            order.append(alt)
+    return order
 
 
 # ---- monitors (Windows: EnumDisplayMonitors; no extra package) ----------------------------------------------------
@@ -310,24 +327,66 @@ def classify_launch_error(browser: str, text: str) -> tuple[str, str]:
     return ("unknown", f"{name} did not start. See the details, or choose another browser in Preferences > Browser.")
 
 
-def launch(pw: Any, browser: str | None = "chromium", headless: bool = False, *,
-           playback: dict[str, Any] | None = None) -> Any:
-    browser = preferred(browser)
-    if browser not in SUPPORTED:
-        raise QAError("BROWSER_NOT_INCLUDED", f"{browser} is not included in this installation. Choose Chromium, "
-                      "Microsoft Edge or Google Chrome.", status=422)
+def _launch_one(pw: Any, browser: str, headless: bool, playback: dict[str, Any] | None) -> Any:
     options: dict[str, Any] = {"headless": headless, "args": launch_args(headless, playback)}
     if browser in ("msedge", "chrome"):
         options["channel"] = browser
-    try:
-        return pw.chromium.launch(**options)
-    except Exception as exc:
-        text = str(exc)
-        reason, message = classify_launch_error(browser, text)
-        raise QAError("BROWSER_LAUNCH_FAILED", f"Could not start {browser}: {message}", status=503,
-                      details={"browser": browser, "reason": reason, "error": text.splitlines()[0][:300] if text else "",
-                               "executable": installed_executable(browser, pw),
-                               "category": "browser_environment"}) from exc
+    return pw.chromium.launch(**options)
+
+
+# 23.13.0: the last browser that was used instead of the one asked for (shown in run logs and diagnostics)
+last_fallback: dict[str, Any] = {}
+
+
+def launch(pw: Any, browser: str | None = None, headless: bool = False, *,
+           playback: dict[str, Any] | None = None, fallback: bool = True, exact: bool = False) -> Any:
+    """Start a browser. 23.13.0: the default is the browser chosen in Preferences (not Chromium), and a browser that
+    is not installed on this PC (for example the included Chromium on an office PC that only has Microsoft Edge) is
+    replaced by the next installed one (Preferences, Edge, Chrome). The replacement is logged and kept in
+    ``last_fallback``; nothing else is ever switched silently."""
+    browser = (browser or preferred(None)) if exact else preferred(browser)
+    if exact:
+        fallback = False
+    if browser not in SUPPORTED:
+        raise QAError("BROWSER_NOT_INCLUDED", f"{browser} is not included in this installation. Choose Chromium, "
+                      "Microsoft Edge or Google Chrome.", status=422)
+    first_error: Exception | None = None
+    tried: list[dict[str, str]] = []
+    for candidate in (fallback_order(browser) if fallback else [browser]):
+        if candidate != browser and candidate != "chromium" and not installed_executable(candidate, pw):
+            continue  # not on this PC: do not even try
+        try:
+            inst = _launch_one(pw, candidate, headless, playback)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            text = str(exc)
+            reason, _msg = classify_launch_error(candidate, text)
+            tried.append({"browser": candidate, "reason": reason})
+            if first_error is None:
+                first_error = exc
+            if reason != "not_installed":
+                break  # installed but blocked / crashed: report it, never hide it behind another browser
+            continue
+        if candidate != browser:
+            import logging
+
+            last_fallback.clear()
+            last_fallback.update({"asked": browser, "used": candidate, "why": "not installed on this PC"})
+            logging.getLogger("qa.browser").warning("%s is not installed on this PC; using %s instead",
+                                                    NAMES.get(browser, browser), NAMES.get(candidate, candidate))
+            try:
+                setattr(inst, "_sg_used", candidate)
+            except Exception:
+                pass
+        return inst
+    text = str(first_error or "")
+    reason, message = classify_launch_error(browser, text)
+    if len(tried) > 1:
+        message += " Also tried: " + ", ".join(f"{NAMES.get(t['browser'], t['browser'])} ({t['reason'].replace('_', ' ')})"
+                                             for t in tried[1:]) + "."
+    raise QAError("BROWSER_LAUNCH_FAILED", f"Could not start {NAMES.get(browser, browser)}: {message}", status=503,
+                  details={"browser": browser, "reason": reason, "error": text.splitlines()[0][:300] if text else "",
+                           "executable": installed_executable(browser, pw), "tried": tried,
+                           "category": "browser_environment"}) from first_error
 
 
 def diagnose(browsers: list[str] | None = None, *, try_launch: bool = True) -> dict[str, Any]:
@@ -343,7 +402,7 @@ def diagnose(browsers: list[str] | None = None, *, try_launch: bool = True) -> d
             row: dict[str, Any] = {"browser": b, "name": NAMES.get(b, b), "executable": installed_executable(b, pw)}
             if try_launch:
                 try:
-                    inst = launch(pw, b, headless=True)
+                    inst = launch(pw, b, headless=True, exact=True)
                     row["version"] = inst.version
                     row["status"] = "PASS"
                     inst.close()

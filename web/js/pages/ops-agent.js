@@ -62,7 +62,8 @@ async function show(tab) {
       <p class="muted">${esc(err.message || "The server did not answer.")} Your data is not affected. Try again; if it keeps happening, the details are in the server log (logs folder of the installation).</p>
       <button class="btn primary" id="opsRetry">Try again</button></div>`;
     const retry = body.querySelector("#opsRetry");
-    if (retry) retry.addEventListener("click", () => show(tab));
+    // 23.13.0: a filter that cannot be loaded (e.g. the Kind list) is reset, so the page's controls come back
+    if (retry) retry.addEventListener("click", () => { if (tab === "knowledge") state.kKind = "workflow"; show(tab); });
   }
   renderStatus();
 }

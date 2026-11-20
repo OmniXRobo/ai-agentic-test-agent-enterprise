@@ -186,7 +186,7 @@ def delete_account(acc_id: str, request: Request, svc: Any = Depends(ops)) -> di
 
 # ---- knowledge ----------------------------------------------------------------------------------------------------
 
-Kind = Literal["screen", "workflow", "rule", "relationship", "role", "profile"]
+Kind = Literal["screen", "workflow", "rule", "relationship", "role", "profile", "lifecycle"]  # 23.13.0: lifecycle (Knowledge tab)
 
 
 class KnowledgeIn(BaseModel):
