@@ -477,7 +477,7 @@ def start(run_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
 @router.post("/runs/{run_id}/confirm")
 def confirm(run_id: str, body: ConfirmIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
     view = svc.agent.engine.confirm(run_id, body.preview_hash, by=actor(request), interface="skyguard")
-    if run_id not in svc.jobs:
+    if run_id not in svc.jobs and run_id not in svc.hosted:  # 23.13.0: a chat task already waits in the chat browser
         svc.start_run(run_id)
     return {"ok": True, **view}
 

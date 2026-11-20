@@ -1,4 +1,4 @@
-SkyGuard Offline Edge/Chrome Agent Extension 1.4.0 (with SkyGuard QA 23.12.0)
+SkyGuard Offline Edge/Chrome Agent Extension 1.4.1 (with SkyGuard QA 23.13.0)
 ============================================================================
 
 The Manifest V3 extension for Microsoft Edge and Google Chrome (116 or later) and its local companion, which runs on
@@ -14,9 +14,14 @@ NEW INSTALL (no commands, no pairing code, no sign-in)
   Edge and Chrome only allow an extension that is not from their store to be added by hand (step 2); SkyGuard does
   not change browser policies to get around that.
 
-ALREADY INSTALLED (1.0 to 1.3.1)
+ALREADY INSTALLED (1.0 to 1.4.0)
   Double-click UPDATE_EXTENSION.cmd, then press Reload on the SkyGuard card of the extensions page it opens. The
   extension then connects and signs in by itself. To undo: UPDATE_EXTENSION.cmd -Rollback
+
+NEW IN 1.4.1
+  - Arabic and UAE Arabic commands are translated to English on this PC; the side panel shows "Understood as".
+  - Public websites need no account, addresses that change on every visit stay the same website, and one browser
+    window is kept (the AI Agent fixes of SkyGuard QA 23.13.0).
 
 NEW IN 1.4.0
   - Installs without typing anything: the installer leaves a one-time ticket in the extension folder of your own

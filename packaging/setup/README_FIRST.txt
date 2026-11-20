@@ -1,46 +1,49 @@
-SkyGuard QA 23.12.0 - cumulative upgrade from SGQA-23.3.35 (API Testing, schedulable API tests and comparisons)
-==============================================================================================================
+SkyGuard QA 23.13.0 - cumulative upgrade from SGQA-23.3.35 (Edge, HTTPS, personal TFS access, report buttons)
+=============================================================================================================
 
 WHAT THIS IS
   One upgrade that brings any installed SkyGuard QA from 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1,
-  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1 or 23.11.2 to 23.12.0, including every release in between. Any
+  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2 or 23.12.0 to 23.13.0, including every release in between. Any
   other version is refused and nothing is changed. No internet. Windows 10 (1909 or later)
   or Windows 11.
 
-  New in 23.12.0:
-  - Automation Studio > API Testing: authorized targets, Test Connection with real diagnostics, OpenAPI / Swagger
-    (JSON or YAML, file or intranet URL, fully offline), cURL / Postman / Python imports (never executed), generated
-    tests with documented expectations, suites and chains, pytest + httpx scripts, response viewer, failures as
-    Defect Review drafts (published to TFS only after approval). Secrets stay in the Windows Credential Manager.
-  - Scheduled Runs: API tests and Integration Comparisons; execution mode Visible / Headless / Smart Auto.
-  - Integration Comparison: confirmed mismatches become Defect Review drafts.
-  - Agent Workflow (same page): six new agents, and UNAVAILABLE with the reason when an engine is missing.
-  - Python editor: full screen and adjustable height.
+  New in 23.13.0 (details: PATCH_CHANGELOG.md):
+  - Microsoft Edge is used for AI-Driven, Discovery and Hybrid when it is chosen in Preferences; a browser that is
+    not installed is replaced by the next one (Preferences, Edge, Chrome).
+  - Dashboard: charts first, click any chart to see the items behind it; AI analysis at the bottom.
+  - Report bar on every testing page: Generate AI result, Create TFS defect, Send email (PDF). Analytics AI.
+  - Defect Review: "Assign to" is a list of the people in your TFS project.
+  - Users: email, own TFS project and Personal Access Token (required); welcome email with the address, user name,
+    first password and the user manual (PDF).
+  - HTTPS with a friendly name (for example https://skyguard-qa/), made offline on this PC.
+  - Healing is kept in the script; dynamic URLs; Guided Browser tabs; API Testing Open and TLS fixes.
+  - AI Agent: Arabic commands, public websites without an account, one browser window, the lifecycle filter fix.
+  - Voice: Arabic and UAE Arabic; the chosen male voice no longer answers with a female voice.
 
 HOW TO INSTALL (5 minutes)
   1. Close SkyGuard QA.
   2. Double-click  SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe
      Welcome -> Detect (finds your installation and version) -> Backup -> Install -> Verify -> Finish.
      If Windows shows "Windows protected your PC": More info -> Run anyway (the program is not code-signed).
-  3. In the browser press Ctrl+F5 once. Open Automation Studio > API Testing > New application.
+  3. In the browser press Ctrl+F5 once. Then open Users (administrators): add each person's email, TFS project and PAT.
 
   If your PC does not allow starting the .exe: open the folder Manual_Install and double-click APPLY_PATCH.cmd.
   It does exactly the same upgrade, with the same checks, backup and automatic restore.
 
-  Browser extension users: the extension stays 1.3.1. If you have not installed 1.3.1 yet, run UPDATE_EXTENSION.cmd
-  from SkyGuard_Offline_Edge_Chrome_Agent_Extension.zip.
+  Browser extension users: run UPDATE_EXTENSION.cmd from SkyGuard_Offline_Edge_Chrome_Agent_Extension.zip
+  (extension 1.4.1), then press Reload on the SkyGuard card of edge://extensions.
 
 YOUR DATA
   Backed up before anything changes (patch-backups folder in your installation). Never deleted. If any step fails,
-  the previous version is restored automatically. To undo later: patch-tools\23.12.0\ROLLBACK_PATCH.cmd.
+  the previous version is restored automatically. To undo later: patch-tools\23.13.0\ROLLBACK_PATCH.cmd.
 
 IN THIS FOLDER
   SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe   the installer (wizard; unattended: /S /APP="<folder>")
   INSTALLATION_GUIDE.md          step by step, unattended install, protected folders, rollback, troubleshooting
-  PATCH_CHANGELOG.md             what is new in 23.12.0
+  PATCH_CHANGELOG.md             what is new in 23.13.0
   USER_GUIDE.md                  API Testing step by step
   ROOT_CAUSE_ANALYSIS.md         what was found and changed, and why
-  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.12.0) and what each one added
+  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.13.0) and what each one added
   SECURITY_REPORT.md             security checks, controls and residual risks
   sbom.cdx.json                  software bill of materials (CycloneDX 1.5)
   TEST_REPORT.md, test-results\  what was tested, passed, failed, skipped or not executed

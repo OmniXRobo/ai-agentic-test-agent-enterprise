@@ -227,7 +227,7 @@ def consequential(run: dict[str, Any]) -> bool:
 def confirm(run_id: str, body: ConfirmIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
     view = svc.pilot.confirm(run_id, body.preview_hash, acknowledge=body.acknowledge, by=actor(request),
                              interface="skyguard", app_id=body.app_id)
-    if run_id not in svc.jobs:
+    if run_id not in svc.jobs and run_id not in svc.hosted:  # 23.13.0: a chat task already waits in the chat browser
         svc.start_run(run_id)
     return {"ok": True, **view, "consequential": run_is_consequential(view)}
 
