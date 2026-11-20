@@ -29,6 +29,39 @@ from .dsl import describe, FILE_CHECKS, NEEDS_TARGET, Script, Step, Target, Valu
 from .store import CredentialProfiles, ScriptStore
 
 
+
+# ---- 23.13.0: addresses with changing ids -------------------------------------------------------------------------
+
+_DYNAMIC_SEGMENT = re.compile(
+    r"^(?:\d{4,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])"
+    r"[A-Za-z0-9_-]{8,})$", re.I)
+
+
+def has_dynamic_part(url: str) -> bool:
+    from urllib.parse import urlsplit
+    path = urlsplit(url or "").path
+    return any(_DYNAMIC_SEGMENT.match(seg) for seg in path.split("/") if seg)
+
+
+def url_pattern(url: str) -> "re.Pattern[str]":
+    """A pattern for a recorded address in which path parts that look like ids (long numbers, hex, uuids, mixed
+    letters and digits) and query values match any value. Other parts must be the same."""
+    from urllib.parse import urlsplit
+    parts = urlsplit(url or "")
+    if not parts.scheme:
+        return re.compile(re.escape(url or ""))
+    path = "/".join("[^/]+" if seg and _DYNAMIC_SEGMENT.match(seg) else re.escape(seg) for seg in parts.path.split("/"))
+    query = ""
+    if parts.query:
+        keys = [q.split("=", 1)[0] for q in parts.query.split("&") if q]
+        query = r"\?" + "&".join(re.escape(k) + r"(?:=[^&#]*)?" for k in keys)
+    host = re.escape(parts.netloc)
+    return re.compile(rf"{re.escape(parts.scheme)}://{host}{path}{query}")
+
+
+def url_matches(current: str, recorded: str) -> bool:
+    return bool(url_pattern(recorded).search(current or ""))
+
 class TestExecutionAgent(BaseAgent):
     agent_id = "test_execution"
 
@@ -593,6 +626,13 @@ class Runner:
                 raise StepFailed(index, "No URL for goto step.")
             if not re.match(r"^[a-z]+://", url) and script.base_url:
                 url = script.base_url.rstrip("/") + "/" + url.lstrip("/")
+            # 23.13.0: a recorded address with a session / booking id in it (emirates.com/3432432dffdsf) changes on
+            # every visit. When the site already moved to the same page with a new id, opening the old one again
+            # would break the flow: the step is kept as done.
+            if index > 0 and has_dynamic_part(url) and url_matches(page.url, url):
+                act.event(names.EXECUTION_STEP, f"Step {index + 1}: already on this page (its address has a changing "
+                                                "id); not opened again", step=index)
+                return
             page.goto(url, timeout=max(timeout, 30000), wait_until="domcontentloaded")
             return
         if step.action == "wait":
@@ -611,7 +651,8 @@ class Runner:
         if step.action == "expect_url":
             from playwright.sync_api import expect
 
-            expect(page).to_have_url(re.compile(re.escape(value or "")), timeout=timeout)
+            # 23.13.0: ids in the address (session, booking, order numbers) may differ on every run
+            expect(page).to_have_url(url_pattern(value or ""), timeout=timeout)
             return
         if step.action == "screenshot":
             shot = self._shot(page, evidence_dir, f"step-{index + 1:02d}-{re.sub(r'[^A-Za-z0-9_-]', '_', value or 'shot')}")

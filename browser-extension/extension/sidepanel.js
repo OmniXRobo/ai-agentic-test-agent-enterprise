@@ -136,9 +136,10 @@ async function sendChat() {
     if (r.type === "needs_approval") { S.pendingApproval = { id: r.entry_id, text }; actions = `<div class="row" style="margin-top:6px"><button class="btn primary" data-act="approve-run">Approve and run</button><button class="btn" data-act="knowledge">Review it first</button></div>`; }
     if (r.type === "clarify" && (r.missing || []).length) actions = `<div class="muted" style="margin-top:4px">Missing information: ${esc(r.missing.join(", "))}</div>`;
     if (r.type === "need_credential" && r.security_notice) actions += `<div class="muted" style="margin-top:4px">${esc(r.security_notice)}</div>`;
+    if (out.translated_to) actions += `<div class="muted" style="margin-top:4px">Understood as: ${esc(out.translated_to)}</div>`;  // SkyGuard 23.13.0: Arabic commands
     if (r.type === "navigate" && r.url) {
       const opened = await send({ type: "open-url", url: r.url });
-      actions = `<div class="muted" style="margin-top:4px">${opened.ok ? "Opened in the browser." : esc(opened.error || "Could not open it.")} ${esc(r.url)}</div>`;
+      actions += `<div class="muted" style="margin-top:4px">${opened.ok ? "Opened in the browser." : esc(opened.error || "Could not open it.")} ${esc(r.url)}</div>`;
     }
     S.messages.push({ who: "agent", text: r.text, warn: r.type === "secret_intercepted" || r.type === "error", actions });
     if (r.type === "run" && r.run_id && !r.duplicate) { S.runId = r.run_id; await send({ type: "drive", runId: r.run_id }); setTimeout(() => show("run"), 600); }

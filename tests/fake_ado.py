@@ -51,6 +51,10 @@ class FakeAzureDevOps:
         self.required: dict[str, dict[str, tuple[str, list[str]]]] = {}
         self.rule_only: dict[str, dict[str, tuple[str, list[str]]]] = {}
         self.validated: list[dict] = []
+        # 23.13.0: the project's teams and their members (Defect Review "Assign to")
+        self.teams = {"t1": [{"identity": {"displayName": "Sara Khan", "uniqueName": "ACME\\sara"}},
+                             {"identity": {"displayName": "Omar Ali", "uniqueName": "omar@acme.ae"}},
+                             {"identity": {"displayName": "[Shop]\\Contributors", "uniqueName": "x", "isContainer": True}}]}
         if hierarchy:
             self._add_hierarchy()
 
@@ -127,6 +131,11 @@ class FakeAzureDevOps:
             return httpx.Response(200, json={"value": [{"id": "p1", "name": self.project}]})
         if path == f"/acme/_apis/projects/{self.project}":
             return httpx.Response(200, json={"id": "p1", "name": self.project, "state": "wellFormed"})
+        if path == f"/acme/_apis/projects/{self.project}/teams":
+            return httpx.Response(200, json={"value": [{"id": t, "name": t} for t in self.teams]})
+        m = re.match(rf"/acme/_apis/projects/{re.escape(self.project)}/teams/([^/]+)/members$", path)
+        if m:
+            return httpx.Response(200, json={"value": self.teams.get(m.group(1), [])})
         if path.startswith("/acme/_apis/projects/"):
             return httpx.Response(404, json={"message": "project not found"})
         if path == f"{proj}/_apis/wit/workitemtypes":
