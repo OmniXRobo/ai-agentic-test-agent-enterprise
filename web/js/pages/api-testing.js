@@ -502,7 +502,17 @@ function renderRuns(host) {
         <td class="row" style="gap:6px"><button class="btn small" data-show="${esc(r.id)}">Open</button><a class="btn small" href="${BASE}/runs/${esc(r.id)}/report.html" target="_blank" rel="noopener">Report</a></td></tr>`).join("")}</tbody></table>`
       : '<p class="muted">No runs yet.</p>'}</div><div id="runDetail"></div>`;
   host.querySelector("#rRef").addEventListener("click", async () => { st.runs = (await api(`${BASE}/runs?app_id=${encodeURIComponent(st.app.id)}&limit=30`)).runs; render(); });
-  host.querySelectorAll("[data-show]").forEach((b) => b.addEventListener("click", () => guarded(b, () => showRun(b.dataset.show, false))));
+  // 23.13.0: Open shows the run's results right away: the details card is drawn, scrolled into view and the row is
+  // marked, so it is clear which run is open (before, the card was drawn below the list and looked like nothing happened)
+  host.querySelectorAll("[data-show]").forEach((b) => b.addEventListener("click", () => guarded(b, async () => {
+    host.querySelectorAll("tr.sel").forEach((tr) => tr.classList.remove("sel"));
+    b.closest("tr")?.classList.add("sel");
+    await showRun(b.dataset.show, false);
+    const box = view.querySelector("#runDetail");
+    box?.scrollIntoView({ behavior: "smooth", block: "start" });
+    box?.firstElementChild?.classList.add("flash");
+    setTimeout(() => box?.firstElementChild?.classList.remove("flash"), 1200);
+  })));
   if (st.run) showRun(st.run, false).catch(() => {});
 }
 

@@ -454,8 +454,16 @@ def restore(x: Ctx) -> dict[str, Any]:
 def chat(x: Ctx) -> dict[str, Any]:
     b = validate(x.body, {"text": ("str", True, 4000), "conversation": ("str", False, 80), "app_id": ("str", False, 80),
                           "source": ("str", False, 10)})
-    return x.c.pilot.command(b["text"], conversation=b.get("conversation"), user=x.user, interface="extension",
-                             app_id=b.get("app_id"), source="voice" if b.get("source") == "voice" else "typed")
+    # SkyGuard 23.13.0: an Arabic (or UAE Arabic) command is translated to English first, by the local model when it
+    # runs, otherwise by the built-in word list; the reply says what was understood.
+    from skyguard_agent.translate import to_english
+
+    text, translated = to_english(b["text"], getattr(x.c.agent, "llm", None))
+    out = x.c.pilot.command(text, conversation=b.get("conversation"), user=x.user, interface="extension",
+                            app_id=b.get("app_id"), source="voice" if b.get("source") == "voice" else "typed")
+    if translated and isinstance(out, dict):
+        out = {**out, "translated_from": b["text"], "translated_to": text}
+    return out
 
 
 # 1.2.0: the simple agent

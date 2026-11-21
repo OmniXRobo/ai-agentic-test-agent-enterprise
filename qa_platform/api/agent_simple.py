@@ -92,21 +92,57 @@ class CommandIn(BaseModel):
 
 @router.post("/command")
 async def command(body: CommandIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
-    out = await run_in_threadpool(svc.pilot.command, body.text, conversation=body.conversation,
+    # 23.13.0: Arabic (including UAE Arabic) is translated to English by the local AI first; the English command is
+    # what the agent plans with, and both are shown
+    text, translated = await run_in_threadpool(svc.to_english, body.text)
+    out = await run_in_threadpool(svc.pilot.command, text, conversation=body.conversation,
                                   user=actor(request), interface="skyguard", app_id=body.app_id, source=body.source)
     reply = out["reply"]
+    if translated:
+        reply["translated_from"] = body.text
+        reply["translated_to"] = text
     if reply.get("type") == "run" and reply.get("run_id") and not reply.get("duplicate"):
-        # the browser opens to check the application read-only and prepare the one preview
+        # the chat browser checks the application read-only and prepares the one preview (23.13.0: the same window
+        # for every request of this chat)
         try:
-            svc.start_run(reply["run_id"])
+            svc.start_run(reply["run_id"], chat=True)
         except AgentError:
             pass
     if reply.get("type") == "navigate" and reply.get("url"):
         try:
-            reply["opened"] = await run_in_threadpool(svc.open_page, reply["app_id"], reply["url"], actor(request))
+            reply["opened"] = await run_in_threadpool(svc.open_page, reply["app_id"], reply["url"], actor(request),
+                                                      new_window=bool(reply.get("new_window")))
         except AgentError as exc:
             reply["opened"] = {"ok": False, "message": exc.message}
+    if reply.get("type") == "sign_in" and reply.get("account_id"):
+        try:
+            view = await run_in_threadpool(svc.sign_in, reply["app_id"], reply["account_id"], actor(request))
+            reply["run_id"] = view["run"]["id"]
+        except AgentError as exc:
+            reply.update(type="error", text=exc.message)
     return {"ok": True, **out}
+
+
+class NewAccountIn(BaseModel):
+    app_id: str = Field(max_length=80)
+    label: str = Field(min_length=1, max_length=80)
+    login_id: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=1, max_length=512)
+    consent: bool
+
+
+@router.post("/accounts", status_code=201)
+def new_account(body: NewAccountIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.13.0: "log in as manager" when no such account exists: the chat's secure form creates the account (label
+    and user name) and stores the password in Windows Credential Manager in one step. The password is never
+    returned, logged or stored in the chat."""
+    if not body.consent:
+        raise AgentError("CONSENT_REQUIRED", "Confirm that you may let SkyGuard sign in with this account.", 422)
+    kb = svc.agent.kb
+    acc = kb.add_account(body.app_id, label=body.label.strip(), login_id=body.login_id.strip(),
+                         role_key=body.label.strip().lower(), by=actor(request))
+    kb.set_credential(acc["id"], body.password, by=actor(request), consent=True)
+    return {"ok": True, "account": kb.account(acc["id"])}
 
 
 @router.get("/suggestions")
@@ -191,6 +227,20 @@ def consequential(run: dict[str, Any]) -> bool:
 def confirm(run_id: str, body: ConfirmIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
     view = svc.pilot.confirm(run_id, body.preview_hash, acknowledge=body.acknowledge, by=actor(request),
                              interface="skyguard", app_id=body.app_id)
-    if run_id not in svc.jobs:
+    if run_id not in svc.jobs and run_id not in svc.hosted:  # 23.13.0: a chat task already waits in the chat browser
         svc.start_run(run_id)
     return {"ok": True, **view, "consequential": run_is_consequential(view)}
+
+
+class PublicIn(BaseModel):
+    public: bool
+
+
+@router.post("/applications/{app_id}/public")
+def set_public(app_id: str, body: PublicIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.13.0: "this website needs no sign-in": tasks run without an account and the chat never asks for one."""
+    kb = svc.agent.kb
+    app = kb.application(app_id)
+    profile = dict(app.get("profile") or {})
+    profile["public"] = bool(body.public)
+    return {"ok": True, "application": kb.set_profile(app["id"], profile, by=actor(request))}

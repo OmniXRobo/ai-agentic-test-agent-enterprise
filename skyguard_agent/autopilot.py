@@ -29,7 +29,7 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import planner, secrets_guard
+from . import planner, secrets_guard, sessions
 from .intent import Intent, classify, compatible, navigation_target, relevance, workflow_category
 from .knowledge import NAME_RE, origin_of, safe_app_url
 from .util import AgentError, digest, dumps, loads, norm, now_iso
@@ -58,6 +58,35 @@ CREATE TABLE IF NOT EXISTS conversation_state (
     updated_at TEXT NOT NULL
 );
 """
+
+
+# 23.13.0: the chat browser (one window, signed in once)
+LOGIN_RE = re.compile(
+    r"^\W*(?:(?:now|please|then|and|ok|okay)\s+)*(?:log\s*-?\s*in|sign\s*-?\s*in|login|signin)\b"
+    r"(?:\s+(?:to|into|on|in)\s+(?:the\s+)?(?:page|site|website|web\s*site|application|app|portal|it|system|[\w.-]+))?"
+    r"(?:\s+(?:with|as|using|by|for)\s+(?:the\s+|my\s+|an?\s+)?(?P<who>[\w .@'-]{1,60}?))?"
+    r"(?:\s+(?:account|user|role|credentials?|id|login))?\W*$", re.I)
+NEW_WINDOW = re.compile(r"\b(in |into |on )?(a |the )?new (browser )?(window|tab|browser)\b|\bopen (a )?new browser\b", re.I)
+URL_IN_TEXT = re.compile(r"(?:https?://|www\.)[^\s<>\"']+|\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:com|net|org|ae|gov|edu|io|"
+                         r"co|info|biz|local|corp|intra|internal|lan)(?:/[^\s<>\"']*)?", re.I)
+BROWSE_WORDS = re.compile(r"^\W*(?:(?:now|please|then|ok|okay)\s+)*(?:browse|open|go to|goto|navigate to|visit|load|"
+                          r"show me|take me to)\b", re.I)
+
+
+def account_for(who: str | None, accounts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The account a person means by "admin", "client", "the manager" or a user name."""
+    if not who:
+        return accounts[0] if len(accounts) == 1 else None
+    w = norm(who)
+    for key in ("label", "role_key", "login_id", "verified_role"):
+        for a in accounts:
+            if norm(a.get(key)) and norm(a.get(key)) == w:
+                return a
+    for a in accounts:
+        hay = " ".join(norm(a.get(k)) for k in ("label", "role_key", "login_id", "verified_role"))
+        if w and re.search(rf"\b{re.escape(w)}", hay):
+            return a
+    return None
 
 
 # ---- small pure helpers (unit-tested) ---------------------------------------------------------------------------
@@ -407,7 +436,7 @@ class Autopilot:
                  if s.get("type") not in ("sign-in", "verification")]
         unverified = [t["title"] for t in tasks if t["certainty"] != "verified"] + \
             [r["rule"] for r in suggestions]
-        return {"application": app, "tasks": tasks, "rules": rules, "suggestions": suggestions, "pages": pages,
+        return {"application": app, "public": bool((app.get("profile") or {}).get("public")), "tasks": tasks, "rules": rules, "suggestions": suggestions, "pages": pages,
                 "unverified": unverified,
                 "last_session": ({"id": sess["id"], "status": sess["status"], "by": sess["created_by"],
                                   "started": sess["created_at"], "ended": sess["updated_at"],
@@ -458,6 +487,48 @@ class Autopilot:
             had = state.pop("pending", None)
             return done({"type": "cleared", "text": "OK, I dropped that request." if had else
                          "OK. Nothing is waiting."})
+        if sessions.NO_SIGN_IN_WORDS.search(raw) and len(raw) < 160:
+            # 23.13.0: "there is no account and no need of account": this website is used without signing in. It is
+            # remembered for the application (Applications & Accounts shows it and can undo it) and the request
+            # that was waiting for an account continues without one.
+            profile = dict(app.get("profile") or {})
+            profile["public"] = True
+            self.kb.set_profile(app["id"], profile, by=user)
+            app = self.kb.application(app["id"])
+            self.agent.audit.record("application.public", actor=user, interface=iface, target=app["id"],
+                                    details={"public": True})
+            waiting = self._fresh_pending(state, app)
+            if waiting and waiting.get("text"):
+                state.pop("pending", None)
+                self._save_state(conv, state)
+                again = self.command(waiting["text"], conversation=conv, user=user, interface=interface,
+                                     app_id=app["id"], source=source)
+                rep = again.get("reply") or {}
+                rep["text"] = f"Understood: {app['name']} needs no sign-in. " + (rep.get("text") or "")
+                return again
+            return done({"type": "public", "text": f"Understood: {app['name']} needs no sign-in, so I will not ask "
+                                                   "for an account. Tell me what you want me to do."})
+        waiting = self._fresh_pending(state, app)
+        if waiting and waiting.get("retry") and LOGIN_RE.match(waiting.get("text") or "") and re.fullmatch(
+                r"\W*(again|retry|try again|done|ok|okay|saved|go|go ahead|continue|yes)\W*", raw, re.I):
+            raw = waiting["text"]  # the password (or account) was saved: sign in now
+            state.pop("pending", None)
+        new_window = bool(NEW_WINDOW.search(raw))
+        login = LOGIN_RE.match(raw)
+        if login:
+            reply = self._sign_in_reply(app, (login.group("who") or "").strip() or None, raw)
+            if reply["type"] in ("need_credential", "need_account"):
+                return done(reply, pending={"app_id": app["id"], "text": raw, "retry": True,
+                                            "intent": {"kind": "navigate"}, "at": now_iso()})
+            state.pop("pending", None)
+            return done(reply)
+        found = URL_IN_TEXT.search(raw)
+        if found and (BROWSE_WORDS.match(raw) or len(raw.split()) <= 3):
+            return done(self._browse_reply(app, found.group(0).rstrip(".,;)"), new_window))
+        if new_window and re.fullmatch(r"\W*(?:(?:now|please|ok)\s+)*(?:open\s+)?(?:it\s+|this\s+)?(?:in\s+)?(?:a\s+)?new "
+                                       r"(?:browser\s+)?(?:window|tab|browser)\W*", raw, re.I):
+            return done({"type": "navigate", "url": app["base_url"], "title": app["name"], "new_window": True,
+                         "text": f"Opening {app['name']} in a new window. Your next requests continue there."})
         intent = classify(raw, app_names=[a["name"] for a in self.kb.applications()])
         pending = self._fresh_pending(state, app)
         combined = raw
@@ -482,7 +553,10 @@ class Autopilot:
                                 details={"intent": intent.kind, "verb": intent.verb, "continued": combined != raw})
 
         if intent.kind == "navigate":
-            return done(self._navigate(app, intent))
+            nav = self._navigate(app, intent)
+            if new_window and nav.get("type") == "navigate":
+                nav["new_window"] = True
+            return done(nav)
         if intent.kind == "read":
             listing = self._show(app, raw if combined == raw else combined, state)
             if listing:
@@ -564,6 +638,43 @@ class Autopilot:
                          understood=prepared["text"] if prepared["text"] != raw else None,
                          filled=prepared.get("filled", []), intent=intent.as_dict())
         return done(reply)
+
+    # ---- 23.13.0: chat browser helpers --------------------------------------------------------------------------
+
+    def _sign_in_reply(self, app: dict[str, Any], who: str | None, raw: str) -> dict[str, Any]:
+        accounts = self.kb.accounts(app["id"])
+        acc = account_for(who, accounts)
+        if acc and acc.get("has_credential") and not acc.get("revoked"):
+            return {"type": "sign_in", "account_id": acc["id"], "account": acc["label"],
+                    "text": f"Signing in to {app['name']} as {acc['label']} in the chat browser. It stays signed in "
+                            "for your next requests."}
+        if acc:
+            return {"type": "need_credential", "account_id": acc["id"], "account": acc["label"], "then": "sign_in",
+                    "security_notice": "Passwords go only into this secure form (Windows Credential Manager). Never "
+                                       "type them in the chat.",
+                    "text": f"I have the {acc['label']} account ({acc['login_id']}) but no saved password. Save it "
+                            "once in the secure form; I sign in right after and remember it."}
+        label = (who or "my account").strip()[:60]
+        return {"type": "need_account", "role": label, "then": "sign_in",
+                "security_notice": "The user name and password go only into this secure form (password: Windows "
+                                   "Credential Manager). Never type them in the chat.",
+                "text": f"I do not have {'a' if who else 'an'} {label} account for {app['name']} yet. Enter its user "
+                        f"name and password once in the secure form; I sign in with it now, and next time you only "
+                        f"say 'log in as {label}'."}
+
+    def _browse_reply(self, app: dict[str, Any], url: str, new_window: bool) -> dict[str, Any]:
+        from .knowledge import same_site
+
+        full = url if re.match(r"^https?://", url, re.I) else "https://" + url.lstrip("/")
+        if same_site(full, app):
+            return {"type": "navigate", "url": full, "title": full, "new_window": new_window,
+                    "text": f"Opening {full}" + (" in a new window." if new_window else " in the chat browser.")}
+        other = self.kb.allowed_origin(full)
+        if other:
+            return {"type": "navigate", "url": full, "title": full, "app_id": other["id"], "new_window": new_window,
+                    "text": f"That address belongs to {other['name']}; opening it there."}
+        return {"type": "clarify", "text": f"{full} is not part of {app['name']} ({app['base_url']}). Connect it first "
+                                           "(Connect & Learn) so that I may open it."}
 
     # ---- 23.11.1: routing helpers -------------------------------------------------------------------------------
 

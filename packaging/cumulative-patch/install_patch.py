@@ -1,5 +1,12 @@
-r"""SkyGuard QA 23.12.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
-23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1 and 23.11.2). 23.12.0 adds API Testing (Automation Studio > API Testing:
+r"""SkyGuard QA 23.13.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2 and 23.12.0). 23.13.0 runs AI-Driven Automation, Application
+Discovery and Hybrid Test Automation in Microsoft Edge when Edge is preferred (no Chromium needed), keeps the element a
+tester picked during self-healing so later runs do not ask again, repairs the AI Agent (lifecycle list, public sites
+without sign-in, changing addresses, one browser for a chat, Arabic commands), the API Testing Open button and its
+offline TLS check, Arabic voice commands with Arabic replies and the male / female voice choice, adds the TFS
+"Assign to" list in Defect Review, a personal TFS project and PAT per account with a welcome email and user manual,
+HTTPS with a friendly name, clickable dashboard charts, and "Generate AI result", "Create TFS defect" and "Send email"
+on every testing module. From 23.12.0: API Testing (Automation Studio > API Testing:
 authorized targets, Test Connection diagnostics, offline OpenAPI / Swagger import, generated tests, chains, pytest + httpx
 scripts, failure classification and Defect Review drafts), API tests and Integration Comparisons in Scheduled Runs with
 Visible / Headless / Smart Auto execution modes, the new Agent Workflow agents with real availability, and a larger
@@ -27,13 +34,13 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.11.2; 23.12.0 to apply again); any other version is
+  1. detects the installation and its version (23.3.35 to 23.12.0; 23.13.0 to apply again); any other version is
      refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.12.0), patches that copy and writes START_SKYGUARD_23.12.0.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.13.0), patches that copy and writes START_SKYGUARD_23.13.0.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
@@ -44,7 +51,8 @@ apply:
      the application folder cannot be written. The wheels are unpacked into a staging folder first; the folder in use
      is replaced only when the staging folder is complete, and the previous runtime is kept for rollback. Nothing is
      installed into the system Python and no registry key or PATH is changed,
-  8. migrates: the main database is brought to 21 migrations (23.12.0 adds migration 21: the API Testing tables
+  8. migrates: the main database is brought to 22 migrations (23.13.0 adds migration 22: defect_drafts.assigned_to;
+     the accounts table gets email and tfs_project when the application starts; 23.12.0 adds migration 21: the API Testing tables
      api_apps, api_tests, api_test_versions, api_suites, api_runs, api_results, api_scripts and api_audit; 23.11.0 adds
      migration 20: review columns on defect_drafts, defect_events, script_python and script_python_state; 23.9.0,
      23.10.0, 23.11.1 and 23.11.2 add none); the Operations Agent's knowledge database is created or
@@ -57,7 +65,7 @@ apply:
 
 rollback (after a successful apply): restores the previous application files, removes the files the patch added and
 puts back the OCR runtime that was there before (or removes the one the patch installed). The databases are kept as
-they are by default (23.10.0, 23.11.0 and 23.12.0 only add tables and columns that earlier versions ignore); --restore-database puts back the copy taken before the
+they are by default (23.10.0, 23.11.0, 23.12.0 and 23.13.0 only add tables and columns that earlier versions ignore); --restore-database puts back the copy taken before the
 upgrade instead (the current database is kept next to it, renamed).
 """
 
@@ -76,16 +84,16 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.12.0"
-BASELINE = ("23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1 "
-            "or 23.11.2")
+PATCH_VERSION = "23.13.0"
+BASELINE = ("23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, "
+            "23.11.2 or 23.12.0")
 RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0",
-            "23.11.0", "23.11.1", "23.11.2")
+            "23.11.0", "23.11.1", "23.11.2", "23.12.0")
 BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
 AGENT_SCHEMA = 2
-MIGRATION_COUNT = 21
+MIGRATION_COUNT = 22
 MARGIN_MB = 300
 
 
@@ -531,6 +539,27 @@ ok = (len(spec['endpoints']) == 1 and own_refused and pol.check_url('http://10.1
       and scriptgen.validate('import httpx\n')['ok'] and ids.count('api_testing') == 1 and len(ids) == len(set(ids)))
 print('ok' if ok else 'API Testing incomplete')
 """
+RELEASE_231300_LOAD = r"""
+import sys
+sys.path.insert(0, '.')
+from pathlib import Path
+from qa_platform.automation import browser
+from qa_platform.automation.runner import url_matches
+from qa_platform import https_setup, welcome
+from qa_platform.reports.ai_reports import MODULES
+from qa_platform.api import defects as dapi
+from skyguard_agent.translate import to_english
+from skyguard_agent.knowledge import same_site
+paths = {r.path for r in dapi.router.routes}
+ok = (browser.fallback_order('msedge')[0] == 'msedge'
+      and url_matches('https://www.emirates.com/99887abcdef12', 'https://www.emirates.com/3432432dffdsf')
+      and to_english('سجل الدخول كمدير')[0] == 'log in as manager'
+      and same_site('https://book.emirates.com/x', {'origins': ['https://www.emirates.com']})
+      and https_setup.check_hostname('SkyGuard-QA') == 'skyguard-qa'
+      and 'analytics' in MODULES and any(p.endswith('/assignees') for p in paths) and any(p.endswith('/manual') for p in paths)
+      and Path('web/js/module-actions.js').is_file() and Path('ENABLE_HTTPS.cmd').is_file())
+print('ok' if ok else '23.13.0 features incomplete')
+"""
 
 
 def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None) -> dict:
@@ -601,6 +630,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("API Testing and new agents (23.12.0)", r120 == "ok", r120)
     except PatchError as exc:
         check("API Testing and new agents (23.12.0)", False, str(exc))
+    try:
+        r130 = run_py(python, app, data, RELEASE_231300_LOAD).splitlines()[-1]
+        check("Edge, healing, AI Agent, HTTPS (23.13.0)", r130 == "ok", r130)
+    except PatchError as exc:
+        check("Edge, healing, AI Agent, HTTPS (23.13.0)", False, str(exc))
     try:
         bp = run_py(python, app, data, BROWSER_POLICY_LOAD).splitlines()[-1]
         check("Maximized browser policy", bp == "ok", bp)
@@ -698,7 +732,7 @@ def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
     step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
-         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0)")
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):

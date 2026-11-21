@@ -97,6 +97,7 @@ class SystemVoice:
             raise QAError("VALIDATION_FAILED", "Nothing to say.", status=422)
         if voice and voice not in {v["name"] for v in self.voices()}:
             voice = ""
+        voice = self.voice_for(text, voice)
         sapi_rate = max(-10, min(10, round((rate - 1) * 10)))
         key = hashlib.sha256(f"{voice}|{sapi_rate}|{text}".encode()).hexdigest()[:32]
         target = self.cache_dir / f"{key}.wav"
@@ -110,6 +111,23 @@ class SystemVoice:
             partial.replace(target)
             self._prune()
         return target.read_bytes()
+
+    def voice_for(self, text: str, voice: str = "") -> str:
+        """23.13.0: the voice for this reply. An Arabic reply is spoken by an installed Arabic voice (Windows
+        "Arabic" language pack: Naayf, Hoda ...) of the same gender as the chosen voice (male by default); other
+        replies keep the chosen voice. Without an Arabic voice the chosen one is used (the text stays on screen)."""
+        import re as _re
+
+        if not _re.search(r"[\u0600-\u06FF]", text or ""):
+            return voice
+        voices = self.voices()
+        chosen = next((v for v in voices if v["name"] == voice), None)
+        if chosen and chosen.get("lang", "").lower().startswith("ar"):
+            return voice
+        gender = (chosen or {}).get("gender") or "Male"
+        arabic = [v for v in voices if v.get("lang", "").lower().startswith("ar")]
+        pick = next((v for v in arabic if v.get("gender") == gender), None) or (arabic[0] if arabic else None)
+        return pick["name"] if pick else voice
 
     def _prune(self) -> None:
         files = sorted(self.cache_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime)

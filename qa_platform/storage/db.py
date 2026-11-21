@@ -906,6 +906,10 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ix_api_audit_app ON api_audit(app_id, id);
     """,
+    # 22 - 23.13.0: the person a defect is assigned to in TFS (chosen from the project's people in Defect Review).
+    """
+    ALTER TABLE defect_drafts ADD COLUMN assigned_to TEXT;
+    """,
 ]
 
 

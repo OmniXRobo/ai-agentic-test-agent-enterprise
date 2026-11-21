@@ -139,6 +139,13 @@ class FasterWhisperService:
             return Path(wanted)
         installed = self.models()
         order = [wanted] + [m for m in PREFERRED_MODELS if m != wanted] + installed
+        lang = (self.config().get("language") or "en").split("-")[0].lower()
+        if lang != "en":
+            # 23.13.0: Arabic (or English + Arabic, "auto") needs a multilingual model; an English-only ".en" model
+            # would turn Arabic speech into English words. The multilingual model of the same size comes first.
+            multi = [m for m in ([wanted[:-3]] if wanted.endswith(".en") else []) + ["small", "base", "medium",
+                     "large-v3", "distil-large-v3", "tiny"] if m in installed]
+            order = multi + order
         for m in order:
             if m in installed:
                 for h in self.homes():

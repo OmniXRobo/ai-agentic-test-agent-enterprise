@@ -200,6 +200,30 @@ class AzureDevOpsClient:
     def get_project(self) -> dict[str, Any]:
         return self.request("GET", f"_apis/projects/{quote(self.project, safe='')}", project_scoped=False)
 
+    def team_members(self, max_teams: int = 25) -> list[dict[str, Any]]:
+        """23.13.0: the people of the project's teams (display name and unique name), for "Assigned To" lists."""
+        pid = quote(self.project, safe="")
+        teams = self.request("GET", f"_apis/projects/{pid}/teams", project_scoped=False,
+                             params={"$top": 200}).get("value", [])
+        seen: dict[str, dict[str, Any]] = {}
+        for team in teams[:max_teams]:
+            tid = quote(str(team.get("id") or team.get("name") or ""), safe="")
+            if not tid:
+                continue
+            try:
+                members = self.request("GET", f"_apis/projects/{pid}/teams/{tid}/members", project_scoped=False,
+                                       params={"$top": 500}).get("value", [])
+            except QAError:
+                continue
+            for m in members:
+                ident = m.get("identity") or m
+                name = ident.get("displayName") or ""
+                unique = ident.get("uniqueName") or ""
+                if not name or ident.get("isContainer"):
+                    continue
+                seen.setdefault((unique or name).lower(), {"name": name, "unique_name": unique})
+        return sorted(seen.values(), key=lambda p: p["name"].lower())
+
     # ---- work item tracking -------------------------------------------------
 
     def work_item_types(self) -> list[dict[str, Any]]:

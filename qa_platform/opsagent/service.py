@@ -46,6 +46,12 @@ class _BrowserJob:
         self.app_id: str | None = None
         self.navigate: list[str] = []  # 23.11.1: pages the person asked to open (handled in the browser's thread)
         self.url: str | None = None  # the page the window shows now
+        # 23.13.0: the chat browser. Tasks of the AI Agent chat run one after the other in this one window, signed in
+        # once, until the person asks for a new window or closes it.
+        self.queue: list[tuple[str, Any]] = []
+        self.session: dict[str, Any] = {}  # who is signed in in this window (the engine's verified session)
+        self.busy: str | None = None  # the run executing in it now
+        self.created = 0.0
 
 
 class _CardReporter:
@@ -104,6 +110,9 @@ class OpsAgentService:
                                      interface="skyguard")
         self.jobs: dict[str, _BrowserJob] = {}
         self._lock = threading.Lock()
+        # 23.13.0: runs executing in a chat browser: run id -> (that window's job, the run's own stop event)
+        self.hosted: dict[str, tuple[_BrowserJob, threading.Event]] = {}
+        self._views = 0
         # 23.10.0: the simple agent (four tabs). Learning by watching is trusted automatically unless an admin turns
         # it off in Advanced settings ("auto_trust": false brings back one approval per learned task).
         self.pilot = Autopilot(self.agent, auto_trust=bool(self.config().get("auto_trust", True)))
@@ -126,6 +135,16 @@ class OpsAgentService:
 
         label = ai.label() if callable(getattr(ai, "label", None)) else getattr(ai, "label", "")
         return CallableLLM(call, name=f"SkyGuard AI gateway ({label})")
+
+    def to_english(self, text: str) -> tuple[str, bool]:
+        """23.13.0: an Arabic command (typed or spoken) in English, by the local AI (word list when it is not
+        running). English text is returned unchanged."""
+        from skyguard_agent.translate import has_arabic, to_english
+
+        if not has_arabic(text):
+            return text, False
+        llm = None if self.agent.learning.llm is None else self.agent.llm
+        return to_english(text, llm)
 
     def _transcribe(self, audio: bytes, content_type: str) -> str:
         return self.rt.voice.transcribe(audio, content_type)
@@ -181,29 +200,53 @@ class OpsAgentService:
                 except Exception:  # the card never breaks the agent
                     pass
 
-    def _start(self, kind: str, ref: str, body: Any, browser: str | None = None, app_id: str | None = None) -> None:
+    def _start(self, kind: str, ref: str, body: Any, browser: str | None = None,
+               app_id: str | None = None) -> _BrowserJob:
+        import time as _time
+
         with self._lock:
             if ref in self.jobs:
                 raise AgentError("ALREADY_RUNNING", "A browser is already working on this.", 409)
             job = _BrowserJob(kind, ref)
             job.browser = browser
             job.app_id = app_id
+            job.created = _time.monotonic()
             self.jobs[ref] = job
         job.thread = threading.Thread(target=self._launch, args=(job, body), name=f"opsagent-{ref}", daemon=True)
         job.thread.start()
+        return job
 
-    def start_run(self, run_id: str) -> dict[str, Any]:
-        """Drive an execution (or a discovery) in a SkyGuard-controlled browser."""
+    def start_run(self, run_id: str, *, chat: bool = False, new_window: bool = False) -> dict[str, Any]:
+        """Drive an execution (or a discovery) in a SkyGuard-controlled browser.
+
+        23.13.0 ``chat``: a task asked for in the AI Agent chat runs in the chat browser of its application (the window
+        the chat already opened, signed in once), not in a new window per request. ``new_window``: the person asked
+        for a new window."""
         engine = self.agent.engine
         run = engine.run(run_id)
         if run["status"] in ("completed", "partial", "failed", "stopped", "cancelled"):
             raise AgentError("RUN_FINISHED", "This execution has finished.", 409)
         kind = "discovery" if run["plan"].get("kind") == "discovery" else "run"
+        if chat and kind == "run" and self.config().get("one_browser", True):
+            job = self.chat_browser(run["application_id"] if "application_id" in run else run["plan"]["app_id"],
+                                    new=new_window)
+            if run_id in self.hosted:
+                return engine.view(run_id)
+            ev = threading.Event()
+            self.hosted[run_id] = (job, ev)
+            job.queue.append(("run", (run_id, ev)))
+            return engine.view(run_id)
         self._start(kind, run_id, lambda job: job.driver.run(engine, run_id, stop=job.stop))
         return engine.view(run_id)
 
-    def resume(self, run_id: str, by: str | None, note: str | None = None, choice: int | None = None) -> dict[str, Any]:
+    def _job_for(self, run_id: str) -> _BrowserJob | None:
         job = self.jobs.get(run_id)
+        if job is None and run_id in self.hosted:
+            job = self.hosted[run_id][0]
+        return job
+
+    def resume(self, run_id: str, by: str | None, note: str | None = None, choice: int | None = None) -> dict[str, Any]:
+        job = self._job_for(run_id)
         events = list(job.driver.manual_events) if job and job.driver else []
         view = self.agent.engine.resume(run_id, by=by, manual_events=events, note=note, choice=choice)
         if not job:  # e.g. after a restart: open a browser again and continue from the checkpoint
@@ -215,11 +258,116 @@ class OpsAgentService:
         job = self.jobs.get(run_id)
         if job:
             job.stop.set()
+        if run_id in self.hosted:  # only this task stops; the chat browser stays open
+            self.hosted[run_id][1].set()
         return view
 
     def browser_state(self, ref: str) -> dict[str, Any]:
-        job = self.jobs.get(ref)
-        return {"open": bool(job), "error": job.error if job else None}
+        job = self._job_for(ref)
+        return {"open": bool(job), "error": job.error if job else None,
+                "shared": ref in self.hosted}
+
+    # ---- 23.13.0: one chat browser per application -------------------------------------------------------------
+
+    def chat_browser(self, app_id: str, *, new: bool = False, url: str | None = None) -> _BrowserJob:
+        """The open chat browser of this application, or a new one (maximized, on ``url`` or the application's
+        address). It stays open until the person closes it, asks for a new window, or SkyGuard stops."""
+        app = self.agent.kb.application(app_id)
+        with self._lock:
+            mine = [j for j in self.jobs.values() if j.kind == "view" and j.app_id == app["id"] and not j.stop.is_set()]
+        if mine and not new:
+            return max(mine, key=lambda j: j.created)
+        self._views += 1
+        ref = f"view-{app['id']}" + (f"-{self._views}" if mine else "")
+        while ref in self.jobs:
+            self._views += 1
+            ref = f"view-{app['id']}-{self._views}"
+        start = url or app["base_url"]
+        engine = self.agent.engine
+
+        def body(job: _BrowserJob) -> None:
+            drv = job.driver
+            drv.perform({"type": "navigate", "url": start})
+            job.url = start
+            tick = self._tick(job)
+            while not job.stop.is_set():
+                ctx = drv.contexts.get(drv.current)
+                if ctx is None or not [pg for pg in ctx.pages if not pg.is_closed()]:
+                    break  # the person closed the window
+                if self._pages_follow(drv, ctx):
+                    pass
+                tick(drv)
+                while job.queue and not job.stop.is_set():
+                    what, arg = job.queue.pop(0)
+                    if what == "run":
+                        self._run_hosted(job, engine, *arg)
+                drv._idle(0.5)
+            for what, arg in job.queue:  # the window was closed with tasks still waiting: they pause, never vanish
+                if what == "run":
+                    self._orphan(arg[0])
+            job.queue.clear()
+
+        return self._start("view", ref, body, app_id=app["id"])
+
+    @staticmethod
+    def _pages_follow(drv: Any, ctx: Any) -> bool:
+        """The person opened a new tab in the chat browser: the agent follows it (as the learning window does)."""
+        try:
+            open_pages = [pg for pg in ctx.pages if not pg.is_closed()]
+            if open_pages and drv.pages.get(drv.current) is not open_pages[-1] and \
+                    (drv.pages.get(drv.current) is None or drv.pages[drv.current].is_closed()):
+                drv.pages[drv.current] = open_pages[-1]
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _run_hosted(self, job: _BrowserJob, engine: Any, run_id: str, ev: threading.Event) -> None:
+        """One task in the chat browser: it starts signed in as the window already is (no second sign-in for the
+        same account) and switches account in the same window when the task needs another one."""
+        job.busy = run_id
+        try:
+            if job.session:
+                try:
+                    engine.seed_session(run_id, job.session)
+                except Exception:
+                    pass
+            self.card.started(job, run_id)
+            job.driver.run(engine, run_id, stop=ev, isolated=False)
+            try:
+                sess = (engine.run(run_id).get("checkpoint") or {}).get("session") or {}
+                if sess.get("account_id"):
+                    job.session = dict(sess)
+            except Exception:
+                pass
+        except Exception as exc:  # noqa: BLE001 - the window stays open for the next request
+            log.warning(f"Chat browser task {run_id} ended: {exc}")
+            try:
+                run = engine.run(run_id)
+                if run["status"] not in ("completed", "partial", "failed", "stopped", "cancelled"):
+                    engine._pause(run, "browser_error", f"The browser could not be used: {str(exc)[:200]}")
+            except Exception:
+                pass
+        finally:
+            job.busy = None
+            self.hosted.pop(run_id, None)
+
+    def _orphan(self, run_id: str) -> None:
+        self.hosted.pop(run_id, None)
+        try:
+            run = self.agent.engine.run(run_id)
+            if run["status"] not in ("completed", "partial", "failed", "stopped", "cancelled"):
+                self.agent.engine._pause(run, "browser_closed", "The chat browser was closed before this task ran. "
+                                                                 "Press Resume to open it again.")
+        except Exception:
+            pass
+
+    def sign_in(self, app_id: str, account_id: str, by: str | None) -> dict[str, Any]:
+        """23.13.0: "log in as manager": sign in to the application in the chat browser with that account (its saved
+        password from Windows Credential Manager), verified like any task's sign-in, and stay signed in."""
+        view = self.agent.engine.create_sign_in(app_id=app_id, account_id=account_id, interface="skyguard", by=by)
+        self.start_run(view["run"]["id"], chat=True)
+        return view
 
     # ---- guided learning in a SkyGuard browser ------------------------------------------------------------------
 
@@ -300,35 +448,30 @@ class OpsAgentService:
                 pass
         return tick
 
-    def open_page(self, app_id: str, url: str, by: str | None = None) -> dict[str, Any]:
-        """Open a page of a registered application: in its learning window when one is open, else in a new
-        maximized window that stays until the person closes it. Only the application's own addresses are opened
-        (no cross-application navigation). Read-only: nothing is clicked or typed."""
-        from skyguard_agent.knowledge import origin_of
+    def open_page(self, app_id: str, url: str, by: str | None = None, *, new_window: bool = False) -> dict[str, Any]:
+        """Open a page of a registered application: in its learning window when one is open, else in the chat
+        browser (23.13.0: one window per application, reused by every request until the person asks for a new
+        window). Only the application's own addresses (its site, including its own subdomains) are opened.
+        Read-only: nothing is clicked or typed."""
+        from skyguard_agent.knowledge import same_site
 
         app = self.agent.kb.application(app_id)
-        if origin_of(url) not in (app.get("origins") or [origin_of(app["base_url"])]):
+        if not same_site(url, app):
             raise AgentError("URL_REFUSED", "That address is not part of this application; it was not opened.", 409)
         self.agent.audit.record("chat.navigate", actor=by, interface="skyguard", target=app["id"],
                                 details={"url": url})
-        for kind in ("watch", "view"):
-            job = next((j for j in self.jobs.values() if j.kind == kind and j.app_id == app["id"]), None)
+        if not new_window:
+            job = next((j for j in self.jobs.values() if j.kind == "watch" and j.app_id == app["id"]), None)
             if job:
                 job.navigate.append(url)
-                return {"ok": True, "window": "learning" if kind == "watch" else "existing", "url": url}
-        ref = f"view-{app['id']}"
-
-        def body(job: _BrowserJob) -> None:
-            drv = job.driver
-            drv.perform({"type": "navigate", "url": url})
-            job.url = url
-            ctx = drv.contexts[drv.current]
-            tick = self._tick(job)
-            while not job.stop.is_set() and [pg for pg in ctx.pages if not pg.is_closed()]:
-                tick(drv)
-                drv._idle(0.5)
-
-        self._start("view", ref, body, app_id=app["id"])
+                return {"ok": True, "window": "learning", "url": url}
+            with self._lock:
+                mine = [j for j in self.jobs.values() if j.kind == "view" and j.app_id == app["id"]
+                        and not j.stop.is_set()]
+            if mine:
+                max(mine, key=lambda j: j.created).navigate.append(url)
+                return {"ok": True, "window": "existing", "url": url}
+        self.chat_browser(app["id"], new=new_window, url=url)
         return {"ok": True, "window": "new", "url": url}
 
     def current_url(self, app_id: str) -> str | None:

@@ -86,13 +86,19 @@ RELATION_NAMES = {
 }
 
 
+USER_NAMESPACE = "tfs-user"  # 23.13.0: personal PATs, one per account and mode, in the OS credential store
+
+
 class TTLCache:
-    def __init__(self, ttl: float) -> None:
+    def __init__(self, ttl: float, scope: Callable[[], Any] | None = None) -> None:
         self.ttl = ttl
+        self.scope = scope  # 23.13.0: keeps one person's project apart from another's
         self._data: dict[Any, tuple[float, Any]] = {}
         self._lock = threading.Lock()
 
     def get_or_set(self, key: Any, fn: Callable[[], Any]) -> Any:
+        if self.scope is not None:
+            key = (self.scope(), key)
         now = time.monotonic()
         with self._lock:
             hit = self._data.get(key)
@@ -157,21 +163,85 @@ class TfsService:
         self.secrets = secrets
         self.bus = bus
         self.transport = transport  # injectable for tests
-        self.cache = TTLCache(ttl=60)
-        self.meta_cache = TTLCache(ttl=600)
+        self.cache = TTLCache(ttl=60, scope=self._scope)
+        self.meta_cache = TTLCache(ttl=600, scope=self._scope)
         self._last_unavailable: tuple[str, float] | None = None
+        self.people: Any = None  # the account store (set by the app): personal TFS projects
+
+    # ---- 23.13.0: personal PAT and project per signed-in account ----------------
+
+    @staticmethod
+    def _who() -> Any:
+        from ..auth import current_user
+        user = current_user()
+        return None if user is None or user.local else user
+
+    def personal(self, mode: str | None = None) -> dict[str, Any]:
+        """The signed-in person's own PAT / project, when they have one ({} for the shared profile)."""
+        user = self._who()
+        if user is None:
+            return {}
+        mode = mode or self.active_mode()
+        name = user.username.lower()
+        pat = self.secrets.get(USER_NAMESPACE, f"{name}:{mode}")
+        project = self.people.tfs_project_of(user.username) if self.people is not None else ""
+        if not pat and not project:
+            return {}
+        return {"user": user.username, "role": user.role, "pat": pat or "", "project": project}
+
+    def _scope(self) -> Any:
+        mine = self.personal()
+        return (mine.get("user", "").lower(), mine.get("project", "")) if mine else ""
+
+    def save_personal(self, username: str, mode: str, *, pat: str | None = None,
+                      project: str | None = None) -> None:
+        if mode not in MODES:
+            raise QAError("TFS_MODE_INVALID", f"Unknown TFS mode '{mode}'.")
+        if pat:
+            self.secrets.set(USER_NAMESPACE, f"{username.lower()}:{mode}", pat.strip())
+        if project is not None and self.people is not None:
+            self.people.set_tfs_project(username, project)
+        self.invalidate()
+
+    def forget_personal(self, username: str) -> None:
+        for mode in MODES:
+            try:
+                self.secrets.delete(USER_NAMESPACE, f"{username.lower()}:{mode}")
+            except QAError:
+                pass
+
+    def check_pat(self, pat: str, project: str, mode: str | None = None) -> dict[str, Any]:
+        """Is this PAT valid for this project on the configured server? ({checked: False} when no server is set)."""
+        p = self.profile(mode, shared=True)
+        if not p["url"]:
+            return {"checked": False, "ok": None, "detail": "No TFS server is set up yet, so the PAT was not checked."}
+        client = AzureDevOpsClient(p["url"], project.strip(), pat.strip(), p["api_version"],
+                                   verify_tls=p["verify_tls"], transport=self.transport,
+                                   ca_bundle=p.get("ca_bundle") or None, timeout=15)
+        try:
+            proj = client.get_project()
+            client.wiql("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project", top=1)
+            return {"checked": True, "ok": True, "detail": f"The PAT can read project '{proj.get('name') or project}'."}
+        except QAError as exc:
+            if exc.error_code in ("TFS_UNREACHABLE", "TFS_TIMEOUT"):
+                return {"checked": False, "ok": None, "detail": exc.message}
+            raise QAError("TFS_PAT_INVALID", f"This PAT cannot open project '{project}': {exc.message}",
+                          status=422) from exc
+        finally:
+            client.close()
 
     # ---- profiles ----------------------------------------------------------
 
     def active_mode(self) -> str:
         return self.settings.section("tfs").get("active_mode", "online")
 
-    def profile(self, mode: str | None = None) -> dict[str, Any]:
+    def profile(self, mode: str | None = None, *, shared: bool = False) -> dict[str, Any]:
         mode = mode or self.active_mode()
         if mode not in MODES:
             raise QAError("TFS_MODE_INVALID", f"Unknown TFS mode '{mode}'.")
         p = self.settings.section("tfs").get(mode, {})
-        return {
+        mine = {} if shared else self.personal(mode)
+        out = {
             "mode": mode,
             "label": MODES[mode]["label"],
             "url": (p.get(MODES[mode]["url_key"]) or "").rstrip("/"),
@@ -181,6 +251,14 @@ class TfsService:
             "ca_bundle": p.get("ca_bundle") or "",  # final patch: a company CA certificate file (PEM)
             "has_pat": self.secrets.has(TFS_NAMESPACE, mode),
         }
+        if mine:
+            out["personal"] = True
+            out["shared_project"] = out["project"]
+            if mine.get("project"):
+                out["project"] = mine["project"]
+            out["has_pat"] = bool(mine.get("pat")) or out["has_pat"]
+            out["personal_pat"] = bool(mine.get("pat"))
+        return out
 
     def profiles(self) -> dict[str, Any]:
         return {
@@ -195,6 +273,16 @@ class TfsService:
                      ca_bundle: str | None = None) -> dict[str, Any]:
         if mode not in MODES:
             raise QAError("TFS_MODE_INVALID", f"Unknown TFS mode '{mode}'.")
+        user = self._who()
+        if user is not None and (user.role != "admin" or self.personal(mode)):
+            # 23.13.0: a person's project and PAT are their own; changing them never changes the admin's project
+            if project is not None or pat:
+                if pat and project is not None and project.strip():
+                    self.check_pat(pat, project, mode)
+                self.save_personal(user.username, mode, pat=pat or None, project=project)
+            if user.role != "admin":
+                return self.profiles()
+            project, pat = None, None
         patch: dict[str, Any] = {}
         if url is not None:
             url = url.strip().rstrip("/")
@@ -233,7 +321,8 @@ class TfsService:
             raise QAError("TFS_NOT_CONFIGURED", f"{p['label']} has no server URL configured.", status=409)
         if not p["project"]:
             raise QAError("TFS_NOT_CONFIGURED", f"{p['label']} has no project configured.", status=409)
-        pat = self.secrets.get(TFS_NAMESPACE, p["mode"])
+        mine = self.personal(p["mode"])
+        pat = mine.get("pat") or self.secrets.get(TFS_NAMESPACE, p["mode"])
         if not pat:
             raise QAError("TFS_NOT_CONFIGURED", f"No PAT is saved for {p['label']}.", status=409)
         return AzureDevOpsClient(p["url"], p["project"], pat, p["api_version"], verify_tls=p["verify_tls"],
@@ -559,6 +648,33 @@ class TfsService:
             return [(w.get("fields") or {}).get(field_ref) for w in c.work_items(ids, fields=[field_ref])] if ids else []
 
         return self.cache.get_or_set(("field_values", self.active_mode(), wiql, field_ref), lambda: self._with_client(run))
+
+    def assignees(self) -> list[dict[str, Any]]:
+        """23.13.0: names to assign work to: the project's team members, plus anyone work was recently assigned to."""
+        def run(c: AzureDevOpsClient) -> list[dict[str, Any]]:
+            people: dict[str, dict[str, Any]] = {}
+            try:
+                for m in c.team_members():
+                    people[(m["unique_name"] or m["name"]).lower()] = m
+            except QAError as exc:
+                if exc.error_code in ("TFS_UNREACHABLE", "TFS_TIMEOUT", "TFS_AUTH_FAILED"):
+                    raise
+            ids = c.wiql("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND "
+                         "[System.AssignedTo] <> '' ORDER BY [System.ChangedDate] DESC", top=400)
+            if ids:
+                for w in c.work_items(ids, fields=["System.AssignedTo"]):
+                    v = (w.get("fields") or {}).get("System.AssignedTo")
+                    name = _identity(v)
+                    unique = v.get("uniqueName", "") if isinstance(v, dict) else ""
+                    if name and "<" in name and not unique:  # "Name <DOMAIN\\user>" on older servers
+                        unique = name[name.index("<") + 1:].rstrip(">").strip()
+                        name = name[:name.index("<")].strip()
+                    if name:
+                        people.setdefault((unique or name).lower(), {"name": name, "unique_name": unique})
+            return sorted(people.values(), key=lambda p: p["name"].lower())
+
+        return self.meta_cache.get_or_set(("assignees", self.active_mode(), self.profile()["project"]),
+                                          lambda: self._with_client(run))
 
     def acceptance_criteria_items(self, story_types: list[str], ac_types: list[str]) -> dict[str, Any]:
         """23.3.30: acceptance criteria written in the user stories' Acceptance Criteria field and kept as their own

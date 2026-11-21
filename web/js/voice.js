@@ -104,18 +104,33 @@ export function localVoices() {
 const MALE = /david|mark|guy|george|james|richard|ryan|daniel|fred|alex|tom|male|man\b/i;
 const FEMALE = /zira|hazel|susan|aria|jenny|eva|female|woman|samantha|victoria|karen/i;
 
-function pickVoice(s, male) {
+// 23.13.0: the reply voice keeps the gender chosen under "Radio voice (Windows)" (male by default). Before, the browser
+// fallback used the voice picked in its own list (often Microsoft Zira, female) whenever the Windows voice could not
+// be used, so a male setting answered with a female voice. An Arabic reply uses an installed Arabic voice.
+const ARABIC = /[\u0600-\u06FF]/;
+function genderOf(name) { return MALE.test(name || "") ? "male" : FEMALE.test(name || "") ? "female" : null; }
+export function wantedGender(s) {
+  const radio = s.radio_voice || "";
+  return radio ? (genderOf(radio) || (/female/i.test(s.radio_voice_gender || "") ? "female" : "male")) : "male";
+}
+
+export function pickVoice(s, male, text = "") {
   const voices = localVoices();
-  const lang = (s.language || "en").toLowerCase();
+  const arabic = ARABIC.test(text || "");
+  const lang = arabic ? "ar" : (s.language || "en").toLowerCase().slice(0, 2);
   const inLang = voices.filter((v) => v.lang.toLowerCase().startsWith(lang));
-  return voices.find((v) => v.name === s.tts_voice)
-    || (male && (inLang.find((v) => MALE.test(v.name)) || inLang.find((v) => !FEMALE.test(v.name))))
-    || inLang[0] || voices[0];
+  const gender = male ? wantedGender(s) : null;
+  const fits = (v) => !gender || genderOf(v.name) === gender || genderOf(v.name) === null;
+  const named = voices.find((v) => v.name === s.tts_voice);
+  if (named && !arabic && fits(named)) return named;
+  const same = gender === "female" ? inLang.find((v) => FEMALE.test(v.name)) : gender === "male"
+    ? (inLang.find((v) => MALE.test(v.name)) || inLang.find((v) => !FEMALE.test(v.name))) : null;
+  return same || (arabic ? inLang[0] : null) || named || inLang[0] || voices[0];
 }
 
 function browserSpeak(text, s, radio) {
   if (!("speechSynthesis" in window)) return Promise.resolve();
-  const chosen = pickVoice(s, true);
+  const chosen = pickVoice(s, true, text);
   if (!chosen) return Promise.resolve(); // no installed voice: the reply is still shown on screen
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text);

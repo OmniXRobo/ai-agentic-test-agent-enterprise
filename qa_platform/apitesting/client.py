@@ -33,6 +33,26 @@ MAX_BODY_KEEP = 200_000
 NAMESPACE = "apicred"
 
 
+
+def trust_context(ca_file: str | None = None) -> Any:
+    """23.13.0: the certificates this PC trusts. Before, only the certifi bundle (public certificate authorities) was
+    used, so an intranet API whose certificate is issued by the company's own CA (trusted by Windows, as on most
+    office PCs without internet) failed Test Connection with a TLS error although Edge opened it. Now the Windows
+    certificate store (ROOT and CA), the certifi bundle and the application's own Trusted CA file are all trusted.
+    Verification itself stays on."""
+    import ssl
+
+    ctx = ssl.create_default_context()  # Windows: the system ROOT / CA stores; elsewhere the OpenSSL default paths
+    try:
+        import certifi
+
+        ctx.load_verify_locations(certifi.where())
+    except Exception:  # noqa: BLE001 - certifi missing: the system store alone
+        pass
+    if ca_file:
+        ctx.load_verify_locations(ca_file)
+    return ctx
+
 class UnresolvedVariable(Exception):
     pass
 
@@ -224,12 +244,14 @@ class Sender:
             self.warnings.append("TLS certificate verification is OFF for this application (set by a person).")
             return False
         ca = tls.get("ca_file")
+        extra = None
         if ca and self.cert_root is not None:
             p = (self.cert_root / Path(ca).name)
             if p.is_file():
-                return str(p)
-            self.warnings.append(f"The CA certificate {Path(ca).name} is missing; the system certificates are used.")
-        return True
+                extra = str(p)
+            else:
+                self.warnings.append(f"The CA certificate {Path(ca).name} is missing; the system certificates are used.")
+        return trust_context(extra)
 
     def _cert(self, auth: dict[str, Any], provider: AuthProvider) -> Any:
         if auth.get("type") != "client_cert" or self.cert_root is None:

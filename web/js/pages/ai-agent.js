@@ -173,6 +173,8 @@ async function send(text, source, log, input, quiet = false) {
 
 function renderReply(log, r) {
   let html = esc(r.text || "");
+  // 23.13.0: an Arabic command is translated to English by the local AI; both are shown
+  if (r.translated_to) html = `<span class="muted">Understood (translated from Arabic): <b>${esc(r.translated_to)}</b></span><br>${html}`;
   if (r.type === "navigate" && r.url) {
     const opened = r.opened || {};
     html += `<br><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`;
@@ -185,12 +187,39 @@ function renderReply(log, r) {
   }
   if (r.type === "clarify" && r.missing?.length) html = `${pill("WARN", "Missing information")} <b>${esc(r.missing.join(", "))}</b><br>${html}`;
   if (r.type === "run" && r.filled?.length) html += `<p class="muted">I filled in: ${r.filled.map(esc).join("; ")}.</p>`;
-  const div = bubble(log, "agent", html, r.type === "run" ? r.run_id : null);
+  const div = bubble(log, "agent", html, (r.type === "run" || r.type === "sign_in") ? r.run_id : null);
+  if (r.type === "need_account") {
+    if (r.security_notice) div.insertAdjacentHTML("beforeend", `<p class="muted">🔒 ${esc(r.security_notice)}</p>`);
+    div.appendChild(accountForm(r.role, () => send("again", "typed", log, null, true)));
+  }
   if (r.type === "need_credential" && r.account_id) {
     if (r.security_notice) div.insertAdjacentHTML("beforeend", `<p class="muted">🔒 ${esc(r.security_notice)}</p>`);
     div.appendChild(credentialForm(r.account_id, r.account, () => send("again", "typed", log, null, true)));
   }
   if (r.type === "secret_intercepted") div.insertAdjacentHTML("afterbegin", pill("WARN", "Withheld") + " ");
+}
+
+// 23.13.0: "log in as manager" without a saved manager account: label, user name and password in one secure form
+function accountForm(role, after) {
+  const f = document.createElement("form");
+  f.className = "settings";
+  f.autocomplete = "off";
+  f.innerHTML = `<p><b>New account for this website</b> (password saved in Windows Credential Manager on this PC)</p>
+    <label>Name of the account <input name="label" maxlength="80" required value="${esc(role || "")}"></label>
+    <label>User name / ID <input name="login" maxlength="120" required autocomplete="off"></label>
+    <label>Password <input type="password" name="pw" maxlength="512" autocomplete="new-password" required></label>
+    <label><input type="checkbox" name="consent" required> I am allowed to let SkyGuard sign in with this account</label>
+    <div class="row"><button class="btn primary" type="submit">Save securely and sign in</button></div>`;
+  f.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await api("/api/ops/simple/accounts", { method: "POST", body: { app_id: state.app, label: f.label.value, login_id: f.login.value, password: f.pw.value, consent: f.consent.checked } });
+      f.pw.value = "";
+      f.replaceWith(Object.assign(document.createElement("p"), { innerHTML: pill("PASS", "Saved securely") }));
+      after();
+    } catch (err) { toast(err.message, "error"); }
+  });
+  return f;
 }
 
 function credentialForm(accountId, label, after) {
@@ -426,10 +455,17 @@ async function knowledgeTab(body) {
     ${(k.unverified || []).length ? `<div class="card" style="margin-top:8px"><h3>Not verified yet</h3><p class="muted">${k.unverified.map(esc).join(" · ")}</p></div>` : ""}
     <div class="card" style="margin-top:8px"><h3>Accounts</h3>
       <p class="muted">One account per role. Created from the sign-ins I saw, or added here. Passwords are kept in Windows Credential Manager on this PC, never in the learning data, chat or logs.</p>
+      ${canEdit() ? `<label><input type="checkbox" id="pubSite"${k.public ? " checked" : ""}> This website needs no sign-in (a public site: I never ask for an account)</label>` : ""}
       ${table(["Account", "Role", "Password", ""], k.accounts.map((a) => `<tr><td>${esc(a.label)}</td><td>${esc(a.verified_role || a.role_key || "not shown by the application")}${a.verified_role ? ` ${pill("PASS", "verified")}` : ""}</td><td>${a.has_credential ? pill("PASS", "Saved") : pill("INFO", "Not saved")}</td><td>${canEdit() ? `<button class="link-btn" data-cred="${esc(a.id)}" data-label="${esc(a.label)}">${a.has_credential ? "Replace" : "Save password"}</button>` : ""}</td></tr>`))}
       ${canEdit() ? `<form id="accForm" class="row" autocomplete="off" style="margin-top:8px"><input name="label" maxlength="80" placeholder="Account label, e.g. Manager (test)" required><input name="login" maxlength="120" placeholder="User name" required><input name="role" maxlength="60" placeholder="Role, e.g. Manager"><button class="btn" type="submit">Add account</button></form>` : ""}
       <div id="credBox"></div></div>`;
   bindPicker(body, () => knowledgeTab(body));
+  body.querySelector("#pubSite")?.addEventListener("change", async (e) => {
+    try {
+      await api(`/api/ops/simple/applications/${encodeURIComponent(state.app)}/public`, { method: "POST", body: { public: e.target.checked } });
+      toast(e.target.checked ? "Saved: no sign-in is needed for this website." : "Saved: this website needs an account.", "success");
+    } catch (err) { toast(err.message, "error"); e.target.checked = !e.target.checked; }
+  });
   body.querySelector("#testKnow").addEventListener("click", async () => {
     const box = body.querySelector("#testOut");
     try {

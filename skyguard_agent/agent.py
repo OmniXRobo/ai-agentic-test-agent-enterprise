@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
-from . import AGENT_NAME, __version__, planner, secrets_guard
+from . import AGENT_NAME, __version__, planner, secrets_guard, sessions
 from .assistant import Assistant, canonical, is_question
 from .intent import Intent, classify, compatible
 from .audit import Audit
@@ -273,18 +273,22 @@ class OperationsAgent:
             return {"type": "clarify", "app_id": app["id"],
                     "text": "Which operation do you mean? I know: " + ", ".join(w["data"].get("title") or w["key"]
                                                                                for w in same_kind)}
-        account = planner.match_account(text, accounts)
-        if not account:
+        account = planner.match_account(text, accounts) if sessions.needs_sign_in(app, wf, accounts) else None
+        if not account and sessions.needs_sign_in(app, wf, accounts):
             allowed = {norm(r) for r in wf["data"].get("roles", [])}
             fitting = [a for a in accounts if not allowed or norm(a.get("verified_role") or a.get("role_key")) in allowed]
             if len(fitting) > 1:  # 23.11.1: of several accounts with the role, the one that can sign in now
                 usable = [a for a in fitting if a.get("has_credential") and not a.get("credential_expired")]
                 fitting = usable if len(usable) == 1 else fitting
             account = fitting[0] if len(fitting) == 1 else None
+        if not account and not sessions.needs_sign_in(app, wf, accounts):
+            account = {"id": None, "label": "no sign-in"}  # 23.13.0: public site, nothing to sign in to
         if not account:
             return {"type": "clarify", "app_id": app["id"], "workflow": wf["key"],
                     "text": f"Which account should perform '{wf['data'].get('title') or wf['key']}'? "
-                            + ", ".join(f"{a['label']} ({a.get('role_key') or 'role not set'})" for a in accounts),
+                            + (", ".join(f"{a['label']} ({a.get('role_key') or 'role not set'})" for a in accounts)
+                               or "No account is saved yet.")
+                            + " If this website needs no sign-in, say 'no account needed' and I continue without one.",
                     "accounts": [{"id": a["id"], "label": a["label"]} for a in accounts]}
         rules = planner.rules_for(self.kb, app["id"], wf)
         options = planner.field_options(self.kb, app["id"], wf)

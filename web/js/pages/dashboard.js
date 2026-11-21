@@ -151,7 +151,8 @@ async function render(view) {
   const trendCard = chartCard("Executions · last 7 days",
     ex ? ms(ex.trend.reduce((n, d) => n + d.passed + d.failed, 0), "This week") + ms(ex.trend.reduce((n, d) => n + d.passed, 0), "Passed")
       + ms(ex.trend.reduce((n, d) => n + d.failed, 0), "Failed") : "",
-    ex ? dayColumns(ex.trend, [{ key: "passed", label: "Passed", color: C.ok }, { key: "failed", label: "Failed", color: C.fail }])
+    ex ? dayColumns(ex.trend, [{ key: "passed", label: "Passed", color: C.ok }, { key: "failed", label: "Failed", color: C.fail }],
+      { hrefFor: (date, key) => `#/history?date=${date}${key === "failed" ? "&status=FAILED" : ""}` })
       : `<p class="muted small">Not available.</p>`, "wide");
 
   const kinds = ins.runs_by_kind || [];
@@ -159,7 +160,7 @@ async function render(view) {
     ms(kinds.reduce((n, k) => n + k.passed + k.failed + k.other, 0), "Runs") + ms(kinds.reduce((n, k) => n + k.passed, 0), "Passed")
       + ms(kinds.reduce((n, k) => n + k.failed, 0), "Failed"),
     hbars(kinds.slice(0, 8).map((k) => ({
-      label: kindLabel(k.kind), href: "#/history",
+      label: kindLabel(k.kind), href: `#/history?kind=${encodeURIComponent(k.kind)}`,
       parts: [{ value: k.passed, color: C.ok, label: "Passed" }, { value: k.failed, color: C.fail, label: "Failed" },
         { value: k.other, color: C.muted, label: "Running or other" }],
     })), { empty: "No runs yet" })
@@ -172,25 +173,48 @@ async function render(view) {
     { label: "SLA failed", value: perf.sla_fail, color: C.fail, href: "#/perf-results" },
   ], { center: pct(perf.sla_pass_rate), sub: "SLA PASS" })) : "";
 
+  // 23.13.0: more charts, each slice / bar opens the matching items
+  const MODULE = { framework: "AI-Driven Automation", functional: "Guided Browser", python: "Guided Browser (Python)",
+    comparison: "Integration Comparison", api: "API Testing", performance: "Performance" };
+  const MODULE_COLOR = [C.run, C.accent, C.violet, C.warn, C.pink, C.fail, C.ok, C.muted];
+  const byModule = Object.entries(ins.defects_by_module || {});
+  const modulesCard = chartCard("Defect drafts by module", ms(byModule.reduce((n, [, v]) => n + v, 0), "Drafts"),
+    donut(byModule.map(([k, v], i) => ({ label: MODULE[k] || k, value: v, color: MODULE_COLOR[i % MODULE_COLOR.length],
+      href: `#/defect-review?source=${encodeURIComponent(k)}&status=all` })), { sub: "DRAFTS", empty: "No defect drafts yet" }));
+  const apiR = ins.api_results || null;
+  const apiCard = chartCard("API Testing results",
+    apiR ? ms(apiR.passed + apiR.failed + apiR.other, "Checks") + ms(apiR.passed, "Passed") + ms(apiR.failed, "Failed") : "",
+    apiR ? donut([
+      { label: "Passed", value: apiR.passed, color: C.ok, href: "#/api-testing" },
+      { label: "Failed", value: apiR.failed, color: C.fail, href: "#/api-testing" },
+      { label: "Other (skipped, error)", value: apiR.other, color: C.muted, href: "#/api-testing" },
+    ], { sub: "API CHECKS", empty: "No API tests run yet" }) : '<p class="muted small">Not available.</p>');
+  const heal = ins.healing || null;
+  const healCard = chartCard("Self-healing",
+    heal ? ms(heal.events, "Locator fixes") + ms(heal.applied, "Kept in the scripts") : "",
+    heal ? donut(Object.entries(heal.by_result || {}).map(([k, v], i) => ({ label: k.replace(/_/g, " "), value: v,
+      color: { validated: C.ok, taught: C.accent, healed: C.run, failed: C.fail, rejected: C.muted }[k] || MODULE_COLOR[i % MODULE_COLOR.length],
+      href: "#/history" })), { sub: "FIXES", empty: "No fixes yet" }) : '<p class="muted small">Not available.</p>');
   area.innerHTML = `
     <h3 style="margin:0 0 10px">${esc(tfs.label)}${tfs.project ? " · " + esc(tfs.project) : ""}</h3>
     ${tfs.connected ? "" : `<p class="muted">${esc(tfs.reason)} <a href="#/tfs-settings">TFS connection settings</a>. Figures come only from your configured project; nothing is estimated.</p>`}
+    <p class="muted small" style="margin:0 0 8px">Click a slice, a bar or a day to see the items behind it.</p>
+    <div class="dash-charts">
+      ${passCard}${trendCard}${defectsCard}${modulesCard}${casesCard}${storiesCard}${apiCard}${healCard}${dataCard}${runsCard}${agentsCard}${slaCard}
+    </div>
+    <h3 style="margin:22px 0 10px">Key figures</h3>
     <div class="grid kpis">${quality.join("")}</div>
     <h3 style="margin:22px 0 10px">QA progress</h3>
     <section class="card qa-progress">${progress}</section>
-    <h3 style="margin:22px 0 10px">Statistics</h3>
-    <div class="dash-charts">
-      ${passCard}${trendCard}${storiesCard}${casesCard}${dataCard}${defectsCard}${runsCard}${agentsCard}
-    </div>
     <h3 style="margin:22px 0 10px">Performance</h3>
-    <div class="grid kpis">${performance.join("")}</div>
-    ${slaCard ? `<div class="dash-charts" style="margin-top:14px">${slaCard}</div>` : ""}`;
+    <div class="grid kpis">${performance.join("")}</div>`;
 }
 
 export async function mount(view) {
   // 23.3.31: AI dashboard analysis (kept outside the figures, which reload when work finishes, so edits are not lost)
-  view.innerHTML = `<section class="card ai-dash" style="margin-bottom:18px"><h3 style="margin:0 0 8px">AI dashboard analysis</h3><div id="aiDash"></div></section>
-    <div id="kpiArea" class="dash"><p class="muted">Loading…</p></div>`;
+  // 23.13.0: the charts come first; the AI analysis report is at the bottom
+  view.innerHTML = `<div id="kpiArea" class="dash"><p class="muted">Loading…</p></div>
+    <section class="card ai-dash" style="margin-top:22px"><h3 style="margin:0 0 8px">AI dashboard analysis</h3><div id="aiDash"></div></section>`;
   mountAiReport(view.querySelector("#aiDash"), { kind: "dashboard", id: "current", analyzeLabel: "Generate AI analysis",
     intro: "The On-Premise AI reads the figures on this dashboard (TFS counts, acceptance criteria, coverage, test data, pass / fail, defects and performance) and writes what they show, the gaps and risks, and the next steps. Read it, edit it or ask again; when you are satisfied, generate the PDF, download it or email it." });
   await render(view);

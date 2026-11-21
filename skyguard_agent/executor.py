@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import quote, urljoin, urlsplit
 
 from . import authz, guard, locator, rules as rule_engine, sessions
-from .knowledge import KnowledgeBase, origin_of
+from .knowledge import KnowledgeBase, origin_of, same_site
 from .planner import build_preview, rules_for
 from .store import Store
 from .util import AgentError, dumps, loads, norm, now_iso
@@ -125,6 +125,65 @@ class Engine:
             except Exception:
                 pass
 
+    # ---- 23.13.0: the chat browser ----------------------------------------------------------------------------
+
+    def seed_session(self, run_id: str, session: dict[str, Any]) -> None:
+        """A task that runs in the chat browser starts with the account already signed in there (verified by an
+        earlier task in the same window), so it is not signed in a second time. The application's own sign-in page,
+        if it shows up, still triggers a new sign-in (``logged_out``)."""
+        if not session or not session.get("account_id"):
+            return
+        with self._lock(run_id):
+            run = self.run(run_id)
+            cp = run["checkpoint"]
+            if (cp.get("session") or {}).get("account_id"):
+                return
+            cp["session"] = {k: session.get(k) for k in ("account_id", "identity", "role", "verified",
+                                                           "sign_in_confirmed", "role_verified", "context")
+                             if k in session}
+            self._save(run, checkpoint=cp)
+
+    def create_sign_in(self, *, app_id: str, account_id: str, interface: str, by: str | None) -> dict[str, Any]:
+        """A sign-in on its own ("log in as manager"): the same verified sign-in a task does, then done. The window
+        stays signed in for the next request. The password comes from the secure store only."""
+        app = self.kb.application(app_id)
+        acc = self.kb.account(account_id)
+        if acc["application_id"] != app["id"]:
+            raise AgentError("ACCOUNT_INVALID", "That account belongs to another application.")
+        if not acc["has_credential"] and not (app.get("profile") or {}).get("login", {}).get("manual"):
+            raise AgentError("CREDENTIAL_MISSING", f"{acc['label']} has no saved credential. Add it through the "
+                             "secure credential form first.", 409)
+        run_id = f"OPS-{now_iso()[:19].replace('-', '').replace(':', '').replace('T', '-')}-{_rand()}"
+        now = now_iso()
+        stage = {"index": 0, "workflow": None, "workflow_entry_id": None, "title": f"Sign in as {acc['label']}",
+                 "account_id": acc["id"], "account": acc["label"], "login_id": acc["login_id"],
+                 "role_claimed": acc.get("role_key"), "commits": False}
+        plan = {"app_id": app["id"], "app_name": app["name"], "kind": "signin", "stages": [stage], "options": {},
+                "mode": app.get("mode", "testing"), "warnings": []}
+        cp = {"phase": "signin", "stage": 0, "item": 0, "step": 0, "sub": "session", "session": {}}
+        self.store.execute("INSERT INTO runs (id, application_id, workflow_key, interface, status, plan, checkpoint, "
+                           "created_by, created_at, updated_at, confirmed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                           (run_id, app["id"], None, interface, "running", dumps(plan), dumps(cp), by, now, now, now))
+        self._event(run_id, "plan", f"Sign in to {app['name']} as {acc['label']}.")
+        self.audit.record("run.sign_in", actor=by, interface=interface, target=run_id,
+                          details={"application": app["name"], "account": acc["label"]})
+        return self.view(run_id)
+
+    def _sign_in_step(self, run: dict[str, Any], cp: dict[str, Any], snap: dict[str, Any],
+                      app: dict[str, Any]) -> dict[str, Any]:
+        stage = run["plan"]["stages"][0]
+        d = self._ensure_session(run, cp, snap, app, stage)
+        if d is not None:
+            return d
+        sess = cp.get("session") or {}
+        note = f"Signed in to {app['name']} as {stage['account']}" + (
+            "" if sess.get("verified") else " (the application shows no user name to verify)") + "."
+        cp["phase"] = "done"
+        self._save(run, status="completed", summary={"message": note, "counts": {}, "total": 0}, checkpoint=cp,
+                   finished_at=now_iso())
+        self._event(run["id"], "done", note)
+        return {"done": self.view_summary(self.run(run["id"]))}
+
     # ---- creating a run: INSPECT -> VALIDATE -> PREVIEW ---------------------------------------------------------
 
     def create(self, *, app_id: str, stages: list[dict[str, Any]], records: list[dict[str, Any]], interface: str,
@@ -143,6 +202,16 @@ class Engine:
                 raise AgentError("WORKFLOW_NOT_APPROVED", f"The workflow '{s['workflow']}' has no approved version. "
                                  "Review and approve it in Knowledge first.", 409)
             acc = self.kb.account(s["account_id"]) if s.get("account_id") else None
+            if acc is None and not sessions.needs_sign_in(app, wf, self.kb.accounts(app["id"])):
+                # 23.13.0: a public site (no sign-in): the task runs in the browser as it is, without an account
+                plan_stages.append({
+                    "index": i, "workflow": wf["key"], "workflow_entry_id": wf["id"], "workflow_version": wf["version"],
+                    "title": wf["data"].get("title") or wf["key"], "account_id": None, "account": "no sign-in",
+                    "login_id": None, "role_claimed": None, "role_verified": None, "public": True,
+                    "commits": bool(wf["data"].get("commits", True)), "page": wf["data"].get("start_url"),
+                    "expected_status": wf["data"].get("expected_status"),
+                })
+                continue
             if not acc or acc["application_id"] != app["id"]:
                 raise AgentError("ACCOUNT_REQUIRED", f"Choose the account for '{wf['data'].get('title') or wf['key']}'.")
             if not acc["has_credential"] and not (app.get("profile") or {}).get("login", {}).get("manual"):
@@ -440,6 +509,8 @@ class Engine:
             handled = self._action_failed(run, cp, awaiting, result, snap)
             if handled:
                 return handled
+        if cp["phase"] == "signin":
+            return self._sign_in_step(run, cp, snap, app)
         if cp["phase"] == "discover" and self.learning is not None:
             return self.learning.discovery_step(run, cp, snap, app)
         if cp["phase"] == "inspect":
@@ -554,6 +625,8 @@ class Engine:
     def _ensure_session(self, run: dict[str, Any], cp: dict[str, Any], snap: dict[str, Any], app: dict[str, Any],
                         stage: dict[str, Any]) -> dict[str, Any] | None:
         """None when the right account is signed in and verified; otherwise the next directive."""
+        if not stage.get("account_id") and stage.get("public"):
+            return None  # 23.13.0: a public site: nothing to sign in to
         sess = sessions.SessionState(cp.get("session"))
         profile = app.get("profile") or {}
         login = cp.setdefault("login", {})
@@ -1407,7 +1480,7 @@ def _url_allowed(url: str, app: dict[str, Any]) -> bool:
     if not url or url.startswith(("about:", "chrome-error:", "data:")) or url == "about:blank":
         return True
     try:
-        return origin_of(url) in app["origins"]
+        return origin_of(url) in app["origins"] or same_site(url, app)  # 23.13.0: www./booking. of the same site
     except Exception:
         return False
 

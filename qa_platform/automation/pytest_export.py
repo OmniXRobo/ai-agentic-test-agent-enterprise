@@ -140,7 +140,23 @@ def _launch(playwright):
         options["channel"] = BROWSER
     if not HEADLESS:
         options["args"] = ["--start-maximized"]  # visible runs open maximized
-    return getattr(playwright, kind).launch(**options)
+    try:
+        return getattr(playwright, kind).launch(**options)
+    except Exception as exc:  # a browser that is not installed on this PC: Edge, then Chrome, then Chromium
+        if "not found" not in str(exc).lower() and "executable doesn't exist" not in str(exc).lower():
+            raise
+        for alt in ("msedge", "chrome", "chromium"):
+            if alt == BROWSER:
+                continue
+            alt_opts = dict(options)
+            alt_opts.pop("channel", None)
+            if alt != "chromium":
+                alt_opts["channel"] = alt
+            try:
+                return playwright.chromium.launch(**alt_opts)
+            except Exception:
+                continue
+        raise
 
 
 def _maximize(page):

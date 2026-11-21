@@ -19,9 +19,9 @@ export function donut(parts, { center = null, sub = "", empty = "No data yet" } 
     const gap = len >= 100 ? 0 : Math.min(0.8, len / 4);
     const arc = `<circle cx="60" cy="60" r="44" pathLength="100" fill="none" stroke="${p.color}" stroke-width="15"
       stroke-dasharray="${(len - gap).toFixed(3)} ${(100 - len + gap).toFixed(3)}" stroke-dashoffset="${(-offset).toFixed(3)}"
-      transform="rotate(-90 60 60)" class="dc-arc"><title>${esc(p.label)}: ${p.value} (${pctOf(p.value, total)}%)</title></circle>`;
+      transform="rotate(-90 60 60)" class="dc-arc"><title>${esc(p.label)}: ${p.value} (${pctOf(p.value, total)}%)${p.href ? " · click for details" : ""}</title></circle>`;
     offset += len;
-    return arc;
+    return p.href ? `<a href="${p.href}" class="dc-link">${arc}</a>` : arc;  // 23.13.0: each slice drills down
   }).join("") : "";
   const legend = parts.map((p) => {
     const row = `<span class="dc-sw" style="background:${p.color}"></span><span class="dc-lab">${esc(p.label)}</span>
@@ -44,7 +44,7 @@ export function donut(parts, { center = null, sub = "", empty = "No data yet" } 
  * @param {{date:string, [k:string]:any}[]} days
  * @param {{key:string, label:string, color:string}[]} series
  */
-export function dayColumns(days, series, { empty = "Nothing ran in this period" } = {}) {
+export function dayColumns(days, series, { empty = "Nothing ran in this period", hrefFor = null } = {}) {
   const totals = days.map((d) => series.reduce((n, s) => n + (d[s.key] || 0), 0));
   const max = Math.max(1, ...totals);
   const W = 320, H = 150, top = 16, base = 124, bw = Math.min(30, (W - 20) / days.length - 10);
@@ -57,7 +57,8 @@ export function dayColumns(days, series, { empty = "Nothing ran in this period" 
       if (!v) return "";
       const h = ((base - top) * v) / max;
       y -= h;
-      return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${s.color}" rx="2"><title>${esc(s.label)}: ${v}</title></rect>`;
+      const rect = `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${s.color}" rx="2" class="dc-arc"><title>${esc(s.label)}: ${v}${hrefFor ? " · click for details" : ""}</title></rect>`;
+      return hrefFor ? `<a href="${hrefFor(d.date, s.key)}" class="dc-link">${rect}</a>` : rect;
     }).join("");
     const day = new Date(`${d.date}T00:00:00`);
     const lab = day.toLocaleDateString([], { weekday: "short" });

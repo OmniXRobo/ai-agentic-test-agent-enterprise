@@ -186,9 +186,14 @@ class PlaywrightDriver:
 
     def run(self, engine: Any, run_id: str, *, stop: threading.Event | None = None,
             resumed: threading.Event | None = None, on_directive: Callable[[dict[str, Any]], None] | None = None,
-            on_wait: Callable[["PlaywrightDriver", dict[str, Any]], None] | None = None, poll_s: float = 0.5, max_steps: int = 20000) -> dict[str, Any]:
-        """Drive one execution until it finishes, waiting (browser open) while it is paused or unconfirmed."""
-        obs: dict[str, Any] = {"snapshot": self.snapshot(), "capabilities": {"isolated_contexts": True}}
+            on_wait: Callable[["PlaywrightDriver", dict[str, Any]], None] | None = None, poll_s: float = 0.5, max_steps: int = 20000,
+            isolated: bool = True) -> dict[str, Any]:
+        """Drive one execution until it finishes, waiting (browser open) while it is paused or unconfirmed.
+
+        23.13.0 ``isolated=False``: the chat browser. Another account signs out and in again in the same window
+        instead of opening an isolated window per account."""
+        caps = {"isolated_contexts": bool(isolated)}
+        obs: dict[str, Any] = {"snapshot": self.snapshot(), "capabilities": caps}
         for _ in range(max_steps):
             if stop is not None and stop.is_set():
                 break
@@ -212,11 +217,11 @@ class PlaywrightDriver:
                         on_wait(self, run)
                     self._idle(poll_s)
                 self.observe_user(False)
-                obs = {"snapshot": self.snapshot(), "capabilities": {"isolated_contexts": True}}
+                obs = {"snapshot": self.snapshot(), "capabilities": caps}
                 continue
             action = directive["action"]
             result = self.perform(action)
-            obs = {"snapshot": self.snapshot(), "result": result, "capabilities": {"isolated_contexts": True}}
+            obs = {"snapshot": self.snapshot(), "result": result, "capabilities": caps}
         return {"status": engine.run(run_id)["status"]}
 
     # ---- 23.7.0: learn while the person browses -------------------------------------------------------------------

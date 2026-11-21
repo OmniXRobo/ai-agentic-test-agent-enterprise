@@ -366,7 +366,17 @@ class ApiTestingService:
             sender.close()
         if info["scheme"] == "https":
             if rec.get("error_kind") == "tls":
-                steps.append({"step": "TLS certificate", "status": "FAIL", "detail": rec["error"]})
+                hint = ""
+                low = (rec.get("error") or "").lower()
+                if "issuer" in low or "self signed" in low or "self-signed" in low or "unknown ca" in low:
+                    hint = (" The server's certificate is issued by an authority this PC does not trust. If it is your "
+                            "company's own CA, add its certificate under Certificates > Trusted CA (ask IT for the "
+                            ".cer / .pem file); SkyGuard QA already trusts the certificates in the Windows store.")
+                elif "hostname" in low or "doesn't match" in low or "not valid for" in low:
+                    hint = " The certificate was issued for another host name; use the name it was issued for."
+                elif "expired" in low:
+                    hint = " The server's certificate has expired; ask its owner to renew it."
+                steps.append({"step": "TLS certificate", "status": "FAIL", "detail": rec["error"] + hint})
             elif rec.get("status") is not None:
                 steps.append({"step": "TLS certificate", "status": "PASS" if (a["config"].get("tls") or {}).get("verify", True)
                               else "WARN", "detail": "Certificate verified." if (a["config"].get("tls") or {}).get("verify", True)
@@ -381,7 +391,10 @@ class ApiTestingService:
             steps.append({"step": "HTTP answer", "status": "PASS" if code < 400 else "WARN", "detail": detail})
             ok = True
         else:
-            steps.append({"step": "HTTP answer", "status": "FAIL", "detail": rec.get("error") or "No answer."})
+            detail = rec.get("error") or "No answer."
+            if rec.get("error_kind") == "tls":
+                detail = "Not sent: the secure connection (TLS) failed first, see above."
+            steps.append({"step": "HTTP answer", "status": "FAIL", "detail": detail})
             ok = False
         self.audit("connection.tested", app_id, url, ok=ok)
         return {"ok": ok, "url": sender.redactor.url(url, set()), "steps": steps}

@@ -76,7 +76,8 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
             <label data-url ${s.stt_api === "faster_whisper" ? "hidden" : ""}>Server URL <input name="stt_url" value="${esc(s.stt_url)}" placeholder="http://127.0.0.1:8081"></label>
             <label data-openai ${s.stt_api === "openai" ? "" : "hidden"}>Model name <input name="stt_model" value="${esc(s.stt_model)}" placeholder="as the server lists it"></label>
           </div>
-          <label>Language <input name="language" value="${esc(s.language)}" maxlength="5" style="width:90px"></label>
+          <label>Language <select name="language">${[["en", "English"], ["auto", "English and Arabic (detected)"], ["ar", "Arabic (UAE and other)"]].concat((s.language && !["en", "auto", "ar"].includes(s.language)) ? [[s.language, s.language]] : []).map(([v, l]) => `<option value="${esc(v)}" ${v === (s.language || "en") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+          <p class="muted">Arabic needs a multilingual Faster-Whisper model (small, not small.en). Get it once with GET_FASTER_WHISPER_MODEL.ps1 -Model small on a PC with Internet and install it with INSTALL_SPEECH_MODEL.cmd from the patch. Arabic commands are translated to English by the local AI before they run, and Arabic replies use an installed Arabic Windows voice when there is one.</p>
         </section>
         <section class="ck-panel">
           <h3>Voice reply</h3>
@@ -89,6 +90,7 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
           <p class="muted">${radio.available ? `Installed Windows voices: ${radio.voices.map((v) => esc(v.name)).join(", ") || "none"}. They are rendered on this PC, so replies work offline.` : "No Windows voices were found by the runtime, so the browser's installed voice is used with the radio beeps and static around it."}</p>
           <label>Browser voice (fallback) <select name="tts_voice"><option value="">Male voice for the language</option>
             ${voices.map((v) => `<option value="${esc(v.name)}" ${v.name === s.tts_voice ? "selected" : ""}>${esc(v.name)} (${esc(v.lang)})</option>`).join("")}</select></label>
+          <p class="muted">Used only when the Windows voice cannot speak. It keeps the gender of the Radio voice above (a male setting is never answered by a female voice).</p>
           <p class="muted">Installed browser voices: ${voices.length ? voices.map((v) => esc(v.name)).join(", ") : "none found"}.</p>
           <label>Speaking speed <input type="number" name="tts_rate" min="0.5" max="2" step="0.1" value="${esc(s.tts_rate)}" style="width:90px"></label>
           ${range("voice_volume", pct(s.voice_volume, 0.9), "Voice volume")}

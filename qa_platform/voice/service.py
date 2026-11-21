@@ -304,11 +304,15 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
 
     def _stt_request(self, cfg: dict[str, Any]) -> tuple[str, dict[str, str]]:
         language = (cfg.get("language") or "en").split("-")[0]
+        # 23.13.0: "auto" = English and Arabic (the model detects which); the English vocabulary hint is only given
+        # for English, because it would push Arabic speech towards English words
+        prompt = self.vocabulary_prompt(cfg) if language == "en" else ""
         if cfg.get("stt_api") == "openai":
-            return "/audio/transcriptions", {"model": cfg.get("stt_model") or "whisper-1", "response_format": "json",
-                                             "language": language, "prompt": self.vocabulary_prompt(cfg)}
-        return "/inference", {"response_format": "json", "language": language, "temperature": "0",
-                              "prompt": self.vocabulary_prompt(cfg)}
+            data = {"model": cfg.get("stt_model") or "whisper-1", "response_format": "json", "prompt": prompt}
+            if language != "auto":
+                data["language"] = language
+            return "/audio/transcriptions", data
+        return "/inference", {"response_format": "json", "language": language, "temperature": "0", "prompt": prompt}
 
     def _try_recording(self, url: str, cfg: dict[str, Any], timeout: float) -> tuple[str, str]:
         """Send half a second of silence to the real recognition endpoint: PASS only if it answers with text JSON.
@@ -483,8 +487,56 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
 
     # ---- entry point ---------------------------------------------------------------------------
 
+    # 23.13.0: Arabic. A command spoken or typed in Arabic (or UAE Arabic) is translated to English by the local AI
+    # (built-in word list when the model is not running), runs as the English command, and the reply is given in
+    # Arabic again. Nothing leaves the PC.
+    def _ai_chat(self) -> Any:
+        ai = self.ai
+
+        class _Gateway:
+            def chat(self, messages: list[dict[str, str]], *, max_tokens: int = 200, json_mode: bool = False) -> str:
+                if not ai.config().get("base_url"):
+                    raise RuntimeError("no local AI configured")
+                return ai.chat(messages, max_tokens=max_tokens, timeout=60)
+
+        return _Gateway()
+
+    def to_arabic(self, text: str) -> str | None:
+        """The reply in Arabic (local AI), or None when it cannot be translated now."""
+        from skyguard_agent.translate import has_arabic
+
+        if not text:
+            return None
+        try:
+            out = self._ai_chat().chat([
+                {"role": "system", "content": "Translate this short reply of a software testing assistant into clear "
+                 "Arabic as spoken in the UAE. Keep names, numbers, test case IDs and page names unchanged. Reply "
+                 "with the Arabic text only."}, {"role": "user", "content": text[:800]}], max_tokens=300)
+        except Exception:  # noqa: BLE001 - the English reply is kept
+            return None
+        out = (out or "").strip()
+        return out if out and has_arabic(out) and len(out) < 1200 else None
+
     def handle(self, text: str, *, conversation_id: str, source: str = "typed",
                page: dict[str, Any] | None = None) -> dict[str, Any]:
+        from skyguard_agent.translate import has_arabic, to_english
+
+        if not has_arabic(text or ""):
+            return self._handle(text, conversation_id=conversation_id, source=source, page=page)
+        english, _ = to_english(self.strip_wake_name(text or "") or text, self._ai_chat())
+        reply = self._handle(english, conversation_id=conversation_id, source=source, page=page)
+        reply["heard"] = text
+        reply["understood"] = english
+        arabic = self.to_arabic(reply.get("say") or "")
+        if arabic:
+            reply["say_en"] = reply.get("say")
+            reply["say"] = arabic
+            reply["speak"] = arabic
+            reply["language"] = "ar"
+        return reply
+
+    def _handle(self, text: str, *, conversation_id: str, source: str = "typed",
+                page: dict[str, Any] | None = None) -> dict[str, Any]:
         text = self.strip_wake_name(text or "")
         if not text:
             raise QAError("VALIDATION_FAILED", "Say or type a command.", status=422)

@@ -162,6 +162,9 @@ def test_run_failure_records_step_and_screenshot(auto, site):
 
 @needs_browser
 def test_self_healing_recovers_renamed_id_and_applies_only_after_validation(auto, rt, site):
+    # 23.13.0: a healed locator is kept automatically by default (see test_release_231300); with "keep healed
+    # locators" off it is applied by a person, as before
+    rt.settings.update({"playback": {"auto_apply_healing": False}})
     script = _login_script(site, page="login_v2.html")
     script.steps[6].timeout_ms = 800
     script = auto.scripts.save(script)
@@ -176,6 +179,21 @@ def test_self_healing_recovers_renamed_id_and_applies_only_after_validation(auto
     assert updated.steps[6].target.selector == "#signin-btn"
     assert "#login-btn" in updated.steps[6].target.alternates
     assert any("self-healing" in v["reason"] for v in auto.scripts.versions(script.id))
+
+
+@needs_browser
+def test_healed_locator_is_kept_so_the_next_run_does_not_heal_again(auto, rt, site):
+    """23.13.0: the healing of a passing step is written into the script (old locator kept as an alternate)."""
+    script = _login_script(site, page="login_v2.html")
+    script.steps[6].timeout_ms = 800
+    script = auto.scripts.save(script)
+    first = auto.run_script(script.id, headless=True, background=False)
+    assert first["status"] == "PASSED" and first["healed"][0]["healed"] == "#signin-btn"
+    kept = auto.scripts.get(script.id).steps[6].target
+    assert kept.selector == "#signin-btn" and "#login-btn" in kept.alternates
+    assert auto.runner.healing_events(script.id)[0]["applied"]
+    second = auto.run_script(script.id, headless=True, background=False)
+    assert second["status"] == "PASSED" and not second["healed"]  # found at once: no healing, no question
 
 
 @needs_browser

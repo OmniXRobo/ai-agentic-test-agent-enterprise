@@ -190,7 +190,7 @@ class Discovery:
 
     # ---- crawl ----------------------------------------------------------------------------
 
-    def crawl(self, run_id: str, base_url: str, *, max_pages: int = 15, max_depth: int = 3, browser: str = "chromium",
+    def crawl(self, run_id: str, base_url: str, *, max_pages: int = 15, max_depth: int = 3, browser: str | None = None,
               headless: bool = True, login_steps: Any = None, job: DiscoveryJob | None = None,
               application: str | None = None, credential_role: str | None = None, environment: str | None = None,
               explore: bool = True, knowledge_source: str = "application", visual: bool | None = None,

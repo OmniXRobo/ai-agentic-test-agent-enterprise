@@ -178,6 +178,27 @@ class AnalyticsService:
                                          key=lambda x: -(x["passed"] + x["failed"] + x["other"]))
         except Exception:
             pass
+        # 23.13.0: more dashboard charts (each one opens the page with the matching items)
+        try:
+            out["defects_by_module"] = dict(Counter(
+                r["source"] or "other" for r in self.db.query("SELECT source FROM defect_drafts LIMIT ?", (MAX_ROWS,))))
+        except Exception:
+            pass
+        try:
+            api = Counter(r["status"] for r in self.db.query(
+                "SELECT status FROM api_results ORDER BY id DESC LIMIT ?", (MAX_ROWS,)))
+            out["api_results"] = {"passed": api.get("PASSED", 0), "failed": api.get("FAILED", 0),
+                                  "other": sum(v for k, v in api.items() if k not in ("PASSED", "FAILED"))}
+        except Exception:
+            pass
+        try:
+            heal = Counter(r["result"] for r in self.db.query(
+                "SELECT result, applied FROM healing_events ORDER BY id DESC LIMIT ?", (MAX_ROWS,)))
+            applied = self.db.query_one("SELECT COUNT(*) AS n FROM healing_events WHERE applied = 1")
+            out["healing"] = {"events": sum(heal.values()), "applied": int((applied or {}).get("n") or 0),
+                              "by_result": dict(heal)}
+        except Exception:
+            pass
         return out
 
     # ---- functional ----------------------------------------------------------------------------
