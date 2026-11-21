@@ -282,6 +282,7 @@ jobs:
           cmd /c "`"$app\INSTALL_SPEECH_MODEL.cmd`" `"$env:RUNNER_TEMP\faster-whisper-bad.zip`""
           if ($LASTEXITCODE -eq 0) { throw "a zip without a model was accepted" }
           if (Test-Path ($dest -replace 'small$', 'bad')) { throw "a model folder was made for the bad zip" }
+          exit 0  # the refused zip above left exit code 1 behind on purpose
   extension-install-windows:
     # 1.2.0 installer fix: runs the companion installer (Install-SkyGuardAgent.ps1) for real under Windows
     # PowerShell 5.1 on a brand-new per-user profile. First the script as released in 23.10.0 (expected to fail with
