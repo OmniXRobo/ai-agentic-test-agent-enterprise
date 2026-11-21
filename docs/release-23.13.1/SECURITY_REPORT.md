@@ -1,4 +1,25 @@
-# Security report: SkyGuard QA 23.13.0 and extension 1.4.1
+# Security report: SkyGuard QA 23.13.1
+
+## 23.13.1 (21 November 2026)
+
+Scope: what 23.13.1 changes since 23.13.0 (commit `e0f9ac4`): `qa_platform/voice/piper.py` (new), `tts.py`,
+`service.py`, `fw_service.py`, `config.py`, `api/voice.py`, `skyguard_agent/translate.py`, `web/js/voice.js`,
+`web/js/radio.js`, `web/js/pages/voice.js`, and the PowerShell helpers `GET_ARABIC_VOICE.ps1`,
+`INSTALL_ARABIC_VOICE.cmd/.ps1`, `INSTALL_SPEECH_MODEL.cmd/.ps1`, `GET_FASTER_WHISPER_MODEL.ps1`.
+
+| Check | Result |
+|---|---|
+| bandit on the changed Python modules | 5 low findings, all reviewed: B404/B603 `subprocess` (Piper and PowerShell are started with fixed argument lists, no shell, the reply text goes on stdin or in an environment variable, never on the command line), B110 (an existing fallback to the word list). No medium or high finding. (`test-results/bandit-231301.json`) |
+| New dependencies | None in Python. Piper (MIT) is downloaded only by `GET_ARABIC_VOICE.ps1` on an internet PC, checked against a pinned SHA-256 (`f3c58906...1efcea`); the voice model is checked against the SHA-256 Hugging Face publishes. |
+| What runs | Only `runtime\piper\piper.exe` (or `piper.exe` under `QA_PIPER_DIR`), with `--model <installed .onnx> --output_file <cache .wav> --length_scale <number>`. The model path comes from the installed folder, not from a request. |
+| API | `PUT /api/voice/settings` takes `arabic_voice_gender` only as "", "male" or "female" (422 otherwise). `/api/voice/speak` keeps its 600-character limit. |
+| Installer helpers | Offline, per user, no administrator rights, staged install (`.new` folder renamed into place); unpacked with .NET `ZipFile` into a new temporary folder; a zip without the expected files is refused and nothing changes (tested in Windows CI). The scripts are ASCII only, so Windows PowerShell 5.1 reads them as written. |
+| Wake-name matching | Only removes the leading name from the text; the command then goes through the same parser, confirmations and permissions as before. |
+
+Residual risk: Piper's own program is a third-party binary (MIT, from the rhasspy GitHub release). It is pinned by
+SHA-256 but not code-signed.
+
+## 23.13.0
 
 Scope: everything 23.13.0 changes since 23.12.0 (commit `fd5a117`), 45 Python files and the changed pages. Most
 attention went to the parts that are new kinds of exposure: HTTPS (a local certificate authority made on this PC),
