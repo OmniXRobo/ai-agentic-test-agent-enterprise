@@ -160,7 +160,7 @@ jobs:
           call "%PKG%\INSTALL.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
           type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"
   setup-exe-build:
-    # 23.10.0 (now 23.13.1): builds the cumulative patch and the Setup wizard exactly as released (NSIS, per user), for the
+    # 23.10.0 (now 23.13.2): builds the cumulative patch and the Setup wizard exactly as released (NSIS, per user), for the
     # Windows job below.
     runs-on: ubuntu-latest
     steps:
@@ -180,7 +180,7 @@ jobs:
         run: python packaging/setup/build_release.py --out dist_release --ocr-wheels ocr-wheels --skip-extension
       - uses: actions/upload-artifact@v4
         with:
-          name: SGQA-23.13.1-setup
+          name: SGQA-23.13.2-setup
           path: |
             dist_release/SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch/SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe
             dist_release/SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch/Manual_Install/
@@ -195,7 +195,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        baseline: ["23.3.35:6d448fa", "23.11.1:8e8df0d", "23.12.0:fd5a117", "23.13.0:e0f9ac4"]
+        baseline: ["23.3.35:6d448fa", "23.11.1:8e8df0d", "23.12.0:fd5a117", "23.13.0:e0f9ac4", "23.13.1:0a7ed57"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -205,7 +205,7 @@ jobs:
           python-version: "3.13"
       - uses: actions/download-artifact@v4
         with:
-          name: SGQA-23.13.1-setup
+          name: SGQA-23.13.2-setup
           path: rel
       - name: Install the baseline release (its own code, a virtual environment, a database with data)
         shell: pwsh
@@ -242,25 +242,25 @@ jobs:
         run: |
           $exe = Get-ChildItem rel -Recurse -Filter "*Offline_Setup.exe" | Select-Object -First 1
           $p = Start-Process -FilePath $exe.FullName -ArgumentList "/S", "/APP=$env:INST", "/NOSTART" -Wait -PassThru
-          Get-ChildItem "$env:INST\logs\setup-23.13.1-*.txt" | ForEach-Object { Get-Content $_.FullName }
+          Get-ChildItem "$env:INST\logs\setup-23.13.2-*.txt" | ForEach-Object { Get-Content $_.FullName }
           "exit code $($p.ExitCode)"
           if ($p.ExitCode -ne 0) { throw "Setup failed with exit code $($p.ExitCode)" }
-          if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.13.1"') { throw "version is not 23.13.1" }
-          if (-not (Test-Path "$env:INST\patch-tools\23.13.1\ROLLBACK_PATCH.cmd")) { throw "patch-tools missing" }
+          if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.13.2"') { throw "version is not 23.13.2" }
+          if (-not (Test-Path "$env:INST\patch-tools\23.13.2\ROLLBACK_PATCH.cmd")) { throw "patch-tools missing" }
           $env:QA_HOME = "$env:INST\data"
-          & "$env:INST\app\.venv\Scripts\python.exe" -E -s "$env:INST\patch-tools\23.13.1\install_patch.py" verify --app "$env:INST" --python "$env:INST\app\.venv\Scripts\python.exe"
+          & "$env:INST\app\.venv\Scripts\python.exe" -E -s "$env:INST\patch-tools\23.13.2\install_patch.py" verify --app "$env:INST" --python "$env:INST\app\.venv\Scripts\python.exe"
           if ($LASTEXITCODE -ne 0) { throw "verify failed" }
       - name: Roll back to the baseline, then upgrade again with APPLY_PATCH.ps1 (Windows PowerShell 5.1)
         shell: pwsh
         run: |
           $env:QA_HOME = "$env:INST\data"
-          & "$env:INST\app\.venv\Scripts\python.exe" -E -s "$env:INST\patch-tools\23.13.1\install_patch.py" rollback --app "$env:INST" --skip-running-check
+          & "$env:INST\app\.venv\Scripts\python.exe" -E -s "$env:INST\patch-tools\23.13.2\install_patch.py" rollback --app "$env:INST" --skip-running-check
           if ($LASTEXITCODE -ne 0) { throw "rollback failed" }
           if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch [regex]::Escape("""$env:BASEV""")) { throw "rollback did not restore $env:BASEV" }
           $manual = Get-ChildItem rel -Recurse -Directory -Filter "Manual_Install" | Select-Object -First 1
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$($manual.FullName)\APPLY_PATCH.ps1" -InstallDir "$env:INST" -NoStart
           if ($LASTEXITCODE -ne 0) { throw "APPLY_PATCH.ps1 failed" }
-          if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.13.1"') { throw "version is not 23.13.1 after APPLY_PATCH.ps1" }
+          if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.13.2"') { throw "version is not 23.13.2 after APPLY_PATCH.ps1" }
       - name: INSTALL_SPEECH_MODEL.cmd installs a model zip offline (Windows PowerShell 5.1)
         shell: pwsh
         run: |

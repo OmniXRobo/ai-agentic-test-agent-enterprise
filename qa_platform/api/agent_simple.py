@@ -101,6 +101,8 @@ async def command(body: CommandIn, request: Request, svc: Any = Depends(ops)) ->
     if translated:
         reply["translated_from"] = body.text
         reply["translated_to"] = text
+    # 23.13.2: the reply is also spoken, in English for an English request and in Arabic for an Arabic one
+    reply.update(await run_in_threadpool(svc.spoken_reply, reply, translated))
     if reply.get("type") == "run" and reply.get("run_id") and not reply.get("duplicate"):
         # the chat browser checks the application read-only and prepares the one preview (23.13.0: the same window
         # for every request of this chat)

@@ -179,3 +179,48 @@ def strip_arabic_wake(text: str, names: list[str] | tuple[str, ...] | set[str]) 
         if any(_close(heard, s) for s in sounds if len(s) >= 2 or heard == s):
             return " ".join(words[size:]).strip(" ،,.:!-")
     return None
+
+
+# ---- the spoken reply (SkyGuard 23.13.2) ---------------------------------------------------------------------------
+# The AI Agent page and the extension speak their replies: in English for an English request, in Arabic for an Arabic
+# one. The Arabic text comes from the local model; when it is not running, a short Arabic line for the kind of reply
+# is spoken and the details stay on screen.
+REPLY_PROMPT = ("Translate this short reply of a software testing assistant into clear Arabic as spoken in the UAE. "
+                "Keep names, numbers, codes and web addresses unchanged. Reply with the Arabic text only.")
+ARABIC_LINES = {
+    "run": "حاضر. أجهز المعاينة الحين، وبعدها أكد لو سمحت قبل التنفيذ.",
+    "navigate": "حاضر، فتحت الصفحة.",
+    "records": "هذي النتائج على الشاشة.",
+    "clarify": "أحتاج معلومة إضافية. شوف الشاشة لو سمحت.",
+    "need_account": "أحتاج حساب للدخول. عبي البيانات على الشاشة.",
+    "need_credential": "أحتاج كلمة المرور. احفظها في النموذج الآمن على الشاشة.",
+    "sign_in": "حاضر، جاري تسجيل الدخول.",
+    "needs_approval": "هذي المهمة تحتاج موافقتك أولاً.",
+    "secret_intercepted": "لا تكتب كلمات السر في المحادثة. استخدم النموذج الآمن.",
+    "error": "ما قدرت أنفذ الطلب. السبب على الشاشة.",
+}
+ARABIC_DEFAULT = "تم. التفاصيل على الشاشة."
+_URL = re.compile(r"https?://\S+")
+
+
+def to_arabic(text: str, llm: Any = None) -> str | None:
+    """The reply in Arabic by the local model, or None when it is not running or answered something else."""
+    if not text or llm is None:
+        return None
+    try:
+        out = llm.chat([{"role": "system", "content": REPLY_PROMPT}, {"role": "user", "content": text.strip()[:800]}],
+                       max_tokens=300)
+    except Exception:  # noqa: BLE001 - the model is not running: the short line is spoken instead
+        return None
+    out = (out or "").strip()
+    return out if out and has_arabic(out) and len(out) < 1200 else None
+
+
+def spoken_reply(reply: dict[str, Any], arabic: bool, llm: Any = None) -> dict[str, str]:
+    """{"speak": text to say, "language": "en" | "ar"} for an agent reply. Web addresses are not read out."""
+    text = _URL.sub("", str(reply.get("text") or "")).strip()
+    text = re.sub(r"\s+", " ", text)[:500]
+    if not arabic:
+        return {"speak": text, "language": "en"}
+    ar = to_arabic(text, llm) if text else None
+    return {"speak": ar or ARABIC_LINES.get(str(reply.get("type")), ARABIC_DEFAULT), "language": "ar"}

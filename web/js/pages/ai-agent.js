@@ -18,6 +18,7 @@ import { esc, toast, dateTimeOf } from "../util.js";
 import { startRecording } from "../wav-recorder.js";
 import { looksSecret, SECRET_WARNING } from "../secret-check.js";
 import { isAdmin, canEdit } from "../auth.js";
+import { voice, loadSettings, speak } from "../voice.js";
 
 const TABS = [["chat", "AI Chat & Voice"], ["connect", "Connect & Learn"], ["knowledge", "Applications & Knowledge"], ["tasks", "Tasks & History"]];
 const OUTCOME = { confirmed_success: ["PASS", "Completed"], confirmed_failure: ["FAIL", "Failed"], skipped: ["WARN", "Skipped"], unknown: ["WARN", "Uncertain: check in the application"], pending: ["INFO", "Waiting"], running: ["INFO", "Running"] };
@@ -166,9 +167,21 @@ async function send(text, source, log, input, quiet = false) {
     try { sessionStorage.setItem("aiagent.conv", out.conversation); } catch { /* ignore */ }
     wait.remove();
     renderReply(log, out.reply);
+    if (source === "voice") sayReply(out.reply);
     state.suggestAt = 0;
     loadSuggestions().catch(() => {});
   } catch (err) { wait.innerHTML = `${pill("FAIL", "Error")} ${esc(err.message)}`; }
+}
+
+// 23.13.2: a spoken request gets a spoken answer: English for English, Arabic (Arabic voice) for Arabic.
+async function sayReply(r) {
+  const line = (r.speak || r.text || "").trim();
+  if (!line) return;
+  try {
+    const s = voice.settings || await loadSettings();
+    if (s?.voice_enabled === false) return;
+    await speak(line, { ...s, speak_replies: true });
+  } catch { /* the reply is on screen */ }
 }
 
 function renderReply(log, r) {

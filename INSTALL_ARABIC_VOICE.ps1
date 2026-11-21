@@ -102,7 +102,18 @@ try {
     Rename-Item -LiteralPath $staging -NewName (Split-Path $dest -Leaf)
     if (Test-Path -LiteralPath "$dest.old") { Remove-Item -LiteralPath "$dest.old" -Recurse -Force }
     Write-Host ("Installed the Arabic voice ({0}) in {1}" -f (($voices | ForEach-Object { $_.BaseName }) -join ", "), $dest) -ForegroundColor Green
-    Write-Host "Arabic replies are now spoken by it. Test it in Voice settings > Arabic voice."
+    Write-Host "Arabic replies are now spoken by it. Test it in Voice settings > Test Arabic Voice."
+    # 23.13.2: the browser extension's companion speaks Arabic replies with the same voice
+    $agentHome = Join-Path $env:LOCALAPPDATA "SkyGuardAgent"
+    if ($env:LOCALAPPDATA -and (Test-Path -LiteralPath $agentHome)) {
+        $agentDest = Join-Path $agentHome "runtime\piper"
+        try {
+            if (Test-Path -LiteralPath $agentDest) { Remove-Item -LiteralPath $agentDest -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path (Split-Path $agentDest -Parent) | Out-Null
+            Copy-Item -LiteralPath $dest -Destination $agentDest -Recurse -Force
+            Write-Host "The browser extension's companion uses it too ($agentDest)." -ForegroundColor Green
+        } catch { Write-Host "The extension's companion could not get a copy ($($_.Exception.Message)); it still finds the voice in $dest when SkyGuard QA is in its default folder." -ForegroundColor Yellow }
+    }
 } finally {
     if ($tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }

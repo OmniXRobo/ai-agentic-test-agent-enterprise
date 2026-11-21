@@ -123,6 +123,7 @@ async function sendChat() {
   box.value = "";
   renderChat();
   try {
+    const spoken = S.voiceSource;
     const out = await api.post("/v1/chat", { text, conversation: S.conversation || undefined, app_id: S.appId || undefined, source: S.voiceSource ? "voice" : "typed" });
     S.voiceSource = false;
     S.conversation = out.conversation;
@@ -142,6 +143,7 @@ async function sendChat() {
       actions += `<div class="muted" style="margin-top:4px">${opened.ok ? "Opened in the browser." : esc(opened.error || "Could not open it.")} ${esc(r.url)}</div>`;
     }
     S.messages.push({ who: "agent", text: r.text, warn: r.type === "secret_intercepted" || r.type === "error", actions });
+    if (spoken) sayReply(r);
     if (r.type === "run" && r.run_id && !r.duplicate) { S.runId = r.run_id; await send({ type: "drive", runId: r.run_id }); setTimeout(() => show("run"), 600); }
     else if (r.type === "run" && r.run_id) { S.runId = r.run_id; setTimeout(() => show("run"), 600); }
     suggestions();
@@ -149,6 +151,47 @@ async function sendChat() {
     S.messages.push({ who: "agent", warn: true, text: e.message });
   }
   renderChat();
+}
+
+// ---- spoken replies (1.4.2): English with the PC's installed voices, Arabic with the offline Arabic voice ----
+const ARABIC = /[\u0600-\u06FF]/;
+const MALE = /david|mark|guy|george|james|richard|ryan|daniel|naayf|hamed|male\b/i;
+const FEMALE = /zira|hazel|susan|aria|jenny|eva|hoda|salma|zariyah|female/i;
+let playing = null;
+
+function localVoice(lang, gender) {
+  const all = ("speechSynthesis" in window ? speechSynthesis.getVoices() : []).filter((v) => v.localService && v.lang.toLowerCase().startsWith(lang));
+  const want = gender === "female" ? FEMALE : MALE;
+  return all.find((v) => want.test(v.name)) || (lang === "ar" ? all[0] : all.find((v) => !(gender === "female" ? MALE : FEMALE).test(v.name))) || null;
+}
+
+function browserSay(text, lang, gender) {
+  const v = localVoice(lang, gender);
+  if (!v) return false; // never an English voice for Arabic text
+  const u = new SpeechSynthesisUtterance(text);
+  u.voice = v; u.lang = v.lang;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+  return true;
+}
+
+async function sayReply(r) {
+  const text = (r.speak || r.text || "").trim();
+  if (!text) return;
+  const { speak_replies, reply_gender } = await chrome.storage.local.get({ speak_replies: true, reply_gender: "male" });
+  if (speak_replies === false) return;
+  const gender = reply_gender === "female" ? "female" : "male";
+  if (!ARABIC.test(text)) { browserSay(text, "en", gender); return; }
+  try {
+    const blob = await api.speakArabic(text, gender);
+    playing?.pause();
+    const url = URL.createObjectURL(blob);
+    playing = new Audio(url);
+    playing.onended = () => URL.revokeObjectURL(url);
+    await playing.play();
+  } catch (e) {
+    if (!browserSay(text, "ar", gender)) toast($("#chatErr"), e.message || "No Arabic voice is installed; the reply is on screen.");
+  }
 }
 
 async function chatAction(act, data) {

@@ -122,6 +122,15 @@ export async function transcribe(wavBlob) {
   return raw("POST", "/v1/voice/transcribe", { audio: wavBlob });
 }
 
+// 1.4.2: an Arabic reply as WAV bytes, spoken by the offline Arabic voice on this PC (companion + Piper)
+export async function speakArabic(text, gender = "male") {
+  const r = await call("POST", "/v1/voice/speak", { text: text.slice(0, 600), gender });
+  const bin = atob(r.wav);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: r.content_type || "audio/wav" });
+}
+
 export async function hello() { return raw("GET", "/v1/hello", { auth: false, device: false }); }
 
 export async function pair(code, name) {

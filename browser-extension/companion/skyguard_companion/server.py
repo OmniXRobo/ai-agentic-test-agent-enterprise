@@ -463,6 +463,12 @@ def chat(x: Ctx) -> dict[str, Any]:
                             app_id=b.get("app_id"), source="voice" if b.get("source") == "voice" else "typed")
     if translated and isinstance(out, dict):
         out = {**out, "translated_from": b["text"], "translated_to": text}
+    if isinstance(out, dict) and isinstance(out.get("reply"), dict):
+        # SkyGuard 23.13.2 (extension 1.4.2): the reply to speak, in English or in Arabic like the request
+        from skyguard_agent.translate import spoken_reply
+
+        out["reply"] = {**out["reply"], **spoken_reply(out["reply"], translated,
+                                                        getattr(x.c.agent, "llm", None) if translated else None)}
     return out
 
 
@@ -568,6 +574,30 @@ def transcribe(x: Ctx) -> dict[str, Any]:
         return {"text": x.c.agent.transcribe(x.raw, x.content_type)}
     except RuntimeError as exc:
         raise AgentError("VOICE_UNAVAILABLE", str(exc), 503) from None
+
+
+@route("POST", "/v1/voice/speak", "write", "voice")
+def speak(x: Ctx) -> dict[str, Any]:
+    """SkyGuard 23.13.2: an Arabic reply as WAV (base64), spoken by the offline Arabic voice (Piper). English replies
+    are spoken by the browser's own installed voices in the side panel."""
+    import base64
+
+    from skyguard_agent import speech
+
+    b = validate(x.body, {"text": ("str", True, 600), "gender": ("str", False, 10)})
+    gender = "female" if b.get("gender") == "female" else "male"
+    try:
+        wav = speech.render_arabic(b["text"], gender, extra=[x.c.paths.runtime / "piper"])
+    except RuntimeError as exc:
+        raise AgentError("VOICE_ARABIC_MISSING", str(exc), 409) from None
+    return {"wav": base64.b64encode(wav).decode("ascii"), "content_type": "audio/wav"}
+
+
+@route("GET", "/v1/voice/arabic")
+def arabic_voice(x: Ctx) -> dict[str, Any]:
+    from skyguard_agent import speech
+
+    return speech.status([x.c.paths.runtime / "piper"])
 
 
 # learning
