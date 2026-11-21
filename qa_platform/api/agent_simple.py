@@ -88,6 +88,8 @@ class CommandIn(BaseModel):
     conversation: str | None = Field(default=None, max_length=80)
     app_id: str | None = Field(default=None, max_length=80)
     source: Literal["typed", "voice"] = "typed"
+    # 23.13.3: a button under a spoken question answers in the language of that question
+    reply_language: Literal["en", "ar"] | None = None
 
 
 @router.post("/command")
@@ -101,6 +103,8 @@ async def command(body: CommandIn, request: Request, svc: Any = Depends(ops)) ->
     if translated:
         reply["translated_from"] = body.text
         reply["translated_to"] = text
+    # 23.13.2: the reply is also spoken, in English for an English request and in Arabic for an Arabic one
+    reply.update(await run_in_threadpool(svc.spoken_reply, reply, translated or body.reply_language == "ar"))
     if reply.get("type") == "run" and reply.get("run_id") and not reply.get("duplicate"):
         # the chat browser checks the application read-only and prepares the one preview (23.13.0: the same window
         # for every request of this chat)
@@ -109,6 +113,15 @@ async def command(body: CommandIn, request: Request, svc: Any = Depends(ops)) ->
         except AgentError:
             pass
     if reply.get("type") == "navigate" and reply.get("url"):
+        # 23.13.3: a learned page on a site whose addresses change on every visit: its changing parts are taken from
+        # the page open now; a page that cannot be rebuilt opens the start page (never "unknown address")
+        from skyguard_agent.understanding import rebase_url
+
+        try:
+            app_row = svc.agent.kb.application(reply.get("app_id") or body.app_id)
+            reply["url"] = rebase_url(reply["url"], svc.current_url(app_row["id"])) or app_row["base_url"]
+        except AgentError:
+            pass
         try:
             reply["opened"] = await run_in_threadpool(svc.open_page, reply["app_id"], reply["url"], actor(request),
                                                       new_window=bool(reply.get("new_window")))
@@ -173,6 +186,20 @@ def cancel(run_id: str, request: Request, svc: Any = Depends(ops)) -> dict[str, 
 def verify(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
     """Test learned knowledge: every task and page is retrieved through the same router a command uses."""
     return {"ok": True, **svc.pilot.verify_retrieval(app_id)}
+
+
+class SayIn(BaseModel):
+    kind: Literal["preview", "completed", "partial", "failed", "stopped", "cancelled", "paused"]
+    text: str = Field(default="", max_length=600)
+    language: Literal["en", "ar"] = "en"
+
+
+@router.post("/say")
+async def say(body: SayIn, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.13.3: what to say when a task of a spoken request moves on (preview ready, done, failed, waiting for you),
+    in the language of the request. Only words: nothing is run or changed."""
+    return {"ok": True, **await run_in_threadpool(svc.spoken_reply, {"type": body.kind, "text": body.text},
+                                                  body.language == "ar")}
 
 
 @router.post("/voice")

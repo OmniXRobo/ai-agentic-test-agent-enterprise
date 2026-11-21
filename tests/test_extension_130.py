@@ -35,9 +35,9 @@ def test_versions_are_130():
     from skyguard_agent import __version__ as core
     from skyguard_companion import VERSION
     # 1.3.1 (SkyGuard 23.11.2) keeps every 1.3.0 feature and adds the missing-information follow-up
-    # 1.4.0 (23.12.0): installs without pairing; 1.4.1 (23.13.0): Arabic commands, public sites, changing addresses
-    assert VERSION == "1.4.1" and core == "1.4.1"
-    assert json.loads((EXT / "manifest.json").read_text())["version"] == "1.4.1"
+    # 1.4.0 (23.12.0): installs without pairing; 1.4.1 (23.13.0): Arabic commands, public sites, changing addresses; 1.4.2 (23.13.2): spoken replies; 1.4.3 (23.13.3): page choices as buttons
+    assert VERSION == "1.4.3" and core == "1.4.3"
+    assert json.loads((EXT / "manifest.json").read_text())["version"] == "1.4.3"
 
 
 def test_side_panel_has_no_fixed_examples_or_permanent_warning():

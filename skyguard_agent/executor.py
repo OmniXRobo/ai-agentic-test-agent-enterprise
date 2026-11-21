@@ -948,7 +948,15 @@ class Engine:
             step = steps[cp["step"]]
             act = step.get("action")
             if act == "navigate":
-                url = urljoin(app["base_url"], _fill(step.get("url") or "", record))
+                raw = step.get("url") or ""
+                url = urljoin(app["base_url"], _fill(raw, record))
+                if not re.search(r"\{\w+\}", raw):
+                    # 23.13.3: an address recorded while learning, on a site that changes its addresses on every
+                    # visit: the changing parts come from the page open now, or the start page is opened
+                    from .understanding import rebase_url
+
+                    here = (snap or {}).get("url") or (cp.get("page") or {}).get("url")
+                    url = rebase_url(url, here) or app["base_url"]
                 if not _url_allowed(url, app):
                     return self._pause(run, "url_refused", "The workflow points outside the registered application; "
                                        "it was not opened.")

@@ -1,4 +1,4 @@
-SkyGuard Offline Edge/Chrome Agent Extension 1.4.1 (with SkyGuard QA 23.13.0)
+SkyGuard Offline Edge/Chrome Agent Extension 1.4.3 (with SkyGuard QA 23.13.3)
 ============================================================================
 
 The Manifest V3 extension for Microsoft Edge and Google Chrome (116 or later) and its local companion, which runs on
@@ -14,9 +14,20 @@ NEW INSTALL (no commands, no pairing code, no sign-in)
   Edge and Chrome only allow an extension that is not from their store to be added by hand (step 2); SkyGuard does
   not change browser policies to get around that.
 
-ALREADY INSTALLED (1.0 to 1.4.0)
+ALREADY INSTALLED (1.0 to 1.4.2)
   Double-click UPDATE_EXTENSION.cmd, then press Reload on the SkyGuard card of the extensions page it opens. The
   extension then connects and signs in by itself. To undo: UPDATE_EXTENSION.cmd -Rollback
+
+NEW IN 1.4.3
+  - Spoken Arabic "open page" is translated literally; when the page is not named, the question lists the page names
+    only and shows them as buttons.
+  - Asked and told in the language you spoke (Arabic or English), including the preview, result and pauses of a task.
+  - Websites whose address changes on every visit: learned pages open with the address of the tab open now.
+
+NEW IN 1.4.2
+  - A request made by voice gets a spoken reply: English with the voices installed in Windows, Arabic with the
+    offline Arabic voice (run INSTALL_ARABIC_VOICE.cmd from the SkyGuard QA folder once; it gives the companion
+    the same voice). Options > Spoken replies: on or off, Male or Female.
 
 NEW IN 1.4.1
   - Arabic and UAE Arabic commands are translated to English on this PC; the side panel shows "Understood as".

@@ -104,7 +104,7 @@ function renderChat() {
   const log = $("#chatLog");
   if (!log) return;
   log.innerHTML = (S.messages.length ? S.messages : [{ who: "agent", text: "Hello. Choose the application, then tell me what to do in it. Every change shows a short preview first and runs only after you confirm." }])
-    .map((m) => `<div class="msg ${m.who}${m.warn ? " warn" : ""}">${esc(m.text)}${m.actions || ""}</div>`).join("");
+    .map((m) => `<div class="msg ${m.who}${m.warn ? " warn" : ""}">${esc(m.text)}${m.ar ? `<div dir="rtl" lang="ar" style="margin-top:4px">${esc(m.ar)}</div>` : ""}${m.actions || ""}</div>`).join("");
   log.scrollTop = log.scrollHeight;
   log.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => chatAction(b.dataset.act, b.dataset));
 }
@@ -123,8 +123,12 @@ async function sendChat() {
   box.value = "";
   renderChat();
   try {
-    const out = await api.post("/v1/chat", { text, conversation: S.conversation || undefined, app_id: S.appId || undefined, source: S.voiceSource ? "voice" : "typed" });
+    const replyLang = S.replyLang || null;  // 1.4.3: a button under a spoken question answers in its language
+    const spoken = S.voiceSource || !!replyLang;
+    S.runLang = S.runLang || {};
+    const out = await api.post("/v1/chat", { text, conversation: S.conversation || undefined, app_id: S.appId || undefined, source: S.voiceSource ? "voice" : "typed", reply_language: replyLang || undefined });
     S.voiceSource = false;
+    S.replyLang = null;
     S.conversation = out.conversation;
     const r = out.reply;
     let actions = "";
@@ -136,12 +140,15 @@ async function sendChat() {
     if (r.type === "needs_approval") { S.pendingApproval = { id: r.entry_id, text }; actions = `<div class="row" style="margin-top:6px"><button class="btn primary" data-act="approve-run">Approve and run</button><button class="btn" data-act="knowledge">Review it first</button></div>`; }
     if (r.type === "clarify" && (r.missing || []).length) actions = `<div class="muted" style="margin-top:4px">Missing information: ${esc(r.missing.join(", "))}</div>`;
     if (r.type === "need_credential" && r.security_notice) actions += `<div class="muted" style="margin-top:4px">${esc(r.security_notice)}</div>`;
+    if (r.type === "clarify" && (r.options || []).length) actions += `<div class="row" style="margin-top:6px">${r.options.slice(0, 7).map((o) => `<button class="chip" data-act="say" data-say="${esc(o)}" data-lang="${spoken ? (r.language === "ar" ? "ar" : "en") : ""}">${esc(o)}</button>`).join("")}</div>`;  // 1.4.3: the choices as buttons
     if (out.translated_to) actions += `<div class="muted" style="margin-top:4px">Understood as: ${esc(out.translated_to)}</div>`;  // SkyGuard 23.13.0: Arabic commands
     if (r.type === "navigate" && r.url) {
       const opened = await send({ type: "open-url", url: r.url });
       actions += `<div class="muted" style="margin-top:4px">${opened.ok ? "Opened in the browser." : esc(opened.error || "Could not open it.")} ${esc(r.url)}</div>`;
     }
     S.messages.push({ who: "agent", text: r.text, warn: r.type === "secret_intercepted" || r.type === "error", actions });
+    if (spoken) { sayReply(r); if (r.run_id) S.runLang[r.run_id] = r.language === "ar" ? "ar" : "en"; }
+    if (r.language === "ar" && r.speak) S.messages[S.messages.length - 1].ar = r.speak;  // 1.4.3: answered in Arabic too
     if (r.type === "run" && r.run_id && !r.duplicate) { S.runId = r.run_id; await send({ type: "drive", runId: r.run_id }); setTimeout(() => show("run"), 600); }
     else if (r.type === "run" && r.run_id) { S.runId = r.run_id; setTimeout(() => show("run"), 600); }
     suggestions();
@@ -151,8 +158,60 @@ async function sendChat() {
   renderChat();
 }
 
+// ---- spoken replies (1.4.2): English with the PC's installed voices, Arabic with the offline Arabic voice ----
+const ARABIC = /[\u0600-\u06FF]/;
+const MALE = /david|mark|guy|george|james|richard|ryan|daniel|naayf|hamed|male\b/i;
+const FEMALE = /zira|hazel|susan|aria|jenny|eva|hoda|salma|zariyah|female/i;
+let playing = null;
+
+function localVoice(lang, gender) {
+  const all = ("speechSynthesis" in window ? speechSynthesis.getVoices() : []).filter((v) => v.localService && v.lang.toLowerCase().startsWith(lang));
+  const want = gender === "female" ? FEMALE : MALE;
+  return all.find((v) => want.test(v.name)) || (lang === "ar" ? all[0] : all.find((v) => !(gender === "female" ? MALE : FEMALE).test(v.name))) || null;
+}
+
+function browserSay(text, lang, gender) {
+  const v = localVoice(lang, gender);
+  if (!v) return false; // never an English voice for Arabic text
+  const u = new SpeechSynthesisUtterance(text);
+  u.voice = v; u.lang = v.lang;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+  return true;
+}
+
+function runLine(runId, kind, text) {
+  const lang = (S.runLang || {})[runId];
+  S.said = S.said || {};
+  const key = `${runId}:${kind}`;
+  if (!lang || S.said[key]) return;
+  S.said[key] = true;
+  if (lang === "en") { sayReply({ text }); return; }
+  api.lineToSpeak(kind, text, "ar").then((x) => sayReply(x)).catch(() => {});
+}
+
+async function sayReply(r) {
+  const text = (r.speak || r.text || "").trim();
+  if (!text) return;
+  const { speak_replies, reply_gender } = await chrome.storage.local.get({ speak_replies: true, reply_gender: "male" });
+  if (speak_replies === false) return;
+  const gender = reply_gender === "female" ? "female" : "male";
+  if (!ARABIC.test(text)) { browserSay(text, "en", gender); return; }
+  try {
+    const blob = await api.speakArabic(text, gender);
+    playing?.pause();
+    const url = URL.createObjectURL(blob);
+    playing = new Audio(url);
+    playing.onended = () => URL.revokeObjectURL(url);
+    await playing.play();
+  } catch (e) {
+    if (!browserSay(text, "ar", gender)) toast($("#chatErr"), e.message || "No Arabic voice is installed; the reply is on screen.");
+  }
+}
+
 async function chatAction(act, data) {
   if (act === "credential") { chrome.windows.create({ url: chrome.runtime.getURL(`credential.html?account=${encodeURIComponent(data.account)}`), type: "popup", width: 460, height: 560 }); return; }
+  if (act === "say") { $("#say").value = data.say; S.replyLang = data.lang || null; return sendChat(); }
   if (act !== "approve-run") return show(act);
   const p = S.pendingApproval;
   if (!p) return;
@@ -231,6 +290,10 @@ async function renderRun(quiet) {
   const final = ["completed", "partial", "failed", "stopped", "cancelled"].includes(r.status);
   statusBar(st, r);
   const s = sv || {};
+  // 1.4.3: a spoken request's task says what happens next, in the language the person spoke
+  if (r.status === "awaiting_confirmation" && s.can_confirm) runLine(r.id, "preview", "The preview is ready. Please check it and press Confirm.");
+  if (r.status === "paused") runLine(r.id, "paused", (pause && pause.message) || "I need you to finish a step on the screen, then press Resume.");
+  if (final) runLine(r.id, r.status, s.result || (r.summary || {}).message || `The task is ${r.status}.`);
   const rows = (s.records || []).map((rec) => Object.entries(rec).map(([k, val]) => `<tr><th>${esc(k)}</th><td>${esc(val)}</td></tr>`).join("")).join("<tr><td colspan='2'><hr></td></tr>");
   const preview = r.status === "awaiting_confirmation" && p.records ? `<h2>Preview (nothing has been submitted)</h2>
     <table><tr><th>Action</th><td>${esc(s.action || v.plan.stages.map((x) => x.title).join(" → "))}</td></tr><tr><th>Application</th><td>${esc(s.application || "")}</td></tr>

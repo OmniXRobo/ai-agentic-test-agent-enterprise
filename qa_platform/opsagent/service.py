@@ -146,6 +146,13 @@ class OpsAgentService:
         llm = None if self.agent.learning.llm is None else self.agent.llm
         return to_english(text, llm)
 
+    def spoken_reply(self, reply: dict[str, Any], arabic: bool) -> dict[str, str]:
+        """23.13.2: what the AI Agent page says aloud for this reply (Arabic by the local AI when it runs)."""
+        from skyguard_agent.translate import spoken_reply
+
+        llm = None if self.agent.learning.llm is None else self.agent.llm
+        return spoken_reply(reply, arabic, llm if arabic else None)
+
     def _transcribe(self, audio: bytes, content_type: str) -> str:
         return self.rt.voice.transcribe(audio, content_type)
 

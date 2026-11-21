@@ -1,4 +1,4 @@
-"""Builds the SkyGuard QA 23.13.1 cumulative patch folder and zip (23.3.35 to 23.13.1: every release in between):
+"""Builds the SkyGuard QA 23.13.3 cumulative patch folder and zip (23.3.35 to 23.13.3: every release in between):
 every application file changed or added since the 23.3.35 baseline commit (the merge of PR #39), the offline OCR
 runtime wheels (RapidOCR, ONNX Runtime, OpenCV, NumPy, Pillow and their dependencies for 64-bit Windows and Python 3.13,
 listed with SHA-256 in ocr-runtime/WHEELS.json), the installer and its Windows wrappers, the browser extension update,
@@ -25,15 +25,15 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-NAME = "SkyGuard_SGQA-23.3.35_to_23.13.1_Patch_Files"
-VERSION = "23.13.1"
+NAME = "SkyGuard_SGQA-23.3.35_to_23.13.3_Patch_Files"
+VERSION = "23.13.3"
 BASELINE_COMMIT = "6d448fa"  # SkyGuard QA 23.3.35 (merge of PR #39)
 PREFIXES = ("qa_platform/", "web/", "skyguard_agent/")
 # 23.13.0: files at the top of the application folder (HTTPS with a friendly name)
 ROOT_FILES = ("ENABLE_HTTPS.cmd", "TRUST_SKYGUARD_QA.cmd", "INSTALL_SPEECH_MODEL.cmd", "INSTALL_SPEECH_MODEL.ps1",
               "GET_FASTER_WHISPER_MODEL.ps1", "INSTALL_ARABIC_VOICE.cmd", "INSTALL_ARABIC_VOICE.ps1", "GET_ARABIC_VOICE.ps1")
-DOCS = REPO / "docs" / "release-23.13.1"
-PREVIOUS_DOCS = {"previous-23.13.0": REPO / "docs" / "release-23.13.0", "previous-23.12.0": REPO / "docs" / "release-23.12.0", "previous-23.11.2": REPO / "docs" / "release-23.11.2", "previous-23.11.1": REPO / "docs" / "release-23.11.1", "previous-23.11.0": REPO / "docs" / "release-23.11.0", "previous-23.10.0": REPO / "docs" / "release-23.10.0", "previous-23.9.0": REPO / "docs" / "integration-23.9.0", "previous-23.8.0": REPO / "docs" / "integration-23.8.0", "previous-23.7.2": REPO / "docs" / "automation-23.7.2", "previous-23.7.1": REPO / "docs" / "playback-23.7.1", "previous-23.7.0": REPO / "docs" / "autolearn-23.7.0",
+DOCS = REPO / "docs" / "release-23.13.3"
+PREVIOUS_DOCS = {"previous-23.13.2": REPO / "docs" / "release-23.13.2", "previous-23.13.1": REPO / "docs" / "release-23.13.1", "previous-23.13.0": REPO / "docs" / "release-23.13.0", "previous-23.12.0": REPO / "docs" / "release-23.12.0", "previous-23.11.2": REPO / "docs" / "release-23.11.2", "previous-23.11.1": REPO / "docs" / "release-23.11.1", "previous-23.11.0": REPO / "docs" / "release-23.11.0", "previous-23.10.0": REPO / "docs" / "release-23.10.0", "previous-23.9.0": REPO / "docs" / "integration-23.9.0", "previous-23.8.0": REPO / "docs" / "integration-23.8.0", "previous-23.7.2": REPO / "docs" / "automation-23.7.2", "previous-23.7.1": REPO / "docs" / "playback-23.7.1", "previous-23.7.0": REPO / "docs" / "autolearn-23.7.0",
                  "previous-23.6.1": REPO / "docs" / "adaptive-23.6.1"}
 TOOLS = ["APPLY_PATCH.cmd", "APPLY_PATCH.ps1", "ROLLBACK_PATCH.cmd", "VERIFY_PATCH.cmd", "install_patch.py",
          "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "DIAGNOSE_SITE.cmd", "DIAGNOSE_SITE.ps1",
@@ -67,7 +67,9 @@ TESTS = ["tests/test_passive_learning_23700.py", "tests/passive_session.py", "te
          "tests/api_site.py", "tests/test_api_testing_231200.py", "tests/test_comparison_schedule_231200.py",
          "tests/test_ui_231200.py", "tests/test_cumulative_patch_231200.py",
          "tests/test_release_231300.py", "tests/test_ui_231300.py", "tests/test_cumulative_patch_231300.py",
-         "tests/test_arabic_voice_231300.py", "tests/test_cumulative_patch_231301.py"]
+         "tests/test_arabic_voice_231300.py", "tests/test_cumulative_patch_231301.py",
+         "tests/test_spoken_replies_231302.py", "tests/test_cumulative_patch_231302.py",
+         "tests/test_arabic_page_231303.py", "tests/test_cumulative_patch_231303.py"]
 TEST_SITES = ["tests/site/integration_ocr", "tests/site/integration_live"]  # whole folders (fixtures of 23.9.0)
 
 
@@ -125,7 +127,7 @@ def main() -> None:
     (stage / "ocr-runtime" / "WHEELS.json").write_text(json.dumps({w.name: sha(w) for w in wheels}, indent=1),
                                                      encoding="utf-8")
     manifest = {"version": VERSION, "baseline": ["23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1",
-                                              "23.7.2", "23.8.0", "23.9.0", "23.10.0", "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0"], "ocr_wheels": len(wheels),
+                                              "23.7.2", "23.8.0", "23.9.0", "23.10.0", "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2"], "ocr_wheels": len(wheels),
                 "extension_version": json.loads((ext / "extension" / "manifest.json").read_text())["version"], "baseline_commit": args.baseline,
                 "files": {rel: sha(stage / "app" / rel) for rel in files}}
     (stage / "PATCH_MANIFEST.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")

@@ -1,14 +1,34 @@
-SkyGuard QA 23.13.1 - cumulative upgrade from SGQA-23.3.35 (Arabic voice replies, Edge, HTTPS, personal TFS access)
+SkyGuard QA 23.13.3 - cumulative upgrade from SGQA-23.3.35 (Arabic AI Agent commands, spoken replies, Arabic voice)
 ==================================================================================================================
 
 WHAT THIS IS
   One upgrade that brings any installed SkyGuard QA from 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1,
-  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0 or 23.13.0 to 23.13.1, including every release
-  in between. Any
+  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1 or 23.13.2 to 23.13.3, including
+  every release in between. Any
   other version is refused and nothing is changed. No internet. Windows 10 (1909 or later)
   or Windows 11.
 
-  New in 23.13.1 (details: PATCH_CHANGELOG.md):
+  New in 23.13.3 (details: PATCH_CHANGELOG.md):
+  - AI Agent: spoken Arabic is translated literally (Arabic "open page" stays "open page", also when the recognizer
+    misspells it); nothing that was not said is added. "Which page do you mean?" lists the page names only and offers them as
+    buttons.
+  - Asked and told in the language you spoke: an Arabic request is answered (and the question asked) in Arabic, an
+    English one in English; after the action the agent also says the preview is ready, the task is done or failed,
+    in the same language.
+  - Websites that change their address on every visit (abc.com/12345, next time abc.com/by123) are the same page
+    and the same application: learned pages open with today's address, without asking to be taught again.
+  - The browser extension 1.4.3 does all of this too (UPDATE_EXTENSION.cmd).
+
+  WHERE IS THE SKYGUARD QA FOLDER? (INSTALL_ARABIC_VOICE.cmd, GET_ARABIC_VOICE.ps1, INSTALL_SPEECH_MODEL.cmd)
+    Paste this into the File Explorer address bar:  %LOCALAPPDATA%\Programs\AIAgenticTestAgent\app
+    If Setup made a side-by-side copy:              %LOCALAPPDATA%\SkyGuardQA\app-23.13.3
+    Or right-click the SkyGuard QA shortcut > Open file location.
+
+  New in 23.13.2:
+  - AI Agent page: a request made by voice gets a spoken reply, in English for English and in Arabic (the Arabic
+    voice) for Arabic. The browser extension 1.4.2 does the same (UPDATE_EXTENSION.cmd).
+
+  New in 23.13.1:
   - Arabic replies are spoken by an Arabic voice, male or female as you choose (Voice settings > Arabic reply voice).
     The offline Arabic voice is installed once: GET_ARABIC_VOICE.ps1 on a PC with Internet, then
     INSTALL_ARABIC_VOICE.cmd in the SkyGuard QA folder. A Windows Arabic voice (Naayf, Hoda) is used when installed.
@@ -43,19 +63,19 @@ HOW TO INSTALL (5 minutes)
   It does exactly the same upgrade, with the same checks, backup and automatic restore.
 
   Browser extension users: run UPDATE_EXTENSION.cmd from SkyGuard_Offline_Edge_Chrome_Agent_Extension.zip
-  (extension 1.4.1), then press Reload on the SkyGuard card of edge://extensions.
+  (extension 1.4.2), then press Reload on the SkyGuard card of edge://extensions.
 
 YOUR DATA
   Backed up before anything changes (patch-backups folder in your installation). Never deleted. If any step fails,
-  the previous version is restored automatically. To undo later: patch-tools\23.13.1\ROLLBACK_PATCH.cmd.
+  the previous version is restored automatically. To undo later: patch-tools\23.13.2\ROLLBACK_PATCH.cmd.
 
 IN THIS FOLDER
   SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe   the installer (wizard; unattended: /S /APP="<folder>")
   INSTALLATION_GUIDE.md          step by step, unattended install, protected folders, rollback, troubleshooting
-  PATCH_CHANGELOG.md             what is new in 23.13.1
+  PATCH_CHANGELOG.md             what is new in 23.13.2
   USER_GUIDE.md                  API Testing step by step
   ROOT_CAUSE_ANALYSIS.md         what was found and changed, and why
-  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.13.1) and what each one added
+  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.13.2) and what each one added
   SECURITY_REPORT.md             security checks, controls and residual risks
   sbom.cdx.json                  software bill of materials (CycloneDX 1.5)
   TEST_REPORT.md, test-results\  what was tested, passed, failed, skipped or not executed
