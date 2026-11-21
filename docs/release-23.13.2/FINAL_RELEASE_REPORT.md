@@ -1,31 +1,29 @@
-# Final release report: SkyGuard QA 23.13.1 (cumulative from 23.3.35)
+# Final release report: SkyGuard QA 23.13.2 (cumulative from 23.3.35)
 
 ## What you get
 
 | File | What it is |
 |---|---|
-| `SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch.zip` | One cumulative, offline upgrade to 23.13.1 for any release from 23.3.35 to 23.13.0. It holds `SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe`, `Manual_Install` (`APPLY_PATCH.cmd`), `README_FIRST.txt`, the documents, the SBOM, test results and `SHA256SUMS.txt`. |
-| `GET_ARABIC_VOICE.ps1` | Also inside the patch (application folder). Run once on a PC with Internet to make `skyguard-arabic-voice.zip`. |
-| `SkyGuard_Offline_Edge_Chrome_Agent_Extension.zip` | Unchanged from 23.13.0 (extension 1.4.1). |
+| `SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch.zip` | One cumulative, offline upgrade to 23.13.2 for any release from 23.3.35 to 23.13.1. It holds `SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe`, `Manual_Install` (`APPLY_PATCH.cmd`), `README_FIRST.txt`, the documents, the SBOM, test results and `SHA256SUMS.txt`. |
+| `SkyGuard_Offline_Edge_Chrome_Agent_Extension.zip` | Extension 1.4.2 with its companion: spoken replies in the side panel. |
 
 ## What was asked and what is in this release
 
 | # | Asked | Status |
 |---|---|---|
-| 1 | `INSTALL_SPEECH_MODEL.cmd` named by the Voice hint was missing | **Done.** In the application folder with `GET_FASTER_WHISPER_MODEL.ps1`; `small.ar` is used for Arabic automatically. |
-| 2 | Arabic voice reply, offline (PC has David, Zira, Mark only) | **Done.** Offline Piper voice Kareem installed with `GET_ARABIC_VOICE.ps1` + `INSTALL_ARABIC_VOICE.cmd`; Windows Arabic voices (also OneCore) are used when installed; an English voice never reads Arabic. |
-| 3 | Arabic reply in a male or female voice, as chosen | **Done**, with one limit: there is no natural offline female Arabic Piper voice. Female uses Windows Hoda if installed, otherwise Kareem at a higher pitch. |
-| 4 | "كابدان افتا صفا" should work like "كابتن افتح صفحة" | **Done.** The wake name is matched in any Arabic spelling; misheard command words are understood. |
+| 1 | AI Agent page: an English voice request is only written, not spoken | **Done.** The reply is spoken in English with the Windows voice. |
+| 2 | AI Agent page: an Arabic voice request is written in English and then spoken in Arabic | **Done.** The command is shown in English, the reply is spoken in Arabic with the offline Arabic voice (male or female as chosen in Voice settings). |
+| 3 | The same in the browser extension | **Done.** Extension 1.4.2: the side panel speaks English replies with the PC's voice and Arabic replies through the companion's offline Arabic voice. Options > Spoken replies: on/off and Male/Female. |
 
 ## Tests
 
-16 new tests, 147 voice and release tests, 31 installer tests (16 earlier releases), all passed. Windows CI runs the
-real Arabic voice download, install and render.
+6 new tests, 109 regression tests (2 skipped), 32 installer tests (17 earlier releases), all passed.
 
 ## After installing
 
 1. Run Setup (or `Manual_Install\APPLY_PATCH.cmd`), press Ctrl+F5 in the browser.
-2. On a PC with Internet: `powershell -ExecutionPolicy Bypass -File GET_ARABIC_VOICE.ps1` (from the SkyGuard QA
-   folder or the patch's `app` folder). Copy `skyguard-arabic-voice.zip` to the office PC's Downloads.
-3. Double-click `INSTALL_ARABIC_VOICE.cmd` in the SkyGuard QA folder.
-4. Voice settings > Voice reply > *Arabic reply voice*: Male or Female, Save, then *Test Arabic Voice*.
+2. If the Arabic voice is not installed yet: `GET_ARABIC_VOICE.ps1` on a PC with Internet, then
+   `INSTALL_ARABIC_VOICE.cmd` on the office PC (see README_FIRST.txt). It is used by both SkyGuard QA and the
+   extension.
+3. Extension: install the 1.4.2 zip as in README_FIRST_EXTENSION.txt. If the extension's companion was installed
+   before the Arabic voice, run `INSTALL_ARABIC_VOICE.cmd` once more so it is copied to the companion too.
