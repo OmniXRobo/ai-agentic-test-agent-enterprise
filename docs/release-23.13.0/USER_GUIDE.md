@@ -55,6 +55,10 @@ again. When a run stops and asks for help, click the right element in the browse
 Your chosen voice keeps its gender (the male voice no longer answers with a female voice). Arabic needs the
 multilingual speech model; see KNOWN_LIMITATIONS.md.
 
+Arabic spoken replies: install the offline Arabic voice once (`GET_ARABIC_VOICE.ps1` on a PC with Internet, then
+`INSTALL_ARABIC_VOICE.cmd` on this PC). Voice settings > Voice reply shows which voice speaks Arabic; press *Test
+Arabic Voice* to hear it. You can call the agent by its name in Arabic too (for example "كابتن افتح صفحة الحجز").
+
 ## Users (administrators)
 
 A new user needs an email address, their TFS project and their TFS Personal Access Token. They receive an email with

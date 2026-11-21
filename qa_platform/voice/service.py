@@ -132,6 +132,15 @@ FAILURE_PHRASES = {
 }
 
 
+
+# 23.13.0: spoken when an Arabic command's reply cannot be translated (the local AI is not running).
+ARABIC_STATUS = {
+    "completed": "تم. التفاصيل على الشاشة.", "accepted": "حاضر، جاري التنفيذ.",
+    "needs_input": "أحتاج معلومة إضافية. شوف السؤال على الشاشة.", "needs_confirmation": "أكد الأمر لو سمحت.",
+    "unclear": "ما فهمت الأمر. ممكن تعيده؟", "failed": "ما قدرت أنفذ الأمر. السبب على الشاشة.",
+    "unsupported": "هذا الأمر غير مدعوم. التفاصيل على الشاشة.",
+}
+
 class VoiceCommandAgent(BaseAgent):
     agent_id = "voice_command"
 
@@ -243,6 +252,13 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
             m = re.match(rf"^\s*(?:hey|ok|okay|hi)?[\s,]*{re.escape(n)}\b[\s,.:!-]*", t, re.I)
             if m:
                 return t[m.end():].strip()
+        from skyguard_agent.translate import has_arabic, strip_arabic_wake
+
+        if has_arabic(t):
+            # 23.13.0: the name spoken in Arabic, in any spelling the recognizer writes (كابتن, كابدان, كبتن ...)
+            rest = strip_arabic_wake(t, sorted(names_))
+            if rest is not None:
+                return rest
         return t
 
     # ---- settings and speech recognition ------------------------------------------------------
@@ -402,6 +418,12 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
             checks.append({"name": "Radio voice (Windows voices)", "status": "PASS" if n else "WARN",
                            "detail": f"{n} Windows voices found; replies are played as radio transmissions." if n else
                            "No Windows voices here; the browser's voice is used with radio static instead."})
+        lang = str(cfg.get("language") or "en").split("-")[0].lower()
+        if cfg.get("speak_replies") and lang != "en":
+            ar = self.system_voice.arabic_status()
+            checks.append({"name": "Arabic spoken replies", "status": "PASS" if ar["available"] else "WARN",
+                           "detail": f"Arabic replies are spoken by {ar['voice']} ({'Windows' if ar['engine'] == 'windows' else 'offline Piper'} voice)."
+                           if ar["available"] else ar["hint"] + " Until then Arabic replies are shown, not spoken."})
         name = "On-Premise AI for free-form requests"
         if not self.ai.config()["base_url"]:
             checks.append({"name": name, "status": "NOT_CONFIGURED", "detail": "Only the fixed command phrases are understood."})
@@ -416,7 +438,8 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
         return {"checks": checks}
 
     def radio_voices(self) -> dict[str, Any]:
-        return {"available": self.system_voice.available(), "voices": self.system_voice.voices()}
+        return {"available": self.system_voice.available(), "voices": self.system_voice.voices(),
+                "arabic": self.system_voice.arabic_status()}
 
     def speak(self, text: str) -> bytes:
         cfg = self.config()
@@ -532,6 +555,11 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
             reply["say_en"] = reply.get("say")
             reply["say"] = arabic
             reply["speak"] = arabic
+            reply["language"] = "ar"
+        else:
+            # The local AI is not running: the details stay on screen in English, and a short Arabic line is spoken
+            # so that an Arabic command is still answered in Arabic.
+            reply["speak"] = ARABIC_STATUS.get(str(reply.get("status")), ARABIC_STATUS["completed"])
             reply["language"] = "ar"
         return reply
 

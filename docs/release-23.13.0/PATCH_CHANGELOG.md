@@ -28,6 +28,14 @@ The numbers follow the 13 items of the request.
   word list when the model is not running), runs as the English command, and the reply is given in Arabic. Speech
   recognition runs with English and Arabic ("auto").
 * Arabic replies are spoken with an installed Windows Arabic voice of the same gender as the chosen voice.
+* Next patch: offline Arabic voice for spoken replies (`GET_ARABIC_VOICE.ps1` on an internet PC,
+  `INSTALL_ARABIC_VOICE.cmd` on the office PC; Piper with the male voice `ar_JO-kareem-medium`). Arabic replies pick
+  it automatically in both reply styles; an English voice never reads Arabic. Voice settings show which voice speaks
+  Arabic and have a *Test Arabic Voice* button.
+* Next patch: the wake name said in Arabic is recognised in any spelling the recognizer writes ("كابتن", "كابدان",
+  "كبتن" for Captain), and common misheard command words are understood ("كابدان افتا صفا" works like
+  "كابتن افتح صفحة"). An installed multilingual speech model with another name (for example `small.ar`) is used for
+  Arabic automatically.
 * **Bug fixed:** a male voice was chosen but replies came in a female voice. The browser fallback used its own list
   (often Microsoft Zira, female) whenever the Windows voice could not be used. It now keeps the chosen gender (male
   by default).

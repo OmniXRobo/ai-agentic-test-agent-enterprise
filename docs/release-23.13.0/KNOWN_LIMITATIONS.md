@@ -25,8 +25,16 @@ Stated plainly so that nobody has to discover them.
   Arabic. For Arabic and UAE Arabic, put the multilingual Faster-Whisper model (`small` or larger) in the speech
   model folder: on a PC with internet run `GET_FASTER_WHISPER_MODEL.ps1 -Model small` (the tools folder of the
   earlier patches) and copy the folder to the office PC. Typed Arabic works without it.
-* **Arabic replies are spoken only if Windows has an Arabic voice** (Settings > Time & language > Speech; the Arabic
-  language pack). Without one, the reply is shown in Arabic and spoken with the chosen voice.
+* **Arabic replies need an Arabic voice.** Office PCs usually have only English Windows voices (David, Zira, Mark),
+  and the Windows Arabic language pack cannot be downloaded offline. The next patch adds an offline Arabic voice:
+  run `GET_ARABIC_VOICE.ps1` on a PC with Internet (Piper text-to-speech, pinned SHA-256, and the male voice
+  `ar_JO-kareem-medium`, checked against the SHA-256 Hugging Face publishes), copy `skyguard-arabic-voice.zip` to
+  the office PC and double-click `INSTALL_ARABIC_VOICE.cmd` in the SkyGuard QA folder. Arabic replies then use it
+  automatically; a Windows Arabic voice is preferred when IT has installed one. The voice model could not be put in
+  the patch itself because the build machine cannot reach Hugging Face. Without any Arabic voice, Arabic replies are
+  shown but not spoken (an English voice no longer reads Arabic text).
+* The Arabic voice is Jordanian (Levantine) Arabic; it is understandable for UAE users but is not a Gulf accent.
+* Without the local AI, the reply details stay in English on screen and a short Arabic status line is spoken.
 * UAE dialect words not known to the local AI or the word list may be translated loosely; the *Understood as* line
   shows what was understood before anything runs.
 

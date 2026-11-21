@@ -186,6 +186,21 @@ export async function playRadio(wav, s) {
   await sleep(stopped ? 60 : 420);
 }
 
+/** 23.13.0: play WAV bytes as they are (plain reply style), e.g. an Arabic reply rendered by the runtime. */
+export async function playPlain(wav, s) {
+  const c = audioContext();
+  const buffer = await c.decodeAudioData(wav);
+  const src = c.createBufferSource(), gain = c.createGain();
+  gain.gain.value = Math.max(0, Math.min(1, Number(s?.voice_volume ?? 0.9)));
+  src.buffer = buffer;
+  src.connect(gain).connect(c.destination);
+  const ended = new Promise((r) => { src.onended = r; });
+  current = { stop: () => { try { src.stop(); } catch { /* not started */ } } };
+  src.start(c.currentTime + 0.03);
+  await ended;
+  current = null;
+}
+
 /** Beeps and static around speech the browser plays itself (its audio cannot be filtered). */
 export async function radioAround(speakFn, s) {
   let c;

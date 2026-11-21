@@ -322,6 +322,8 @@ def test_builtin_offline_recognizer_and_radio_voice(env, monkeypatch, tmp_path):
     assert c.get("/api/voice/settings").json()["stt_engine"] == "builtin"
 
     if sys.platform != "win32":  # Windows voices exist only on Windows; the dashboard then uses the browser voice
-        assert c.get("/api/voice/radio-voices").json() == {"ok": True, "available": False, "voices": []}
+        rv = c.get("/api/voice/radio-voices").json()
+        assert {k: rv[k] for k in ("ok", "available", "voices")} == {"ok": True, "available": False, "voices": []}
+        assert rv["arabic"]["available"] is False  # 23.13.0: with how to install the offline Arabic voice
         r = c.post("/api/voice/speak", json={"text": "Roger, sir. Stand by."})
         assert r.status_code == 409 and r.json()["error_code"] == "VOICE_TTS_UNAVAILABLE"

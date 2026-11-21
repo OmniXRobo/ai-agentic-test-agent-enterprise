@@ -145,6 +145,10 @@ class FasterWhisperService:
             # would turn Arabic speech into English words. The multilingual model of the same size comes first.
             multi = [m for m in ([wanted[:-3]] if wanted.endswith(".en") else []) + ["small", "base", "medium",
                      "large-v3", "distil-large-v3", "tiny"] if m in installed]
+            # Any other installed model without ".en" is multilingual too (a folder renamed "small.ar" ...).
+            multi += [m for m in installed if not m.endswith(".en") and m not in multi]
+            if wanted in installed and not wanted.endswith(".en"):
+                multi = [wanted] + [m for m in multi if m != wanted]
             order = multi + order
         for m in order:
             if m in installed:

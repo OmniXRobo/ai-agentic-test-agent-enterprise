@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from typing import Any
 
 from ..errors import QAError
 from ..logging_setup import get_logger
+from .piper import PiperVoice
 
 log = get_logger("voice.tts")
 
@@ -45,6 +47,10 @@ foreach ($v in $s.GetInstalledVoices()) { if ($v.Enabled) { $i = $v.VoiceInfo; "
 """
 
 
+def is_arabic(text: str) -> bool:
+    return bool(re.search(r"[\u0600-\u06FF]", text or ""))
+
+
 def _powershell() -> str | None:
     if sys.platform != "win32":
         return None
@@ -52,8 +58,9 @@ def _powershell() -> str | None:
 
 
 class SystemVoice:
-    def __init__(self, cache_dir: Path) -> None:
+    def __init__(self, cache_dir: Path, piper: PiperVoice | None = None) -> None:
         self.cache_dir = cache_dir
+        self.piper = piper or PiperVoice(cache_dir.parent)
         self._voices: list[dict[str, str]] | None = None
         self._lock = threading.Lock()
 
@@ -88,7 +95,18 @@ class SystemVoice:
         return self._voices
 
     def available(self) -> bool:
-        return bool(self.voices())
+        return bool(self.voices()) or self.piper.arabic_voice() is not None
+
+    def arabic_status(self) -> dict[str, Any]:
+        """Which voice speaks Arabic replies: a Windows Arabic voice, the offline Piper voice, or none."""
+        win = next((v for v in self.voices() if v.get("lang", "").lower().startswith("ar")), None)
+        if win:
+            return {"available": True, "engine": "windows", "voice": win["name"]}
+        pv = self.piper.arabic_voice()
+        if pv:
+            return {"available": True, "engine": "piper", "voice": pv["name"]}
+        return {"available": False, "engine": "", "voice": "",
+                "hint": "No Arabic voice installed. Run INSTALL_ARABIC_VOICE.cmd from the SkyGuard QA folder."}
 
     def render(self, text: str, voice: str = "", rate: float = 1.0) -> bytes:
         """WAV bytes for the text. Renders are cached, so repeated phrases ("Roger, stand by") play at once."""
@@ -98,6 +116,9 @@ class SystemVoice:
         if voice and voice not in {v["name"] for v in self.voices()}:
             voice = ""
         voice = self.voice_for(text, voice)
+        if is_arabic(text) and not self._is_arabic_voice(voice):
+            # No Windows Arabic voice: the offline Piper voice speaks it. An English voice never reads Arabic.
+            return self._render_piper(text, rate)
         sapi_rate = max(-10, min(10, round((rate - 1) * 10)))
         key = hashlib.sha256(f"{voice}|{sapi_rate}|{text}".encode()).hexdigest()[:32]
         target = self.cache_dir / f"{key}.wav"
@@ -112,13 +133,32 @@ class SystemVoice:
             self._prune()
         return target.read_bytes()
 
+    def _is_arabic_voice(self, voice: str) -> bool:
+        v = next((v for v in self.voices() if v["name"] == voice), None)
+        return bool(v and v.get("lang", "").lower().startswith("ar"))
+
+    def _render_piper(self, text: str, rate: float) -> bytes:
+        pv = self.piper.arabic_voice()
+        if not pv:
+            raise QAError("VOICE_ARABIC_MISSING", "No Arabic voice is installed. Run INSTALL_ARABIC_VOICE.cmd from "
+                          "the SkyGuard QA folder (the reply stays on screen).", status=409)
+        key = hashlib.sha256(f"piper|{pv['name']}|{rate:.2f}|{text}".encode()).hexdigest()[:32]
+        target = self.cache_dir / f"{key}.wav"
+        if target.exists():
+            return target.read_bytes()
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        partial = target.with_suffix(".part.wav")
+        with self._lock:
+            self.piper.render(text, partial, rate)
+            partial.replace(target)
+            self._prune()
+        return target.read_bytes()
+
     def voice_for(self, text: str, voice: str = "") -> str:
         """23.13.0: the voice for this reply. An Arabic reply is spoken by an installed Arabic voice (Windows
         "Arabic" language pack: Naayf, Hoda ...) of the same gender as the chosen voice (male by default); other
         replies keep the chosen voice. Without an Arabic voice the chosen one is used (the text stays on screen)."""
-        import re as _re
-
-        if not _re.search(r"[\u0600-\u06FF]", text or ""):
+        if not is_arabic(text):
             return voice
         voices = self.voices()
         chosen = next((v for v in voices if v["name"] == voice), None)

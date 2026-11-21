@@ -283,6 +283,39 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw "a zip without a model was accepted" }
           if (Test-Path ($dest -replace 'small$', 'bad')) { throw "a model folder was made for the bad zip" }
           exit 0  # the refused zip above left exit code 1 behind on purpose
+      - name: Arabic voice replies offline (GET_ARABIC_VOICE.ps1, INSTALL_ARABIC_VOICE.cmd, Piper renders Arabic)
+        shell: pwsh
+        run: |
+          $app = "$env:INST\app"
+          foreach ($f in "INSTALL_ARABIC_VOICE.cmd", "INSTALL_ARABIC_VOICE.ps1", "GET_ARABIC_VOICE.ps1") {
+            if (-not (Test-Path "$app\$f")) { throw "$f is not in the application folder" } }
+          # the internet PC step (this runner has Internet): Piper (pinned SHA-256) + ar_JO-kareem-medium (HF SHA-256)
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$app\GET_ARABIC_VOICE.ps1" -OutDir "$env:RUNNER_TEMP\usb"
+          if ($LASTEXITCODE -ne 0) { throw "GET_ARABIC_VOICE.ps1 failed" }
+          # the office PC step: install from the zip, offline
+          $env:QA_NO_PAUSE = "1"
+          cmd /c "`"$app\INSTALL_ARABIC_VOICE.cmd`" `"$env:RUNNER_TEMP\usb\skyguard-arabic-voice.zip`""
+          if ($LASTEXITCODE -ne 0) { throw "INSTALL_ARABIC_VOICE.cmd failed" }
+          if (-not (Test-Path "$app\runtime\piper\piper.exe")) { throw "piper.exe was not installed" }
+          if (-not (Test-Path "$app\runtime\piper\voices\ar_JO-kareem-medium.onnx")) { throw "the Arabic voice was not installed" }
+          # SkyGuard QA speaks an Arabic reply with it (the runner has only English Windows voices, like the office PC)
+          $py = @'
+          import sys, tempfile
+          from pathlib import Path
+          from qa_platform.voice.tts import SystemVoice
+          sv = SystemVoice(Path(tempfile.mkdtemp()) / "voice-cache")
+          print("arabic:", sv.arabic_status())
+          assert sv.arabic_status()["engine"] in ("piper", "windows"), sv.arabic_status()
+          wav = sv.render("\u062a\u0645. \u062c\u0627\u0631\u064a \u0641\u062a\u062d \u0627\u0644\u0635\u0641\u062d\u0629.")
+          assert wav[:4] == b"RIFF" and len(wav) > 8000, len(wav)
+          print("Arabic reply rendered:", len(wav), "bytes")
+          '@
+          $env:QA_HOME = "$env:INST\data"
+          Push-Location $app
+          $py | & "$app\.venv\Scripts\python.exe" -E -s -
+          $rc = $LASTEXITCODE
+          Pop-Location
+          if ($rc -ne 0) { throw "the Arabic reply was not rendered" }
   extension-install-windows:
     # 1.2.0 installer fix: runs the companion installer (Install-SkyGuardAgent.ps1) for real under Windows
     # PowerShell 5.1 on a brand-new per-user profile. First the script as released in 23.10.0 (expected to fail with

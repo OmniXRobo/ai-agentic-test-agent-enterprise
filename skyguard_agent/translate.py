@@ -58,6 +58,17 @@ WORDS: dict[str, str] = {
     "واحد": "one", "اثنين": "two", "ثلاثة": "three", "اربعة": "four", "خمسة": "five", "ستة": "six", "سبعة": "seven",
     "ثمانية": "eight", "تسعة": "nine", "عشرة": "ten",
 }
+# Speech recognition often mishears the last letter or a vowel in Gulf speech ("افتح" heard as "افتا", "صفحة" as
+# "صفا"). These spellings mean the same command word. (Checked after the exact words above.)
+MISHEARD: dict[str, str] = {
+    "افتا": "open", "افتاح": "open", "افته": "open", "افتحي": "open", "افتحلي": "open", "فتحلي": "open",
+    "افتحو": "open", "افتحوا": "open", "ابتح": "open", "افدح": "open",
+    "صفا": "page", "صفحه": "page", "صفحا": "page", "سفحة": "page", "سفحه": "page", "صفحت": "page", "صفح": "page",
+    "الصفحه": "the page", "الصفا": "the page",
+    "اعرظ": "show", "عرظ": "show", "ورنى": "show me", "وريني": "show me", "ورينا": "show me",
+    "سجلني": "log me in", "دخلني": "log me in", "شغلي": "run", "شغلو": "run",
+    "احجزلي": "book", "احجزي": "book", "ابحثلي": "search", "دورلي": "search",
+}
 _DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 
 PROMPT = ("You translate instructions for a software testing assistant from Arabic (Modern Standard or UAE / Gulf "
@@ -88,6 +99,8 @@ def by_words(text: str) -> str:
             continue
         core = tok.strip("،,.؟?!")
         en = WORDS.get(core)
+        if en is None:
+            en = MISHEARD.get(core)
         if en is None and core.startswith("ال") and core[2:] in WORDS:
             en = WORDS[core[2:]]
         if en is None and len(core) > 2 and core[0] in "وبك" and core[1:] in WORDS:  # و / ب / ك: and, with, as
@@ -110,3 +123,59 @@ def to_english(text: str, llm: Any = None) -> tuple[str, bool]:
         except Exception:  # the model is not running: the word list below
             pass
     return by_words(text), True
+
+
+# ---- the wake name spoken in Arabic ------------------------------------------------------------------------------
+# "Captain" said by an Arabic speaker and written by the recognizer: كابتن, كابدان, كبتن, كابتين ... The name is
+# compared by its consonants (b/p, t/d, k/q/c are one sound each), so any spelling of the configured name works
+# without a hard-coded list.
+_AR_SOUND = {"ك": "k", "ق": "k", "ج": "j", "ب": "b", "پ": "b", "ت": "t", "د": "t", "ط": "t", "ض": "t", "ث": "s",
+             "س": "s", "ص": "s", "ز": "z", "ذ": "z", "ظ": "z", "ر": "r", "ل": "l", "م": "m", "ن": "n", "ه": "h",
+             "ة": "", "ح": "h", "خ": "h", "ش": "x", "ف": "f", "ڤ": "f", "غ": "g", "گ": "g", "ع": ""}
+_CALLS = ("يا", "هي", "اوكي", "اوك", "هاي", "ي")
+
+
+def name_sound(word: str) -> str:
+    """Consonant outline of a name in Latin or Arabic letters: Captain / كابتن / كابدان -> 'kbtn'."""
+    w = normalize(word or "").lower().strip("،,.؟?!:")
+    if has_arabic(w):
+        return "".join(_AR_SOUND.get(ch, "") for ch in w)
+    w = re.sub(r"[^a-z]", "", w)
+    w = w.replace("ph", "f").replace("ck", "k").replace("sh", "x").replace("kh", "h").replace("gh", "g").replace("th", "t")
+    w = re.sub(r"c(?=[eiy])", "s", w)
+    table = str.maketrans({"c": "k", "q": "k", "p": "b", "d": "t", "v": "f"})
+    w = re.sub(r"[aeiouyw]", "", w.translate(table))
+    return re.sub(r"(.)\1+", r"\1", w)
+
+
+def _close(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 3 or abs(len(a) - len(b)) > 1:
+        return False
+    # one letter added, dropped or changed
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] <= 1
+
+
+def strip_arabic_wake(text: str, names: list[str] | tuple[str, ...] | set[str]) -> str | None:
+    """The Arabic sentence without a leading call of the wake name ("" if it was only the name), or None if the
+    sentence does not start with the name. 'كابدان افتا صفا' with the name Captain -> 'افتا صفا'."""
+    words = (text or "").strip().split()
+    if words and normalize(words[0]).strip("،,.!") in _CALLS:
+        words = words[1:]
+    sounds = [name_sound(n) for n in names if n and n.strip()]
+    for size in (2, 1):  # a two-word name ("Captain Saqr") first
+        if len(words) < size:
+            continue
+        heard = name_sound("".join(words[:size]))
+        if any(_close(heard, s) for s in sounds if len(s) >= 2 or heard == s):
+            return " ".join(words[size:]).strip(" ،,.:!-")
+    return None
