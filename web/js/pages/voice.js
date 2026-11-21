@@ -77,7 +77,7 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
             <label data-openai ${s.stt_api === "openai" ? "" : "hidden"}>Model name <input name="stt_model" value="${esc(s.stt_model)}" placeholder="as the server lists it"></label>
           </div>
           <label>Language <select name="language">${[["en", "English"], ["auto", "English and Arabic (detected)"], ["ar", "Arabic (UAE and other)"]].concat((s.language && !["en", "auto", "ar"].includes(s.language)) ? [[s.language, s.language]] : []).map(([v, l]) => `<option value="${esc(v)}" ${v === (s.language || "en") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
-          <p class="muted">Arabic needs a multilingual Faster-Whisper model (small, not small.en). Get it once with GET_FASTER_WHISPER_MODEL.ps1 -Model small on a PC with Internet and install it with INSTALL_SPEECH_MODEL.cmd from the patch. Arabic commands are translated to English by the local AI before they run, and Arabic replies use an installed Arabic Windows voice when there is one.</p>
+          <p class="muted">Arabic needs a multilingual Faster-Whisper model (small, not small.en). Get it once with GET_FASTER_WHISPER_MODEL.ps1 -Model small on a PC with Internet and copy faster-whisper-small.zip to this PC (Downloads) and double-click INSTALL_SPEECH_MODEL.cmd in the SkyGuard QA application folder (both scripts are there). Arabic commands are translated to English by the local AI before they run, and Arabic replies use an installed Arabic Windows voice when there is one.</p>
         </section>
         <section class="ck-panel">
           <h3>Voice reply</h3>

@@ -61,5 +61,7 @@ Stated plainly so that nobody has to discover them.
 
 ## Not done in this release
 
-* **INSTALL_SPEECH_MODEL** script for the Arabic model: use `GET_FASTER_WHISPER_MODEL.ps1 -Model small` as above.
+* `INSTALL_SPEECH_MODEL.cmd` was referred to by the Voice settings hint but was **not in the 23.13.0 package**. Until the
+  next patch, copy the model folder by hand to `runtime\faster-whisper\models\small`. The next patch adds
+  `INSTALL_SPEECH_MODEL.cmd` and `GET_FASTER_WHISPER_MODEL.ps1` to the application folder.
 * Setup.exe is still not code-signed (SmartScreen says *Unknown publisher*).

@@ -30,7 +30,8 @@ VERSION = "23.13.0"
 BASELINE_COMMIT = "6d448fa"  # SkyGuard QA 23.3.35 (merge of PR #39)
 PREFIXES = ("qa_platform/", "web/", "skyguard_agent/")
 # 23.13.0: files at the top of the application folder (HTTPS with a friendly name)
-ROOT_FILES = ("ENABLE_HTTPS.cmd", "TRUST_SKYGUARD_QA.cmd")
+ROOT_FILES = ("ENABLE_HTTPS.cmd", "TRUST_SKYGUARD_QA.cmd", "INSTALL_SPEECH_MODEL.cmd", "INSTALL_SPEECH_MODEL.ps1",
+              "GET_FASTER_WHISPER_MODEL.ps1")
 DOCS = REPO / "docs" / "release-23.13.0"
 PREVIOUS_DOCS = {"previous-23.12.0": REPO / "docs" / "release-23.12.0", "previous-23.11.2": REPO / "docs" / "release-23.11.2", "previous-23.11.1": REPO / "docs" / "release-23.11.1", "previous-23.11.0": REPO / "docs" / "release-23.11.0", "previous-23.10.0": REPO / "docs" / "release-23.10.0", "previous-23.9.0": REPO / "docs" / "integration-23.9.0", "previous-23.8.0": REPO / "docs" / "integration-23.8.0", "previous-23.7.2": REPO / "docs" / "automation-23.7.2", "previous-23.7.1": REPO / "docs" / "playback-23.7.1", "previous-23.7.0": REPO / "docs" / "autolearn-23.7.0",
                  "previous-23.6.1": REPO / "docs" / "adaptive-23.6.1"}

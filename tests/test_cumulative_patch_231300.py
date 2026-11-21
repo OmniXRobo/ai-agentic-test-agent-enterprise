@@ -179,6 +179,7 @@ def test_patch_contents(built):
     assert "previous-23.11.1/PATCH_CHANGELOG.md" in sums and "tests/test_missing_info_231102.py" in sums
     assert "tests/test_ui_231102.py" in sums and "tests/test_ui_231200.py" in sums and "tests/test_ui_231300.py" in sums
     assert "previous-23.12.0/PATCH_CHANGELOG.md" in sums and "app/ENABLE_HTTPS.cmd" in sums
+    assert "app/INSTALL_SPEECH_MODEL.cmd" in sums and "app/INSTALL_SPEECH_MODEL.ps1" in sums and "app/GET_FASTER_WHISPER_MODEL.ps1" in sums
     assert "previous-23.11.2/PATCH_CHANGELOG.md" in sums and "tests/test_api_testing_231200.py" in sums
     app = built / "app" / "qa_platform"
     assert '__version__ = "23.13.0"' in (app / "__init__.py").read_text()

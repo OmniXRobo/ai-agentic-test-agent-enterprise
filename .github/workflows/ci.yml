@@ -261,6 +261,27 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$($manual.FullName)\APPLY_PATCH.ps1" -InstallDir "$env:INST" -NoStart
           if ($LASTEXITCODE -ne 0) { throw "APPLY_PATCH.ps1 failed" }
           if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.13.0"') { throw "version is not 23.13.0 after APPLY_PATCH.ps1" }
+      - name: INSTALL_SPEECH_MODEL.cmd installs a model zip offline (Windows PowerShell 5.1)
+        shell: pwsh
+        run: |
+          $app = "$env:INST\app"
+          foreach ($f in "INSTALL_SPEECH_MODEL.cmd", "INSTALL_SPEECH_MODEL.ps1", "GET_FASTER_WHISPER_MODEL.ps1") {
+            if (-not (Test-Path "$app\$f")) { throw "$f is not in the application folder" } }
+          $src = Join-Path $env:RUNNER_TEMP "faster-whisper-small"
+          New-Item -ItemType Directory -Force $src | Out-Null
+          foreach ($f in "model.bin", "config.json", "tokenizer.json", "vocabulary.txt") { "x" | Set-Content "$src\$f" }
+          Compress-Archive -Path "$src\*" -DestinationPath "$src.zip" -Force
+          $env:QA_NO_PAUSE = "1"
+          cmd /c "`"$app\INSTALL_SPEECH_MODEL.cmd`" `"$src.zip`""
+          if ($LASTEXITCODE -ne 0) { throw "INSTALL_SPEECH_MODEL.cmd failed" }
+          $dest = @("$app\runtime\faster-whisper\models\small", "$env:INST\runtime\faster-whisper\models\small") | Where-Object { Test-Path "$_\model.bin" } | Select-Object -First 1
+          if (-not $dest) { throw "the model was not installed" }
+          "installed in $dest"
+          # a zip without a model is refused and changes nothing
+          Compress-Archive -Path "$src\config.json" -DestinationPath "$env:RUNNER_TEMP\faster-whisper-bad.zip" -Force
+          cmd /c "`"$app\INSTALL_SPEECH_MODEL.cmd`" `"$env:RUNNER_TEMP\faster-whisper-bad.zip`""
+          if ($LASTEXITCODE -eq 0) { throw "a zip without a model was accepted" }
+          if (Test-Path ($dest -replace 'small$', 'bad')) { throw "a model folder was made for the bad zip" }
   extension-install-windows:
     # 1.2.0 installer fix: runs the companion installer (Install-SkyGuardAgent.ps1) for real under Windows
     # PowerShell 5.1 on a brand-new per-user profile. First the script as released in 23.10.0 (expected to fail with
