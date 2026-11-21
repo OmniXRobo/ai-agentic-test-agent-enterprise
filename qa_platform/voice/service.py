@@ -420,9 +420,9 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
                            "No Windows voices here; the browser's voice is used with radio static instead."})
         lang = str(cfg.get("language") or "en").split("-")[0].lower()
         if cfg.get("speak_replies") and lang != "en":
-            ar = self.system_voice.arabic_status()
+            ar = self.system_voice.arabic_status(cfg.get("radio_voice") or "", str(cfg.get("arabic_voice_gender") or ""))
             checks.append({"name": "Arabic spoken replies", "status": "PASS" if ar["available"] else "WARN",
-                           "detail": f"Arabic replies are spoken by {ar['voice']} ({'Windows' if ar['engine'] == 'windows' else 'offline Piper'} voice)."
+                           "detail": f"Arabic replies ({ar['gender'].lower()}) are spoken by {ar['voice']} ({'Windows' if ar['engine'] == 'windows' else 'offline Piper'} voice)."
                            if ar["available"] else ar["hint"] + " Until then Arabic replies are shown, not spoken."})
         name = "On-Premise AI for free-form requests"
         if not self.ai.config()["base_url"]:
@@ -439,11 +439,13 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
 
     def radio_voices(self) -> dict[str, Any]:
         return {"available": self.system_voice.available(), "voices": self.system_voice.voices(),
-                "arabic": self.system_voice.arabic_status()}
+                "arabic": self.system_voice.arabic_status(self.config().get("radio_voice") or "",
+                                                          str(self.config().get("arabic_voice_gender") or ""))}
 
     def speak(self, text: str) -> bytes:
         cfg = self.config()
-        return self.system_voice.render(text, cfg.get("radio_voice") or "", float(cfg.get("tts_rate") or 1))
+        return self.system_voice.render(text, cfg.get("radio_voice") or "", float(cfg.get("tts_rate") or 1),
+                                        str(cfg.get("arabic_voice_gender") or ""))
 
     # ---- conversations -------------------------------------------------------------------------
 

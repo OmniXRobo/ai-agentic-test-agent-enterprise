@@ -2,7 +2,8 @@
 
 Windows only ships English voices on most office PCs (David, Zira, Mark), and an Arabic Windows voice needs a
 language pack that an offline PC cannot download. Piper is a small offline text-to-speech program; with an Arabic
-voice model (default: ar_JO-kareem-medium, male) it speaks the Arabic replies. Layout, installed by
+voice model (default: ar_JO-kareem-medium, male) it speaks the Arabic replies. Piper has no female Arabic voice;
+a female reply uses Kareem at a higher pitch unless a female ar_*.onnx model is installed next to it. Layout, installed by
 INSTALL_ARABIC_VOICE.cmd:
 
   runtime\\piper\\piper.exe                       (+ espeak-ng-data, onnxruntime.dll ... from the Piper zip)
@@ -17,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -71,17 +73,28 @@ class PiperVoice:
                                 "gender": "Female" if any(w in model.stem.lower() for w in FEMALE) else "Male"})
         return out
 
-    def arabic_voice(self) -> dict[str, str] | None:
-        if not self.exe():
-            return None
-        arabic = [v for v in self.voices() if v["lang"].startswith("ar")]
-        return next((v for v in arabic if v["gender"] == "Male"), None) or (arabic[0] if arabic else None)
+    def arabic_voices(self) -> list[dict[str, str]]:
+        return [v for v in self.voices() if v["lang"].startswith("ar")] if self.exe() else []
 
-    def render(self, text: str, out: Path, rate: float = 1.0) -> None:
-        exe, voice = self.exe(), self.arabic_voice()
+    def arabic_voice(self, gender: str = "Male") -> dict[str, str] | None:
+        """The Arabic voice for this gender. Piper publishes only a male Arabic voice (ar_JO-kareem); a female
+        request without a female model gets that voice at a higher pitch (marked "pitched": "1")."""
+        arabic = self.arabic_voices()
+        same = next((v for v in arabic if v["gender"] == gender), None)
+        if same:
+            return same
+        if gender == "Female" and arabic:
+            return {**arabic[0], "gender": "Female", "pitched": "1",
+                    "label": f"{arabic[0]['name']} at a higher (female) pitch"}
+        return arabic[0] if arabic else None
+
+    def render(self, text: str, out: Path, rate: float = 1.0, gender: str = "Male") -> None:
+        exe, voice = self.exe(), self.arabic_voice(gender)
         if not exe or not voice:
             raise QAError("VOICE_ARABIC_MISSING", "No Arabic voice is installed. Run INSTALL_ARABIC_VOICE.cmd.", status=409)
         length = max(0.5, min(2.0, 1.0 / max(rate, 0.1)))
+        if voice.get("pitched"):
+            length *= PITCH_UP  # spoken slower here, played faster below: same speed, higher voice
         kw: dict[str, Any] = {"creationflags": 0x08000000} if sys.platform == "win32" else {}  # CREATE_NO_WINDOW
         try:
             done = subprocess.run([str(exe), "--model", voice["path"], "--output_file", str(out),
@@ -93,6 +106,22 @@ class PiperVoice:
         if done.returncode != 0 or not out.is_file() or out.stat().st_size < 100:
             raise QAError("VOICE_TTS_FAILED", "The Arabic voice could not speak this reply.", status=502,
                           details=(done.stderr or b"").decode("utf-8", "replace")[-300:])
+        if voice.get("pitched"):
+            pitch_up(out, PITCH_UP)
+
+
+PITCH_UP = 1.32  # about 5 semitones: a male voice moved into the female range
+
+
+def pitch_up(path: Path, factor: float) -> None:
+    """Raise the pitch by playing the samples faster (the WAV's sample rate is raised; players resample)."""
+    with wave.open(str(path), "rb") as w:
+        params, frames = w.getparams(), w.readframes(w.getnframes())
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(params.nchannels)
+        w.setsampwidth(params.sampwidth)
+        w.setframerate(int(round(params.framerate * factor)))
+        w.writeframes(frames)
 
 
 FEMALE = ("amira", "hoda", "salma", "female", "woman", "zira", "laila", "layla", "fatima", "noor")

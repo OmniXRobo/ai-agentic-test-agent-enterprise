@@ -55,7 +55,8 @@ def calls(home: Path) -> list[dict]:
 def test_arabic_reply_is_spoken_by_the_offline_arabic_voice(tmp_path, piper_home):
     v = SystemVoice(tmp_path / "cache", PiperVoice())
     v._voices = [{"name": "Microsoft David Desktop", "gender": "Male", "lang": "en-US"}]  # the office PC: English only
-    assert v.arabic_status() == {"available": True, "engine": "piper", "voice": "ar_JO-kareem-medium"}
+    st = v.arabic_status("Microsoft David Desktop")
+    assert (st["available"], st["engine"], st["voice"], st["gender"]) == (True, "piper", "ar_JO-kareem-medium", "Male")
     wav = v.render(ARABIC_REPLY, "Microsoft David Desktop", rate=1.25)
     assert wav[:4] == b"RIFF"
     (call,) = calls(piper_home)
@@ -149,3 +150,46 @@ def test_dashboard_plays_arabic_replies_with_the_arabic_voice():
     for f in ("INSTALL_ARABIC_VOICE.cmd", "INSTALL_ARABIC_VOICE.ps1", "GET_ARABIC_VOICE.ps1"):
         assert (ROOT / f).is_file()
     assert "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea" in (ROOT / "GET_ARABIC_VOICE.ps1").read_text()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the fake piper is a Python script")
+def test_female_arabic_reply_uses_a_female_voice_or_kareem_at_a_higher_pitch(tmp_path, piper_home):
+    import wave
+
+    v = SystemVoice(tmp_path / "cache", PiperVoice())
+    v._voices = [{"name": "Microsoft Zira Desktop", "gender": "Female", "lang": "en-US", "source": "desktop"}]
+    st = v.arabic_status("Microsoft Zira Desktop")  # follows the radio voice: Zira is female
+    assert st["gender"] == "Female" and "higher (female) pitch" in st["voice"]
+    assert st["male"]["voice"] == "ar_JO-kareem-medium" and st["female"]["engine"] == "piper"
+    male = v.render(ARABIC_REPLY, "Microsoft Zira Desktop", gender="male")
+    female = v.render(ARABIC_REPLY, "Microsoft Zira Desktop")
+    rate = lambda b: wave.open(__import__("io").BytesIO(b)).getframerate()  # noqa: E731
+    assert rate(male) == 16000 and rate(female) == round(16000 * 1.32)  # played faster: a higher voice
+    first, second = calls(piper_home)
+    assert float(second["args"][second["args"].index("--length_scale") + 1]) > float(first["args"][first["args"].index("--length_scale") + 1])
+    # a real female model, when installed, is used as it is
+    for ext in (".onnx", ".onnx.json"):
+        (piper_home / "voices" / f"ar_XX-amira-medium{ext}").write_text("{}" if ext.endswith("json") else "x")
+    assert v.arabic_status(gender="female")["female"]["voice"] == "ar_XX-amira-medium"
+
+
+def test_windows_female_arabic_voice_and_onecore_voices(tmp_path, piper_home):
+    from qa_platform.voice.tts import parse_voices
+
+    voices = parse_voices(["Microsoft David Desktop|Male|en-US|desktop", "Microsoft David|Male|en-US|onecore",
+                           "Microsoft Hoda|Female|ar-EG|onecore", "Microsoft Naayf|Male|ar-SA|onecore",
+                           "Microsoft Zira Desktop|Female|en-US"])
+    assert [x["name"] for x in voices] == ["Microsoft David Desktop", "Microsoft Hoda", "Microsoft Naayf",
+                                            "Microsoft Zira Desktop"]  # English OneCore voices stay out of the list
+    v = SystemVoice(tmp_path / "cache", PiperVoice())
+    v._voices = voices
+    st = v.arabic_status("Microsoft David Desktop", "female")
+    assert st["female"] == {"engine": "windows", "voice": "Microsoft Hoda", "label": "Microsoft Hoda", "gender": "Female"}
+    assert st["male"]["voice"] == "Microsoft Naayf" and st["voice"] == "Microsoft Hoda"
+
+
+def test_arabic_voice_gender_setting_is_saved(client):
+    r = client.put("/api/voice/settings", json={"arabic_voice_gender": "female"})
+    assert r.status_code == 200 and r.json()["arabic_voice_gender"] == "female"
+    assert client.put("/api/voice/settings", json={"arabic_voice_gender": "child"}).status_code == 422
+    assert client.get("/api/voice/radio-voices").json()["arabic"]["gender"] == "Female"

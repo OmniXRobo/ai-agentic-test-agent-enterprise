@@ -8,6 +8,10 @@
     voices\       the Arabic voice ar_JO-kareem-medium (male, Jordanian Arabic; huggingface.co/rhasspy/piper-voices),
                   checked against the SHA-256 Hugging Face publishes for it
 
+  Male and female: Piper publishes one Arabic voice, Kareem (male). SkyGuard QA speaks female Arabic replies with
+  Kareem at a higher pitch, unless a female voice is installed: a Windows Arabic voice such as Hoda (Arabic language
+  pack with speech, installed by IT), or a female Piper model added with -Voice when one is published.
+
   Copy the zip to the offline PC (Downloads or the Desktop) and double-click INSTALL_ARABIC_VOICE.cmd in the
   SkyGuard QA folder there.
 
@@ -19,7 +23,7 @@
 [CmdletBinding()]
 param(
     [string]$OutDir = "",
-    [ValidatePattern('^ar_[A-Z]{2}-[a-z0-9_]+-(x_low|low|medium|high)$')][string]$Voice = "ar_JO-kareem-medium"
+    [ValidatePattern('^ar_[A-Z]{2}-[a-z0-9_]+-(x_low|low|medium|high)$')][string[]]$Voice = @("ar_JO-kareem-medium")
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,7 +63,7 @@ function Get-File([string]$Uri, [string]$OutFile) {
 }
 function Get-Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLower() }
 
-Write-Host "== Offline Arabic voice for SkyGuard QA: Piper + $Voice" -ForegroundColor Cyan
+Write-Host "== Offline Arabic voice for SkyGuard QA: Piper + $($Voice -join ', ')" -ForegroundColor Cyan
 if (Test-Path $Work) { Remove-Item $Work -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $Work "voices") | Out-Null
 
@@ -76,26 +80,28 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::ExtractToDirectory($piperZip, $Work)   # makes $Work\piper\piper.exe
 if (-not (Test-Path (Join-Path $Work "piper\piper.exe"))) { throw "The Piper zip has no piper\piper.exe." }
 
-# 2. The Arabic voice (SHA-256 published by Hugging Face)
-$parts = $Voice -split "-"           # ar_JO, kareem, medium
-$lang = $parts[0]; $family = $lang.Split("_")[0]; $name = $parts[1]; $quality = $parts[2]
-$dir = "$family/$lang/$name/$quality"
-$tree = @(foreach ($item in @(Invoke-RestMethod -Uri "https://huggingface.co/api/models/$Repo/tree/$Rev/$dir" -UseBasicParsing -TimeoutSec 60)) { $item })
-foreach ($file in @("$Voice.onnx", "$Voice.onnx.json")) {
-    $entry = $tree | ForEach-Object { $_ } | Where-Object { "$($_.path)" -eq "$dir/$file" } | Select-Object -First 1
-    if (-not $entry) { throw "$file is not published in $Repo ($dir)." }
-    $dest = Join-Path $Work "voices\$file"
-    Write-Host ("  {0} ({1:N0} MB)..." -f $file, ([int64]$(if ($entry.lfs) { $entry.lfs.size } else { $entry.size }) / 1MB))
-    Get-File "https://huggingface.co/$Repo/resolve/$Rev/$dir/$file" $dest
-    $hash = Get-Sha $dest
-    if ($entry.lfs) {
-        $want = "$($entry.lfs.oid)".ToLower()
-        if ($hash -ne $want) { throw "${file}: SHA-256 $hash does not match the published $want. Run the script again." }
-    } elseif ((Get-Item $dest).Length -ne [int64]$entry.size) {
-        throw "${file}: size does not match the published size. Run the script again."
+# 2. The Arabic voice(s) (SHA-256 published by Hugging Face)
+foreach ($one in $Voice) {
+    $parts = $one -split "-"           # ar_JO, kareem, medium
+    $lang = $parts[0]; $family = $lang.Split("_")[0]; $name = $parts[1]; $quality = $parts[2]
+    $dir = "$family/$lang/$name/$quality"
+    $tree = @(foreach ($item in @(Invoke-RestMethod -Uri "https://huggingface.co/api/models/$Repo/tree/$Rev/$dir" -UseBasicParsing -TimeoutSec 60)) { $item })
+    foreach ($file in @("$one.onnx", "$one.onnx.json")) {
+        $entry = $tree | ForEach-Object { $_ } | Where-Object { "$($_.path)" -eq "$dir/$file" } | Select-Object -First 1
+        if (-not $entry) { throw "$file is not published in $Repo ($dir)." }
+        $dest = Join-Path $Work "voices\$file"
+        Write-Host ("  {0} ({1:N0} MB)..." -f $file, ([int64]$(if ($entry.lfs) { $entry.lfs.size } else { $entry.size }) / 1MB))
+        Get-File "https://huggingface.co/$Repo/resolve/$Rev/$dir/$file" $dest
+        $hash = Get-Sha $dest
+        if ($entry.lfs) {
+            $want = "$($entry.lfs.oid)".ToLower()
+            if ($hash -ne $want) { throw "${file}: SHA-256 $hash does not match the published $want. Run the script again." }
+        } elseif ((Get-Item $dest).Length -ne [int64]$entry.size) {
+            throw "${file}: size does not match the published size. Run the script again."
+        }
     }
 }
-$source = [ordered]@{ piper = $PiperUrl; piper_sha256 = $PiperSha; voice = $Voice; voice_repo = "https://huggingface.co/$Repo";
+$source = [ordered]@{ piper = $PiperUrl; piper_sha256 = $PiperSha; voice = ($Voice -join ", "); voice_repo = "https://huggingface.co/$Repo";
                       revision = $Rev; downloaded_at = (Get-Date).ToString("s") }
 ($source | ConvertTo-Json) | Set-Content -Path (Join-Path $Work "SOURCE.json") -Encoding UTF8
 

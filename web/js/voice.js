@@ -119,7 +119,7 @@ export function pickVoice(s, male, text = "") {
   const arabic = ARABIC.test(text || "");
   const lang = arabic ? "ar" : (s.language || "en").toLowerCase().slice(0, 2);
   const inLang = voices.filter((v) => v.lang.toLowerCase().startsWith(lang));
-  const gender = male ? wantedGender(s) : null;
+  const gender = male ? (arabic && ["male", "female"].includes(s.arabic_voice_gender) ? s.arabic_voice_gender : wantedGender(s)) : null;
   const fits = (v) => !gender || genderOf(v.name) === gender || genderOf(v.name) === null;
   const named = voices.find((v) => v.name === s.tts_voice);
   if (named && !arabic && fits(named)) return named;

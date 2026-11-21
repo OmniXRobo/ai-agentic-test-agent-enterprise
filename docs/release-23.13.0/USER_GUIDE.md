@@ -57,7 +57,7 @@ multilingual speech model; see KNOWN_LIMITATIONS.md.
 
 Arabic spoken replies: install the offline Arabic voice once (`GET_ARABIC_VOICE.ps1` on a PC with Internet, then
 `INSTALL_ARABIC_VOICE.cmd` on this PC). Voice settings > Voice reply shows which voice speaks Arabic; press *Test
-Arabic Voice* to hear it. You can call the agent by its name in Arabic too (for example "كابتن افتح صفحة الحجز").
+Arabic Voice* to hear it. *Arabic reply voice* chooses Male or Female (or the same gender as the radio voice). You can call the agent by its name in Arabic too (for example "كابتن افتح صفحة الحجز").
 
 ## Users (administrators)
 

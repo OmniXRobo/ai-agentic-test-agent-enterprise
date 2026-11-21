@@ -32,6 +32,9 @@ The numbers follow the 13 items of the request.
   `INSTALL_ARABIC_VOICE.cmd` on the office PC; Piper with the male voice `ar_JO-kareem-medium`). Arabic replies pick
   it automatically in both reply styles; an English voice never reads Arabic. Voice settings show which voice speaks
   Arabic and have a *Test Arabic Voice* button.
+* Next patch: *Arabic reply voice* setting: like the radio voice, Male or Female. Male uses a Windows male Arabic
+  voice (Naayf) or Kareem; Female uses a Windows female Arabic voice (Hoda) or Kareem at a higher pitch. Arabic
+  voices that Windows 10 / 11 installs as OneCore voices (the Settings language pack) are now found and used.
 * Next patch: the wake name said in Arabic is recognised in any spelling the recognizer writes ("كابتن", "كابدان",
   "كبتن" for Captain), and common misheard command words are understood ("كابدان افتا صفا" works like
   "كابتن افتح صفحة"). An installed multilingual speech model with another name (for example `small.ar`) is used for

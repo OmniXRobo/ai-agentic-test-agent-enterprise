@@ -34,6 +34,9 @@ Stated plainly so that nobody has to discover them.
   the patch itself because the build machine cannot reach Hugging Face. Without any Arabic voice, Arabic replies are
   shown but not spoken (an English voice no longer reads Arabic text).
 * The Arabic voice is Jordanian (Levantine) Arabic; it is understandable for UAE users but is not a Gulf accent.
+* **Female Arabic voice:** Piper publishes only one Arabic voice (Kareem, male). With *Arabic reply voice: Female*,
+  SkyGuard QA uses a Windows female Arabic voice (Hoda) if IT has installed the Arabic language pack with speech;
+  otherwise it speaks Kareem at a higher pitch, which sounds lighter but is not a natural female voice.
 * Without the local AI, the reply details stay in English on screen and a short Arabic status line is spoken.
 * UAE dialect words not known to the local AI or the word list may be translated loosely; the *Understood as* line
   shows what was understood before anything runs.
