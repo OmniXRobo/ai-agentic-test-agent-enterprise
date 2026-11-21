@@ -105,6 +105,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # radio = replies sound like a pilot on the radio (Windows voice through a radio filter, squelch, static)
         "reply_style": "radio",
         "radio_voice": "",
+        "arabic_voice_gender": "",  # 23.13.0: "" = like the radio voice, "male" or "female"
         # Voice & Command Agent: names are settings, never code. The display name may be in any script (e.g. Arabic);
         # the command name is what the recognizer listens for and the voice says, in Latin letters.
         "agent_display_name": "HAMI",

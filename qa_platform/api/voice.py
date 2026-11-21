@@ -44,6 +44,7 @@ class VoiceSettingsIn(BaseModel):
     tts_rate: float | None = Field(default=None, ge=0.5, le=2)
     reply_style: Literal["radio", "plain"] | None = None
     radio_voice: str | None = Field(default=None, max_length=200)
+    arabic_voice_gender: Literal["", "male", "female"] | None = None
     agent_display_name: str | None = Field(default=None, min_length=1, max_length=40)
     agent_command_name: str | None = Field(default=None, min_length=2, max_length=30, pattern=r"^[A-Za-z][A-Za-z' -]*$")
     voice_enabled: bool | None = None

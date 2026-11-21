@@ -7,7 +7,7 @@
 
 import { api } from "./api.js";
 import { subscribe } from "./store.js";
-import { playRadio, radioAround, ackTone, micTone, stopRadio, setAmbience, duck } from "./radio.js";
+import { playRadio, playPlain, radioAround, ackTone, micTone, stopRadio, setAmbience, duck } from "./radio.js";
 
 const listeners = new Set();
 export const voice = {
@@ -119,13 +119,14 @@ export function pickVoice(s, male, text = "") {
   const arabic = ARABIC.test(text || "");
   const lang = arabic ? "ar" : (s.language || "en").toLowerCase().slice(0, 2);
   const inLang = voices.filter((v) => v.lang.toLowerCase().startsWith(lang));
-  const gender = male ? wantedGender(s) : null;
+  const gender = male ? (arabic && ["male", "female"].includes(s.arabic_voice_gender) ? s.arabic_voice_gender : wantedGender(s)) : null;
   const fits = (v) => !gender || genderOf(v.name) === gender || genderOf(v.name) === null;
   const named = voices.find((v) => v.name === s.tts_voice);
   if (named && !arabic && fits(named)) return named;
   const same = gender === "female" ? inLang.find((v) => FEMALE.test(v.name)) : gender === "male"
     ? (inLang.find((v) => MALE.test(v.name)) || inLang.find((v) => !FEMALE.test(v.name))) : null;
-  return same || (arabic ? inLang[0] : null) || named || inLang[0] || voices[0];
+  if (arabic) return same || inLang[0] || null; // an English voice never reads Arabic text
+  return same || named || inLang[0] || voices[0];
 }
 
 function browserSpeak(text, s, radio) {
@@ -149,15 +150,27 @@ function browserSpeak(text, s, radio) {
 
 // Radio replies use the PC's Windows voice rendered by the runtime, so the audio can go through the radio filter.
 let windowsVoice = null; // null = unknown, false = not available
+// 23.13.0: Arabic replies are rendered by the runtime (Windows Arabic voice or the offline Piper voice) in every reply
+// style, tracked apart from the English voice: a PC can have one without the other.
+let arabicVoice = null;
 const wavCache = new Map();
 
 async function radioWav(text) {
-  if (windowsVoice === false) return null;
+  const arabic = ARABIC.test(text);
+  if ((arabic ? arabicVoice : windowsVoice) === false) return null;
   if (wavCache.has(text)) return wavCache.get(text).slice(0);
   try {
     const resp = await fetch("/api/voice/speak", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-    if (!resp.ok) { if (resp.status === 409) windowsVoice = false; return null; }
-    windowsVoice = true;
+    if (!resp.ok) {
+      if (resp.status === 409) {
+        let code = "";
+        try { code = (await resp.json())?.error_code || ""; } catch { /* not JSON */ }
+        if (arabic) arabicVoice = false;
+        if (!arabic || code === "VOICE_TTS_UNAVAILABLE") windowsVoice = false;
+      }
+      return null;
+    }
+    if (arabic) arabicVoice = true; else windowsVoice = true;
     const wav = await resp.arrayBuffer();
     if (wavCache.size > 40) wavCache.delete(wavCache.keys().next().value);
     wavCache.set(text, wav);
@@ -178,12 +191,14 @@ async function speakNow(text, s, gen) {
   if (gen !== speechGen) return;
   voice.speaking = true; duck("agent"); emit();
   try {
-    if (s.reply_style !== "radio") return await browserSpeak(text, s, false);
+    const arabic = ARABIC.test(text);
+    if (s.reply_style !== "radio" && !arabic) return await browserSpeak(text, s, false);
     const wav = await radioWav(text);
     if (gen !== speechGen) return;
     if (wav) {
-      try { return await playRadio(wav, s); } catch { /* fall back to the browser voice */ }
+      try { return await (s.reply_style === "radio" ? playRadio(wav, s) : playPlain(wav, s)); } catch { /* fall back to the browser voice */ }
     }
+    if (s.reply_style !== "radio") return await browserSpeak(text, s, false);
     await radioAround(() => browserSpeak(text, s, true), s);
   } finally {
     voice.speaking = false; speakEndedAt = performance.now();
@@ -549,14 +564,53 @@ let wakeStarting = null;
 let followPending = 0; // seconds of follow-up window to open once the agent has finished speaking
 let followUntil = 0;
 
-function normalizeWords(t) { return (t || "").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim(); }
+function normalizeWords(t) { return (t || "").toLowerCase().replace(/[^a-z0-9' \u0621-\u064A]+/g, " ").replace(/\s+/g, " ").trim(); }
 
 function nameWords(s) {
   return [s?.agent_command_name || "Hami", s?.agent_display_name].map(normalizeWords).filter((n) => n && /^[a-z]/.test(n));
 }
 
+// 23.13.0: the wake name spoken in Arabic, in any spelling the recognizer writes ("كابتن", "كابدان", "كبتن" for
+// Captain). Names are compared by their consonants, as in skyguard_agent/translate.py name_sound().
+const AR_SOUND = { "ك": "k", "ق": "k", "ج": "j", "ب": "b", "پ": "b", "ت": "t", "د": "t", "ط": "t", "ض": "t", "ث": "s",
+  "س": "s", "ص": "s", "ز": "z", "ذ": "z", "ظ": "z", "ر": "r", "ل": "l", "م": "m", "ن": "n", "ه": "h", "ح": "h", "خ": "h",
+  "ش": "x", "ف": "f", "ڤ": "f", "غ": "g", "گ": "g" };
+const AR_CALLS = new Set(["يا", "هي", "اوكي", "اوك", "هاي", "ي"]);
+export function nameSound(word) {
+  let w = (word || "").toLowerCase().replace(/[\u064B-\u0652\u0670\u0640]/g, "");
+  if (ARABIC.test(w)) return [...w].map((ch) => AR_SOUND[ch] || "").join("");
+  w = w.replace(/[^a-z]/g, "").replace(/ph/g, "f").replace(/ck/g, "k").replace(/sh/g, "x").replace(/kh/g, "h")
+    .replace(/gh/g, "g").replace(/th/g, "t").replace(/c(?=[eiy])/g, "s");
+  w = w.replace(/[cq]/g, "k").replace(/p/g, "b").replace(/d/g, "t").replace(/v/g, "f").replace(/[aeiouyw]/g, "");
+  return w.replace(/(.)\1+/g, "$1");
+}
+function closeSound(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 3 || Math.abs(a.length - b.length) > 1) return false;
+  let prev = [...Array(b.length + 1).keys()];
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] !== b[j - 1] ? 1 : 0)));
+    prev = cur;
+  }
+  return prev[b.length] <= 1;
+}
+function afterArabicName(text, s) {
+  let words = (text || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length && AR_CALLS.has(words[0].replace(/[،,.!]/g, ""))) words = words.slice(1);
+  const sounds = [s?.agent_command_name || "Hami", s?.agent_display_name].filter(Boolean).map(nameSound);
+  for (const size of [2, 1]) {
+    if (words.length < size) continue;
+    const heard = nameSound(words.slice(0, size).join(""));
+    if (sounds.some((x) => (x.length >= 2 || heard === x) && closeSound(heard, x))) return words.slice(size).join(" ").replace(/^[\s،,.:!-]+|[\s،,.:!-]+$/g, "");
+  }
+  return null;
+}
+
 /** The sentence without a leading "hey <name>," ("" if it was only the name). null if it was not addressed. */
 export function afterName(text, s = voice.settings) {
+  if (ARABIC.test(text || "")) return afterArabicName(text, s);
   const t = normalizeWords(text).replace(/^(hey|ok|okay|hi)\s+/, "");
   for (const n of nameWords(s).sort((x, y) => y.length - x.length)) {
     if (t === n) return "";

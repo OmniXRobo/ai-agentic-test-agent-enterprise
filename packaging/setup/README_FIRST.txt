@@ -1,13 +1,23 @@
-SkyGuard QA 23.13.0 - cumulative upgrade from SGQA-23.3.35 (Edge, HTTPS, personal TFS access, report buttons)
-=============================================================================================================
+SkyGuard QA 23.13.1 - cumulative upgrade from SGQA-23.3.35 (Arabic voice replies, Edge, HTTPS, personal TFS access)
+==================================================================================================================
 
 WHAT THIS IS
   One upgrade that brings any installed SkyGuard QA from 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1,
-  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2 or 23.12.0 to 23.13.0, including every release in between. Any
+  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0 or 23.13.0 to 23.13.1, including every release
+  in between. Any
   other version is refused and nothing is changed. No internet. Windows 10 (1909 or later)
   or Windows 11.
 
-  New in 23.13.0 (details: PATCH_CHANGELOG.md):
+  New in 23.13.1 (details: PATCH_CHANGELOG.md):
+  - Arabic replies are spoken by an Arabic voice, male or female as you choose (Voice settings > Arabic reply voice).
+    The offline Arabic voice is installed once: GET_ARABIC_VOICE.ps1 on a PC with Internet, then
+    INSTALL_ARABIC_VOICE.cmd in the SkyGuard QA folder. A Windows Arabic voice (Naayf, Hoda) is used when installed.
+  - The agent's name said in Arabic is understood however the recognizer spells it, and common misheard Arabic
+    command words still work (for example "Captain, open page" heard badly).
+  - INSTALL_SPEECH_MODEL.cmd (the Voice hint referred to it) installs the Arabic speech model offline; a model
+    folder with another name (for example small.ar) is used for Arabic automatically.
+
+  New in 23.13.0:
   - Microsoft Edge is used for AI-Driven, Discovery and Hybrid when it is chosen in Preferences; a browser that is
     not installed is replaced by the next one (Preferences, Edge, Chrome).
   - Dashboard: charts first, click any chart to see the items behind it; AI analysis at the bottom.
@@ -25,7 +35,9 @@ HOW TO INSTALL (5 minutes)
   2. Double-click  SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe
      Welcome -> Detect (finds your installation and version) -> Backup -> Install -> Verify -> Finish.
      If Windows shows "Windows protected your PC": More info -> Run anyway (the program is not code-signed).
-  3. In the browser press Ctrl+F5 once. Then open Users (administrators): add each person's email, TFS project and PAT.
+  3. In the browser press Ctrl+F5 once. (From 23.12.0 or older: open Users and add each person's email, TFS project
+     and PAT.)
+  4. For Arabic spoken replies: run INSTALL_ARABIC_VOICE.cmd once with the zip from GET_ARABIC_VOICE.ps1 (see above).
 
   If your PC does not allow starting the .exe: open the folder Manual_Install and double-click APPLY_PATCH.cmd.
   It does exactly the same upgrade, with the same checks, backup and automatic restore.
@@ -35,15 +47,15 @@ HOW TO INSTALL (5 minutes)
 
 YOUR DATA
   Backed up before anything changes (patch-backups folder in your installation). Never deleted. If any step fails,
-  the previous version is restored automatically. To undo later: patch-tools\23.13.0\ROLLBACK_PATCH.cmd.
+  the previous version is restored automatically. To undo later: patch-tools\23.13.1\ROLLBACK_PATCH.cmd.
 
 IN THIS FOLDER
   SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe   the installer (wizard; unattended: /S /APP="<folder>")
   INSTALLATION_GUIDE.md          step by step, unattended install, protected folders, rollback, troubleshooting
-  PATCH_CHANGELOG.md             what is new in 23.13.0
+  PATCH_CHANGELOG.md             what is new in 23.13.1
   USER_GUIDE.md                  API Testing step by step
   ROOT_CAUSE_ANALYSIS.md         what was found and changed, and why
-  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.13.0) and what each one added
+  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.13.1) and what each one added
   SECURITY_REPORT.md             security checks, controls and residual risks
   sbom.cdx.json                  software bill of materials (CycloneDX 1.5)
   TEST_REPORT.md, test-results\  what was tested, passed, failed, skipped or not executed

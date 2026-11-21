@@ -77,7 +77,7 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
             <label data-openai ${s.stt_api === "openai" ? "" : "hidden"}>Model name <input name="stt_model" value="${esc(s.stt_model)}" placeholder="as the server lists it"></label>
           </div>
           <label>Language <select name="language">${[["en", "English"], ["auto", "English and Arabic (detected)"], ["ar", "Arabic (UAE and other)"]].concat((s.language && !["en", "auto", "ar"].includes(s.language)) ? [[s.language, s.language]] : []).map(([v, l]) => `<option value="${esc(v)}" ${v === (s.language || "en") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
-          <p class="muted">Arabic needs a multilingual Faster-Whisper model (small, not small.en). Get it once with GET_FASTER_WHISPER_MODEL.ps1 -Model small on a PC with Internet and install it with INSTALL_SPEECH_MODEL.cmd from the patch. Arabic commands are translated to English by the local AI before they run, and Arabic replies use an installed Arabic Windows voice when there is one.</p>
+          <p class="muted">Arabic needs a multilingual Faster-Whisper model (small, not small.en). Get it once with GET_FASTER_WHISPER_MODEL.ps1 -Model small on a PC with Internet and copy faster-whisper-small.zip to this PC (Downloads) and double-click INSTALL_SPEECH_MODEL.cmd in the SkyGuard QA application folder (both scripts are there). Arabic commands are translated to English by the local AI before they run, and Arabic replies are spoken by an Arabic voice: a Windows Arabic voice, or the offline Arabic voice from INSTALL_ARABIC_VOICE.cmd (see Voice reply).</p>
         </section>
         <section class="ck-panel">
           <h3>Voice reply</h3>
@@ -87,7 +87,9 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
             <option value="plain" ${s.reply_style === "plain" ? "selected" : ""}>Plain voice</option></select></label>
           <label>Radio voice (Windows) <select name="radio_voice" ${radio.available ? "" : "disabled"}><option value="">Adult male voice (default)</option>
             ${radio.voices.map((v) => `<option value="${esc(v.name)}" ${v.name === s.radio_voice ? "selected" : ""}>${esc(v.name)} (${esc(v.gender)}, ${esc(v.lang)})</option>`).join("")}</select></label>
-          <p class="muted">${radio.available ? `Installed Windows voices: ${radio.voices.map((v) => esc(v.name)).join(", ") || "none"}. They are rendered on this PC, so replies work offline.` : "No Windows voices were found by the runtime, so the browser's installed voice is used with the radio beeps and static around it."}</p>
+          <p class="muted">${radio.voices.length ? `Installed Windows voices: ${radio.voices.map((v) => esc(v.name)).join(", ")}. They are rendered on this PC, so replies work offline.` : "No Windows voices were found by the runtime, so the browser's installed voice is used with the radio beeps and static around it."}</p>
+          <label>Arabic reply voice <select name="arabic_voice_gender">${[["", "Like the radio voice"], ["male", "Male"], ["female", "Female"]].map(([v, l]) => `<option value="${v}" ${v === (s.arabic_voice_gender || "") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <p class="muted" id="arabicVoice">${arabicLine(radio.arabic)}</p>
           <label>Browser voice (fallback) <select name="tts_voice"><option value="">Male voice for the language</option>
             ${voices.map((v) => `<option value="${esc(v.name)}" ${v.name === s.tts_voice ? "selected" : ""}>${esc(v.name)} (${esc(v.lang)})</option>`).join("")}</select></label>
           <p class="muted">Used only when the Windows voice cannot speak. It keeps the gender of the Radio voice above (a male setting is never answered by a female voice).</p>
@@ -115,6 +117,7 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
       </div>
       <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Save</button>
         <button class="btn" type="button" id="testVoice">Test Voice</button>
+        <button class="btn" type="button" id="testArabic">Test Arabic Voice</button>
         <button class="btn" type="button" id="testRadio">Test Radio</button>
         <button class="btn" type="button" id="stopSpeak">Stop Speaking</button>
         <button class="btn" type="button" id="diag">Check voice setup</button>
@@ -139,7 +142,7 @@ function readForm(form) {
       stt_engine: f("stt_engine").value, stt_api: f("stt_api").value, stt_url: f("stt_url").value, stt_model: f("stt_model").value,
       ...(f("fw_model")?.value ? { fw_model: f("fw_model").value } : {}),
       stt_model_dir: f("stt_model_dir").value.trim(), language: f("language").value.trim() || "en",
-      speak_replies: f("speak_replies").checked, reply_style: f("reply_style").value, radio_voice: f("radio_voice").value,
+      speak_replies: f("speak_replies").checked, reply_style: f("reply_style").value, radio_voice: f("radio_voice").value, arabic_voice_gender: f("arabic_voice_gender").value,
       tts_voice: f("tts_voice").value, tts_rate: Number(f("tts_rate").value) || 1, voice_volume: frac("voice_volume"),
       radio_intensity: frac("radio_intensity"), wireless_tone: f("wireless_tone").checked, static_volume: frac("static_volume"),
       ambience_enabled: f("ambience_enabled").checked, ambience_volume: frac("ambience_volume"),
@@ -150,6 +153,19 @@ function readForm(form) {
       click_sound: f("click_sound").checked, click_volume: frac("click_volume"),
     },
   };
+}
+
+// 23.13.0: which voice speaks Arabic replies, and how to get one on an offline PC.
+function arabicLine(ar) {
+  const who = (c) => c ? `${esc(c.label || c.voice)} (${c.engine === "windows" ? "Windows" : "offline"})` : "none";
+  if (ar?.available) {
+    return `Arabic replies are spoken now by <b dir="auto">${esc(ar.voice)}</b> (${esc((ar.gender || "").toLowerCase())}). ` +
+      `Male: ${who(ar.male)}. Female: ${who(ar.female)}. ` +
+      "A Windows Arabic voice of the chosen gender (Arabic language pack with speech: Naayf, Hoda) is used first when IT has installed one.";
+  }
+  return "Arabic replies: no Arabic voice is installed, so Arabic replies are shown but not spoken (an English voice never reads them). " +
+    "On a PC with Internet run GET_ARABIC_VOICE.ps1, copy skyguard-arabic-voice.zip to this PC (Downloads) and double-click INSTALL_ARABIC_VOICE.cmd in the SkyGuard QA folder. " +
+    "A Windows Arabic voice (Arabic language pack with speech, installed by IT) is used instead when there is one.";
 }
 
 async function render(view) {
@@ -205,6 +221,12 @@ async function render(view) {
     const trial = { ...voice.settings, ...readForm(form).voice, speak_replies: true, voice_enabled: true };
     if (trial.radio_voice !== voice.settings.radio_voice || trial.tts_rate !== voice.settings.tts_rate) toast("Save first to hear a different Windows voice or speed.", "info");
     await speak(`${trial.agent_display_name} on frequency. Radio check, loud and clear. Ready for your instructions.`, trial);
+  });
+  view.querySelector("#testArabic").addEventListener("click", async () => {
+    const trial = { ...voice.settings, ...readForm(form).voice, speak_replies: true, voice_enabled: true };
+    if (!radio.arabic?.available) toast("No Arabic voice is installed yet. Run INSTALL_ARABIC_VOICE.cmd in the SkyGuard QA folder.", "info");
+    else if ((trial.arabic_voice_gender || "") !== (voice.settings.arabic_voice_gender || "") || trial.radio_voice !== voice.settings.radio_voice) toast("Save first to hear the other Arabic voice.", "info");
+    await speak("حاضر. جاري فتح صفحة الحجز.", trial);
   });
   view.querySelector("#testRadio").addEventListener("click", () => testRadio(readForm(form).voice).catch((err) => toast(err.message, "error")));
   view.querySelector("#stopSpeak").addEventListener("click", stopSpeaking);
