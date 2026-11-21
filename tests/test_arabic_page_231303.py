@@ -12,7 +12,7 @@ import pytest
 
 from skyguard_agent.autopilot import Autopilot, page_names
 from skyguard_agent.intent import classify
-from skyguard_agent.translate import spoken_reply, to_english
+from skyguard_agent.translate import ARABIC_LINES, LINE_KINDS, spoken_reply, to_english
 
 ROOT = Path(__file__).resolve().parent.parent
 EMIRATES = {"id": "app1", "name": "Emirates (Test)", "base_url": "https://www.emirates.example/ae/english/"}
@@ -81,6 +81,84 @@ def test_the_question_is_spoken_in_arabic_for_an_arabic_request():
 
 def test_page_and_extension_show_the_choices_as_buttons():
     page = (ROOT / "web" / "js" / "pages" / "ai-agent.js").read_text(encoding="utf-8")
-    assert 'r.type === "clarify" && r.options?.length' in page and 'send(o, "typed", log, null)' in page
+    assert 'r.type === "clarify" && r.options?.length' in page and 'send(o, "typed", log, null, false, spoken' in page
     panel = (ROOT / "browser-extension" / "extension" / "sidepanel.js").read_text(encoding="utf-8")
     assert 'data-act="say"' in panel and 'if (act === "say")' in panel
+
+
+# ---- the question and what follows, in the language the person spoke (23.13.3, after the user's answer) ----------
+
+def test_the_page_question_is_asked_in_arabic_without_the_local_ai():
+    r = spoken_reply({"type": "clarify", "text": "Which page?", "options": ["Open the Book flights page"]}, True)
+    assert r == {"speak": ARABIC_LINES["choose"], "language": "ar"}
+    assert spoken_reply({"type": "clarify", "text": "Which page?", "options": ["x"]}, False) == {
+        "speak": "Which page?", "language": "en"}
+
+
+def test_every_task_step_has_an_arabic_line():
+    assert set(LINE_KINDS) <= set(ARABIC_LINES)
+    assert spoken_reply({"type": "completed", "text": "1 trip created."}, True)["speak"] == ARABIC_LINES["completed"]
+
+
+def test_task_steps_and_button_answers_are_spoken_in_the_request_language(client):
+    for lang, check in (("en", lambda t: t == "The preview is ready."), ("ar", lambda t: t == ARABIC_LINES["preview"])):
+        r = client.post("/api/ops/simple/say", json={"kind": "preview", "text": "The preview is ready.", "language": lang})
+        assert r.status_code == 200, r.text
+        assert r.json()["language"] == lang and check(r.json()["speak"])
+    assert client.post("/api/ops/simple/say", json={"kind": "run_anything", "text": "x"}).status_code == 422
+    # a button under a spoken Arabic question: typed English text, answered in Arabic
+    r = client.post("/api/ops/simple/command", json={"text": "open the start page", "reply_language": "ar"})
+    assert r.status_code == 200, r.text
+    assert r.json()["reply"]["language"] == "ar"
+
+
+def test_page_and_extension_speak_task_steps_and_show_arabic():
+    page = (ROOT / "web" / "js" / "pages" / "ai-agent.js").read_text(encoding="utf-8")
+    for needle in ('runLine(runId, "preview"', 'runLine(runId, r.status', '"/api/ops/simple/say"', 'dir="rtl" lang="ar"',
+                   "reply_language: speakAs"):
+        assert needle in page, needle
+    panel = (ROOT / "browser-extension" / "extension" / "sidepanel.js").read_text(encoding="utf-8")
+    for needle in ('runLine(r.id, "preview"', "runLine(r.id, r.status", "api.lineToSpeak", 'dir="rtl" lang="ar"',
+                   "reply_language: replyLang"):
+        assert needle in panel, needle
+    server = (ROOT / "browser-extension" / "companion" / "skyguard_companion" / "server.py").read_text(encoding="utf-8")
+    assert '"/v1/voice/line"' in server and 'b.get("reply_language") == "ar"' in server
+
+
+# ---- websites whose addresses change on every visit (23.13.3) -----------------------------------------------------
+
+from skyguard_agent.understanding import path_template, rebase_url  # noqa: E402
+
+
+def test_changing_addresses_are_the_same_page():
+    assert path_template("https://abc.com/12345") == path_template("https://abc.com/by123") == "/{id}"
+    assert path_template("https://abc.com/(S(x1y2z3))/home.aspx") == path_template("https://abc.com/(S(q9))/home.aspx")
+    assert path_template("https://abc.com/s/AbCdEfGhIjKlMnOpQr/booking") == "/s/{id}/booking"
+    assert path_template("https://abc.com/app;jsessionid=AB12/orders") == "/app/orders"
+    assert path_template("https://abc.com/ae/english/book") == "/ae/english/book"  # ordinary words stay
+
+
+def test_a_learned_page_opens_with_the_changing_part_of_today():
+    assert rebase_url("https://abc.com/12345/booking", "https://abc.com/by123/home") == "https://abc.com/by123/booking"
+    assert rebase_url("https://abc.com/12345", "https://abc.com/by123") == "https://abc.com/by123"
+    assert rebase_url("https://abc.com/{id}/booking", None) is None          # cannot be rebuilt: the start page
+    assert rebase_url("https://abc.com/ae/book?x=1", "https://abc.com/by9") == "https://abc.com/ae/book?x=1"
+    assert rebase_url("https://abc.com/12345/b", "https://other.com/by123/a") == "https://abc.com/12345/b"
+
+
+def test_connecting_the_new_address_finds_the_learned_application(client):
+    first = client.post("/api/ops/simple/connect", json={"url": "https://www.abc-shop.example/12345", "learn": False})
+    assert first.status_code == 201, first.text
+    for again in ("https://www.abc-shop.example/by123", "https://abc-shop.example/by123/home"):
+        r = client.post("/api/ops/simple/connect", json={"url": again, "learn": False})
+        assert r.status_code == 201 and r.json()["created"] is False, r.text
+        assert r.json()["application"]["id"] == first.json()["application"]["id"]
+
+
+def test_tasks_and_the_extension_use_the_address_of_today():
+    executor = (ROOT / "skyguard_agent" / "executor.py").read_text(encoding="utf-8")
+    assert "rebase_url(url, here) or app[\"base_url\"]" in executor
+    api = (ROOT / "qa_platform" / "api" / "agent_simple.py").read_text(encoding="utf-8")
+    assert "rebase_url(reply[\"url\"], svc.current_url(" in api
+    bg = (ROOT / "browser-extension" / "extension" / "background.js").read_text(encoding="utf-8")
+    assert "let url = rebaseUrl(msg.url, same ? same.url : \"\");" in bg

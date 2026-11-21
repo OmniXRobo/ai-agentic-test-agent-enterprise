@@ -92,9 +92,9 @@ def test_companion_without_an_arabic_voice_says_how_to_install_it(tmp_path, monk
 
 def test_pages_speak_the_reply():
     page = (ROOT / "web" / "js" / "pages" / "ai-agent.js").read_text(encoding="utf-8")
-    assert 'if (source === "voice") sayReply(out.reply);' in page and "speak(line" in page
+    assert 'if (source === "voice" || speakAs) sayReply(out.reply);' in page and "speak(line" in page  # 23.13.3: speakAs
     side = (ROOT / "browser-extension" / "extension" / "sidepanel.js").read_text(encoding="utf-8")
-    assert "if (spoken) sayReply(r);" in side and "api.speakArabic" in side
+    assert "if (spoken) { sayReply(r);" in side and "api.speakArabic" in side
     assert "return false; // never an English voice for Arabic text" in side
     server = (ROOT / "browser-extension" / "companion" / "skyguard_companion" / "server.py").read_text(encoding="utf-8")
     assert '"/v1/voice/speak"' in server and "spoken_reply" in server

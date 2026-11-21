@@ -587,7 +587,7 @@ from skyguard_agent.translate import to_english
 from skyguard_agent.autopilot import page_names
 ok = (to_english('\u0625\u0641\u062a\u0627\u062d\u0629 \u0635\u0641\u062d\u0629') == ('open page', True)
       and page_names([{'name': 'Book Flights | Find Hotels | Emirates'}, {'name': '/ae/english/book'}, {'name': 'book flights'}], {'name': 'Emirates (Test)'}) == ['Book Flights']
-      and 'r.options' in Path('web/js/pages/ai-agent.js').read_text(encoding='utf-8'))
+      and all(w in Path('web/js/pages/ai-agent.js').read_text(encoding='utf-8') for w in ('r.options', 'runLine')))
 print('ok' if ok else '23.13.3 features incomplete')
 """
 

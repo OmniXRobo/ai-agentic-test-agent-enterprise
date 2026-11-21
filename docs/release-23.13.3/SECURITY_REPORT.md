@@ -5,6 +5,7 @@
 | Area | Check |
 |---|---|
 | Page buttons | Each button only sends its text as a command through the same path as typing (the same sign-in, roles, secret check and preview / confirmation); the text is escaped when shown. Nothing runs without the usual confirmation. |
+| `POST /api/ops/simple/say`, companion `POST /v1/voice/line` | Return words only: the kind is one of seven fixed values (preview, completed, partial, failed, stopped, cancelled, paused), text at most 600 characters; same sign-in as the rest (the companion's "voice" rate bucket). Nothing is run or changed. |
 | Translation | Offline as before; fewer requests reach the local AI. No new endpoint, permission or dependency; the extension's manifest permissions are unchanged. |
 
 

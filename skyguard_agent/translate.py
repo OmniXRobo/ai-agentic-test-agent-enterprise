@@ -208,7 +208,18 @@ ARABIC_LINES = {
     "needs_approval": "هذي المهمة تحتاج موافقتك أولاً.",
     "secret_intercepted": "لا تكتب كلمات السر في المحادثة. استخدم النموذج الآمن.",
     "error": "ما قدرت أنفذ الطلب. السبب على الشاشة.",
+    # 23.13.3: a question with choices, and what happens to a task after the request (preview, done, failed ...)
+    "choose": "أي صفحة تقصد؟ اختر من الأزرار على الشاشة.",
+    "preview": "المعاينة جاهزة. راجعها وأكد لو سمحت.",
+    "completed": "تم التنفيذ بنجاح.",
+    "partial": "تم تنفيذ جزء من المهمة. التفاصيل على الشاشة.",
+    "failed": "ما نجحت المهمة. السبب على الشاشة.",
+    "stopped": "وقفت المهمة.",
+    "cancelled": "تم إلغاء المهمة.",
+    "paused": "أحتاجك تكمل خطوة على الشاشة، وبعدها اضغط استئناف.",
 }
+# 23.13.3: kinds of line that /say accepts (task progress spoken after the first reply)
+LINE_KINDS = ("preview", "completed", "partial", "failed", "stopped", "cancelled", "paused")
 ARABIC_DEFAULT = "تم. التفاصيل على الشاشة."
 _URL = re.compile(r"https?://\S+")
 
@@ -233,4 +244,5 @@ def spoken_reply(reply: dict[str, Any], arabic: bool, llm: Any = None) -> dict[s
     if not arabic:
         return {"speak": text, "language": "en"}
     ar = to_arabic(text, llm) if text else None
-    return {"speak": ar or ARABIC_LINES.get(str(reply.get("type")), ARABIC_DEFAULT), "language": "ar"}
+    kind = "choose" if reply.get("type") == "clarify" and reply.get("options") else str(reply.get("type"))
+    return {"speak": ar or ARABIC_LINES.get(kind, ARABIC_DEFAULT), "language": "ar"}

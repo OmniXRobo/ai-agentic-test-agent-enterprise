@@ -131,6 +131,11 @@ export async function speakArabic(text, gender = "male") {
   return new Blob([bytes], { type: r.content_type || "audio/wav" });
 }
 
+// 1.4.3: what to say when a task of a spoken request moves on, in Arabic (English is said as written)
+export async function lineToSpeak(kind, text, language) {
+  return call("POST", "/v1/voice/line", { kind, text: (text || "").slice(0, 600), language });
+}
+
 export async function hello() { return raw("GET", "/v1/hello", { auth: false, device: false }); }
 
 export async function pair(code, name) {

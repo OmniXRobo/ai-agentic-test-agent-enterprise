@@ -11,7 +11,13 @@ WHAT THIS IS
   New in 23.13.3 (details: PATCH_CHANGELOG.md):
   - AI Agent: spoken Arabic is translated literally (Arabic "open page" stays "open page", also when the recognizer
     misspells it); nothing that was not said is added. "Which page do you mean?" lists the page names only and offers them as
-    buttons. The browser extension 1.4.3 shows the same buttons (UPDATE_EXTENSION.cmd).
+    buttons.
+  - Asked and told in the language you spoke: an Arabic request is answered (and the question asked) in Arabic, an
+    English one in English; after the action the agent also says the preview is ready, the task is done or failed,
+    in the same language.
+  - Websites that change their address on every visit (abc.com/12345, next time abc.com/by123) are the same page
+    and the same application: learned pages open with today's address, without asking to be taught again.
+  - The browser extension 1.4.3 does all of this too (UPDATE_EXTENSION.cmd).
 
   WHERE IS THE SKYGUARD QA FOLDER? (INSTALL_ARABIC_VOICE.cmd, GET_ARABIC_VOICE.ps1, INSTALL_SPEECH_MODEL.cmd)
     Paste this into the File Explorer address bar:  %LOCALAPPDATA%\Programs\AIAgenticTestAgent\app

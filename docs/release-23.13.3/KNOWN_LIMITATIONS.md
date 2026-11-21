@@ -10,6 +10,12 @@ rest still applies from 23.13.0.
 * The word list translates short commands word by word; an unusual short command it understands only in part goes to
   the local AI.
 * What the speech recognizer writes cannot be changed; only the known misheard spellings are corrected.
+* The steps of a task are spoken only while its card is on screen (AI Agent page) or the Run tab is open (extension).
+  Without the local AI the Arabic step lines are short fixed sentences; the details stay on screen in English.
+* Only spoken requests (and buttons under a spoken question) are answered aloud; typed requests stay silent.
+* A changing part made of ordinary letters only (abc.com/kqzt/booking) cannot be told apart from a page name; parts
+  with digits, long codes and session folders are recognised. A host name other than "www." (test., uat.) is still a
+  separate application on Connect & Learn.
 
 ## New in 23.13.2
 

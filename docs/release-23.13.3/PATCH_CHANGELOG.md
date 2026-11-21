@@ -20,9 +20,30 @@ works offline. The database stays at 22 migrations. Earlier changes: `previous-2
 * For an Arabic voice request the question is spoken in Arabic.
 * The same clean page names are used in the suggestions under the chat.
 
+## Asked and told in the language you spoke
+
+* An Arabic request is answered in Arabic: the reply also shows the Arabic sentence that is spoken, and "Which page do
+  you mean?" is asked in Arabic ("أي صفحة تقصد؟ ..."). An English request is answered in English.
+* After a spoken request, the agent also says what happens next, in the same language: the preview is ready, the task
+  is done (with its result), it failed (why is on screen), or it waits for you to finish a step.
+* A page button pressed under a spoken question is answered in the language of that question.
+
+## Websites whose address changes on every visit
+
+* Some websites change part of the address every time (abc.com/12345 one day, abc.com/by123 the next). Those parts
+  (numbers, codes with digits, long tokens, session folders) are now treated as "changes every visit": the page is the
+  same page and the website is the same application.
+* A learned page or task step is opened with the changing part of the page open now (learned abc.com/12345/booking,
+  open now abc.com/by123/home: abc.com/by123/booking). When it cannot be rebuilt, the start page is opened instead of
+  an address that no longer exists. The agent no longer asks you to teach it again because the address changed.
+* Connect & Learn with the new address (or with / without "www.") finds the application already learned.
+
 ## Browser extension 1.4.3
 
-* The side panel shows the same page buttons under the question. Update: `UPDATE_EXTENSION.cmd`, then Reload.
+* The side panel shows the same page buttons under the question, shows the Arabic answer to an Arabic request, and
+  says what happens to the task (preview ready, done, failed, waiting) in the language spoken. The companion adds
+  `POST /v1/voice/line` for the Arabic wording.
+* A page it opens on a site with changing addresses uses the address part of the tab open now. Update: `UPDATE_EXTENSION.cmd`, then Reload.
 
 ## Where the SkyGuard QA folder is
 

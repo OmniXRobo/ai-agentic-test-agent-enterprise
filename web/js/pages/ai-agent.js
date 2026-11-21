@@ -24,7 +24,7 @@ const TABS = [["chat", "AI Chat & Voice"], ["connect", "Connect & Learn"], ["kno
 const OUTCOME = { confirmed_success: ["PASS", "Completed"], confirmed_failure: ["FAIL", "Failed"], skipped: ["WARN", "Skipped"], unknown: ["WARN", "Uncertain: check in the application"], pending: ["INFO", "Waiting"], running: ["INFO", "Running"] };
 const FINAL = ["completed", "partial", "failed", "stopped", "cancelled"];
 
-const state = { tab: "chat", app: null, apps: [], conversation: null, runs: new Map(), poll: null, view: null, watching: [], lastRun: null, ack: new Map(), sig: new Map(), suggestAt: 0, input: null, log: null };
+const state = { tab: "chat", app: null, apps: [], conversation: null, runs: new Map(), poll: null, view: null, watching: [], lastRun: null, ack: new Map(), sig: new Map(), suggestAt: 0, input: null, log: null, runLang: new Map(), said: new Set() };
 let alive = true;
 
 const pill = (cls, text) => `<span class="pill ${cls}">${esc(text)}</span>`;
@@ -153,7 +153,7 @@ function bubble(log, who, html, runId) {
   return div;
 }
 
-async function send(text, source, log, input, quiet = false) {
+async function send(text, source, log, input, quiet = false, speakAs = null) {
   text = (text || "").trim();
   if (!text) return;
   if (looksSecret(text)) { toast(SECRET_WARNING, "error", 8000); return; }
@@ -162,18 +162,32 @@ async function send(text, source, log, input, quiet = false) {
   if (!quiet) bubble(log, "user", esc(text) + (source === "voice" ? ' <span class="muted">(voice)</span>' : ""));
   const wait = bubble(log, "agent", '<span class="muted">Working…</span>');
   try {
-    const out = await api("/api/ops/simple/command", { method: "POST", body: { text, conversation: state.conversation, app_id: state.app, source } });
+    const out = await api("/api/ops/simple/command", { method: "POST", body: { text, conversation: state.conversation, app_id: state.app, source, reply_language: speakAs || undefined } });
     state.conversation = out.conversation;
     try { sessionStorage.setItem("aiagent.conv", out.conversation); } catch { /* ignore */ }
     wait.remove();
-    renderReply(log, out.reply);
-    if (source === "voice") sayReply(out.reply);
+    // 23.13.3: a task of a spoken request also says what happens next (preview ready, done, failed), in the language
+    // the person spoke
+    if ((source === "voice" || speakAs) && out.reply.run_id) state.runLang.set(out.reply.run_id, out.reply.language === "ar" ? "ar" : "en");
+    renderReply(log, out.reply, source === "voice" || !!speakAs);
+    if (source === "voice" || speakAs) sayReply(out.reply);
     state.suggestAt = 0;
     loadSuggestions().catch(() => {});
   } catch (err) { wait.innerHTML = `${pill("FAIL", "Error")} ${esc(err.message)}`; }
 }
 
 // 23.13.2: a spoken request gets a spoken answer: English for English, Arabic (Arabic voice) for Arabic.
+// 23.13.3: progress of a spoken request's task, once per step: English as written, Arabic from the server
+function runLine(runId, kind, text) {
+  const lang = state.runLang.get(runId);
+  const key = `${runId}:${kind}`;
+  if (!lang || state.said.has(key)) return;
+  state.said.add(key);
+  if (lang === "en") { sayReply({ text }); return; }
+  api("/api/ops/simple/say", { method: "POST", body: { kind, text: (text || "").slice(0, 600), language: "ar" } })
+    .then((r) => sayReply(r)).catch(() => {});
+}
+
 async function sayReply(r) {
   const line = (r.speak || r.text || "").trim();
   if (!line) return;
@@ -184,8 +198,10 @@ async function sayReply(r) {
   } catch { /* the reply is on screen */ }
 }
 
-function renderReply(log, r) {
+function renderReply(log, r, spoken = false) {
   let html = esc(r.text || "");
+  // 23.13.3: an Arabic request is answered in Arabic as well (the line that is spoken)
+  if (r.language === "ar" && r.speak) html += `<div dir="rtl" lang="ar" class="ai-arabic" style="margin-top:4px">${esc(r.speak)}</div>`;
   // 23.13.0: an Arabic command is translated to English by the local AI; both are shown
   if (r.translated_to) html = `<span class="muted">Understood (translated from Arabic): <b>${esc(r.translated_to)}</b></span><br>${html}`;
   if (r.type === "navigate" && r.url) {
@@ -216,7 +232,8 @@ function renderReply(log, r) {
     row.className = "row";
     for (const o of r.options.slice(0, 7)) {
       const b = Object.assign(document.createElement("button"), { className: "btn", type: "button", textContent: o });
-      b.addEventListener("click", () => send(o, "typed", log, null));
+      // the answer to a spoken question is spoken too, in the same language
+      b.addEventListener("click", () => send(o, "typed", log, null, false, spoken ? (r.language === "ar" ? "ar" : "en") : null));
       row.appendChild(b);
     }
     div.appendChild(row);
@@ -354,6 +371,9 @@ async function renderRun(runId, el) {
   else if (r.summary?.message) mid += `<p><b>${esc(r.summary.message)}</b></p>`;
   el.innerHTML = head + mid;
   el.dataset.drawn = "1";
+  if (r.status === "awaiting_confirmation" && s.can_confirm) runLine(runId, "preview", "The preview is ready. Please check it and press Confirm.");
+  if (r.status === "paused") runLine(runId, "paused", data.status?.pause?.message || "I need you to finish a step on the screen, then press Resume.");
+  if (FINAL.includes(r.status)) runLine(runId, r.status, s.result || r.summary?.message || s.status_text || `The task is ${r.status}.`);
   el.dataset.final = FINAL.includes(r.status) ? "1" : "0";
   const ack = el.querySelector("[data-ack]");
   ack?.addEventListener("change", () => state.ack.set(`${runId}:${s.preview_hash}`, ack.checked));

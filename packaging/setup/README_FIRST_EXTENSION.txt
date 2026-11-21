@@ -21,6 +21,8 @@ ALREADY INSTALLED (1.0 to 1.4.2)
 NEW IN 1.4.3
   - Spoken Arabic "open page" is translated literally; when the page is not named, the question lists the page names
     only and shows them as buttons.
+  - Asked and told in the language you spoke (Arabic or English), including the preview, result and pauses of a task.
+  - Websites whose address changes on every visit: learned pages open with the address of the tab open now.
 
 NEW IN 1.4.2
   - A request made by voice gets a spoken reply: English with the voices installed in Windows, Arabic with the

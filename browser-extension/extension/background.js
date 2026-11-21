@@ -65,6 +65,25 @@ chrome.action.onClicked.addListener(async () => {
 
 // ---- helpers -----------------------------------------------------------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 1.4.3 (SkyGuard 23.13.3): parts of an address that change from visit to visit (12345, by123, long tokens, UUIDs)
+const dynamicSeg = (s) => s === "{id}" || /\d/.test(s) || /^[a-f0-9-]{16,}$/i.test(s) || s.length > 40 || /^\(\w\(.*\)\)$/.test(s)
+  || (s.length >= 16 && /^[A-Za-z0-9_-]+$/.test(s) && /[a-z]/.test(s) && /[A-Z]/.test(s));
+const segTemplate = (segs) => segs.map((s) => (dynamicSeg(s) ? "{id}" : s.toLowerCase())).join("/");
+export function rebaseUrl(target, current) {
+  let t, c = null;
+  try { t = new URL(target); } catch (e) { return target; }
+  try { c = current ? new URL(current) : null; } catch (e) { c = null; }
+  const ts = t.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const cs = c && c.origin === t.origin ? c.pathname.split("/").filter(Boolean) : [];
+  const out = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (dynamicSeg(ts[i]) && i < cs.length && dynamicSeg(cs[i]) && segTemplate(ts.slice(0, i)) === segTemplate(cs.slice(0, i))) out.push(cs[i]);
+    else if (ts[i].includes("{")) return null;
+    else out.push(encodeURIComponent(ts[i]));
+  }
+  t.pathname = "/" + out.join("/") + (t.pathname.endsWith("/") && out.length ? "/" : "");
+  return t.toString();
+}
 const originOf = (url) => { try { const u = new URL(url); return `${u.protocol}//${u.host}`; } catch (e) { return ""; } };
 
 function broadcast(msg) { chrome.runtime.sendMessage(msg).catch(() => {}); }
@@ -521,8 +540,12 @@ async function handle(msg) {
       if (!(await chrome.permissions.contains({ origins: [origin + "/*"] }))) return { ok: false, error: `Access to ${origin} was not granted (Applications, Grant access).` };
       const tabs = await chrome.tabs.query({});
       const same = tabs.find((t) => originOf(t.url || "") === origin && ![...DRIVES.values()].some((d) => d.tabId === t.id));
-      const tab = same ? await chrome.tabs.update(same.id, { url: msg.url, active: true }) : await chrome.tabs.create({ url: msg.url, active: true });
-      return { ok: true, tabId: tab.id };
+      // 1.4.3: a site that changes its addresses on every visit: the changing parts come from the page open now,
+      // and a learned page that cannot be rebuilt opens the application's start page
+      let url = rebaseUrl(msg.url, same ? same.url : "");
+      if (!url) url = ((await appList()).find((a) => (a.origins || [originOf(a.base_url)]).includes(origin)) || {}).base_url || origin + "/";
+      const tab = same ? await chrome.tabs.update(same.id, { url, active: true }) : await chrome.tabs.create({ url, active: true });
+      return { ok: true, tabId: tab.id, url };
     }
     case "active-url": {
       const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });

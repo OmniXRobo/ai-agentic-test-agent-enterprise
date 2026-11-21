@@ -302,6 +302,16 @@ class Autopilot:
                 if env and env != app.get("environment"):
                     app = self.kb.update_application(app["id"], by=by, environment=env)
                 return {"application": app, "created": False}
+        # 23.13.3: the same website with or without "www." (or http / https), whatever the path, is the application
+        # already learned, unless another environment was named for it. Other host names (test., uat. ...) stay
+        # their own application, as before.
+        def bare(u: str) -> str:
+            return re.sub(r"^www\.", "", (urlsplit(u).hostname or "").lower())
+
+        for app in self.kb.applications():
+            if any(bare(o) == bare(url) for o in (app.get("origins") or [app["base_url"]])) and \
+                    (not env or env == app.get("environment")):
+                return {"application": app, "created": False}
         base = (name or "").strip() or suggest_name(url)
         candidate, n = base, 2
         names = {a["name"] for a in self.kb.applications()}
