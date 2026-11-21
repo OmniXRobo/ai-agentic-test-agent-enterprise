@@ -72,7 +72,9 @@ try {
     } else {
         $tmp = Join-Path $env:TEMP ("sg-model-" + [guid]::NewGuid().ToString("N"))
         Write-Host "Unpacking $Source ..."
-        Expand-Archive -LiteralPath $Source -DestinationPath $tmp -Force
+        # .NET directly: Expand-Archive breaks when Windows PowerShell inherits PowerShell 7's module path
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($Source, $tmp)
         $modelDir = Find-ModelDir $tmp
     }
     if (-not $modelDir) { Write-Host "$Source does not hold a Faster-Whisper model (model.bin, config.json, tokenizer.json)." -ForegroundColor Red; exit 1 }
