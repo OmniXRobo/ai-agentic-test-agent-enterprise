@@ -61,7 +61,8 @@ WORDS: dict[str, str] = {
 # Speech recognition often mishears the last letter or a vowel in Gulf speech ("افتح" heard as "افتا", "صفحة" as
 # "صفا"). These spellings mean the same command word. (Checked after the exact words above.)
 MISHEARD: dict[str, str] = {
-    "افتا": "open", "افتاح": "open", "افته": "open", "افتحي": "open", "افتحلي": "open", "فتحلي": "open",
+    "افتا": "open", "افتاح": "open", "افتاحة": "open", "افتاحه": "open", "افتاحا": "open", "فتاحة": "open",
+    "افتاحي": "open", "افتحة": "open", "افتحه": "open it", "افته": "open", "افتحي": "open", "افتحلي": "open", "فتحلي": "open",
     "افتحو": "open", "افتحوا": "open", "ابتح": "open", "افدح": "open",
     "صفا": "page", "صفحه": "page", "صفحا": "page", "سفحة": "page", "سفحه": "page", "صفحت": "page", "صفح": "page",
     "الصفحه": "the page", "الصفا": "the page",
@@ -69,13 +70,17 @@ MISHEARD: dict[str, str] = {
     "سجلني": "log me in", "دخلني": "log me in", "شغلي": "run", "شغلو": "run",
     "احجزلي": "book", "احجزي": "book", "ابحثلي": "search", "دورلي": "search",
 }
+_HAMZA_ALEF = re.compile("[أإآ]")
 _DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 
+# 23.13.3: literal. The old example "open the booking page" made the model answer "Open the booking page" for a plain
+# "افتح صفحة" (open page); a page, place or object that was not said is never added.
 PROMPT = ("You translate instructions for a software testing assistant from Arabic (Modern Standard or UAE / Gulf "
-          "Arabic) to English. Write the instruction as one short English command, as a tester would type it "
-          "(for example: 'open the booking page', 'log in as manager', 'book flight from Dubai to Karachi tomorrow'). "
-          "Keep names, numbers, codes and web addresses exactly as written. Do not add anything. Reply with the "
-          "English command only.")
+          "Arabic) to English. The text comes from speech recognition and may be misspelled: translate what was "
+          "meant (for example 'إفتاحة صفحة' and 'افتا صفا' mean 'open page'). Translate literally into one short "
+          "English command, as a tester would type it. Never add a page name, place, date, account or any other "
+          "detail that is not in the Arabic text. Keep names, numbers, codes and web addresses exactly as written. "
+          "Reply with the English command only.")
 
 
 def has_arabic(text: str | None) -> bool:
@@ -100,7 +105,7 @@ def by_words(text: str) -> str:
         core = tok.strip("،,.؟?!")
         en = WORDS.get(core)
         if en is None:
-            en = MISHEARD.get(core)
+            en = MISHEARD.get(core) or MISHEARD.get(_HAMZA_ALEF.sub("ا", core))  # إفتاحة is افتاحة
         if en is None and core.startswith("ال") and core[2:] in WORDS:
             en = WORDS[core[2:]]
         if en is None and len(core) > 2 and core[0] in "وبك" and core[1:] in WORDS:  # و / ب / ك: and, with, as
@@ -113,6 +118,11 @@ def to_english(text: str, llm: Any = None) -> tuple[str, bool]:
     """(English text, translated?) for a command. Text without Arabic letters is returned unchanged."""
     if not has_arabic(text):
         return text, False
+    # 23.13.3: a short command that the word list translates completely ("افتح صفحة", "إفتاحة صفحة") is taken as it
+    # is: exact, and the model cannot add a page that was not said
+    words = by_words(text)
+    if not has_arabic(words) and len(words.split()) <= 4:
+        return words, True
     if llm is not None:
         try:
             out = llm.chat([{"role": "system", "content": PROMPT}, {"role": "user", "content": text.strip()[:1000]}],
@@ -122,7 +132,7 @@ def to_english(text: str, llm: Any = None) -> tuple[str, bool]:
                 return out, True
         except Exception:  # the model is not running: the word list below
             pass
-    return by_words(text), True
+    return words, True
 
 
 # ---- the wake name spoken in Arabic ------------------------------------------------------------------------------

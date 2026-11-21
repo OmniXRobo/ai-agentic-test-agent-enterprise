@@ -1,5 +1,5 @@
-r"""SkyGuard QA 23.13.2 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
-23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0 and 23.13.1). 23.13.2 speaks the AI Agent replies (English or Arabic, page and extension 1.4.2). 23.13.1 adds offline Arabic voice replies (male or female) and the speech model / Arabic voice install helpers. 23.13.0 runs AI-Driven Automation, Application
+r"""SkyGuard QA 23.13.3 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1 and 23.13.2). 23.13.3 translates spoken Arabic literally ("open page") and asks a clean question with page buttons. 23.13.2 speaks the AI Agent replies (English or Arabic, page and extension 1.4.2). 23.13.1 adds offline Arabic voice replies (male or female) and the speech model / Arabic voice install helpers. 23.13.0 runs AI-Driven Automation, Application
 Discovery and Hybrid Test Automation in Microsoft Edge when Edge is preferred (no Chromium needed), keeps the element a
 tester picked during self-healing so later runs do not ask again, repairs the AI Agent (lifecycle list, public sites
 without sign-in, changing addresses, one browser for a chat, Arabic commands), the API Testing Open button and its
@@ -34,13 +34,13 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.13.1; 23.13.2 to apply again); any other version is
+  1. detects the installation and its version (23.3.35 to 23.13.2; 23.13.3 to apply again); any other version is
      refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.13.2), patches that copy and writes START_SKYGUARD_23.13.2.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.13.3), patches that copy and writes START_SKYGUARD_23.13.3.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
@@ -84,11 +84,11 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.13.2"
+PATCH_VERSION = "23.13.3"
 BASELINE = ("23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, "
-            "23.11.2, 23.12.0, 23.13.0 or 23.13.1")
+            "23.11.2, 23.12.0, 23.13.0, 23.13.1 or 23.13.2")
 RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0",
-            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1")
+            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2")
 BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
@@ -581,6 +581,15 @@ ok = (spoken_reply({'type': 'navigate', 'text': 'Opening the booking page https:
       and hasattr(speech, 'render_arabic') and 'sayReply' in Path('web/js/pages/ai-agent.js').read_text(encoding='utf-8'))
 print('ok' if ok else '23.13.2 features incomplete')
 """
+RELEASE_231303_LOAD = r"""
+from pathlib import Path
+from skyguard_agent.translate import to_english
+from skyguard_agent.autopilot import page_names
+ok = (to_english('\u0625\u0641\u062a\u0627\u062d\u0629 \u0635\u0641\u062d\u0629') == ('open page', True)
+      and page_names([{'name': 'Book Flights | Find Hotels | Emirates'}, {'name': '/ae/english/book'}, {'name': 'book flights'}], {'name': 'Emirates (Test)'}) == ['Book Flights']
+      and 'r.options' in Path('web/js/pages/ai-agent.js').read_text(encoding='utf-8'))
+print('ok' if ok else '23.13.3 features incomplete')
+"""
 
 
 def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None) -> dict:
@@ -666,6 +675,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("Spoken AI Agent replies in English and Arabic (23.13.2)", r132 == "ok", r132)
     except PatchError as exc:
         check("Spoken AI Agent replies in English and Arabic (23.13.2)", False, str(exc))
+    try:
+        r133 = run_py(python, app, data, RELEASE_231303_LOAD).splitlines()[-1]
+        check("Arabic commands translated literally, page choices (23.13.3)", r133 == "ok", r133)
+    except PatchError as exc:
+        check("Arabic commands translated literally, page choices (23.13.3)", False, str(exc))
     try:
         bp = run_py(python, app, data, BROWSER_POLICY_LOAD).splitlines()[-1]
         check("Maximized browser policy", bp == "ok", bp)
@@ -763,7 +777,7 @@ def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
     step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
-         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2)")
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2 + 23.13.3)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):

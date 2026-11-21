@@ -711,10 +711,13 @@ class Autopilot:
     def _navigate(self, app: dict[str, Any], intent: Intent) -> dict[str, Any]:
         page = navigation_target(intent, app, self._screens(app["id"]), self._workflows(app["id"]))
         if not page:
-            known = [s["name"] for s in self._screens(app["id"]) if s.get("type") not in ("sign-in", "verification")]
-            return {"type": "clarify", "intent": intent.as_dict(),
+            # 23.13.3: page names a person would say (no addresses, no "| Emirates" title tails, no duplicates), also
+            # offered as buttons
+            known = page_names(self._screens(app["id"]), app)[:6]
+            options = [f"Open the {n} page" for n in known] + ["Open the start page"]
+            return {"type": "clarify", "intent": intent.as_dict(), "options": options,
                     "text": f"Which page of {app['name']} do you mean?"
-                            + (f" I know: {', '.join(known[:8])}." if known else
+                            + (f" I know: {', '.join(known)}." if known else
                                " I have not learned its pages yet; I can open its start page.")}
         return {"type": "navigate", "url": page["url"], "title": page["title"], "intent": intent.as_dict(),
                 "text": f"Opening {page['title']}" + (f" in {app['name']}" if page["kind"] == "page" else "") + "."}
@@ -1121,7 +1124,8 @@ class Autopilot:
         # 5. places and explanations
         for sc in sorted(model.get("screens") or [], key=lambda x: -(x.get("visits") or 0))[:3]:
             if sc.get("type") not in ("sign-in", "verification") and sc is not here and sc.get("name"):
-                add(f"Open the {sc['name']} page", "navigate", "a page you used")
+                for n in page_names([sc], app):
+                    add(f"Open the {n} page", "navigate", "a page you used")
         for ent, lc in list(lcs.items())[:1]:
             sts = lc.get("statuses") or []
             if len(sts) >= 2 and ent:
@@ -1320,3 +1324,26 @@ def _fingerprint(app_id: str, wf_key: str, text: str) -> str:
 def _conv_id() -> str:
     from .util import new_id
     return new_id("conv")
+
+
+def page_names(screens: list[dict[str, Any]], app: dict[str, Any]) -> list[str]:
+    """23.13.3: the learned pages as a person names them. A title like "Book Flights | Find Hotels and Car Rental |
+    Emirates" becomes "Book Flights"; addresses ("/ae/english/book") and the site's own name are left out; the same
+    name in another case is listed once."""
+    site = norm(app.get("name") or "")
+    site_words = {w for w in re.split(r"\W+", site) if len(w) > 2}
+    out: list[str] = []
+    seen: set[str] = set()
+    for sc in screens:
+        if sc.get("type") in ("sign-in", "verification"):
+            continue
+        name = str(sc.get("name") or "").strip()
+        if not name or name.startswith("/") or "://" in name or re.fullmatch(r"[\w./-]*/[\w./-]*", name):
+            continue
+        name = re.split(r"\s+[|\u2013\u2014-]\s+", name)[0].strip()  # first part of a "Page | Site" title
+        key = norm(name)
+        if not key or key in seen or key == site or (site_words and set(key.split()) <= site_words):
+            continue
+        seen.add(key)
+        out.append(name[:60])
+    return out

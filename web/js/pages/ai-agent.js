@@ -210,6 +210,17 @@ function renderReply(log, r) {
     div.appendChild(credentialForm(r.account_id, r.account, () => send("again", "typed", log, null, true)));
   }
   if (r.type === "secret_intercepted") div.insertAdjacentHTML("afterbegin", pill("WARN", "Withheld") + " ");
+  // 23.13.3: a question with choices ("Which page do you mean?") shows them as buttons
+  if (r.type === "clarify" && r.options?.length) {
+    const row = document.createElement("div");
+    row.className = "row";
+    for (const o of r.options.slice(0, 7)) {
+      const b = Object.assign(document.createElement("button"), { className: "btn", type: "button", textContent: o });
+      b.addEventListener("click", () => send(o, "typed", log, null));
+      row.appendChild(b);
+    }
+    div.appendChild(row);
+  }
 }
 
 // 23.13.0: "log in as manager" without a saved manager account: label, user name and password in one secure form

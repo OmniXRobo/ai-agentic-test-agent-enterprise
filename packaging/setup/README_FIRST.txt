@@ -1,14 +1,24 @@
-SkyGuard QA 23.13.2 - cumulative upgrade from SGQA-23.3.35 (spoken AI Agent replies, Arabic voice, Edge, HTTPS)
-================================================================================================================
+SkyGuard QA 23.13.3 - cumulative upgrade from SGQA-23.3.35 (Arabic AI Agent commands, spoken replies, Arabic voice)
+==================================================================================================================
 
 WHAT THIS IS
   One upgrade that brings any installed SkyGuard QA from 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1,
-  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0 or 23.13.1 to 23.13.2, including
+  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1 or 23.13.2 to 23.13.3, including
   every release in between. Any
   other version is refused and nothing is changed. No internet. Windows 10 (1909 or later)
   or Windows 11.
 
-  New in 23.13.2 (details: PATCH_CHANGELOG.md):
+  New in 23.13.3 (details: PATCH_CHANGELOG.md):
+  - AI Agent: spoken Arabic is translated literally (Arabic "open page" stays "open page", also when the recognizer
+    misspells it); nothing that was not said is added. "Which page do you mean?" lists the page names only and offers them as
+    buttons. The browser extension 1.4.3 shows the same buttons (UPDATE_EXTENSION.cmd).
+
+  WHERE IS THE SKYGUARD QA FOLDER? (INSTALL_ARABIC_VOICE.cmd, GET_ARABIC_VOICE.ps1, INSTALL_SPEECH_MODEL.cmd)
+    Paste this into the File Explorer address bar:  %LOCALAPPDATA%\Programs\AIAgenticTestAgent\app
+    If Setup made a side-by-side copy:              %LOCALAPPDATA%\SkyGuardQA\app-23.13.3
+    Or right-click the SkyGuard QA shortcut > Open file location.
+
+  New in 23.13.2:
   - AI Agent page: a request made by voice gets a spoken reply, in English for English and in Arabic (the Arabic
     voice) for Arabic. The browser extension 1.4.2 does the same (UPDATE_EXTENSION.cmd).
 
