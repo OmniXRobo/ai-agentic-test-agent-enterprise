@@ -224,13 +224,13 @@ def test_wrong_version_is_refused(built, tmp_path):
     assert "Nothing was changed" in r.stderr and "earlier patches" in r.stderr
     assert _version(app) == "23.3.31"
     # a version that is not a release (newer, or made up) is refused the same way, and detect says so
-    init.write_text(init.read_text().replace("23.3.31", "23.14.0"))
+    init.write_text(init.read_text().replace("23.3.31", "23.14.1"))
     r = _run(built, "apply", "--app", str(app), "--data", str(data))
-    assert r.returncode == 1 and "not one of the SkyGuard QA releases" in r.stderr and _version(app) == "23.14.0"
+    assert r.returncode == 1 and "not one of the SkyGuard QA releases" in r.stderr and _version(app) == "23.14.1"
     d = subprocess.run([sys.executable, str(built / "install_patch.py"), "detect", "--app", str(app), "--data", str(data),
                         "--ini", str(tmp_path / "d.ini")], capture_output=True, text=True)
     out = json.loads(d.stdout)
-    assert d.returncode == 3 and out["supported"] is False and out["version"] == "23.14.0"
+    assert d.returncode == 3 and out["supported"] is False and out["version"] == "23.14.1"
     assert "supported=0" in (tmp_path / "d.ini").read_text(encoding="utf-16")
 
 
@@ -494,7 +494,7 @@ def test_working_arabic_voice_is_detected_kept_and_never_downloaded(built, tmp_p
     assert {p: p.read_bytes() for p in (app / "runtime").rglob("*") if p.is_file() and "ocr" not in p.parts} == \
         {p: b for p, b in voice_files.items() if "ocr" not in p.parts}
     assert json.loads((data / "settings.json").read_text())["voice"] == voice_cfg
-    backup = next((app.parent / "patch-backups").glob("23.13.3-to-23.14.0-*"))
+    backup = next(tmp_path.rglob("patch-backups/23.13.3-to-23.14.0-*"))
     before = json.loads((backup / "VOICE_BEFORE.json").read_text())
     assert set(before["models"]) == {"small.ar", "small.en"} and "ar_JO-kareem-medium" in before["voices"]
     # applying again (repair) is idempotent: the voice is still the same
