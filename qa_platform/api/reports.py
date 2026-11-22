@@ -28,7 +28,10 @@ class ReportIn(BaseModel):
 
 @router.get("/api/analytics/summary")
 async def summary(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    return {"ok": True, **(await run_in_threadpool(rt.analytics.summary))}
+    # 23.14.1: the Dashboard waits at most a few seconds for TFS; slower TFS figures follow on the next refresh
+    from ..reports.analytics import DASHBOARD_TFS_BUDGET
+
+    return {"ok": True, **(await run_in_threadpool(rt.analytics.summary, DASHBOARD_TFS_BUDGET))}
 
 
 @router.get("/api/analytics/functional")

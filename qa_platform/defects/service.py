@@ -28,6 +28,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from ..auth import carry_user
 from .. import auth, branding
 from ..agents.base import BaseAgent
 from ..clock import now_iso
@@ -468,7 +469,8 @@ class DefectService:
             return
         if cfg.get("mode") != "on_premise" or not cfg.get("base_url"):
             return  # failure facts are never sent to a cloud AI automatically
-        t = threading.Thread(target=self._ai_quietly, args=(draft_id,), daemon=True, name=f"defect-ai-{draft_id}")
+        t = threading.Thread(target=carry_user(self._ai_quietly), args=(draft_id,), daemon=True,
+                             name=f"defect-ai-{draft_id}")  # 23.14.1
         t.start()
 
     def _ai_quietly(self, draft_id: int) -> None:

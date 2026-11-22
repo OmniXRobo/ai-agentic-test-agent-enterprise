@@ -8,7 +8,12 @@ of the system clock.
 
 from __future__ import annotations
 
+import contextvars
+import threading
+import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import date, timedelta
 from typing import Any
 
@@ -19,6 +24,19 @@ from ..storage.db import Database, loads
 from ..tfs.service import TfsService
 
 MAX_ROWS = 20000
+DASHBOARD_TFS_BUDGET = 12.0  # 23.14.1: seconds the Dashboard waits for TFS before showing the rest
+
+_POOL: ThreadPoolExecutor | None = None
+_POOL_LOCK = threading.Lock()
+
+
+def _background() -> ThreadPoolExecutor:
+    """Threads for TFS reads the Dashboard does not wait for (they finish and fill the TFS cache)."""
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="dash-tfs")
+        return _POOL
 
 
 def _day(ts: str | None) -> date | None:
@@ -46,14 +64,31 @@ class AnalyticsService:
 
     # ---- shared --------------------------------------------------------------------------------
 
-    def tfs_counts(self) -> dict[str, Any]:
-        """Live TFS counts, or the reason they are unavailable (never an estimate)."""
+    def tfs_counts(self, budget: float | None = None) -> dict[str, Any]:
+        """Live TFS counts, or the reason they are unavailable (never an estimate).
+
+        23.14.1: ``budget`` (seconds) is how long the Dashboard waits. When TFS has not answered by then the figures
+        are reported as still loading ("pending") and the query goes on in the background, so the Dashboard shows
+        everything else at once and the TFS figures on its next refresh (the TFS cache holds them)."""
+        if budget is not None:
+            return self._within(budget, self.tfs_counts, {
+                "connected": False, "pending": True,
+                "reason": "TFS is answering slowly; the TFS figures appear here as soon as they arrive."})
         try:
             return {"connected": True, **self.tfs.kpis()}
         except QAError as exc:
-            return {"connected": False, "reason": exc.message}
+            return {"connected": False, "reason": exc.message, "error_code": exc.error_code}
         except Exception as exc:  # analytics must still render if TFS answers unexpectedly
-            return {"connected": False, "reason": f"TFS figures could not be loaded ({type(exc).__name__})."}
+            return {"connected": False, "reason": f"TFS figures could not be loaded ({type(exc).__name__}).",
+                    "error_code": "TFS_KPI_FAILED"}
+
+    def _within(self, budget: float, fn: Any, pending: dict[str, Any]) -> dict[str, Any]:
+        """Runs fn as the signed-in person (their PAT and project) and waits at most ``budget`` seconds for it."""
+        future = _background().submit(contextvars.copy_context().run, fn)
+        try:
+            return future.result(timeout=max(0.0, budget))
+        except FutureTimeout:
+            return dict(pending)
 
     def acceptance_criteria(self) -> dict[str, Any]:
         """Acceptance criteria of the project's user stories, counted the way test design reads them: the criteria
@@ -102,8 +137,25 @@ class AnalyticsService:
 
     # ---- dashboard -----------------------------------------------------------------------------
 
-    def summary(self) -> dict[str, Any]:
-        tfs = self.tfs_counts()
+    def summary(self, budget: float | None = None) -> dict[str, Any]:
+        """23.14.1: with ``budget`` the TFS counts and the acceptance criteria are asked for at the same time and the
+        Dashboard waits at most ``budget`` seconds for them (see tfs_counts)."""
+        started = time.monotonic()
+        ac_future = None
+        if budget is not None:
+            ac_future = _background().submit(contextvars.copy_context().run, self.acceptance_criteria)
+        tfs = self.tfs_counts(budget)
+        if ac_future is not None and tfs.get("connected") and "requirement" in tfs:
+            try:
+                ac = ac_future.result(timeout=max(0.5, budget - (time.monotonic() - started)))
+            except FutureTimeout:
+                ac = {"available": False, "pending": True,
+                      "reason": "TFS is still reading the acceptance criteria; they appear here as soon as they arrive."}
+        elif tfs.get("connected") and "requirement" in tfs:
+            ac = self.acceptance_criteria()
+        else:
+            ac = {"available": False, "pending": bool(tfs.get("pending")),
+                  "reason": tfs.get("reason") or "The TFS project has no user story type."}
         latest = self.latest_results()
         passed = sum(r["status"] == "PASSED" for r in latest.values())
         perf = self.db.query("SELECT status, sla FROM perf_runs WHERE status IN ('PASSED','FAILED')")
@@ -112,8 +164,7 @@ class AnalyticsService:
         open_drafts = self.db.query_one("SELECT COUNT(*) AS n FROM defect_drafts WHERE status IN ('draft','needs_review')")["n"]
         return {
             "tfs": tfs,
-            "acceptance_criteria": self.acceptance_criteria() if tfs.get("connected") and "requirement" in tfs else
-            {"available": False, "reason": tfs.get("reason") or "The TFS project has no user story type."},
+            "acceptance_criteria": ac,
             "coverage": self.coverage(tfs),
             "test_data": test_data,
             "functional": {"scripts_run": len(latest), "passed": passed, "failed": len(latest) - passed,
@@ -149,7 +200,7 @@ class AnalyticsService:
             pass
         if tfs.get("connected") and "open_defects" in tfs:
             try:
-                total = self.tfs.count("bug")
+                total = int(tfs["defects_total"]) if "defects_total" in tfs else self.tfs.count("bug")
                 out["defects"] = {"total": total, "open": int(tfs["open_defects"]), "closed": max(0, total - int(tfs["open_defects"]))}
             except Exception:
                 pass

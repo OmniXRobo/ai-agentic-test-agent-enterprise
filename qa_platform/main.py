@@ -24,6 +24,25 @@ from .runtime import build_runtime
 log = get_logger("main")
 
 
+REQUEST_THREADS = 100  # 23.14.1: worker threads for API requests (the default of 40 filled up behind slow TFS calls)
+
+
+def _widen_thread_pool() -> None:
+    """23.14.1: requests that wait for TFS (each up to 30 s) no longer use up the threads every other page needs.
+
+    Every API request that is not async runs on one of these threads. With a slow TFS server, the Dashboard, the
+    status strip and the TFS pages held all 40 default threads, so even pages that never touch TFS (the AI analysis
+    panel, notifications) and Connection Test waited in the queue and showed "Loading..." for a long time."""
+    try:
+        import anyio.to_thread
+
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        if limiter.total_tokens < REQUEST_THREADS:
+            limiter.total_tokens = REQUEST_THREADS
+    except Exception as exc:  # noqa: BLE001 - never stop the server for this
+        log.warning(f"Could not widen the request thread pool: {exc}")
+
+
 def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     paths = (paths or Paths()).ensure()
     configure_logging(paths.logs)
@@ -31,6 +50,7 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         rt = build_runtime(paths, **runtime_options)
+        _widen_thread_pool()
         rt.bus.bind_loop(asyncio.get_running_loop())
         app.state.runtime = rt
         app.state.users = UserStore(rt.db)  # 23.3.34: accounts and sign-ins

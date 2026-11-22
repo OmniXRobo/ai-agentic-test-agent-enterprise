@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+from ..auth import carry_user
 from ..agents.base import new_run_id
 from ..ai.gateway import AIGateway
 from ..clock import now_iso
@@ -127,7 +128,7 @@ class AutomationService:
             except Exception:
                 log.info(f"{name} finished with an error (reported through events)")
 
-        threading.Thread(target=wrapper, name=name, daemon=True).start()
+        threading.Thread(target=carry_user(wrapper), name=name, daemon=True).start()  # 23.14.1
 
     # ---- execution ---------------------------------------------------------------------
 

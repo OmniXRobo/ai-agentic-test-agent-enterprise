@@ -102,6 +102,27 @@ def reset_current_user(token: contextvars.Token) -> None:
     _current.reset(token)
 
 
+def carry_user(fn: Any) -> Any:
+    """23.14.1: fn, run later on another thread, as the person signed in now (their own TFS PAT and project).
+
+    Background work started with threading.Thread or run_in_executor does not inherit the request's signed-in person,
+    so test design, script generation, voice commands, reports and defect analysis used the shared (administrator's)
+    PAT and project instead of the person's own, and found nothing in projects only the person works in."""
+    import functools
+
+    user = current_user()
+
+    @functools.wraps(fn)
+    def run(*args: Any, **kwargs: Any) -> Any:
+        token = _current.set(user)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _current.reset(token)
+
+    return run
+
+
 # ---- passwords ------------------------------------------------------------------------------------------------------
 
 

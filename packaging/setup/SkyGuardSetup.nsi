@@ -7,7 +7,7 @@
 ; no services, no writes to protected folders (a protected application folder gets a patched side-by-side copy).
 ;
 ; Built on the build machine by packaging/setup/build_release.py:
-;   makensis -DVERSION=23.14.0 -DPAYLOAD=<patch folder> -DOUTFILE=<Setup.exe> SkyGuardSetup.nsi
+;   makensis -DVERSION=23.14.1 -DPAYLOAD=<patch folder> -DOUTFILE=<Setup.exe> SkyGuardSetup.nsi
 ;
 ; Unattended (for IT, or a test):
 ;   Setup.exe /S /APP=<installation folder> [/SIDEBYSIDE] [/NOSTART] [/KEEPRUNNING]
@@ -23,7 +23,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 
 !ifndef VERSION
-  !error "VERSION is required (-DVERSION=23.14.0)"
+  !error "VERSION is required (-DVERSION=23.14.1)"
 !endif
 !ifndef PAYLOAD
   !error "PAYLOAD is required (-DPAYLOAD=<patch folder>)"

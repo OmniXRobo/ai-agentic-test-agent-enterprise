@@ -12,6 +12,7 @@ import { mountAiReport } from "../ai-report.js";
 let unsub = null;
 let stopTick = null;
 let refreshTimer = null;
+let pendingTries = 0;  // 23.14.1: re-reads while TFS figures are still loading
 
 const C = {
   ok: "var(--ok)", fail: "var(--fail)", warn: "var(--warn)", run: "var(--run)", accent: "var(--accent)",
@@ -55,9 +56,14 @@ async function render(view) {
   if (!area) return;  // the page was left before a refresh started
   let summary, a, itest = null;
   try {
-    [summary, a] = await Promise.all([api("/api/dashboard/summary"), api("/api/analytics/summary")]);
-    itest = await api("/api/itest/summary").catch(() => null);  // 23.14.0: optional; never breaks the dashboard
+    // 23.14.1: the three requests go out together (the Security / integration figures waited for the others)
+    [summary, a, itest] = await Promise.all([api("/api/dashboard/summary"), api("/api/analytics/summary"),
+      api("/api/itest/summary").catch(() => null)]);  // 23.14.0: optional; never breaks the dashboard
     if (!area.isConnected) return;
+    // 23.14.1: TFS answering slowly: everything else is shown now and the TFS figures follow when they arrive
+    if (summary.tfs?.pending || a.tfs?.pending || a.acceptance_criteria?.pending) {
+      if (pendingTries++ < 20) { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => render(view), 5000); }
+    } else pendingTries = 0;
   } catch (err) {
     area.innerHTML = `<div class="card"><h2>Dashboard unavailable</h2><p class="muted">${esc(err.message)}</p></div>`;
     return;
@@ -70,7 +76,7 @@ async function render(view) {
   const ex = ins.executions || null;
   const def = ins.defects || null;
   const drafts = ins.defect_drafts || {};
-  const notConnected = "TFS not connected";
+  const notConnected = tfs.pending ? "TFS figures loading…" : "TFS not connected";
   const tfsNote = tfs.connected ? tfs.project : notConnected;
   const tcTotal = "tfs_test_cases" in cov ? cov.tfs_test_cases : (t.testcase ?? null);
 
@@ -249,6 +255,7 @@ function itestSection(d) {
 }
 
 export async function mount(view) {
+  pendingTries = 0;
   // 23.3.31: AI dashboard analysis (kept outside the figures, which reload when work finishes, so edits are not lost)
   // 23.13.0: the charts come first; the AI analysis report is at the bottom
   view.innerHTML = `<div id="kpiArea" class="dash"><p class="muted">Loading…</p></div>
