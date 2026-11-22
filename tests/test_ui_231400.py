@@ -106,7 +106,7 @@ def page(world):
         ctx.add_cookies([{"name": COOKIE, "value": world["token"], "url": world["base"] + "/"}])
         p = ctx.new_page()
         errors: list[str] = []
-        p.on("pageerror", lambda e: errors.append(str(e)))
+        p.on("pageerror", lambda e: errors.append(f"{e} @ {getattr(e, 'stack', '')}"))
         p.errors = errors  # type: ignore[attr-defined]
         yield p
         b.close()
@@ -226,4 +226,19 @@ def test_email_smtp_settings_intranet_fields(page, world, shots):
     assert cfg["developer_directory"][0]["modules"] == ["fuse", "activemq"]
     expect(page.locator("#sendHistory h3")).to_have_text("Email Developer send history", timeout=10000)
     page.screenshot(path=str(shots / "231400-email-smtp.png"), full_page=True)
+    assert not page.errors
+
+
+def test_dashboard_has_security_and_integration_section(page, world, shots):
+    page.goto(world["base"] + "/#/dashboard")
+    sec = page.locator("h3", has_text="Security and integration testing")
+    expect(sec).to_be_visible(timeout=20000)
+    for title in ("Security findings", "Red Hat Fuse integration", "ActiveMQ messaging", "Analysis, defects, reports and email"):
+        expect(page.locator(".dash-card h3", has_text=title)).to_be_visible()
+    assert page.locator(".dash-charts .card").count() >= 10  # the existing widgets are kept
+    page.locator(".dash-card", has_text="ActiveMQ messaging").scroll_into_view_if_needed()
+    page.locator(".dash-card", has_text="ActiveMQ messaging").screenshot(path=str(shots / "231400-dashboard-amq.png"))
+    page.locator('.dash-card a[href="#/activemq-testing?tab=connections"]').click()
+    expect(page.locator("#pageTitle")).to_have_text("ActiveMQ Testing", timeout=10000)
+    expect(page.locator('[data-tab="connections"].on')).to_be_visible()
     assert not page.errors

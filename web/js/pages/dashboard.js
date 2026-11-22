@@ -52,9 +52,12 @@ function agentsDonut() {
 
 async function render(view) {
   const area = view.querySelector("#kpiArea");
-  let summary, a;
+  if (!area) return;  // the page was left before a refresh started
+  let summary, a, itest = null;
   try {
     [summary, a] = await Promise.all([api("/api/dashboard/summary"), api("/api/analytics/summary")]);
+    itest = await api("/api/itest/summary").catch(() => null);  // 23.14.0: optional; never breaks the dashboard
+    if (!area.isConnected) return;
   } catch (err) {
     area.innerHTML = `<div class="card"><h2>Dashboard unavailable</h2><p class="muted">${esc(err.message)}</p></div>`;
     return;
@@ -202,12 +205,47 @@ async function render(view) {
     <div class="dash-charts">
       ${passCard}${trendCard}${defectsCard}${modulesCard}${casesCard}${storiesCard}${apiCard}${healCard}${dataCard}${runsCard}${agentsCard}${slaCard}
     </div>
+    ${itestSection(itest)}
     <h3 style="margin:22px 0 10px">Key figures</h3>
     <div class="grid kpis">${quality.join("")}</div>
     <h3 style="margin:22px 0 10px">QA progress</h3>
     <section class="card qa-progress">${progress}</section>
     <h3 style="margin:22px 0 10px">Performance</h3>
     <div class="grid kpis">${performance.join("")}</div>`;
+}
+
+// 23.14.0: Security Testing, Red Hat Fuse, ActiveMQ and the shared result actions, from recorded results only. Every
+// slice and figure opens the screen with the items behind it.
+function itestSection(d) {
+  if (!d) return "";
+  const sec = d.security || {}, fuse = d.fuse || {}, amq = d.activemq || {}, sh = d.shared || {};
+  const na = (m) => `<p class="muted small">${esc(m.error || "This module is not available.")}</p>`;
+  const sevColor = { critical: C.fail, high: C.pink, medium: C.warn, low: C.accent, info: C.muted };
+  const secCard = chartCard("Security findings", sec.unavailable ? "" : link("#/sec-findings", ms(sec.open, "Open")) + link("#/sec-scanning", ms(sec.assessments, "Assessments")) + link("#/sec-findings?status=open", ms(sec.pending_review, "To review")) + link("#/sec-regression", ms(sec.retests, "Retests")),
+    sec.unavailable ? na(sec) : donut(["critical", "high", "medium", "low", "info"].map((k) => ({ label: k[0].toUpperCase() + k.slice(1), value: (sec.by_severity || {})[k] || 0,
+      color: sevColor[k], href: `#/sec-findings?severity=${k}` })), { sub: "OPEN", empty: "No open finding" }));
+  const fuseCard = chartCard("Red Hat Fuse integration", fuse.unavailable ? "" : link("#/fuse-testing?tab=connections", ms(fuse.connections, "Connections")) + link("#/fuse-testing?tab=monitoring", ms(fuse.routes_down, "Routes down")) + link("#/fuse-testing?tab=results", ms(fuse.unverified, "Unverified")),
+    fuse.unavailable ? na(fuse) : donut([
+      { label: "Passed", value: fuse.passed || 0, color: C.ok, href: "#/fuse-testing?tab=results" },
+      { label: "Transformation failed", value: fuse.transformation_failed || 0, color: C.fail, href: "#/fuse-testing?tab=results" },
+      { label: "Routing failed", value: fuse.routing_failed || 0, color: C.pink, href: "#/fuse-testing?tab=results" },
+      { label: "Reliability failed", value: fuse.reliability_failed || 0, color: C.warn, href: "#/fuse-testing?tab=results" },
+      { label: "End-to-end failed", value: fuse.e2e_failed || 0, color: C.violet, href: "#/fuse-testing?tab=results" },
+    ], { sub: "RESULTS", empty: "No Fuse test run yet" }));
+  const amqCard = chartCard("ActiveMQ messaging", amq.unavailable ? "" : link("#/activemq-testing?tab=connections", ms(amq.brokers, "Brokers")) + link("#/activemq-testing?tab=monitoring", ms(amq.health_alerts, "Health alerts")) + link("#/activemq-testing?tab=dlq", ms(amq.dlq_tests, "DLQ tests")),
+    amq.unavailable ? na(amq) : donut([
+      { label: "Published and verified", value: amq.published_verified || 0, color: C.ok, href: "#/activemq-testing?tab=results" },
+      { label: "Other passed", value: Math.max(0, (amq.passed || 0) - (amq.published_verified || 0)), color: C.accent, href: "#/activemq-testing?tab=results" },
+      { label: "Publish failed", value: amq.publish_failed || 0, color: C.fail, href: "#/activemq-testing?tab=results" },
+      { label: "Consumer failed", value: amq.consumer_failed || 0, color: C.pink, href: "#/activemq-testing?tab=consumer" },
+      { label: "Dead-letter failed", value: amq.dlq_failed || 0, color: C.warn, href: "#/activemq-testing?tab=dlq" },
+      { label: "Other failed", value: Math.max(0, (amq.failed || 0) - (amq.publish_failed || 0) - (amq.consumer_failed || 0) - (amq.dlq_failed || 0)), color: C.violet, href: "#/activemq-testing?tab=results" },
+    ], { sub: "RESULTS", empty: "No broker test run yet" }));
+  const sharedCard = chartCard("Analysis, defects, reports and email",
+    ms(sh.ai_analyses, "AI analyses") + ms(sh.pending_analyses, "Failures not analyzed") + ms(sh.defect_drafts, "Defect drafts"),
+    `<div class="ms-row">${link("#/sec-reports", ms(sh.reports, "PDF reports"))}${link("#/email-settings", ms(sh.emails_accepted, "Emails accepted"))}${link("#/email-settings", ms(sh.emails_failed, "Emails failed"))}${link("#/email-settings", ms(sh.emails_draft, "Email drafts"))}${ms(sh.retests, "Retests")}</div>
+     <p class="muted small" style="margin:8px 0 0">"Accepted" means the SMTP server took the email; delivery is not confirmed by SMTP.</p>`);
+  return `<h3 style="margin:22px 0 10px">Security and integration testing</h3><div class="dash-charts-itest">${secCard}${fuseCard}${amqCard}${sharedCard}</div>`;
 }
 
 export async function mount(view) {
