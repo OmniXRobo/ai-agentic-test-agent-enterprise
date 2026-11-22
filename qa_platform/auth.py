@@ -384,6 +384,8 @@ VIEW_WRITES = [re.compile(p) for p in (
     r"^/api/apitest/apps/[^/]+/run$",
     r"^/api/apitest/runs/[^/]+/cancel$",
     r"^/api/apitest/results/\d+/rerun$",
+    # 23.14.0: a view-only account may make the PDF report of a result (no data changes)
+    r"^/api/test-actions/[^/]+/[^/]+/pdf$",
 )]
 
 
