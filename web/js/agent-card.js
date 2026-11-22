@@ -5,6 +5,7 @@ import { state } from "./store.js";
 import { robotSvg } from "./robots.js";
 import { agentState } from "./agent-state.js";
 import { esc, elapsed, timeOf } from "./util.js";
+import { controlsHtml, updateControls } from "./agent-controls.js";
 
 function short(name) { return name.replace(/ Agent$/, ""); }
 
@@ -47,14 +48,21 @@ function timeText(a, s) {
   return "—";
 }
 
-export function cardHtml(a, { compact = false } = {}) {
+// 23.14.0: decorative parts for the Agent Workflow looks (Preferences > Agent Workflow look); off for Classic.
+let deco = false;
+export function setCardDeco(on) { deco = !!on; }
+const DECO = '<span class="cc-chase" aria-hidden="true"></span><span class="cc-corners" aria-hidden="true"><i></i><i></i><i></i><i></i></span>';
+const HUD = '<svg class="cc-hud" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="47" class="h1"/><circle cx="50" cy="50" r="42" class="h2"/><circle cx="50" cy="50" r="38" class="h3"/></svg>';
+
+export function cardHtml(a, opts) {
+  const compact = !!(opts && opts.compact);
   const s = agentState(a, state.agents);
   const pct = a.progress ?? 0;
   const eta = etaText(a, s);
   return `
-  <article class="agent-card ${esc(s.state)}" data-agent="${esc(a.id)}" aria-live="polite">
+  <article class="agent-card ${esc(s.state)}" data-agent="${esc(a.id)}" aria-live="polite">${deco ? DECO : ""}
     <div class="agent-head">
-      <div class="agent-robot"><span class="unit-radar" aria-hidden="true"></span>${robotSvg(a.robot, a.name)}</div>
+      <div class="agent-robot"><span class="unit-radar" aria-hidden="true"></span>${deco ? HUD : ""}${robotSvg(a.robot, a.name)}</div>
       <div style="min-width:0">
         <div class="agent-name">${esc(compact ? short(a.name) : a.name)}</div>
         <span class="pill ${esc(s.state)}" data-f="state">${esc(s.state)}</span>
@@ -70,6 +78,7 @@ export function cardHtml(a, { compact = false } = {}) {
       <dt>Total time</dt><dd data-f="total" title="Elapsed + remaining while it runs; the real duration when it has finished">${esc(eta.total)}</dd>
       <dt>Last result</dt><dd data-f="last">${esc(s.last_result || "—")}</dd>
     </dl>
+    ${controlsHtml(a)}
   </article>`;
 }
 
@@ -90,6 +99,7 @@ export function updateCard(root, a) {
   const eta = etaText(a, s);
   if (f("rem")) { f("rem").textContent = eta.rem; f("total").textContent = eta.total; }
   f("last").textContent = s.last_result || "—";
+  updateControls(el, a);
 }
 
 /** Refresh every card in a root (used by the shared 1 s ticker: only text, no layout work). */

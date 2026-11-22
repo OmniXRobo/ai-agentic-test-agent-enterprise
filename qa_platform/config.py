@@ -56,7 +56,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
            "logo_path": "",  # 23.3.30: product name, tagline and logo (Preferences)
            # 23.3.35: the desktop icon opens the dashboard as a browser tab with an address bar ("browser") or as its
            # own app window without one ("app"); Microsoft Edge first either way
-           "open_as": "browser"},
+           "open_as": "browser",
+           # 23.14.0: the look of Agent Workflow: classic, command_center, holographic, skyguard_core, mission_control
+           "workflow_look": "classic"},
     "tfs": {
         # "online" = Azure DevOps Online, "offline" = local TFS / Azure DevOps Server
         "active_mode": "online",

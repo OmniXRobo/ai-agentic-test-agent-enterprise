@@ -204,3 +204,21 @@ a.pr-row:hover .pr-lab { color: var(--accent); }
 /* 23.12.0: an agent whose engine or dependency is unavailable */
 .agent-card.UNAVAILABLE { border-color: var(--warn, #e0a02a); }
 .agent-card.UNAVAILABLE .robot-svg { opacity: .45; filter: grayscale(.7); }
+
+/* 23.14.0: Pause / Resume and Stop on every agent card (all Agent Workflow looks) */
+.agent-ctl { position: relative; z-index: 3; display: flex; align-items: center; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(56, 214, 255, .16); }
+.agent-ctl-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  font: 600 11.5px/1.2 inherit; letter-spacing: .04em; color: #d6ecff; background: rgba(56, 214, 255, .08); border: 1px solid rgba(56, 214, 255, .4);
+  transition: background .15s, border-color .15s, box-shadow .15s; }
+.agent-ctl-btn svg { width: 12px; height: 12px; fill: currentColor; }
+.agent-ctl-btn:hover:not(:disabled) { background: rgba(56, 214, 255, .2); border-color: #38d6ff; box-shadow: 0 0 10px rgba(56, 214, 255, .35); }
+.agent-ctl-btn.stop { color: #ffd3d8; background: rgba(255, 75, 92, .08); border-color: rgba(255, 75, 92, .45); }
+.agent-ctl-btn.stop:hover:not(:disabled) { background: rgba(255, 75, 92, .2); border-color: #ff4b5c; box-shadow: 0 0 10px rgba(255, 75, 92, .35); }
+.agent-ctl-btn.stop.confirm { background: #ff4b5c; color: #fff; border-color: #ff4b5c; animation: ctlConfirm .8s ease-in-out infinite alternate; }
+.agent-ctl-btn:disabled { opacity: .38; cursor: not-allowed; }
+.agent-ctl-note { margin-left: auto; font-size: 11px; color: #7898c2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@keyframes ctlConfirm { to { box-shadow: 0 0 14px rgba(255, 75, 92, .7); } }
+:root[data-theme="light"] .agent-ctl-btn { color: #0b3a66; background: rgba(34, 120, 230, .08); border-color: rgba(34, 120, 230, .45); }
+:root[data-theme="light"] .agent-ctl-btn.stop { color: #a3142a; background: rgba(220, 40, 60, .07); border-color: rgba(220, 40, 60, .45); }
+:root[data-theme="light"] .agent-ctl-btn.stop.confirm { color: #fff; background: #d92c42; }
+@media (prefers-reduced-motion: reduce) { .agent-ctl-btn.stop.confirm { animation: none; } }

@@ -266,6 +266,7 @@ def get_settings(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "settings": rt.settings.get()}
 
 
+WORKFLOW_LOOKS = ("classic", "command_center", "holographic", "skyguard_core", "mission_control")
 ALLOWED_SETTINGS_SECTIONS = {"ui", "tfs", "ai", "defects", "performance", "playback", "comparison"}
 
 
@@ -281,6 +282,9 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
     if open_as is not None and open_as not in ("browser", "app"):
         raise QAError("SETTINGS_INVALID", "Open as must be 'browser' or 'app'.")
     branding.validate(patch.get("ui", {}))  # 23.3.30: product name, tagline and logo path
+    look = patch.get("ui", {}).get("workflow_look")  # 23.14.0: the look of Agent Workflow (Preferences)
+    if look is not None and look not in WORKFLOW_LOOKS:
+        raise QAError("SETTINGS_INVALID", f"The Agent Workflow look must be one of: {', '.join(WORKFLOW_LOOKS)}.")
     if "sidebar_collapsed" in patch.get("ui", {}) and not isinstance(patch["ui"]["sidebar_collapsed"], bool):
         raise QAError("SETTINGS_INVALID", "sidebar_collapsed must be true or false.")
     pb = patch.get("playback", {})

@@ -50,6 +50,8 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app = FastAPI(title="AI Agentic Test Agent Enterprise", version=__version__, lifespan=lifespan,
                   docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
     install_error_handlers(app)
+    from .api import agent_control as agent_control_api
+    app.include_router(agent_control_api.router)  # 23.14.0: Stop / Pause / Resume on the agent cards (before /api/agents/...)
     app.include_router(core.router)
     app.include_router(tfs.router)
     app.include_router(design.router)
