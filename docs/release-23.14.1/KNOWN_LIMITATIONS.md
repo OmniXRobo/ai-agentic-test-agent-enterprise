@@ -8,7 +8,7 @@ Stated plainly so that nobody has to discover them. The first section is new in 
 * **Not run against the real Azure DevOps here (no access from this environment):** the speed fix was measured against
   a simulated Azure DevOps with 200 ms per request. The simulation has no TLS handshake and no Windows certificate
   store, so it understates the gain on a real PC; it was not timed on your PC.
-* A TFS figure that takes longer than 12 s is shown on the Dashboard a little later (the page asks again every 5 s,
+* A TFS figure that takes longer than 8 s is shown on the Dashboard a little later (the page asks again every 5 s,
   for up to about 100 s). A TFS server that never answers is reported after its own timeout, as before.
 * A PAT or project changed directly in the Windows Credential Manager or the database (not through SkyGuard) is
   picked up within 30 seconds. Changes made in SkyGuard apply at once.

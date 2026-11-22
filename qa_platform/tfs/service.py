@@ -587,8 +587,11 @@ class TfsService:
 
     def meta(self) -> dict[str, Any]:
         def load(c: AzureDevOpsClient) -> dict[str, Any]:
-            types = c.work_item_types()
-            cats = c.work_item_type_categories()
+            # 23.14.1: the four reads are independent; they go out together on the shared connection pool
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="tfs-meta") as pool:
+                f_types, f_cats = pool.submit(c.work_item_types), pool.submit(c.work_item_type_categories)
+                f_iter, f_areas = pool.submit(c.iterations), pool.submit(c.areas)
+            types, cats = f_types.result(), f_cats.result()
             categories = {}
             for key, ref in CATEGORIES.items():
                 cat = next((x for x in cats if x.get("referenceName") == ref), None)
@@ -603,8 +606,8 @@ class TfsService:
                 states[t["name"]] = [s["name"] for s in t.get("states", []) or []]
                 closed.update(s["name"] for s in t.get("states", []) or []
                               if s.get("category") in ("Completed", "Removed", "Resolved"))
-            iterations = _flatten_nodes(c.iterations(), [])
-            areas = _flatten_nodes(c.areas(), [])
+            iterations = _flatten_nodes(f_iter.result(), [])
+            areas = _flatten_nodes(f_areas.result(), [])
             return {
                 "project": c.project,
                 "work_item_types": sorted(t["name"] for t in types if not t.get("isDisabled")),

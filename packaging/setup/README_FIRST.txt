@@ -10,7 +10,7 @@ WHAT THIS IS
   New in 23.14.1 (details: PATCH_CHANGELOG.md, cause: ROOT_CAUSE_ANALYSIS.md):
   - TFS is fast again on every TFS page for accounts with their own PAT and project: connections are reused, your
     PAT and project are read once (not on every call), and the same TFS query is never sent twice at the same time.
-  - Dashboard: shows everything at once and never waits more than 12 seconds for TFS; slow TFS figures read
+  - Dashboard: shows everything at once and never waits more than 8 seconds for TFS; slow TFS figures read
     "TFS figures loading..." and fill in by themselves.
   - Connection Test: the same six checks, quicker.
   - Test design, test data, script generation, voice commands, reports and defect analysis use YOUR PAT and project

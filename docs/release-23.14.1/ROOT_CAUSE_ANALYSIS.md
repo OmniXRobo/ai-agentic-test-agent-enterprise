@@ -54,9 +54,9 @@ design run per user) are not in this patch.
 | Where | Change |
 |---|---|
 | `tfs/client.py` | The TLS context is built once and reused (built again only when the CA file changes). Connect timeout 10 s (was 30 s). Connections are kept open (keep-alive pool). |
-| `tfs/service.py` | One open client per server / project / PAT, reused by every TFS call; a failed connection is dropped so the next call starts fresh. The person's PAT and project (and the shared PAT) are read once every 30 s, and at once again after any change (Save, Users page, Remove PAT). The cache makes **concurrent requests for the same figure share one TFS call** (errors are shared too, and never cached). The Dashboard counts run in parallel and the total number of defects comes with them. |
+| `tfs/service.py` | One open client per server / project / PAT, reused by every TFS call; a failed connection is dropped so the next call starts fresh. The person's PAT and project (and the shared PAT) are read once every 30 s, and at once again after any change (Save, Users page, Remove PAT). The cache makes **concurrent requests for the same figure share one TFS call** (errors are shared too, and never cached). The Dashboard counts run in parallel and the total number of defects comes with them; the four project reads (work item types, categories, iterations, areas) go out together. |
 | `tfs/service.py` Connection Test | Reachability and authentication come from one call; the collection, project, work item and test plan checks run at the same time. Same six checks, same results, one round trip fewer and three run together. |
-| `reports/analytics.py`, `api/core.py`, `api/reports.py` | The Dashboard waits at most 12 s for TFS. If TFS is slower, everything else is shown and the TFS figures say "loading"; the TFS query carries on in the background, as the signed-in person, and fills the cache. Both Dashboard requests share the same figures. |
+| `reports/analytics.py`, `api/core.py`, `api/reports.py` | The Dashboard waits at most 8 s for TFS. If TFS is slower, everything else is shown and the TFS figures say "loading"; the TFS query carries on in the background, as the signed-in person, and fills the cache. Both Dashboard requests share the same figures. |
 | `web/js/pages/dashboard.js` | The three Dashboard requests go out together; while TFS figures are loading the page asks again every 5 s (at most 20 times) and fills them in. |
 | `main.py` | 100 request threads instead of 40, so slow TFS calls cannot block the rest of the application. |
 | `health.py` | The TFS light in the status strip is kept per person and project. |
@@ -67,10 +67,11 @@ design run per user) are not in this patch.
 | | Before | After |
 |---|---|---|
 | Connection Test | 7 requests, 1.51 s | 6 requests, 0.65 s |
-| Dashboard, empty cache | 17 TFS requests, 70 credential reads, 2.85 s | 10 TFS requests, 0 credential reads, 1.41 s |
+| Dashboard, empty cache | 17 TFS requests, 70 credential reads, 2.85 s | 10 TFS requests, 0 credential reads, 0.81 s |
 | Dashboard, cached | 40 credential reads, 0.47 s | 0 credential reads, 0.01 s |
 | New TLS context + connection per TFS call | yes | no (one per server / project / PAT) |
-| Dashboard when TFS takes longer than 12 s | "Loading..." until every TFS call ends | shown at once; TFS figures follow |
+| Dashboard with TFS at 3.5 s per request (browser test) | "Loading..." for 36 s | complete in 9 s |
+| Dashboard when TFS takes longer than 8 s | "Loading..." until every TFS call ends | shown at once; TFS figures follow |
 
 The simulation has no TLS handshakes and no Windows certificate store, so on a real PC the gain is larger: the
 per-call connection and certificate store costs are gone entirely.

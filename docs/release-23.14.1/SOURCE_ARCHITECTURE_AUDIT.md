@@ -13,7 +13,7 @@ dependency and no new feature, so the patch number goes up (23.14.0 → 23.14.1)
 |---|---|
 | TLS context built once; connect timeout; keep-alive pool | `qa_platform/tfs/client.py` |
 | One open client per server / project / PAT; PAT and project lookups remembered 30 s and cleared on any change; cache shared by concurrent requests; parallel Dashboard counts; quicker Connection Test | `qa_platform/tfs/service.py` |
-| Dashboard time budget for TFS (12 s), background completion as the signed-in person | `qa_platform/reports/analytics.py`, `qa_platform/api/core.py`, `qa_platform/api/reports.py`, `web/js/pages/dashboard.js` |
+| Dashboard time budget for TFS (8 s), background completion as the signed-in person | `qa_platform/reports/analytics.py`, `qa_platform/api/core.py`, `qa_platform/api/reports.py`, `web/js/pages/dashboard.js` |
 | 100 request threads | `qa_platform/main.py` |
 | TFS status light per person and project | `qa_platform/health.py` |
 | Background work as the person who started it (`carry_user`) | `qa_platform/auth.py`, `qa_platform/api/design.py`, `qa_platform/automation/framework/studio.py`, `qa_platform/automation/service.py`, `qa_platform/voice/service.py`, `qa_platform/reports/service.py`, `qa_platform/defects/service.py` |

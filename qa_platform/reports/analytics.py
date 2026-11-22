@@ -24,7 +24,7 @@ from ..storage.db import Database, loads
 from ..tfs.service import TfsService
 
 MAX_ROWS = 20000
-DASHBOARD_TFS_BUDGET = 12.0  # 23.14.1: seconds the Dashboard waits for TFS before showing the rest
+DASHBOARD_TFS_BUDGET = 8.0  # 23.14.1: seconds the Dashboard waits for TFS before showing the rest
 
 _POOL: ThreadPoolExecutor | None = None
 _POOL_LOCK = threading.Lock()

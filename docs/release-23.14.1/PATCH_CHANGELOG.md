@@ -22,9 +22,10 @@ account with its own PAT and project. Root cause and measurements: `ROOT_CAUSE_A
 
 ## Dashboard
 
-* Shows everything at once and **never waits more than 12 s for TFS**. When TFS is slower the TFS figures read
+* Shows everything at once and **never waits more than 8 s for TFS**. When TFS is slower the TFS figures read
   "TFS figures loading…" and fill in by themselves when TFS answers (the page asks again every 5 s).
-* The TFS counts (user stories, test cases, open defects, all defects) are asked for at the same time.
+* The TFS counts (user stories, test cases, open defects, all defects) are asked for at the same time, and so are the
+  project's work item types, categories, iterations and areas.
 * The Security / Fuse / ActiveMQ figures are requested together with the other figures, not after them.
 
 ## Connection Test
