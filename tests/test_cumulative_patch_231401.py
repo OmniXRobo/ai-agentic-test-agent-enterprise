@@ -225,13 +225,13 @@ def test_wrong_version_is_refused(built, tmp_path):
     assert "Nothing was changed" in r.stderr and "earlier patches" in r.stderr
     assert _version(app) == "23.3.31"
     # a version that is not a release (newer, or made up) is refused the same way, and detect says so
-    init.write_text(init.read_text().replace("23.3.31", "23.14.1"))
+    init.write_text(init.read_text().replace("23.3.31", "23.14.2"))
     r = _run(built, "apply", "--app", str(app), "--data", str(data))
-    assert r.returncode == 1 and "not one of the SkyGuard QA releases" in r.stderr and _version(app) == "23.14.1"
+    assert r.returncode == 1 and "not one of the SkyGuard QA releases" in r.stderr and _version(app) == "23.14.2"
     d = subprocess.run([sys.executable, str(built / "install_patch.py"), "detect", "--app", str(app), "--data", str(data),
                         "--ini", str(tmp_path / "d.ini")], capture_output=True, text=True)
     out = json.loads(d.stdout)
-    assert d.returncode == 3 and out["supported"] is False and out["version"] == "23.14.1"
+    assert d.returncode == 3 and out["supported"] is False and out["version"] == "23.14.2"
     assert "supported=0" in (tmp_path / "d.ini").read_text(encoding="utf-16")
 
 

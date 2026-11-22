@@ -1,27 +1,27 @@
-# Final release report: SkyGuard QA 23.14.0
+# Final release report: SkyGuard QA 23.14.1
 
-**Deliverable:** `SkyGuard_QA_Enterprise_Final_Cumulative_Security_Integration_Patch.zip` (one zip): the Setup wizard
+**Deliverable:** `SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch.zip`: the Setup wizard
 (`SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe`), `Manual_Install\` (the same upgrade without the .exe), the
-release documents and the test results. Upgrades 23.3.35 to 23.13.3 (19 releases) to 23.14.0 offline, without
-administrator rights, with backup, automatic restore on failure and rollback.
+release documents and the test results. Upgrades 23.3.35 to 23.14.0 (20 releases) to 23.14.1 offline, without
+administrator rights, with backup, automatic restore on failure and rollback. The browser extension is unchanged
+(1.4.3); no extension update is needed.
 
-## What is in it
+## What it fixes
 
-* Security Testing (8 screens), Red Hat Fuse Integration Testing (8 tabs), ActiveMQ Classic and Artemis testing (8 tabs).
-* Analyze with AI, Create TFS Defect, Generate PDF Report, Email Developer, View Evidence and Retest on every result.
-* Email / SMTP for the intranet with Test connection and send history; offline PDF report types.
-* Dashboard figures; 19 new agents in Agent Workflow, five looks and Stop / Pause / Resume.
-* Voice commands for the new screens in English and Arabic; voice tests. The working Arabic voice is kept and verified.
-* Migration 23. No new dependency. Nothing downloads.
+* TFS slow on every TFS page for accounts with their own PAT and project: connections are reused, the PAT and project
+  are read once, duplicate queries are merged, project reads and counts run in parallel.
+* Dashboard stuck on "Loading...": it shows at once and waits at most 8 s for TFS; slow TFS figures fill in later.
+* Connection Test: same six checks, quicker.
+* Background work (test design, test data, scripts, voice, reports, defects, agents) uses the signed-in person's PAT
+  and project, not the administrator's.
+* All 23.14.0 features kept. No migration, no new dependency. The Arabic voice and speech model are kept (verified).
 
 ## Tested
 
-* Full regression: **0 failures** (1,135 passed after one expected test update; 359 environment / old-version skips).
-* New tests: 24 module tests (real ActiveMQ Classic 5.18.6 and Artemis 2.37.0), 17 browser tests, 7 Agent Workflow
-  tests, 38 installer tests on all 19 earlier releases.
+* Full regression: 1,182 passed; 1 failure in a new installer test (an example version that became this release),
+  fixed and passing; 402 skipped.
+* 15 new TFS speed tests; 40 installer tests on all 20 earlier releases including 23.14.0.
 
-## Needs checking on the intranet
+## Needs checking on your PC
 
-Real Red Hat Fuse (only a simulator and a route stand-in were used), real OWASP ZAP (fake API), the real SMTP server
-(test transport), Microsoft Edge itself (Chromium was used), Windows Setup (CI on the pull request), the microphone and
-Arabic transcription (no audio device here). See `KNOWN_LIMITATIONS.md` and `COMPATIBILITY_MATRIX.md`.
+The speed with your real Azure DevOps organization. See `KNOWN_LIMITATIONS.md`.
