@@ -19,6 +19,26 @@ _DIACRITICS = re.compile(r"[ً-ْٰـ]")  # harakat and tatweel
 # Longest phrases first. UAE / Gulf words are included (ورني = show me, سوّ / سوي = make, باكر / بكرة = tomorrow,
 # شو = what, وين = where, ابا / ابغى = I want).
 PHRASES: list[tuple[str, str]] = [
+    # 23.14.0: Security Testing, Red Hat Fuse, ActiveMQ, Email / SMTP (both hamza spellings; longest first)
+    ("الاختبارات الفاشلة في فيوز", "failed fuse tests"), ("اختبارات فيوز الفاشلة", "failed fuse tests"),
+    ("الاختبارات الفاشلة في الوسيط", "failed broker tests"), ("اختبارات الوسيط الفاشلة", "failed broker tests"),
+    ("قائمة الرسائل الميتة", "dead letter queue"), ("اختبار الرسائل الميتة", "dead letter tests"),
+    ("الثغرات الأمنية الحرجة", "critical vulnerabilities"), ("الثغرات الامنية الحرجة", "critical vulnerabilities"),
+    ("الثغرات الحرجة", "critical vulnerabilities"), ("الثغرات الأمنية", "security findings"),
+    ("الثغرات الامنية", "security findings"), ("نتائج الأمان", "security findings"), ("نتائج الامان", "security findings"),
+    ("اختبارات الأمان", "security testing"), ("اختبارات الامان", "security testing"), ("اختبار الأمان", "security testing"),
+    ("اختبار الامان", "security testing"), ("الاختبار الأمني", "security testing"), ("الاختبار الامني", "security testing"),
+    ("فحص الثغرات", "vulnerability scan"), ("فحص أمني", "security scan"), ("فحص امني", "security scan"),
+    ("تقارير الأمان", "security reports"), ("تقارير الامان", "security reports"), ("تقرير الأمان", "security report"),
+    ("تقرير الامان", "security report"), ("إعدادات الأمان", "security settings"), ("اعدادات الامان", "security settings"),
+    ("ريد هات فيوز", "red hat fuse"), ("ريدهات فيوز", "red hat fuse"), ("مراقبة المسارات", "route monitoring"),
+    ("مقارنة التحويل", "transformation comparison"), ("مقارنة التحويلات", "transformation comparison"),
+    ("أكتيف إم كيو", "activemq"), ("اكتيف ام كيو", "activemq"), ("اكتف ام كيو", "activemq"), ("أكتيف ام كيو", "activemq"),
+    ("مراقبة الوسيط", "broker monitoring"), ("صحة الوسيط", "broker health"), ("وسيط الرسائل", "message broker"),
+    ("الرسائل الميتة", "dead letter tests"), ("سجل البريد", "email history"),
+    ("إعدادات البريد", "email settings"), ("اعدادات البريد", "email settings"), ("البريد الإلكتروني", "email"),
+    ("البريد الالكتروني", "email"), ("لوحة التحكم", "dashboard"), ("لوحة القيادة", "dashboard"),
+    ("سير عمل الوكلاء", "agent workflow"), ("اختبار واجهات البرمجة", "api testing"),
     ("سجل الدخول", "log in"), ("سجل دخول", "log in"), ("تسجيل الدخول", "log in"), ("ادخل الى", "log in to"),
     ("سجل الخروج", "log out"), ("تسجيل الخروج", "log out"),
     ("نافذة جديدة", "new window"), ("نافذه جديده", "new window"), ("متصفح جديد", "new browser"),
@@ -57,6 +77,10 @@ WORDS: dict[str, str] = {
     "دلهي": "Delhi", "مانيلا": "Manila",
     "واحد": "one", "اثنين": "two", "ثلاثة": "three", "اربعة": "four", "خمسة": "five", "ستة": "six", "سبعة": "seven",
     "ثمانية": "eight", "تسعة": "nine", "عشرة": "ten",
+    # 23.14.0
+    "الثغرات": "vulnerabilities", "ثغرات": "vulnerabilities", "فيوز": "fuse", "الطوابير": "queues", "طوابير": "queues",
+    "المسارات": "routes", "مسارات": "routes", "الوسيط": "message broker", "ابدأ": "start", "ابدا": "start",
+    "حلل": "analyze", "تقرير": "report", "التقارير": "reports",
 }
 # Speech recognition often mishears the last letter or a vowel in Gulf speech ("افتح" heard as "افتا", "صفحة" as
 # "صفا"). These spellings mean the same command word. (Checked after the exact words above.)

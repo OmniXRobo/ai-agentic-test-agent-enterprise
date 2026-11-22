@@ -378,7 +378,8 @@ VIEW_WRITES = [re.compile(p) for p in (
     r"^/api/schedules/[^/]+/run$",
     r"^/api/reports/[^/]+/pdf$",
     r"^/api/ai-reports/[^/]+/[^/]+/pdf$",
-    r"^/api/voice/(commands|transcribe|warmup|speak)$",
+    r"^/api/voice/(commands|transcribe|warmup|speak|interpret)$",
+    r"^/api/fuse/compare$",  # 23.14.0: compares two messages given in the request; nothing is sent or stored
     r"^/api/app/window$",
     # 23.12.0: run saved API tests (a view-only account cannot confirm tests that change data; see apitesting)
     r"^/api/apitest/apps/[^/]+/run$",

@@ -6,6 +6,7 @@ import { api } from "../api.js";
 import { esc, toast } from "../util.js";
 import { voice, loadSettings, localVoices, speak, stopSpeaking, applyAmbience, agentName, settingsChanged } from "../voice.js";
 import { testRadio } from "../radio.js";
+import { startRecording } from "../wav-recorder.js";
 
 const ENGINES = {
   builtin: ["Built-in offline recognizer (recommended)", "Speech is recognized on this PC by the bundled offline model (Vosk). No Internet and no speech server are needed."],
@@ -184,7 +185,9 @@ async function render(view) {
       </header>
       <p class="muted" style="margin:0">Voice &amp; Command Agent settings. Everything runs on this PC: offline recognition, installed voices and locally generated radio effects.</p>
       ${formHtml(s, radio, all.settings.playback || {}, fw)}
+      ${voiceTestsHtml()}
     </div>`;
+  wireVoiceTests(view);
 
   const form = view.querySelector("#vset");
   form.querySelectorAll(".range input").forEach((r) => r.addEventListener("input", () => { r.nextElementSibling.textContent = `${r.value}%`; }));
@@ -263,6 +266,71 @@ async function render(view) {
     checks.push({ name: "Browser voices", status: n ? "PASS" : "WARN", detail: n ? `${n} voices installed on this PC.` : "No installed browser voices." });
     out.innerHTML = `<table class="data"><tbody>${checks.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="pill ${c.status === "NOT_CONFIGURED" ? "WAITING" : esc(c.status)}">${esc(c.status.replace("_", " "))}</span></td><td class="muted">${esc(c.detail)}</td></tr>`).join("")}</tbody></table>`;
   });
+}
+
+// 23.14.0: three tests with real results only. The microphone passes only when real sound was recorded; nothing is
+// executed by the interpretation test.
+const AR_SAMPLE = "افتح الثغرات الأمنية";
+function voiceTestsHtml() {
+  return `<section class="card" id="voiceTests" style="margin-top:14px"><h3 style="margin:0 0 6px">Voice tests</h3>
+    <p class="muted small" style="margin:0 0 8px">Each test reports only what really happened on this PC. Recording stays on this PC and goes only to the local speech recognizer.</p>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px">
+      <div class="card"><b>1. Test microphone</b><p class="muted small">Records 3 seconds. Speak or tap near the microphone. Passes only if real sound is heard.</p>
+        <button class="btn" type="button" id="vtMic">Test microphone</button><div class="vt-level" style="height:6px;background:var(--border);border-radius:3px;margin:8px 0"><div id="vtLevel" style="height:6px;width:0;background:var(--ok);border-radius:3px"></div></div><div id="vtMicOut" class="small"></div></div>
+      <div class="card"><b>2. Test Arabic transcription</b><p class="muted small">Press, then read aloud: <b dir="rtl" lang="ar">${esc(AR_SAMPLE)}</b> (5 seconds). The local recognizer writes what it heard.</p>
+        <button class="btn" type="button" id="vtAr">Test Arabic transcription</button><div id="vtArOut" class="small" style="margin-top:8px"></div></div>
+      <div class="card"><b>3. Test command interpretation</b><p class="muted small">Type a command in English or Arabic. Shows how it is understood; nothing is executed.</p>
+        <div class="row" style="gap:6px"><input id="vtCmd" dir="auto" value="${esc(AR_SAMPLE)}" style="flex:1"><button class="btn" type="button" id="vtInt">Interpret</button></div><div id="vtIntOut" class="small" style="margin-top:8px"></div></div>
+    </div></section>`;
+}
+
+const vpill = (st, text) => `<span class="pill ${st}">${esc(text)}</span>`;
+
+function interpretationHtml(r) {
+  return `<div>${r.arabic ? `<div>Heard: <span dir="auto">${esc(r.heard)}</span></div><div>English: ${esc(r.english)}</div>` : ""}
+    <div>${r.understood ? vpill("PASS", "Understood") : vpill("WARN", "Not covered by the rules")} ${esc(r.result || "")}</div>
+    ${r.command ? `<div class="muted">Command: <code>${esc(r.command)}</code>${r.needs_confirmation ? " · asks for confirmation first" : ""} · not executed</div>` : ""}</div>`;
+}
+
+function wireVoiceTests(view) {
+  const level = view.querySelector("#vtLevel");
+  view.querySelector("#vtMic").addEventListener("click", async (e) => {
+    const out = view.querySelector("#vtMicOut"); e.target.disabled = true; out.textContent = "Recording 3 seconds…";
+    let peak = 0;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("The microphone is not available on this address. Open the dashboard on http://127.0.0.1 or https.");
+      const rec = await startRecording({ maxMs: 3000, onLevel: (v) => { peak = Math.max(peak, v); level.style.width = `${Math.round(v * 100)}%`; } });
+      const wav = await rec.done;
+      level.style.width = "0";
+      const bytes = wav?.size || wav?.byteLength || 0;
+      out.innerHTML = peak > 0.04 ? `${vpill("PASS", "PASS")} Sound recorded (peak level ${Math.round(peak * 100)}%, ${Math.round(bytes / 1024)} KB).`
+        : bytes ? `${vpill("WARN", "NO SOUND")} The microphone opened but no sound was heard (peak ${Math.round(peak * 100)}%). Check that it is not muted and speak closer.`
+          : `${vpill("FAIL", "FAIL")} Nothing was recorded.`;
+    } catch (err) { out.innerHTML = `${vpill("FAIL", "FAIL")} ${esc(err.name === "NotAllowedError" ? "The browser blocked the microphone. Allow it for this site." : err.name === "NotFoundError" ? "No microphone is connected." : err.message)}`; }
+    finally { e.target.disabled = false; }
+  });
+  view.querySelector("#vtAr").addEventListener("click", async (e) => {
+    const out = view.querySelector("#vtArOut"); e.target.disabled = true; out.textContent = "Recording 5 seconds… read the sentence now.";
+    try {
+      const rec = await startRecording({ maxMs: 5000 });
+      const wav = await rec.done;
+      out.textContent = "Recognizing on this PC…";
+      const { text } = await api("/api/voice/transcribe", { method: "POST", rawBody: wav, contentType: "audio/wav" });
+      const arabic = /[\u0600-\u06FF]/.test(text || "");
+      const r = text ? await api("/api/voice/interpret", { method: "POST", body: { text } }).catch(() => null) : null;
+      out.innerHTML = `${!text ? `${vpill("WARN", "NOTHING HEARD")} The recognizer returned no text.` : arabic ? `${vpill("PASS", "PASS")} Arabic text recognized:` : `${vpill("WARN", "NOT ARABIC")} The recognizer wrote non-Arabic text. Set the speech language to Arabic or Auto.`}
+        ${text ? `<div dir="auto" style="margin:4px 0"><b>${esc(text)}</b></div>` : ""}${r ? interpretationHtml(r) : ""}`;
+    } catch (err) { out.innerHTML = `${vpill("FAIL", "FAIL")} ${esc(err.message)}`; }
+    finally { e.target.disabled = false; }
+  });
+  const interpret = async (btn) => {
+    const out = view.querySelector("#vtIntOut"); btn.disabled = true;
+    try { out.innerHTML = interpretationHtml(await api("/api/voice/interpret", { method: "POST", body: { text: view.querySelector("#vtCmd").value } })); }
+    catch (err) { out.innerHTML = `${vpill("FAIL", "FAIL")} ${esc(err.message)}`; }
+    finally { btn.disabled = false; }
+  };
+  view.querySelector("#vtInt").addEventListener("click", (e) => interpret(e.target));
+  view.querySelector("#vtCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); interpret(view.querySelector("#vtInt")); } });
 }
 
 export async function mount(view) {

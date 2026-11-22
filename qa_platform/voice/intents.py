@@ -54,6 +54,26 @@ PAGES: list[tuple[str, str, tuple[str, ...]]] = [
     ("voice", "Voice & Command Agent", ("voice and command agent", "voice commands", "voice settings", "voice")),
     ("command-center", "AI Voice Command Center", ("voice command center", "command center", "mission control")),
     ("reports", "Reports", ("reports", "report list")),
+    # 23.14.0: Security Testing, Integration Testing, API Testing and Email / SMTP
+    ("api-testing", "API Testing", ("api testing", "api tests", "rest api tests")),
+    ("integration-comparison", "Integration Comparison", ("integration comparison", "data comparison")),
+    ("sec-assessment", "AI Security Assessment", ("ai security assessment", "security assessment", "security testing",
+                                                 "security applications")),
+    ("sec-discovery", "Application Discovery (Security)", ("security discovery", "security application discovery",
+                                                           "attack surface")),
+    ("sec-scanning", "Vulnerability Scanning", ("vulnerability scanning", "vulnerability scan", "security scan",
+                                                "security scanning", "zap scan", "owasp scan")),
+    ("sec-scenarios", "Security Test Scenarios", ("security test scenarios", "security scenarios")),
+    ("sec-findings", "Security Findings", ("security findings", "vulnerabilities", "findings")),
+    ("sec-regression", "Security Regression", ("security regression", "security retest")),
+    ("sec-reports", "Security Reports", ("security reports", "security report", "vulnerability report")),
+    ("sec-preferences", "Security Preferences", ("security preferences", "security settings", "owasp checks")),
+    ("fuse-testing", "Red Hat Fuse Testing", ("red hat fuse testing", "red hat fuse", "fuse testing", "fuse tests",
+                                             "fuse", "camel routes", "fuse connections")),
+    ("activemq-testing", "ActiveMQ Testing", ("activemq testing", "active mq testing", "activemq", "active mq", "artemis",
+                                             "message broker", "broker testing", "broker connections", "amq")),
+    ("email-settings", "Email / SMTP", ("email settings", "smtp settings", "email smtp", "smtp", "mail settings",
+                                        "email configuration")),
     ("analytics", "Analytics", ("analytics", "quality analytics", "trends")),
 ]
 PAGE_LABELS = {route: label for route, label, _ in PAGES}
@@ -150,6 +170,11 @@ def parse(text: str) -> Intent | None:
         return interrupted
     if re.search(r"\b(stop|abort|halt|cancel)\b.*\b(test|run|load|jmeter|execution|playback|everything|it)\b", t):
         return Intent("stop_run")
+
+    from .intents_itest import itest_intent
+    module = itest_intent(t)  # 23.14.0: security, Fuse, ActiveMQ and email screens (open only, nothing is started)
+    if module:
+        return module
 
     launched = launch_intent(t)  # "launch my application": the guided browser session
     if launched:

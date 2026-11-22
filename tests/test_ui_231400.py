@@ -242,3 +242,33 @@ def test_dashboard_has_security_and_integration_section(page, world, shots):
     expect(page.locator("#pageTitle")).to_have_text("ActiveMQ Testing", timeout=10000)
     expect(page.locator('[data-tab="connections"].on')).to_be_visible()
     assert not page.errors
+
+
+def test_voice_page_tests_microphone_needs_real_sound(page, world, shots):
+    """Chromium's fake microphone (a steady tone with --use-fake-device-for-media-stream) is not used here: in the
+    plain headless browser getUserMedia fails, and the test must say FAIL or NO SOUND, never PASS."""
+    page.goto(world["base"] + "/#/voice")
+    card = page.locator("#voiceTests")
+    expect(card).to_be_visible(timeout=20000)
+    card.locator("#vtInt").click()
+    out = card.locator("#vtIntOut")
+    expect(out).to_contain_text("open security findings", timeout=10000)
+    expect(out).to_contain_text("Would open Security Findings")
+    expect(out).to_contain_text("not executed")
+    card.locator("#vtMic").click()
+    expect(card.locator("#vtMicOut .pill")).to_be_visible(timeout=15000)
+    assert card.locator("#vtMicOut .pill").inner_text() != "PASS"
+    card.screenshot(path=str(shots / "231400-voice-tests.png"))
+    assert not page.errors
+
+
+def test_voice_interpret_api_executes_nothing(world):
+    api = world["api"]
+    before = api.get("/api/voice/commands?limit=200").json()
+    r = api.post("/api/voice/interpret", json={"text": "ابدأ فحص أمني"}).json()
+    assert r["english"] == "start security scan" and r["command"] == "open_page" and r["executed"] is False
+    assert r["navigate"] == "#/sec-scanning"
+    r = api.post("/api/voice/interpret", json={"text": "show failed broker tests"}).json()
+    assert r["navigate"] == "#/activemq-testing?tab=results"
+    after = api.get("/api/voice/commands?limit=200").json()
+    assert len(after.get("items", after.get("commands", []))) == len(before.get("items", before.get("commands", [])))
