@@ -112,7 +112,9 @@ def test_arabic_commands_are_translated_offline():
             assert "Arabic" in messages[0]["content"]
             return '"open the booking page"\n'
 
-    assert to_english("افتح صفحة الحجز", Llm()) == ("open the booking page", True)
+    # 23.13.3: a short command the word list understands completely is taken as it is; longer ones go to the model
+    assert to_english("افتح صفحة الحجز", Llm()) == ("open booking page", True)
+    assert to_english("ابغى افتح صفحة الحجز في نافذة جديدة لو سمحت", Llm()) == ("open the booking page", True)
 
     class Broken:
         def chat(self, *a, **k):

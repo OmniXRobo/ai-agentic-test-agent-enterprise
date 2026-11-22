@@ -37,6 +37,10 @@
     <p class="muted">Needs the optional "debugger" permission; the browser shows a notice while it is used. Without it the agent pauses and you type the value yourself. Values are never assigned to fields directly.</p></div>
   <div class="card"><h2>Microphone</h2><p class="muted">Voice is optional. Recording happens only between Speak and Stop, and audio goes only to the local speech recognizer.</p>
     <button class="btn" id="micBtn">Allow the microphone</button></div>
+  <div class="card"><h2>Spoken replies</h2>
+    <label class="row" style="display:flex"><input type="checkbox" id="speakReplies" style="width:auto"> Speak the reply when I ask by voice</label>
+    <label>Reply voice<select id="replyGender"><option value="male">Male</option><option value="female">Female</option></select></label>
+    <p class="muted" id="arabicVoice">English replies use the voices installed in Windows. Arabic replies use the offline Arabic voice installed with INSTALL_ARABIC_VOICE.cmd (SkyGuard QA folder); Female is that voice at a higher pitch unless a female Arabic voice is installed.</p></div>
   <div class="card hidden" id="adminCard"><h2>Companion users (admin)</h2><div id="users" class="list"></div>
     <label>User name<input id="nuUser"></label><label>Password<input id="nuPass" type="password" autocomplete="new-password"></label>
     <label>Role<select id="nuRole"><option value="operator">operator (learn, run)</option><option value="viewer">viewer (read only)</option><option value="admin">admin</option></select></label>

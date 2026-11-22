@@ -453,7 +453,7 @@ def restore(x: Ctx) -> dict[str, Any]:
 @route("POST", "/v1/chat", "write", "llm")
 def chat(x: Ctx) -> dict[str, Any]:
     b = validate(x.body, {"text": ("str", True, 4000), "conversation": ("str", False, 80), "app_id": ("str", False, 80),
-                          "source": ("str", False, 10)})
+                          "source": ("str", False, 10), "reply_language": ("str", False, 5)})
     # SkyGuard 23.13.0: an Arabic (or UAE Arabic) command is translated to English first, by the local model when it
     # runs, otherwise by the built-in word list; the reply says what was understood.
     from skyguard_agent.translate import to_english
@@ -463,6 +463,14 @@ def chat(x: Ctx) -> dict[str, Any]:
                             app_id=b.get("app_id"), source="voice" if b.get("source") == "voice" else "typed")
     if translated and isinstance(out, dict):
         out = {**out, "translated_from": b["text"], "translated_to": text}
+    if isinstance(out, dict) and isinstance(out.get("reply"), dict):
+        # SkyGuard 23.13.2 (extension 1.4.2): the reply to speak, in English or in Arabic like the request
+        from skyguard_agent.translate import spoken_reply
+
+        # 23.13.3 (1.4.3): a button under a spoken Arabic question is answered in Arabic too
+        arabic = translated or b.get("reply_language") == "ar"
+        out["reply"] = {**out["reply"], **spoken_reply(out["reply"], arabic,
+                                                        getattr(x.c.agent, "llm", None) if arabic else None)}
     return out
 
 
@@ -568,6 +576,44 @@ def transcribe(x: Ctx) -> dict[str, Any]:
         return {"text": x.c.agent.transcribe(x.raw, x.content_type)}
     except RuntimeError as exc:
         raise AgentError("VOICE_UNAVAILABLE", str(exc), 503) from None
+
+
+@route("POST", "/v1/voice/speak", "write", "voice")
+def speak(x: Ctx) -> dict[str, Any]:
+    """SkyGuard 23.13.2: an Arabic reply as WAV (base64), spoken by the offline Arabic voice (Piper). English replies
+    are spoken by the browser's own installed voices in the side panel."""
+    import base64
+
+    from skyguard_agent import speech
+
+    b = validate(x.body, {"text": ("str", True, 600), "gender": ("str", False, 10)})
+    gender = "female" if b.get("gender") == "female" else "male"
+    try:
+        wav = speech.render_arabic(b["text"], gender, extra=[x.c.paths.runtime / "piper"])
+    except RuntimeError as exc:
+        raise AgentError("VOICE_ARABIC_MISSING", str(exc), 409) from None
+    return {"wav": base64.b64encode(wav).decode("ascii"), "content_type": "audio/wav"}
+
+
+@route("POST", "/v1/voice/line", "read", "voice")
+def voice_line(x: Ctx) -> dict[str, Any]:
+    """SkyGuard 23.13.3 (extension 1.4.3): what to say when a task of a spoken request moves on (preview ready, done,
+    failed, waiting), in the language of the request. Only words: nothing is run or changed."""
+    from skyguard_agent.translate import LINE_KINDS, spoken_reply
+
+    b = validate(x.body, {"kind": ("str", True, 20), "text": ("str", False, 600), "language": ("str", False, 5)})
+    if b["kind"] not in LINE_KINDS:
+        raise AgentError("BAD_REQUEST", "Unknown kind of line.", 422)
+    arabic = b.get("language") == "ar"
+    return spoken_reply({"type": b["kind"], "text": b.get("text") or ""}, arabic,
+                        getattr(x.c.agent, "llm", None) if arabic else None)
+
+
+@route("GET", "/v1/voice/arabic")
+def arabic_voice(x: Ctx) -> dict[str, Any]:
+    from skyguard_agent import speech
+
+    return speech.status([x.c.paths.runtime / "piper"])
 
 
 # learning

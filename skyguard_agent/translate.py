@@ -61,7 +61,8 @@ WORDS: dict[str, str] = {
 # Speech recognition often mishears the last letter or a vowel in Gulf speech ("افتح" heard as "افتا", "صفحة" as
 # "صفا"). These spellings mean the same command word. (Checked after the exact words above.)
 MISHEARD: dict[str, str] = {
-    "افتا": "open", "افتاح": "open", "افته": "open", "افتحي": "open", "افتحلي": "open", "فتحلي": "open",
+    "افتا": "open", "افتاح": "open", "افتاحة": "open", "افتاحه": "open", "افتاحا": "open", "فتاحة": "open",
+    "افتاحي": "open", "افتحة": "open", "افتحه": "open it", "افته": "open", "افتحي": "open", "افتحلي": "open", "فتحلي": "open",
     "افتحو": "open", "افتحوا": "open", "ابتح": "open", "افدح": "open",
     "صفا": "page", "صفحه": "page", "صفحا": "page", "سفحة": "page", "سفحه": "page", "صفحت": "page", "صفح": "page",
     "الصفحه": "the page", "الصفا": "the page",
@@ -69,13 +70,17 @@ MISHEARD: dict[str, str] = {
     "سجلني": "log me in", "دخلني": "log me in", "شغلي": "run", "شغلو": "run",
     "احجزلي": "book", "احجزي": "book", "ابحثلي": "search", "دورلي": "search",
 }
+_HAMZA_ALEF = re.compile("[أإآ]")
 _DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 
+# 23.13.3: literal. The old example "open the booking page" made the model answer "Open the booking page" for a plain
+# "افتح صفحة" (open page); a page, place or object that was not said is never added.
 PROMPT = ("You translate instructions for a software testing assistant from Arabic (Modern Standard or UAE / Gulf "
-          "Arabic) to English. Write the instruction as one short English command, as a tester would type it "
-          "(for example: 'open the booking page', 'log in as manager', 'book flight from Dubai to Karachi tomorrow'). "
-          "Keep names, numbers, codes and web addresses exactly as written. Do not add anything. Reply with the "
-          "English command only.")
+          "Arabic) to English. The text comes from speech recognition and may be misspelled: translate what was "
+          "meant (for example 'إفتاحة صفحة' and 'افتا صفا' mean 'open page'). Translate literally into one short "
+          "English command, as a tester would type it. Never add a page name, place, date, account or any other "
+          "detail that is not in the Arabic text. Keep names, numbers, codes and web addresses exactly as written. "
+          "Reply with the English command only.")
 
 
 def has_arabic(text: str | None) -> bool:
@@ -100,7 +105,7 @@ def by_words(text: str) -> str:
         core = tok.strip("،,.؟?!")
         en = WORDS.get(core)
         if en is None:
-            en = MISHEARD.get(core)
+            en = MISHEARD.get(core) or MISHEARD.get(_HAMZA_ALEF.sub("ا", core))  # إفتاحة is افتاحة
         if en is None and core.startswith("ال") and core[2:] in WORDS:
             en = WORDS[core[2:]]
         if en is None and len(core) > 2 and core[0] in "وبك" and core[1:] in WORDS:  # و / ب / ك: and, with, as
@@ -113,6 +118,11 @@ def to_english(text: str, llm: Any = None) -> tuple[str, bool]:
     """(English text, translated?) for a command. Text without Arabic letters is returned unchanged."""
     if not has_arabic(text):
         return text, False
+    # 23.13.3: a short command that the word list translates completely ("افتح صفحة", "إفتاحة صفحة") is taken as it
+    # is: exact, and the model cannot add a page that was not said
+    words = by_words(text)
+    if not has_arabic(words) and len(words.split()) <= 4:
+        return words, True
     if llm is not None:
         try:
             out = llm.chat([{"role": "system", "content": PROMPT}, {"role": "user", "content": text.strip()[:1000]}],
@@ -122,7 +132,7 @@ def to_english(text: str, llm: Any = None) -> tuple[str, bool]:
                 return out, True
         except Exception:  # the model is not running: the word list below
             pass
-    return by_words(text), True
+    return words, True
 
 
 # ---- the wake name spoken in Arabic ------------------------------------------------------------------------------
@@ -179,3 +189,60 @@ def strip_arabic_wake(text: str, names: list[str] | tuple[str, ...] | set[str]) 
         if any(_close(heard, s) for s in sounds if len(s) >= 2 or heard == s):
             return " ".join(words[size:]).strip(" ،,.:!-")
     return None
+
+
+# ---- the spoken reply (SkyGuard 23.13.2) ---------------------------------------------------------------------------
+# The AI Agent page and the extension speak their replies: in English for an English request, in Arabic for an Arabic
+# one. The Arabic text comes from the local model; when it is not running, a short Arabic line for the kind of reply
+# is spoken and the details stay on screen.
+REPLY_PROMPT = ("Translate this short reply of a software testing assistant into clear Arabic as spoken in the UAE. "
+                "Keep names, numbers, codes and web addresses unchanged. Reply with the Arabic text only.")
+ARABIC_LINES = {
+    "run": "حاضر. أجهز المعاينة الحين، وبعدها أكد لو سمحت قبل التنفيذ.",
+    "navigate": "حاضر، فتحت الصفحة.",
+    "records": "هذي النتائج على الشاشة.",
+    "clarify": "أحتاج معلومة إضافية. شوف الشاشة لو سمحت.",
+    "need_account": "أحتاج حساب للدخول. عبي البيانات على الشاشة.",
+    "need_credential": "أحتاج كلمة المرور. احفظها في النموذج الآمن على الشاشة.",
+    "sign_in": "حاضر، جاري تسجيل الدخول.",
+    "needs_approval": "هذي المهمة تحتاج موافقتك أولاً.",
+    "secret_intercepted": "لا تكتب كلمات السر في المحادثة. استخدم النموذج الآمن.",
+    "error": "ما قدرت أنفذ الطلب. السبب على الشاشة.",
+    # 23.13.3: a question with choices, and what happens to a task after the request (preview, done, failed ...)
+    "choose": "أي صفحة تقصد؟ اختر من الأزرار على الشاشة.",
+    "preview": "المعاينة جاهزة. راجعها وأكد لو سمحت.",
+    "completed": "تم التنفيذ بنجاح.",
+    "partial": "تم تنفيذ جزء من المهمة. التفاصيل على الشاشة.",
+    "failed": "ما نجحت المهمة. السبب على الشاشة.",
+    "stopped": "وقفت المهمة.",
+    "cancelled": "تم إلغاء المهمة.",
+    "paused": "أحتاجك تكمل خطوة على الشاشة، وبعدها اضغط استئناف.",
+}
+# 23.13.3: kinds of line that /say accepts (task progress spoken after the first reply)
+LINE_KINDS = ("preview", "completed", "partial", "failed", "stopped", "cancelled", "paused")
+ARABIC_DEFAULT = "تم. التفاصيل على الشاشة."
+_URL = re.compile(r"https?://\S+")
+
+
+def to_arabic(text: str, llm: Any = None) -> str | None:
+    """The reply in Arabic by the local model, or None when it is not running or answered something else."""
+    if not text or llm is None:
+        return None
+    try:
+        out = llm.chat([{"role": "system", "content": REPLY_PROMPT}, {"role": "user", "content": text.strip()[:800]}],
+                       max_tokens=300)
+    except Exception:  # noqa: BLE001 - the model is not running: the short line is spoken instead
+        return None
+    out = (out or "").strip()
+    return out if out and has_arabic(out) and len(out) < 1200 else None
+
+
+def spoken_reply(reply: dict[str, Any], arabic: bool, llm: Any = None) -> dict[str, str]:
+    """{"speak": text to say, "language": "en" | "ar"} for an agent reply. Web addresses are not read out."""
+    text = _URL.sub("", str(reply.get("text") or "")).strip()
+    text = re.sub(r"\s+", " ", text)[:500]
+    if not arabic:
+        return {"speak": text, "language": "en"}
+    ar = to_arabic(text, llm) if text else None
+    kind = "choose" if reply.get("type") == "clarify" and reply.get("options") else str(reply.get("type"))
+    return {"speak": ar or ARABIC_LINES.get(kind, ARABIC_DEFAULT), "language": "ar"}

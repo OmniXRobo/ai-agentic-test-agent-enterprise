@@ -124,17 +124,51 @@ def page_problems(p: dict[str, Any]) -> tuple[list[str], list[str]]:
 DETAIL_STATUS = re.compile(r"\bstatus\s*[:\-]?\s*\n?\s*([A-Z][A-Za-z]+(?:[ -][A-Z][A-Za-z]+){0,3})")
 
 
+_SESSION_PARAM = re.compile(r";(jsessionid|sid|phpsessid)=[^/?#]*", re.I)
+
+
+def dynamic_segment(seg: str) -> bool:
+    """23.13.3: a part of an address that changes from visit to visit or record to record: numbers and codes with
+    digits (12345, by123), long hex / UUIDs, ASP.NET session folders ((S(abc...))), long random tokens."""
+    return bool(seg == "{id}" or re.search(r"\d", seg) or re.fullmatch(r"[a-f0-9-]{16,}", seg, re.I) or len(seg) > 40
+                or re.fullmatch(r"\(\w\(.*\)\)", seg)
+                or (len(seg) >= 16 and re.fullmatch(r"[A-Za-z0-9_-]+", seg) and re.search(r"[a-z]", seg)
+                    and re.search(r"[A-Z]", seg)))
+
+
 def path_template(url: str) -> str:
-    path = urlsplit(url or "").path or "/"
+    path = _SESSION_PARAM.sub("", urlsplit(url or "").path or "/")
     segs = []
     for s in path.strip("/").split("/"):
         if not s:
             continue
-        if re.search(r"\d", s) or re.fullmatch(r"[a-f0-9-]{16,}", s, re.I) or len(s) > 40:
-            segs.append("{id}")
-        else:
-            segs.append(s.lower())
+        segs.append("{id}" if dynamic_segment(s) else s.lower())
     return "/" + "/".join(segs)
+
+
+def rebase_url(target: str, current: str | None) -> str | None:
+    """23.13.3: a learned address on a site whose addresses change on every visit (abc.com/12345/booking learned,
+    abc.com/by123/home open now): the changing parts are taken from the page open now (abc.com/by123/booking). A
+    changing part that cannot be filled (a learned "{id}" with nothing to take it from) gives None: open the start
+    page instead of an address that no longer exists. The query is kept; another site is never mixed in."""
+    t = urlsplit(target or "")
+    tsegs = [s for s in _SESSION_PARAM.sub("", t.path).split("/") if s]
+    c = urlsplit(current or "") if current else None
+    csegs = [s for s in _SESSION_PARAM.sub("", c.path).split("/") if s] if c else []
+    from .knowledge import site_of
+
+    same = bool(c and site_of(c.hostname or "") == site_of(t.hostname or "") and (t.hostname or "") != "")
+    out: list[str] = []
+    for i, seg in enumerate(tsegs):
+        if dynamic_segment(seg) and same and i < len(csegs) and dynamic_segment(csegs[i]) and \
+                path_template("/" + "/".join(tsegs[:i])) == path_template("/" + "/".join(csegs[:i])):
+            out.append(csegs[i])
+        elif seg == "{id}" or "{" in seg:
+            return None
+        else:
+            out.append(seg)
+    path = "/" + "/".join(out) + ("/" if t.path.endswith("/") and out else "")
+    return t._replace(path=path).geturl()
 
 
 def text_template(text: str) -> str:
