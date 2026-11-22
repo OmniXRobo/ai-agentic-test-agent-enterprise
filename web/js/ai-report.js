@@ -1,7 +1,7 @@
 // 23.3.31: AI analysis report panel shared by Recent Runs (AI-Driven Automation, Guided Browser Automation),
 // Performance Results and the Dashboard. The On-Premise AI writes the analysis; the tester edits it or asks again;
 // when satisfied, Make PDF, then Open / Download, or Email PDF (subject and body written from the analysis, the PDF
-// attached, sent through Settings > Outlook Email only when the tester presses Send).
+// attached, sent through Settings > Email / SMTP only when the tester presses Send).
 
 import { api } from "./api.js";
 import { esc, toast, dateTimeOf, openModal } from "./util.js";
@@ -98,7 +98,7 @@ export async function openEmail(kind, id, onSent = () => {}) {
   let d;
   try { d = await api(`${base(kind, id)}/email`); } catch (err) { toast(err.message, "error"); return; }
   const { el, close } = openModal("Email the PDF report", `
-    ${d.email_configured ? "" : '<p class="pill WARN" style="white-space:normal">Outlook email is not set up yet. Set it up under <a href="#/email-settings">Settings &gt; Outlook Email</a>, then send.</p>'}
+    ${d.email_configured ? "" : '<p class="pill WARN" style="white-space:normal">Outlook email is not set up yet. Set it up under <a href="#/email-settings">Settings &gt; Email / SMTP</a>, then send.</p>'}
     <form class="grid" id="mailForm" style="gap:10px">
       <label>To <input name="to" value="${esc(d.to)}" placeholder="name@company.com; other@company.com" required></label>
       <label>Cc <input name="cc" value="${esc(d.cc)}" placeholder="optional"></label>

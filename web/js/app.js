@@ -39,6 +39,8 @@ import * as integrationWorkspace from "./pages/integration-workspace.js";
 import { apiTesting } from "./pages/api-testing.js";
 import { tfsIntegration, browserManager, auraMemory } from "./pages/preferences-final.js";
 import { mountModuleActions } from "./module-actions.js";
+import { secAssessment, secDiscovery, secScanning, secScenarios, secFindings, secRegression, secReports, secPreferences } from "./pages/security.js";
+import { fuseTesting, activemqTesting } from "./pages/integration-testing.js";
 
 // route -> { title, page }
 const NAV = [
@@ -87,8 +89,21 @@ const NAV = [
   ]],
   // 23.8.0: the 18 separate comparison pages (discovery, extraction, OCR, import, mapping, filters, rules, KPI
   // definitions, run, results, defects, reports, evidence ...) are one workspace; their work happens behind it.
-  ["Integration Comparison", [
+  // 23.14.0: Security Testing (eight screens) and Integration Testing (Red Hat Fuse, ActiveMQ Classic / Artemis).
+  ["Security Testing", [
+    ["sec-assessment", "AI Security Assessment", secAssessment],
+    ["sec-discovery", "Application Discovery", secDiscovery],
+    ["sec-scanning", "Vulnerability Scanning", secScanning],
+    ["sec-scenarios", "Security Test Scenarios", secScenarios],
+    ["sec-findings", "Security Findings", secFindings],
+    ["sec-regression", "Security Regression", secRegression],
+    ["sec-reports", "Security Reports", secReports],
+    ["sec-preferences", "Security Preferences", secPreferences],
+  ]],
+  ["Integration Testing", [
     ["integration-comparison", "Integration Comparison", integrationWorkspace],
+    ["fuse-testing", "Red Hat Fuse Testing", fuseTesting],
+    ["activemq-testing", "ActiveMQ Testing", activemqTesting],
   ]],
   ["Quality", [
     ["defects", "Defects", workItemPage({ category: "bug", createLabel: "New defect" })],
@@ -105,7 +120,7 @@ const NAV = [
     ["aura", "AURA Learning Memory", auraMemory],
     ["ai-settings", "AI Runtime", aiSettings],
     ["app-credentials", "Application Credentials", appCredentials],
-    ["email-settings", "Outlook Email", emailSettings],
+    ["email-settings", "Email / SMTP", emailSettings],
     ["voice", "Voice & Command Agent", voicePage],
     ["users", "Users & Network Access", usersPage],
   ]],
@@ -150,10 +165,12 @@ const I = {
   key: "M7 14a3 3 0 1 1 3-3 3 3 0 0 1-3 3Zm5.6-5A6 6 0 1 0 12.6 13H15v3h3v-3h3V9Z",
   user: "M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5Z",
   data: "M12 2C7 2 4 3.8 4 6v12c0 2.2 3 4 8 4s8-1.8 8-4V6c0-2.2-3-4-8-4Zm0 2c3.9 0 6 1.2 6 2s-2.1 2-6 2-6-1.2-6-2 2.1-2 6-2Z",
+  shield: "M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5Zm-1.2 13.6-3.5-3.5 1.4-1.4 2.1 2.1 4.6-4.6 1.4 1.4Z",
+  queue: "M3 5h18v4H3Zm0 5h18v4H3Zm0 5h18v4H3Z",
   search: "M10 2a8 8 0 1 0 4.9 14.3l5.4 5.4 1.4-1.4-5.4-5.4A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1-6 6 6 6 0 0 1 6-6Z",
 };
 const ICON_BY_ROUTE = [
-  [/^ops-agent|^ai-agent/, "bot"],
+  [/^ops-agent|^ai-agent/, "bot"], [/^sec-/, "shield"], [/activemq-testing/, "queue"], [/fuse-testing/, "flow"],
   [/command-center|voice/, "mic"], [/^dashboard|cmp-dashboard|analytics/, "grid"], [/workflow/, "flow"], [/notif/, "bell"],
   [/history|schedul|perf-schedules/, "clock"], [/test-data|perf-data|cmp-import|cmp-extract/, "data"],
   [/discovery|cmp-discovery|explorer|investigation/, "search"], [/test-|stories|acceptance|plans|suites/, "check"],

@@ -3,6 +3,7 @@ import { esc, dateTimeOf, elapsed, timeOf, toast } from "../util.js";
 import { executionStepsHtml } from "./automation.js";
 import { analyzeRun } from "./defect-review.js";
 import { mountAiReport } from "../ai-report.js";
+import { actionButtons, wireActions } from "../result-actions.js";
 
 // 23.6.0: AI-Driven framework scripts (FWS-...) open in the AI-Driven Automation Script Inventory; recorded, guided and
 // hybrid scripts (SCR-...) in the script editor. Before, every run linked to the guided page ("Invalid script id").
@@ -27,6 +28,7 @@ async function renderDetail(view, runId) {
       <div class="row"><h2 style="margin:0">${esc(run.title || run.run_id)}</h2><span class="pill ${esc(run.status)}">${esc(run.status)}</span></div>
       <p class="muted">${esc(run.run_id)} · ${esc(run.kind)} · started ${esc(dateTimeOf(run.started_at))}${run.finished_at ? " · took " + esc(elapsed(run.started_at, run.finished_at)) : ""}</p>
       ${run.summary?.error ? `<p class="pill FAIL">${esc(run.summary.error)}</p>` : ""}
+      ${["RUNNING", "QUEUED"].includes(run.status) ? "" : `<div class="row" style="gap:6px;margin:6px 0">${actionButtons("exec", run.run_id, run.status === "PASSED" ? "PASSED" : "FAILED", { retest: false })}</div>`}
       ${run.kind === "performance" ? `<p><a class="btn" href="#/perf-results?run=${esc(run.run_id)}">Open performance results</a></p>` : ""}
       ${checks.length ? `<table class="data"><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>
         ${checks.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="pill ${esc(c.status)}">${esc(c.status)}</span></td><td>${esc(c.detail)}</td></tr>`).join("")}
@@ -39,6 +41,7 @@ async function renderDetail(view, runId) {
     <div class="card" style="margin-top:14px"><h3>Event log</h3>
       <div class="feed">${events.map((e) => `<div class="feed-item"><span class="feed-time">${esc(timeOf(e.timestamp))}</span><span>${esc((e.agent_name ? e.agent_name + " · " : "") + (e.activity || e.name))}</span></div>`).join("")}</div>
     </div>`;
+  wireActions(view.querySelector(".card"), {});  // 23.14.0: Analyze with AI, TFS defect, PDF, Email Developer, evidence (passed: evidence, PDF, email)
   const aiBox = view.querySelector("#aiRunReport");
   if (aiBox) mountAiReport(aiBox, { kind: "run", id: runId, analyzeLabel: "Generate AI analysis report",
     intro: "The On-Premise AI reviews this run's steps, results, times, errors and self-healing. When you are satisfied, generate the PDF, download it or email it." });

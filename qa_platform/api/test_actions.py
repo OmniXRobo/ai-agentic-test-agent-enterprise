@@ -126,6 +126,11 @@ def retest(kind: str, subject_id: str, s: Any = Depends(actions)) -> dict[str, A
     return {"ok": True, "run": s.retest(kind, subject_id)}
 
 
+@router.get("/api/test-actions/email-history")
+def email_history(status: str | None = None, limit: int = 200, s: Any = Depends(actions)) -> dict[str, Any]:
+    return {"ok": True, "emails": s.email_history(status, min(max(limit, 1), 1000))}
+
+
 # ---- email drafts ---------------------------------------------------------------------------------------------------
 @router.get("/api/test-actions/email/{draft_id}")
 def email_get(draft_id: str, s: Any = Depends(actions)) -> dict[str, Any]:

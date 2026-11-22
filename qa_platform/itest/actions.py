@@ -86,6 +86,8 @@ PROMPT = (
 
 
 def _short(value: Any, n: int = 600) -> str:
+    if value is None:
+        return ""
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     text = SANITIZER.text(text or "", n)
     return text
@@ -481,8 +483,8 @@ hypothesis to confirm. Confidence: <b>{e(a.get('confidence'))}</b>.</p>
             lines.append(f"URL: {f['url']}")
         if not passed:
             lines += ["", f"Defect summary: {(a or {}).get('defect_summary') or f.get('test_name')}",
-                      f"Expected behaviour: {_short(f.get('expected'), 800)}",
-                      f"Actual behaviour: {_short(f.get('actual'), 800)}",
+                      f"Expected behaviour: {_short(f.get('expected'), 800) or 'see the test definition'}",
+                      f"Actual behaviour: {_short(f.get('actual'), 800) or 'not recorded'}",
                       "", "Reproduction steps:", f"1. Open {f.get('application') or 'the application'} in "
                       f"{f.get('environment') or 'the test environment'}.",
                       f"2. Run the test '{f.get('test_name')}' (execution {f.get('execution_id')}).",
@@ -523,6 +525,19 @@ hypothesis to confirm. Confidence: <b>{e(a.get('confidence'))}</b>.</p>
                          "allowed_domains": self.rt.mailer.allowed_domains(cfg),
                          "allow_external": bool(cfg.get("allow_external"))}
         return row
+
+    def email_history(self, status: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        """Send history of Email Developer (every module): who, what, when, accepted or failed and why."""
+        where, params = "", []
+        if status in ("draft", "sending", "accepted", "failed"):
+            where, params = " WHERE status = ?", [status]
+        rows = self.db.query("SELECT id, module, subject_kind, subject_id, status, to_addrs, cc_addrs, subject, sent_at, "
+                             "error, attempts, created_by, created_at, updated_at FROM email_outbox" + where +
+                             " ORDER BY updated_at DESC LIMIT ?", (*params, int(limit)))
+        for r in rows:
+            r["to_addrs"] = loads(r["to_addrs"]) or []
+            r["cc_addrs"] = loads(r["cc_addrs"]) if r.get("cc_addrs") else []
+        return rows
 
     def emails(self, kind: str, subject_id: str) -> list[dict[str, Any]]:
         rows = self.db.query("SELECT id, status, to_addrs, subject, sent_at, error, attempts, smtp_reply, created_at FROM "
