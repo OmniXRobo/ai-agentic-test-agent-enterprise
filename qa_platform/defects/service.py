@@ -52,7 +52,9 @@ STATUS_LABELS = {"draft": "Draft", "needs_review": "Needs Review", "approved": "
                  "linked": "Duplicate"}
 SOURCE_LABELS = {"functional": "Guided Browser Automation", "framework": "AI-Driven Automation",
                  "python": "Guided Browser Automation (Python)", "comparison": "Integration Comparison",
-                 "performance": "Performance", "api": "API Testing"}
+                 "performance": "Performance", "api": "API Testing",
+                 # 23.14.0
+                 "security": "Security Testing", "fuse": "Red Hat Fuse Testing", "activemq": "ActiveMQ Testing"}
 MAX_ATTACHMENT = 20 * 1024 * 1024
 
 
@@ -225,6 +227,34 @@ class DefectService:
                             ((assigned_to or "").strip()[:256] or None, saved["id"]))
         if saved.get("_new"):
             self._event(saved["id"], by, "edited", f"Written on {module}")
+            try:
+                self.check_duplicates(saved["id"])
+            except QAError as exc:
+                log.info(f"Duplicate check skipped: {exc.message}")
+        return self.get(saved["id"])
+
+    def evidence_draft(self, *, source: str, module: str, title: str, severity: int, priority: int, repro_steps: str,
+                       facts: dict[str, Any], run_id: str, signature_seed: str, test_case_id: str | None = None,
+                       source_ref: str | None = None) -> dict[str, Any]:
+        """23.14.0: "Create TFS Defect" on a failed result of Security, Fuse, ActiveMQ or a failed run of an existing
+        module. The draft carries the sanitized facts and goes through Defect Review (editable preview, mandatory TFS
+        fields, duplicate check, approval) before anything is sent to TFS."""
+        by = self._actor("edit")
+        title = (title or "").strip()[:250]
+        if len(title) < 3:
+            raise QAError("VALIDATION_FAILED", "Write a title of at least 3 characters.", status=422)
+        if source not in SOURCE_LABELS:
+            source = "functional"
+        draft = {"source": source, "source_run_id": (run_id or "")[:80] or "MANUAL",
+                 "signature": hashlib.sha256(f"evidence|{source}|{signature_seed}".encode()).hexdigest()[:40],
+                 "category": "manual", "product_defect": True, "title": title,
+                 "severity": max(1, min(4, int(severity))), "priority": max(1, min(4, int(priority))),
+                 "repro_steps": repro_steps, "facts": {"module": module, "reported_by": by, "error": "",
+                                                       "manual": True, **facts},
+                 "evidence": [], "test_case_id": test_case_id, "source_ref": source_ref}
+        saved = self._store(draft)
+        if saved.get("_new"):
+            self._event(saved["id"], by, "edited", f"Prepared from {module} evidence")
             try:
                 self.check_duplicates(saved["id"])
             except QAError as exc:
@@ -536,7 +566,8 @@ class DefectService:
                        extra: dict[str, Any] | None = None) -> tuple[str, list[dict[str, Any]], list[str]]:
         type_name = self.tfs.default_type("bug")  # Bug, Defect or Issue, from the process
         kind = {"performance": "Performance", "comparison": "Integration Comparison",
-                "api": "API Testing"}.get(draft["source"], "Functional")
+                "api": "API Testing", "security": "Security Testing", "fuse": "Red Hat Fuse Testing",
+                "activemq": "ActiveMQ Testing"}.get(draft["source"], "Functional")
         values: dict[str, Any] = {
             "System.Title": draft["title"],
             "Microsoft.VSTS.TCM.ReproSteps": draft["repro_steps"],

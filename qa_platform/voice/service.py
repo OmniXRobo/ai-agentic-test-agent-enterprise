@@ -565,6 +565,36 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
             reply["language"] = "ar"
         return reply
 
+    def interpret(self, text: str) -> dict[str, Any]:
+        """23.14.0: what a command would do, without doing it (Voice page > Test command interpretation). Rules and the
+        built-in Arabic word list only: deterministic, nothing is executed, stored or sent to the AI."""
+        from skyguard_agent.translate import has_arabic, to_english
+
+        heard = (text or "").strip()[:500]
+        if not heard:
+            raise QAError("VALIDATION_FAILED", "Say or type a command.", status=422)
+        arabic = has_arabic(heard)
+        english = to_english(self.strip_wake_name(heard) or heard)[0] if arabic else self.strip_wake_name(heard)
+        intent = intents.parse(english)
+        out: dict[str, Any] = {"heard": privacy.redact(heard), "arabic": arabic, "english": privacy.redact(english),
+                               "executed": False, "understood": intent is not None and intent.command != "unclear"}
+        if intent is None:
+            out["result"] = ("The fixed rules do not cover this sentence. When you say it, the agent asks the local AI to "
+                             "choose one of the registered commands, or asks you to say it again.")
+            return out
+        spec = registry.BY_ID.get(intent.command)
+        out.update(command=intent.command, params=privacy.redact_params(dict(intent.params)), summary=spec.summary if spec else "",
+                   needs_confirmation=bool(spec and spec.destructive))
+        if intent.command == "open_page":
+            route = intent.params.get("route")
+            query = intent.params.get("query")
+            out["result"] = f"Would open {intents.PAGE_LABELS.get(route, route)}" + (f" ({query})" if query else "") + "."
+            out["navigate"] = f"#/{route}{'?' + query if query else ''}"
+        else:
+            out["result"] = f"Would run the command '{intent.command}'" + (" after you confirm it" if out["needs_confirmation"]
+                                                                           else "") + "."
+        return out
+
     def _handle(self, text: str, *, conversation_id: str, source: str = "typed",
                 page: dict[str, Any] | None = None) -> dict[str, Any]:
         text = self.strip_wake_name(text or "")
@@ -791,7 +821,14 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
                                verify={"route": "test-suites", "label": "Test Suites"})
         # The dashboard opens the page and checks it really loaded before anything says it is done.
         say = f"I'm opening {label} now." if self.style() == "conversational" else f"{label} opened."
-        return Outcome("completed", say, navigate=f"#/{route}", verify={"route": route, "label": label})
+        # 23.14.0: a fixed filter or tab from the rules in intents_itest.py (never from the AI)
+        query = intent.params.get("query") if intent.via == "rules" else None
+        if query and not re.fullmatch(r"[a-z_]+=[a-z0-9_,]+", str(query)):
+            query = None
+        if intent.via == "rules" and intent.params.get("note"):
+            say = str(intent.params["note"])
+        return Outcome("completed", say, navigate=f"#/{route}{'?' + query if query else ''}",
+                       verify={"route": route, "label": label})
 
     def _cmd_open_work_item(self, conv: Conversation, intent: Intent) -> Outcome:
         item_id = int(intent.params["id"])

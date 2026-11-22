@@ -50,6 +50,8 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     app = FastAPI(title="AI Agentic Test Agent Enterprise", version=__version__, lifespan=lifespan,
                   docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
     install_error_handlers(app)
+    from .api import agent_control as agent_control_api
+    app.include_router(agent_control_api.router)  # 23.14.0: Stop / Pause / Resume on the agent cards (before /api/agents/...)
     app.include_router(core.router)
     app.include_router(tfs.router)
     app.include_router(design.router)
@@ -79,6 +81,13 @@ def create_app(paths: Paths | None = None, **runtime_options: Any) -> FastAPI:
     from .api import apitesting as apitesting_api
 
     app.include_router(apitesting_api.router)  # 23.12.0: API Testing
+    from .api import integration as integration_api
+    from .api import security as security_api
+    from .api import test_actions as test_actions_api
+
+    app.include_router(security_api.router)  # 23.14.0: Security Testing
+    app.include_router(integration_api.router)  # 23.14.0: Red Hat Fuse and ActiveMQ testing
+    app.include_router(test_actions_api.router)  # 23.14.0: Analyze with AI, TFS defect, PDF, Email Developer, retest
     opsagent_api.install(app)
     auth_api.install(app)  # 23.3.34: every API request needs an account allowed to make it (runs after the guard)
     guard.install(app)  # 23.3.32: only the dashboard itself may use the API

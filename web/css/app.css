@@ -262,6 +262,8 @@ table.steps td { padding: 4px 6px; }
 @media (max-width: 640px) { .shot-thumb, .shot-thumb img { width: 80px; } .shot-thumb img { height: 45px; } }
 .grid > label, form.grid label, .card > .grid > label { display: grid; gap: 4px; font-size: 13px; }
 .grid label input:not([type=checkbox]):not([type=radio]), .grid label select { width: 100%; min-width: 0; }
+.grid label.row, form.grid label.row, fieldset label.row { display: flex; align-items: center; gap: 6px; }
+fieldset label.row input[type=checkbox] { width: auto; flex: none; }
 .grid > span > label { display: grid; gap: 4px; font-size: 13px; }
 
 /* Charts */

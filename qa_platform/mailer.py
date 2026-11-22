@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import mimetypes
 import smtplib
 import ssl
@@ -36,7 +37,13 @@ PRESETS = {
 }
 DEFAULTS = {"mode": "smtp", "preset": "office365", "host": "smtp.office365.com", "port": 587, "security": "starttls",
             "username": "", "sender": "", "sender_name": "", "default_to": "", "verify_tls": True,
-            "timeout_seconds": 30}
+            "timeout_seconds": 30,
+            # 23.14.0: intranet SMTP for Email Developer (company CA certificate, recipient policy, attachment limits,
+            # developer directory). None of these change how the existing report emails are sent.
+            "ca_file": "", "allowed_domains": "", "allow_external": False, "max_attachment_mb": 10,
+            "max_total_attachment_mb": 20, "developer_directory": []}
+ADDRESS_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                        r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
 SECRET_NS, SECRET_NAME = "email", "smtp"
 OLD_DEFAULT_SENDER_NAME = "QA Enterprise AI"
 
@@ -102,6 +109,38 @@ class Mailer:
             raise QAError("EMAIL_SECURITY", "Security must be STARTTLS, SSL or none.", status=422)
         if clean.get("sender") and "@" not in str(clean["sender"]):
             raise QAError("EMAIL_SENDER", "The sender must be an email address.", status=422)
+        for key, top in (("max_attachment_mb", 50), ("max_total_attachment_mb", 100)):
+            if key in clean:
+                try:
+                    clean[key] = max(1, min(top, int(clean[key])))
+                except (TypeError, ValueError):
+                    raise QAError("EMAIL_LIMIT", "Attachment limits are whole numbers of MB.", status=422) from None
+        if clean.get("ca_file"):
+            ca = Path(str(clean["ca_file"]).strip().strip('"'))
+            if ca.suffix.lower() not in (".pem", ".crt", ".cer") or not ca.is_file():
+                raise QAError("EMAIL_CA_FILE", "The company CA certificate must be an existing .pem, .crt or .cer file "
+                              "on this PC.", status=422)
+            clean["ca_file"] = str(ca)
+        if "allowed_domains" in clean:
+            doms = [d.strip().lower().lstrip("@") for d in re.split(r"[,; ]+", str(clean["allowed_domains"] or "")) if d.strip()]
+            if any(not re.match(r"^[a-z0-9.-]+\.[a-z0-9-]+$|^[a-z0-9-]+$", d) for d in doms):
+                raise QAError("EMAIL_DOMAINS", "Allowed recipient domains are names such as company.local.", status=422)
+            clean["allowed_domains"] = ", ".join(dict.fromkeys(doms))
+        if "developer_directory" in clean:
+            people = []
+            for p in clean["developer_directory"] or []:
+                if not isinstance(p, dict):
+                    continue
+                addr = str(p.get("email") or "").strip()
+                if not ADDRESS_RE.match(addr):
+                    raise QAError("EMAIL_DIRECTORY", f"'{addr}' in the developer directory is not an email address.",
+                                  status=422)
+                people.append({"name": str(p.get("name") or addr)[:120], "email": addr,
+                               "team": str(p.get("team") or "")[:80], "modules": [str(m)[:40] for m in
+                                                                               (p.get("modules") or [])][:10]})
+            clean["developer_directory"] = people[:300]
+        if "allow_external" in clean:
+            clean["allow_external"] = bool(clean["allow_external"])
         self.settings.update({"email": clean})
         if clear_password:
             self.secrets.delete(SECRET_NS, SECRET_NAME)
@@ -112,10 +151,12 @@ class Mailer:
     # ---- sending ---------------------------------------------------------------------------------
 
     def send(self, to: Any, subject: str, html: str, text: str | None = None, *, cc: Any = None,
-             attachments: list[Path] | None = None) -> dict[str, Any]:
+             attachments: list[Path] | None = None, bcc: Any = None) -> dict[str, Any]:
         cfg = self.config()
         recipients = split_addresses(to)
         copies = split_addresses(cc)
+        hidden = split_addresses(bcc)
+        subject = " ".join(str(subject or "").split())[:250]  # no CR / LF: no header injection
         if not recipients:
             raise QAError("EMAIL_NO_RECIPIENT", "Add at least one email address to send the report to.", status=422)
         if not cfg["configured"]:
@@ -123,6 +164,9 @@ class Mailer:
                           status=409)
         files = [Path(a) for a in attachments or [] if Path(a).is_file()]
         if cfg.get("mode") == "outlook_app":
+            if hidden:  # the Outlook app path has no Bcc here; refuse instead of exposing the addresses
+                raise QAError("EMAIL_BCC_UNSUPPORTED", "Bcc needs SMTP; the Outlook app on this PC cannot send it.",
+                              status=409)
             return self._send_outlook_app(recipients, copies, subject, html, files)
         sender = cfg.get("sender") or cfg.get("username")
         msg = EmailMessage()
@@ -137,16 +181,22 @@ class Mailer:
             ctype, _ = mimetypes.guess_type(f.name)
             main, sub = (ctype or "application/octet-stream").split("/", 1)
             msg.add_attachment(f.read_bytes(), maintype=main, subtype=sub, filename=f.name)
+        everyone = recipients + copies + hidden
         if self.transport is not None:
-            self.transport(cfg, msg)
-            return {"sent": True, "to": recipients, "cc": copies, "mode": "smtp"}
-        self._smtp(cfg, msg)
-        return {"sent": True, "to": recipients, "cc": copies, "mode": "smtp"}
+            reply = self.transport(cfg, msg) if not hidden else self.transport(cfg, msg, everyone)
+            refused = reply if isinstance(reply, dict) else {}
+            return {"sent": True, "to": recipients, "cc": copies, "bcc": hidden, "mode": "smtp",
+                    "refused": {k: str(v) for k, v in refused.items()}}
+        refused = self._smtp(cfg, msg, everyone)
+        return {"sent": True, "to": recipients, "cc": copies, "bcc": hidden, "mode": "smtp",
+                "refused": {k: str(v) for k, v in (refused or {}).items()}}
 
-    def _smtp(self, cfg: dict[str, Any], msg: EmailMessage) -> None:
+    def _smtp(self, cfg: dict[str, Any], msg: EmailMessage, everyone: list[str] | None = None) -> dict[str, Any]:
         host, port = cfg.get("host"), int(cfg.get("port") or 587)
         timeout = float(cfg.get("timeout_seconds") or 30)
         context = ssl.create_default_context()
+        if cfg.get("ca_file") and Path(cfg["ca_file"]).is_file():  # 23.14.0: the company's own CA (intranet SMTP)
+            context.load_verify_locations(cfg["ca_file"])
         if not cfg.get("verify_tls", True):
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
@@ -163,7 +213,8 @@ class Mailer:
                     server.ehlo()
                 if cfg.get("username") and password:
                     server.login(cfg["username"], password)
-                server.send_message(msg)
+                # Bcc is not a header: the addresses go only into the SMTP envelope
+                return server.send_message(msg, to_addrs=everyone) if everyone else server.send_message(msg)
         except smtplib.SMTPAuthenticationError as exc:
             raise QAError("EMAIL_LOGIN_FAILED", "Outlook refused the user name or password. With Microsoft 365, SMTP "
                           "sign-in (SMTP AUTH) must be allowed for this mailbox, or use an app password.", status=502,
@@ -201,6 +252,77 @@ class Mailer:
                 raise QAError("EMAIL_OUTLOOK_APP", "Outlook on this PC could not send the email. Open Outlook once "
                               "and check it is signed in.", status=502, details=(done.stderr or done.stdout)[-400:])
         return {"sent": True, "to": to, "cc": cc, "mode": "outlook_app"}
+
+    # ---- 23.14.0: Email Developer policy and connection check ----------------------------------------------------
+
+    def allowed_domains(self, cfg: dict[str, Any] | None = None) -> list[str]:
+        """The recipient domains Email Developer may send to: the configured list, otherwise the sender's own domain."""
+        cfg = cfg or self.config()
+        doms = [d.strip().lower() for d in str(cfg.get("allowed_domains") or "").split(",") if d.strip()]
+        if not doms:
+            sender = str(cfg.get("sender") or cfg.get("username") or "")
+            if "@" in sender:
+                doms = [sender.rsplit("@", 1)[1].lower()]
+        return doms
+
+    def check_recipients(self, addresses: list[str]) -> list[str]:
+        """Validates every address (syntax, no header characters) and the enterprise recipient policy. Returns the
+        clean list; raises with the addresses that are refused."""
+        cfg = self.config()
+        bad = [a for a in addresses if not ADDRESS_RE.match(a) or any(c in a for c in "\r\n<>,;")]
+        if bad:
+            raise QAError("EMAIL_ADDRESS_INVALID", "Not a valid email address: " + ", ".join(bad[:5]), status=422)
+        if not cfg.get("allow_external"):
+            doms = self.allowed_domains(cfg)
+            outside = [a for a in addresses if not doms or not any(a.lower().endswith("@" + d) or
+                                                                   a.lower().endswith("." + d) for d in doms)]
+            if outside:
+                raise QAError("EMAIL_RECIPIENT_NOT_ALLOWED", "The enterprise email policy does not allow sending to: " +
+                              ", ".join(outside[:5]) + (f". Allowed domains: {', '.join(doms)}." if doms else
+                                                        ". Set the sender or the allowed recipient domains first."),
+                              status=403)
+        return addresses
+
+    def test_connection(self) -> dict[str, Any]:
+        """Connects, says EHLO, starts TLS and signs in like a real send, without sending anything."""
+        cfg = self.config()
+        if cfg.get("mode") == "outlook_app":
+            return {"ok": True, "detail": "The Outlook app on this PC sends the email; there is no SMTP server to test."}
+        if not cfg["configured"]:
+            raise QAError("EMAIL_NOT_CONFIGURED", "Set the SMTP server and the sender first.", status=409)
+        host, port = cfg.get("host"), int(cfg.get("port") or 587)
+        steps: list[str] = []
+        if self.transport is not None:
+            return {"ok": True, "detail": "Test transport", "steps": ["connected"]}
+        context = ssl.create_default_context()
+        if cfg.get("ca_file") and Path(cfg["ca_file"]).is_file():
+            context.load_verify_locations(cfg["ca_file"])
+        if not cfg.get("verify_tls", True):
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        try:
+            timeout = float(cfg.get("timeout_seconds") or 30)
+            server: smtplib.SMTP = (smtplib.SMTP_SSL(host, port, timeout=timeout, context=context)
+                                    if cfg.get("security") == "ssl" else smtplib.SMTP(host, port, timeout=timeout))
+            with server:
+                code, _ = server.ehlo()
+                steps.append(f"connected to {host}:{port} (EHLO {code})")
+                if cfg.get("security", "starttls") == "starttls":
+                    server.starttls(context=context)
+                    server.ehlo()
+                    steps.append("STARTTLS: certificate accepted")
+                password = self._password_safe()
+                if cfg.get("username") and password:
+                    server.login(cfg["username"], password)
+                    steps.append("signed in")
+                server.noop()
+        except smtplib.SMTPAuthenticationError as exc:
+            raise QAError("EMAIL_LOGIN_FAILED", "The SMTP server refused the user name or password.", status=502,
+                          details=_short(exc)) from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            raise QAError("EMAIL_CONNECT_FAILED", f"Could not use the SMTP server {host}:{port}.", status=502,
+                          details=_short(exc)) from exc
+        return {"ok": True, "detail": "; ".join(steps), "steps": steps}
 
     def send_test(self, to: Any = None) -> dict[str, Any]:
         cfg = self.config()

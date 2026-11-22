@@ -49,7 +49,7 @@ def meta() -> dict[str, Any]:
     }
 
 
-AI_AGENTS = ("requirements", "test_planning", "test_case_design", "test_data")
+AI_AGENTS = ("requirements", "test_planning", "test_case_design", "test_data", "ai_bug_analysis")
 BROWSER_AGENTS = ("app_discovery", "automation_engineering", "guided_browser", "test_execution", "self_healing",
                   "manual_playback", "ai_operations", "integration_comparison")
 
@@ -69,6 +69,21 @@ def _availability(rt: Runtime) -> dict[str, str]:
             out[a] = "API Testing did not start on this PC (see the application log)."
     if getattr(rt, "scheduler", None) is None:
         out["scheduled_execution"] = "The scheduler is not running."
+    # 23.14.0
+    if getattr(rt, "aura", None) is None:
+        out["aura_memory"] = "AURA did not start on this PC (see Preferences > AURA)."
+    for attr, ids, label in (
+            ("security", ("security_discovery", "vulnerability_assessment", "authn_authz_testing", "controlled_fuzzing",
+                          "finding_validation"), "Security Testing"),
+            ("fuse", ("fuse_route_discovery", "fuse_route_mapping", "fuse_test_execution"), "Red Hat Fuse Testing"),
+            ("activemq", ("broker_discovery", "message_publish_verification", "consumer_delivery_validation",
+                          "retry_dlq_testing"), "ActiveMQ Testing"),
+            ("test_actions", ("ai_bug_analysis", "evidence_collection", "tfs_defect_preparation", "pdf_reporting",
+                              "email_developer"), "The result actions")):
+        if getattr(rt, attr, None) is None:
+            for a in ids:
+                out[a] = f"{label} did not start on this PC (see the application log)."
+
     if importlib.util.find_spec("playwright") is None:
         for a in BROWSER_AGENTS:
             out.setdefault(a, "Playwright is not installed.")
@@ -251,6 +266,7 @@ def get_settings(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "settings": rt.settings.get()}
 
 
+WORKFLOW_LOOKS = ("classic", "command_center", "holographic", "skyguard_core", "mission_control")
 ALLOWED_SETTINGS_SECTIONS = {"ui", "tfs", "ai", "defects", "performance", "playback", "comparison"}
 
 
@@ -266,6 +282,9 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
     if open_as is not None and open_as not in ("browser", "app"):
         raise QAError("SETTINGS_INVALID", "Open as must be 'browser' or 'app'.")
     branding.validate(patch.get("ui", {}))  # 23.3.30: product name, tagline and logo path
+    look = patch.get("ui", {}).get("workflow_look")  # 23.14.0: the look of Agent Workflow (Preferences)
+    if look is not None and look not in WORKFLOW_LOOKS:
+        raise QAError("SETTINGS_INVALID", f"The Agent Workflow look must be one of: {', '.join(WORKFLOW_LOOKS)}.")
     if "sidebar_collapsed" in patch.get("ui", {}) and not isinstance(patch["ui"]["sidebar_collapsed"], bool):
         raise QAError("SETTINGS_INVALID", "sidebar_collapsed must be true or false.")
     pb = patch.get("playback", {})

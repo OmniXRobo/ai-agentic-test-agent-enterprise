@@ -1,4 +1,4 @@
-// 23.3.21: Automation Studio > Scheduled Runs, and Settings > Outlook Email.
+// 23.3.21: Automation Studio > Scheduled Runs, and Settings > Email / SMTP.
 import { api, defaultBrowser } from "../api.js";
 import { productName } from "../brand.js";
 import { esc, toast, dateTimeOf, openModal } from "../util.js";
@@ -47,7 +47,7 @@ function scheduleForm(selected, current = {}, { runNow = false, emailReady = fal
     <label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="publish_tfs" style="width:auto;margin:0" ${c.publish_tfs ? "checked" : ""}>Write Passed / Failed to TFS test runs</label>
     ${runNow ? "" : `<label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="catch_up" style="width:auto;margin:0" ${c.catch_up ? "checked" : ""}>Run a missed time when the app opens</label>`}
     <fieldset style="grid-column:1/-1;border:1px solid var(--border);border-radius:8px;padding:10px 12px"><legend>Email report (Outlook)</legend>
-      ${emailReady ? "" : '<p class="muted" style="margin:0 0 8px">Set up the sender first in <a href="#/email-settings">Settings > Outlook Email</a>.</p>'}
+      ${emailReady ? "" : '<p class="muted" style="margin:0 0 8px">Set up the sender first in <a href="#/email-settings">Settings > Email / SMTP</a>.</p>'}
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
       <label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="email_enabled" style="width:auto;margin:0" ${em.enabled ? "checked" : ""}>Send the report by email</label>
       <label>To <input name="email_to" value="${esc(em.to || "")}" placeholder="lead@company.com; qa@company.com"></label>
@@ -231,8 +231,8 @@ async function mountSchedules(view) {
 async function mountEmail(view) {
   const { email: e } = await api("/api/email/settings");
   view.innerHTML = `<form class="card grid" id="emailForm" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
-    <h3 style="grid-column:1/-1;margin:0">Outlook email for run reports</h3>
-    <p class="muted" style="grid-column:1/-1;margin:0">Scheduled Runs send their HTML report (and the screenshot of each failure) through this account.</p>
+    <h3 style="grid-column:1/-1;margin:0">Email / SMTP</h3>
+    <p class="muted" style="grid-column:1/-1;margin:0">Scheduled Runs, module reports and Email Developer send through this account. On the office intranet choose "Company Exchange / other SMTP server". Nothing is sent without you pressing Send.</p>
     <label>Send with <select name="mode"><option value="smtp" ${e.mode !== "outlook_app" ? "selected" : ""}>Outlook / Microsoft 365 account (SMTP)</option>
       <option value="outlook_app" ${e.mode === "outlook_app" ? "selected" : ""}>The Outlook app on this PC (no password)</option></select></label>
     <label data-smtp>Account type <select name="preset"><option value="office365" ${e.preset === "office365" ? "selected" : ""}>Microsoft 365 / Office 365 (smtp.office365.com)</option>
@@ -246,14 +246,28 @@ async function mountEmail(view) {
     <label data-smtp>From address <input name="sender" value="${esc(e.sender || "")}" placeholder="qa.reports@company.com"></label>
     <label>From name <input name="sender_name" value="${esc(e.sender_name || "")}" placeholder="Product name from Preferences"></label>
     <label>Default recipients <input name="default_to" value="${esc(e.default_to || "")}" placeholder="lead@company.com; team@company.com"></label>
+    <fieldset data-smtp style="grid-column:1/-1;border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))"><legend>Intranet SMTP and safety rules</legend>
+      <label class="row" style="gap:6px"><input type="checkbox" name="verify_tls" ${e.verify_tls !== false ? "checked" : ""}> Verify the server certificate</label>
+      <label>Company CA certificate file (PEM, on this PC) <input name="ca_file" value="${esc(e.ca_file || "")}" placeholder="C:\\SkyGuard\\certs\\company-ca.pem"></label>
+      <label>Timeout (seconds) <input name="timeout_seconds" type="number" min="5" max="300" value="${esc(e.timeout_seconds || 30)}"></label>
+      <label>Allowed recipient domains <input name="allowed_domains" value="${esc(e.allowed_domains || "")}" placeholder="company.local, company.com"></label>
+      <label class="row" style="gap:6px"><input type="checkbox" name="allow_external" ${e.allow_external ? "checked" : ""}> Allow recipients outside these domains</label>
+      <label>Largest attachment (MB) <input name="max_attachment_mb" type="number" min="1" max="50" value="${esc(e.max_attachment_mb || 10)}"></label>
+      <label>All attachments together (MB) <input name="max_total_attachment_mb" type="number" min="1" max="100" value="${esc(e.max_total_attachment_mb || 20)}"></label>
+      <label style="grid-column:1/-1">Developer directory (one per line: name, email, team, modules separated by |)
+        <textarea name="developer_directory" rows="4" dir="auto" placeholder="Ahmed Ali, ahmed.ali@company.local, Integration, fuse|activemq">${esc((e.developer_directory || []).map((p) => [p.name, p.email, p.team || "", (p.modules || []).join("|")].join(", ")).join("\n"))}</textarea></label>
+    </fieldset>
     <p class="muted" data-app style="grid-column:1/-1;margin:0">Outlook (classic desktop) must be installed and signed in for the Windows user that runs ${esc(productName())}. The mail is sent from that mailbox and appears in its Sent Items.</p>
     <p role="alert" data-cloud style="grid-column:1/-1;margin:0;color:var(--fail);font-weight:600">Microsoft 365 and Outlook.com are on the Internet: on a PC without Internet these emails cannot be sent. Choose "Company Exchange / other SMTP server" with your company's mail server, or "Outlook app on this PC" connected to your company's Exchange.</p>
     <p class="muted" data-smtp style="grid-column:1/-1;margin:0">The password is kept in the Windows Credential Manager, never in the settings file. Microsoft 365 needs SMTP sign-in (SMTP AUTH) allowed for this mailbox; with multi-factor sign-in use an app password.</p>
     <div class="row" style="grid-column:1/-1;gap:8px"><span class="muted">${e.configured ? "Ready to send." : "Not set up yet."}</span><span class="spacer"></span>
       ${e.has_password ? '<button class="btn" type="button" id="clearPw">Remove saved password</button>' : ""}
       <input id="testTo" placeholder="Send a test email to…" value="${esc(e.default_to || e.sender || "")}" style="max-width:260px">
+      <button class="btn" type="button" id="connBtn" title="Connect, start TLS and sign in without sending anything">Test connection</button>
       <button class="btn" type="button" id="testBtn">Send test email</button><button class="btn primary" type="submit">Save</button></div>
-  </form>`;
+    <p class="muted small" id="connOut" style="grid-column:1/-1;margin:0"></p>
+  </form>
+  <div class="card" id="sendHistory"><p class="muted">Loading send history…</p></div>`;
   const f = view.querySelector("#emailForm");
   const sync = () => {
     const app = f.mode.value === "outlook_app", custom = f.preset.value === "custom";
@@ -267,15 +281,49 @@ async function mountEmail(view) {
     const body = { mode: fd.mode, preset: fd.preset, username: fd.username ?? undefined, sender: fd.sender ?? undefined, sender_name: fd.sender_name,
       default_to: fd.default_to, ...extra };
     if (fd.preset === "custom") Object.assign(body, { host: fd.host, port: Number(fd.port) || 587, security: fd.security });
+    if (fd.mode !== "outlook_app") {
+      Object.assign(body, { verify_tls: f.verify_tls.checked, ca_file: fd.ca_file || "", timeout_seconds: Number(fd.timeout_seconds) || 30,
+        allowed_domains: fd.allowed_domains || "", allow_external: f.allow_external.checked,
+        max_attachment_mb: Number(fd.max_attachment_mb) || 10, max_total_attachment_mb: Number(fd.max_total_attachment_mb) || 20,
+        developer_directory: String(fd.developer_directory || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
+          const [name, email, team, modules] = l.split(",").map((x) => (x || "").trim());
+          return { name, email, team, modules: (modules || "").split("|").map((m) => m.trim()).filter(Boolean) };
+        }) });
+    }
     if (fd.secret) body.secret = fd.secret;
     await api("/api/email/settings", { method: "PUT", body });
   };
   f.addEventListener("submit", async (ev) => { ev.preventDefault(); try { await save(); toast("Email settings saved.", "success"); await mountEmail(view); } catch (err) { toast(err.message, "error"); } });
   view.querySelector("#clearPw")?.addEventListener("click", async () => { try { await save({ clear_secret: true }); toast("Saved password removed.", "success"); await mountEmail(view); } catch (err) { toast(err.message, "error"); } });
+  view.querySelector("#connBtn").addEventListener("click", async (ev) => {
+    const out = view.querySelector("#connOut"); ev.target.disabled = true; out.textContent = "Testing…";
+    try { await save(); const r = await api("/api/email/test-connection", { method: "POST", body: {} }); out.innerHTML = `<span class="pill PASS">Connected</span> ${esc(r.detail || "")} (nothing was sent)`; }
+    catch (err) { out.innerHTML = `<span class="pill FAIL">Failed</span> ${esc(err.message)}${err.details ? ` (${esc(err.details)})` : ""}`; }
+    finally { ev.target.disabled = false; }
+  });
+  drawSendHistory(view.querySelector("#sendHistory"));
   view.querySelector("#testBtn").addEventListener("click", async () => {
     try { await save(); const r = await api("/api/email/test", { method: "POST", body: { to: view.querySelector("#testTo").value } }); toast(`Test email sent to ${r.to.join(", ")}.`, "success"); }
     catch (err) { toast(`${err.message}${err.details ? ` (${err.details})` : ""}`, "error", 9000); }
   });
+}
+
+// 23.14.0: what Email Developer sent from every module. "Accepted" means the SMTP server took the message; it does not
+// prove delivery to the mailbox.
+async function drawSendHistory(box, status = "") {
+  try {
+    const { emails } = await api(`/api/test-actions/email-history?limit=200${status ? `&status=${encodeURIComponent(status)}` : ""}`);
+    const pillOf = { accepted: "PASS", failed: "FAIL", sending: "RUNNING", draft: "WAITING" };
+    box.innerHTML = `<div class="row" style="gap:8px"><h3 style="margin:0">Email Developer send history</h3><span class="spacer"></span>
+      <select id="shStatus" aria-label="Status"><option value="">All</option>${["accepted", "failed", "sending", "draft"].map((x) => `<option value="${x}" ${x === status ? "selected" : ""}>${x}</option>`).join("")}</select></div>
+      <p class="muted small">Accepted means the SMTP server accepted the message for delivery; it does not prove the developer received it. A failed email keeps its draft so you can correct it and send again.</p>
+      ${emails.length ? `<table class="data compact"><thead><tr><th>When</th><th>Module</th><th>Subject</th><th>To</th><th>Status</th><th>By</th></tr></thead><tbody>
+      ${emails.map((m) => `<tr><td class="small">${esc(m.sent_at || m.updated_at || "")}</td><td>${esc(m.module || "")}<div class="muted small">${esc(m.subject_kind)} ${esc(m.subject_id)}</div></td>
+        <td>${esc(m.subject || "")}${m.error ? `<div class="small" style="color:var(--fail)">${esc(m.error)}</div>` : ""}</td><td class="small">${esc([...(m.to_addrs || []), ...(m.cc_addrs || [])].join(", "))}</td>
+        <td><span class="pill ${pillOf[m.status] || "WAITING"}">${esc(m.status)}</span>${m.attempts > 1 ? `<div class="muted small">${m.attempts} attempts</div>` : ""}</td><td class="small">${esc(m.created_by || "")}</td></tr>`).join("")}</tbody></table>`
+      : '<p class="muted">Nothing sent yet.</p>'}`;
+    box.querySelector("#shStatus").addEventListener("change", (e) => drawSendHistory(box, e.target.value));
+  } catch (err) { box.innerHTML = `<p class="muted">Send history is not available: ${esc(err.message)}</p>`; }
 }
 
 export const scheduledRuns = {

@@ -1,4 +1,4 @@
-"""Builds the two release zips of SkyGuard QA 23.13.3 (run on a build machine with internet; installing needs none):
+"""Builds the two release zips of SkyGuard QA 23.14.0 (run on a build machine with internet; installing needs none):
 
     SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch.zip
         SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe   the wizard (Welcome, Detect, Backup, Install, Verify,
@@ -38,16 +38,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-VERSION = "23.13.3"
+VERSION = "23.14.0"
 EXT_VERSION = "1.4.3"
 PATCH_NAME = "SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch"
 SETUP_NAME = "SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe"
 EXT_NAME = "SkyGuard_Offline_Edge_Chrome_Agent_Extension"
-STAGE_NAME = "SkyGuard_SGQA-23.3.35_to_23.13.3_Patch_Files"  # build_patch.py
-DOCS = REPO / "docs" / "release-23.13.3"
+STAGE_NAME = "SkyGuard_SGQA-23.3.35_to_23.14.0_Patch_Files"  # build_patch.py
+DOCS = REPO / "docs" / "release-23.14.0"
 TOP_DOCS = ("RELEASE_INCLUSION_MANIFEST.md", "INSTALLATION_GUIDE.md", "SECURITY_REPORT.md", "TEST_REPORT.md",
             "KNOWN_LIMITATIONS.md", "FINAL_RELEASE_REPORT.md", "SOURCE_ARCHITECTURE_AUDIT.md", "PATCH_CHANGELOG.md",
-            "USER_GUIDE.md", "ROOT_CAUSE_ANALYSIS.md")
+            "USER_GUIDE.md", "ROOT_CAUSE_ANALYSIS.md", "COMPATIBILITY_MATRIX.md", "DEPENDENCY_INVENTORY.md")
 SETUP_PAYLOAD = ("install_patch.py", "PATCH_MANIFEST.json", "stop_skyguard.ps1", "APPLY_PATCH.ps1", "ROLLBACK_PATCH.cmd",
                  "VERIFY_PATCH.cmd")
 

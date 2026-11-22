@@ -75,6 +75,16 @@ def command(body: CommandIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, **rt.voice.handle(body.text, conversation_id=body.conversation_id, source=body.source, page=page)}
 
 
+class InterpretIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+@router.post("/interpret")
+def interpret(body: InterpretIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.14.0: how a spoken or typed command (English or Arabic) is understood; nothing is executed."""
+    return {"ok": True, **rt.voice.interpret(body.text)}
+
+
 @router.get("/commands")
 def history(conversation_id: str | None = Query(default=None, max_length=64), limit: int = Query(default=50, ge=1, le=200),
             rt: Runtime = Depends(runtime)) -> dict[str, Any]:

@@ -1,5 +1,11 @@
-r"""SkyGuard QA 23.13.3 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
-23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1 and 23.13.2). 23.13.3 translates spoken Arabic literally ("open page") and asks a clean question with page buttons. 23.13.2 speaks the AI Agent replies (English or Arabic, page and extension 1.4.2). 23.13.1 adds offline Arabic voice replies (male or female) and the speech model / Arabic voice install helpers. 23.13.0 runs AI-Driven Automation, Application
+r"""SkyGuard QA 23.14.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2 and 23.13.3). 23.14.0 adds Security
+Testing (eight screens, OWASP checks, read-only discovery, offline OWASP ZAP integration, bounded fuzzing), Red Hat Fuse
+Integration Testing (Karaf / Spring Boot / EAP through Jolokia or actuator, or black box; read-only), ActiveMQ Classic and
+Artemis testing (test destinations only), the same result actions everywhere (Analyze with AI, Create TFS Defect,
+Generate PDF Report, Email Developer, View Evidence, Retest), intranet SMTP settings with send history, dashboard
+figures, the new agents in Agent Workflow and voice commands for the new modules; the installed Arabic voice and speech
+model are detected and kept, never replaced or downloaded. 23.13.3 translates spoken Arabic literally ("open page") and asks a clean question with page buttons. 23.13.2 speaks the AI Agent replies (English or Arabic, page and extension 1.4.2). 23.13.1 adds offline Arabic voice replies (male or female) and the speech model / Arabic voice install helpers. 23.13.0 runs AI-Driven Automation, Application
 Discovery and Hybrid Test Automation in Microsoft Edge when Edge is preferred (no Chromium needed), keeps the element a
 tester picked during self-healing so later runs do not ask again, repairs the AI Agent (lifecycle list, public sites
 without sign-in, changing addresses, one browser for a chat, Arabic commands), the API Testing Open button and its
@@ -34,24 +40,26 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.13.2; 23.13.3 to apply again); any other version is
+  1. detects the installation and its version (23.3.35 to 23.13.3; 23.14.0 to apply again); any other version is
      refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.13.3), patches that copy and writes START_SKYGUARD_23.13.3.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.14.0), patches that copy and writes START_SKYGUARD_23.14.0.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
-     backup) and settings.json,
+     backup) and settings.json, and records the installed voice setup (Faster-Whisper runtime and models, Piper and
+     its Arabic voices, the voice settings) to prove afterwards that none of it was changed,
   6. copies the new files (each written to a temporary name, then renamed),
   7. installs the offline OCR runtime (RapidOCR, ONNX Runtime, OpenCV, NumPy, Pillow: wheels for 64-bit Windows and
      Python 3.13, carried in the patch) into runtime\ocr\site-packages, or into %LOCALAPPDATA%\SkyGuardQA\ocr when
      the application folder cannot be written. The wheels are unpacked into a staging folder first; the folder in use
      is replaced only when the staging folder is complete, and the previous runtime is kept for rollback. Nothing is
      installed into the system Python and no registry key or PATH is changed,
-  8. migrates: the main database is brought to 22 migrations (23.13.0 adds migration 22: defect_drafts.assigned_to;
+  8. migrates: the main database is brought to 23 migrations (23.14.0 adds migration 23: itest_targets, itest_runs,
+     itest_results, itest_cases, itest_audit, sec_findings, sec_app_maps, ai_analyses and email_outbox; 23.13.0 adds migration 22: defect_drafts.assigned_to;
      the accounts table gets email and tfs_project when the application starts; 23.12.0 adds migration 21: the API Testing tables
      api_apps, api_tests, api_test_versions, api_suites, api_runs, api_results, api_scripts and api_audit; 23.11.0 adds
      migration 20: review columns on defect_drafts, defect_events, script_python and script_python_state; 23.9.0,
@@ -84,16 +92,16 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.13.3"
+PATCH_VERSION = "23.14.0"
 BASELINE = ("23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, "
-            "23.11.2, 23.12.0, 23.13.0, 23.13.1 or 23.13.2")
+            "23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2 or 23.13.3")
 RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0",
-            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2")
+            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3")
 BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
 AGENT_SCHEMA = 2
-MIGRATION_COUNT = 22
+MIGRATION_COUNT = 23
 MARGIN_MB = 300
 
 
@@ -591,8 +599,122 @@ ok = (to_english('\u0625\u0641\u062a\u0627\u062d\u0629 \u0635\u0641\u062d\u0629'
 print('ok' if ok else '23.13.3 features incomplete')
 """
 
+RELEASE_231400_LOAD = r"""
+from pathlib import Path
+from qa_platform.agents.registry import AGENTS
+from qa_platform.amqtest.jolokia import JolokiaClient
+from qa_platform.fusetest.compare import compare
+from qa_platform.itest.common import ID_RE
+from qa_platform.voice.intents import parse
+from skyguard_agent.translate import to_english
+need = {'vulnerability_assessment', 'fuse_route_discovery', 'broker_discovery', 'ai_bug_analysis', 'email_developer', 'pdf_reporting'}
+web = Path('web/js')
+ok = (need <= {a.id for a in AGENTS}
+      and compare('{"a": 1.0}', '{"a": 1}', rules={'numeric_tolerance': 0.01})['match']
+      and not ID_RE.match('..') and hasattr(JolokiaClient, 'exec_read_only')
+      and parse(to_english('\u0627\u0628\u062f\u0623 \u0641\u062d\u0635 \u0623\u0645\u0646\u064a')[0]).params['route'] == 'sec-scanning'
+      and all((web / f).is_file() for f in ('result-actions.js', 'pages/security.js', 'pages/integration-testing.js', 'pages/itest-ui.js'))
+      and 'sec-assessment' in (web / 'app.js').read_text(encoding='utf-8'))
+print('ok' if ok else '23.14.0 features incomplete')
+"""
 
-def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None) -> dict:
+ITEST_TABLES = {"itest_targets", "itest_runs", "itest_results", "itest_cases", "itest_audit", "sec_findings", "sec_app_maps",
+                "ai_analyses", "email_outbox"}
+VOICE_SECTION_KEYS = ("stt_engine", "stt_api", "language", "fw_model", "fw_port", "fw_compute_type", "radio_voice",
+                      "arabic_voice_gender", "tts_voice", "speak_replies")
+
+
+def voice_inventory(app: Path, data: Path) -> dict:
+    """The installed voice setup, read from the folders and settings.json only (nothing is imported, started or
+    downloaded): Faster-Whisper runtime and models, Piper and its voices, and the voice settings. Used before and after
+    the upgrade to prove the working Arabic voice was kept, and by verify to say what is missing."""
+    homes_fw = [p for p in (app / "runtime" / "faster-whisper", app.parent / "runtime" / "faster-whisper",
+                            data / "faster-whisper") if p.is_dir()]
+    homes_pp = [p for p in (app / "runtime" / "piper", app.parent / "runtime" / "piper", data / "piper") if p.is_dir()]
+    env_fw, env_pp = os.environ.get("QA_FASTER_WHISPER_DIR"), os.environ.get("QA_PIPER_DIR")
+    homes_fw += [Path(env_fw)] if env_fw and Path(env_fw).is_dir() else []
+    homes_pp += [Path(env_pp)] if env_pp and Path(env_pp).is_dir() else []
+
+    def tree_sig(folder: Path) -> str:  # names, sizes and times: cheap, and any replacement changes it
+        h = hashlib.sha256()
+        for f in sorted(folder.rglob("*")):
+            if f.is_file():
+                st = f.stat()
+                h.update(f"{f.relative_to(folder).as_posix()}|{st.st_size}|{int(st.st_mtime)}".encode())
+        return h.hexdigest()[:16]
+
+    models = {}
+    for h in homes_fw:
+        if (h / "models").is_dir():
+            for m in sorted((h / "models").iterdir()):
+                if m.is_dir() and (m / "model.bin").is_file():
+                    models[m.name] = {"path": str(m), "signature": tree_sig(m), "multilingual": not m.name.endswith(".en")}
+    voices = {}
+    piper_exe = None
+    for h in homes_pp:
+        for base in (h, h / "piper"):
+            for n in ("piper.exe", "piper"):
+                if piper_exe is None and (base / n).is_file():
+                    piper_exe = str(base / n)
+        for folder in (h / "voices", h):
+            if folder.is_dir():
+                for onnx in sorted(folder.glob("*.onnx")):
+                    if onnx.with_suffix(".onnx.json").is_file():
+                        voices[onnx.stem] = {"path": str(onnx), "size": onnx.stat().st_size,
+                                             "arabic": onnx.stem.lower().startswith("ar")}
+    try:
+        settings = json.loads((data / "settings.json").read_text(encoding="utf-8")) if (data / "settings.json").is_file() else {}
+    except (OSError, ValueError):
+        settings = {}
+    v = settings.get("voice") or {}
+    section = {k: v.get(k) for k in VOICE_SECTION_KEYS if k in v}
+    fw_runtime = next((str(h) for h in homes_fw if (h / "lib" / "faster_whisper").is_dir()), None)
+    return {"faster_whisper_runtime": fw_runtime, "models": models, "piper": piper_exe, "voices": voices,
+            "settings": section, "settings_signature": hashlib.sha256(json.dumps(v, sort_keys=True).encode()).hexdigest()[:16]}
+
+
+def voice_findings(inv: dict) -> list[tuple[str, str]]:
+    """(status, text) lines for the voice report: what is installed and what is missing (with the helper to run)."""
+    out: list[tuple[str, str]] = []
+    lang = str((inv.get("settings") or {}).get("language") or "en")
+    multi = [m for m, d in inv["models"].items() if d["multilingual"]]
+    out.append(("PASS" if inv["faster_whisper_runtime"] else "WARN", f"Faster-Whisper runtime: {inv['faster_whisper_runtime']}"
+                if inv["faster_whisper_runtime"] else "Faster-Whisper runtime not found (the built-in recognizer is used). "
+                "Run INSTALL_SPEECH_MODEL.cmd with the offline package to add it."))
+    if lang.split("-")[0] in ("ar", "auto"):
+        out.append(("PASS" if multi else "WARN", f"Arabic-capable speech model: {', '.join(multi)}" if multi else
+                    "No Arabic-capable speech model (for example models\\small.ar). Run INSTALL_SPEECH_MODEL.cmd with the "
+                    "offline model folder; nothing is downloaded by this installer."))
+    else:
+        out.append(("PASS", f"Speech models: {', '.join(inv['models']) or 'none'} (speech language {lang})"))
+    ar = [n for n, d in inv["voices"].items() if d["arabic"]]
+    out.append(("PASS" if inv["piper"] and ar else "WARN", f"Offline Arabic voice: {', '.join(ar)} (Piper)" if inv["piper"] and ar
+                else "No offline Arabic voice (Piper with ar_JO-kareem). Windows Arabic voices (Hoda) are used when installed; "
+                "run INSTALL_ARABIC_VOICE.cmd with the offline voice files to add Kareem."))
+    return out
+
+
+def voice_preserved(before: dict, after: dict) -> tuple[bool, str]:
+    changed = []
+    for kind in ("models", "voices"):
+        for name, d in before[kind].items():
+            if name not in after[kind]:
+                changed.append(f"{name} removed")
+            elif d != after[kind][name]:
+                changed.append(f"{name} changed")
+    if before["settings_signature"] != after["settings_signature"]:
+        changed.append("voice settings changed")
+    if before["piper"] and not after["piper"]:
+        changed.append("Piper removed")
+    if before["faster_whisper_runtime"] and not after["faster_whisper_runtime"]:
+        changed.append("Faster-Whisper runtime removed")
+    n = len(before["models"]) + len(before["voices"])
+    return (not changed, f"{n} speech model(s) / voice(s) and the voice settings unchanged" if not changed
+            else "; ".join(changed[:6]))
+
+
+def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None,
+           voice_before: dict | None = None) -> dict:
     report: dict = {"checks": []}
 
     def check(name: str, ok: bool, detail: str) -> None:
@@ -681,6 +803,22 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
     except PatchError as exc:
         check("Arabic commands translated literally, page choices (23.13.3)", False, str(exc))
     try:
+        r140 = run_py(python, app, data, RELEASE_231400_LOAD).splitlines()[-1]
+        check("Security, Fuse, ActiveMQ, result actions, voice (23.14.0)", r140 == "ok", r140)
+    except PatchError as exc:
+        check("Security, Fuse, ActiveMQ, result actions, voice (23.14.0)", False, str(exc))
+    # 23.14.0: the Arabic voice and speech model are detected and reported, never installed or downloaded here
+    inv = voice_inventory(app, data)
+    report["voice"] = inv
+    for status, text in voice_findings(inv):
+        if status == "PASS":
+            check("Voice setup", True, text)
+        else:
+            warn("Voice setup", text)
+    if voice_before is not None:
+        ok, detail = voice_preserved(voice_before, inv)
+        check("Arabic voice kept", ok, detail)
+    try:
         bp = run_py(python, app, data, BROWSER_POLICY_LOAD).splitlines()[-1]
         check("Maximized browser policy", bp == "ok", bp)
     except PatchError as exc:
@@ -737,6 +875,8 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         cmp = {"cmp_projects", "cmp_records", "cmp_audit", "cmp_ws_screens", "cmp_ws_state", "cmp_ws_configs", "cmp_ws_decisions"}
         check("Comparison tables", cmp <= tables, "present" if cmp <= tables else "missing: " + ", ".join(sorted(cmp - tables)))
         check("Login sign-in method column", "auth_method" in cols, "present" if "auth_method" in cols else "missing")
+        check("Security, Fuse and ActiveMQ tables", ITEST_TABLES <= tables,
+              "present" if ITEST_TABLES <= tables else "missing: " + ", ".join(sorted(ITEST_TABLES - tables)))
         if before_counts is not None:
             after = row_counts(db)
             lost = {t: (n, after.get(t, 0)) for t, n in before_counts.items() if after.get(t, 0) < n}
@@ -777,7 +917,7 @@ def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
     step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
-         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2 + 23.13.3)")
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2 + 23.13.3 + 23.14.0)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):
@@ -839,6 +979,8 @@ def apply(args: argparse.Namespace) -> int:
         sqlite_copy(kdb, backup / "knowledge.sqlite3")
     if (data / "settings.json").exists():
         _copy(data / "settings.json", backup / "settings.json")
+    voice_before = voice_inventory(app, data)
+    (backup / "VOICE_BEFORE.json").write_text(json.dumps(voice_before, indent=1), encoding="utf-8")
     info = {"from": before, "to": PATCH_VERSION, "created": stamp, "app": str(app), "data": str(data),
             "replaced": replaced, "added": added, "database": db.exists(), "row_counts": before_counts}
     (backup / "BACKUP.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
@@ -875,7 +1017,7 @@ def apply(args: argparse.Namespace) -> int:
         say(f"Operations Agent knowledge database schema version {kv} ({data / 'opsagent' / 'knowledge.sqlite3'}).")
 
         step("Verifying")
-        report = verify(app, data, python, before_counts)
+        report = verify(app, data, python, before_counts, voice_before)
         if not report["ok"]:
             raise PatchError("verification failed: " + "; ".join(c["name"] for c in report["checks"] if c["status"] == "FAIL"))
     except Exception as exc:  # noqa: BLE001 - every failure rolls back
@@ -910,6 +1052,9 @@ def apply(args: argparse.Namespace) -> int:
     (backup / "VERIFY.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     step("Result")
     say(f"Patched {before} -> {PATCH_VERSION}. Backup for rollback: {backup}")
+    missing = [t for st, t in voice_findings(report.get("voice") or voice_inventory(app, data)) if st != "PASS"]
+    if missing:
+        say("Voice: kept as it was. Not installed (optional, nothing was downloaded):\n  - " + "\n  - ".join(missing))
     return 0
 
 

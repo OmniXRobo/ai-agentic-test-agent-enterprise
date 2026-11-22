@@ -89,7 +89,7 @@ def test_pages_carry_the_branding():
     for css in ("app.css", "hud.css"):  # the voice pages are navy and cyan, not green
         text = (ROOT / "web" / "css" / css).read_text(encoding="utf-8")
         assert "93, 255, 122" not in text and "#5dff7a" not in text
-    wf = (ROOT / "web" / "js" / "pages" / "workflow.js").read_text(encoding="utf-8")
+    wf = (ROOT / "web" / "js" / "pages" / "wf-looks" / "classic.js").read_text(encoding="utf-8")  # 23.14.0: the Classic Squadron look
     assert "wf-hero" in wf and "wf-flight" in wf
 
 
