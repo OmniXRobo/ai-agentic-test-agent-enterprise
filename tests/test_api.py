@@ -14,7 +14,7 @@ def test_agents_endpoint_lists_all_agents_waiting(client):
     data = client.get("/api/agents").json()
     assert len(data["agents"]) == len(AGENTS) == 43  # 23.12.0: six agents added; 23.14.0: nineteen more
     assert {a["status"] for a in data["agents"]} == {"WAITING"}
-    assert len({a["robot"] for a in data["agents"]}) == 24  # every agent has its own robot
+    assert len({a["robot"] for a in data["agents"]}) == 43  # every agent has its own robot (23.14.0: robots.js draws all 43)
 
 
 def test_unknown_api_route_returns_structured_json(client):

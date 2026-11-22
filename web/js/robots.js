@@ -29,6 +29,26 @@ const E = {
   apianalysis: '<circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="#fff" stroke-width="1.6"/><path d="m10 10 5 5" stroke="#fff" stroke-width="2"/><path d="M4.5 6.5h4" stroke="#fff" stroke-width="1.4"/>',
   contract: '<path d="M3 1h7l3 3v11H3z" fill="none" stroke="#fff" stroke-width="1.5"/><path d="m5.5 9 2 2 3.5-4" fill="none" stroke="#fff" stroke-width="1.7"/>',
   scheduler: '<circle cx="8" cy="8" r="6.5" fill="none" stroke="#fff" stroke-width="1.6"/><path d="M8 4v4l3 2" fill="none" stroke="#fff" stroke-width="1.7"/>',
+  // 23.14.0: AURA memory, Security, Fuse, ActiveMQ and the shared result-action agents
+  aura: '<path d="M8 1.5c-3 0-5 2-5 4.5 0 1.6.8 2.6 1.8 3.4V13h6.4V9.4C12.2 8.6 13 7.6 13 6c0-2.5-2-4.5-5-4.5z" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M6 15h4M8 4v5M6 6.5h4" stroke="#fff" stroke-width="1.3"/>',
+  secdiscovery: '<path d="M8 1 14 3.5V8c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V3.5z" fill="none" stroke="#fff" stroke-width="1.5"/><circle cx="7.5" cy="7.5" r="2.4" fill="none" stroke="#fff" stroke-width="1.4"/><path d="m9.3 9.3 2.2 2.2" stroke="#fff" stroke-width="1.6"/>',
+  vulnscan: '<path d="M8 1 14 3.5V8c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V3.5z" fill="#fff"/><path d="M8 4.5v4.5" stroke="#c0262d" stroke-width="2"/><circle cx="8" cy="11.3" r="1.1" fill="#c0262d"/>',
+  authz: '<rect x="3" y="7" width="10" height="8" rx="1.4" fill="#fff"/><path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="#fff" stroke-width="1.7"/><circle cx="8" cy="10.6" r="1.3" fill="rgba(0,0,0,.45)"/>',
+  fuzz: '<path d="M1 8h2l1.5-5 2 10 2-8 1.5 6 1.5-3H15" fill="none" stroke="#fff" stroke-width="1.5"/><circle cx="3" cy="13" r="1" fill="#fff"/><circle cx="13" cy="3" r="1" fill="#fff"/>',
+  validate: '<path d="M8 1 14 3.5V8c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V3.5z" fill="none" stroke="#fff" stroke-width="1.5"/><path d="m5 8 2 2 4-4.5" fill="none" stroke="#fff" stroke-width="1.8"/>',
+  fusediscovery: '<circle cx="3" cy="8" r="2" fill="#fff"/><circle cx="13" cy="3" r="2" fill="#fff"/><circle cx="13" cy="13" r="2" fill="#fff"/><path d="M5 8h3m0 0 3.4-4M8 8l3.4 4" fill="none" stroke="#fff" stroke-width="1.4"/>',
+  fusemap: '<path d="M1 4h5l4 8h5M1 12h5l4-8h5" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M13 2l2 2-2 2M13 10l2 2-2 2" fill="none" stroke="#fff" stroke-width="1.3"/>',
+  fuseexec: '<path d="M1 8h4M11 8h4" stroke="#fff" stroke-width="1.6"/><path d="M6 3v10l6-5z" fill="#fff"/>',
+  fusecompare: '<path d="M2 3h5v10H2zM9 3h5v10H9z" fill="none" stroke="#fff" stroke-width="1.4"/><path d="M4.5 1v14M11.5 1v14" stroke="#fff" stroke-width=".9" opacity=".6"/><path d="M6 8h4" stroke="#fff" stroke-width="1.6"/>',
+  broker: '<rect x="1.5" y="5" width="13" height="6" rx="1.5" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M4 8h1M7 8h1M10 8h1" stroke="#fff" stroke-width="1.8"/><path d="M8 1v4M8 11v4" stroke="#fff" stroke-width="1.3"/>',
+  publish: '<path d="M1.5 3.5h13v9h-13z" fill="none" stroke="#fff" stroke-width="1.4"/><path d="m1.5 3.5 6.5 5 6.5-5" fill="none" stroke="#fff" stroke-width="1.4"/><path d="M12 15V10m-2 2 2-2 2 2" fill="none" stroke="#fff" stroke-width="1.2"/>',
+  consumer: '<path d="M1.5 3.5h13v9h-13z" fill="none" stroke="#fff" stroke-width="1.4"/><path d="m4.5 8 2.5 2.5L11.5 5.5" fill="none" stroke="#fff" stroke-width="1.7"/>',
+  dlq: '<path d="M13 8A5 5 0 1 1 8 3h3" fill="none" stroke="#fff" stroke-width="1.6"/><path d="m10 1 2 2-2 2" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M6 6.5 10 10.5M10 6.5l-4 4" stroke="#fff" stroke-width="1.4"/>',
+  bugai: '<ellipse cx="7" cy="9" rx="3.5" ry="4.5" fill="#fff"/><path d="M7 4.5V3M3.5 7 1 6M3.5 11 1 12" stroke="#fff" stroke-width="1.3"/><path d="M12.5 1.5l.7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7zM13 8l.5 1 1 .5-1 .5-.5 1-.5-1-1-.5 1-.5z" fill="#fff"/>',
+  evidence: '<rect x="1.5" y="3.5" width="13" height="10" rx="1.5" fill="none" stroke="#fff" stroke-width="1.5"/><circle cx="8" cy="8.5" r="2.6" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M5 3.5 6 1.5h4l1 2" fill="none" stroke="#fff" stroke-width="1.3"/>',
+  tfsprep: '<path d="M3 1h7l3 3v11H3z" fill="none" stroke="#fff" stroke-width="1.5"/><ellipse cx="8" cy="9.5" rx="2.2" ry="2.8" fill="#fff"/><path d="M8 6.3v-1M5 8.5h-1M11 8.5h1M5.5 11.5l-1 1M10.5 11.5l1 1" stroke="#fff" stroke-width="1"/>',
+  pdf: '<path d="M3 1h7l3 3v11H3z" fill="#fff"/><path d="M10 1v3h3" fill="none" stroke="rgba(0,0,0,.35)" stroke-width="1"/><path d="M5 9h6M5 11.5h4" stroke="#c0262d" stroke-width="1.4"/>',
+  email: '<rect x="1" y="3" width="14" height="10" rx="1.5" fill="#fff"/><path d="m1.5 3.8 6.5 5 6.5-5" fill="none" stroke="rgba(0,0,0,.4)" stroke-width="1.3"/>',
 };
 
 // type: pilot | drone; hue: squadron colour; visor: gold | cobalt | emerald (pilots only)
@@ -57,6 +77,26 @@ const STYLE = {
   apianalysis:    { type: "drone", hue: 300 },
   contract:       { type: "drone", hue: 55 },
   scheduler:      { type: "drone", hue: 205 },
+  // 23.14.0
+  aura:           { type: "pilot", hue: 170, visor: "cobalt" },
+  secdiscovery:   { type: "drone", hue: 215 },
+  vulnscan:       { type: "drone", hue: 350 },
+  authz:          { type: "pilot", hue: 40,  visor: "gold" },
+  fuzz:           { type: "drone", hue: 20 },
+  validate:       { type: "pilot", hue: 135, visor: "emerald" },
+  fusediscovery:  { type: "drone", hue: 10 },
+  fusemap:        { type: "pilot", hue: 25,  visor: "cobalt" },
+  fuseexec:       { type: "drone", hue: 0 },
+  fusecompare:    { type: "pilot", hue: 340, visor: "gold" },
+  broker:         { type: "drone", hue: 230 },
+  publish:        { type: "pilot", hue: 240, visor: "emerald" },
+  consumer:       { type: "drone", hue: 150 },
+  dlq:            { type: "drone", hue: 280 },
+  bugai:          { type: "pilot", hue: 315, visor: "cobalt" },
+  evidence:       { type: "drone", hue: 195 },
+  tfsprep:        { type: "pilot", hue: 220, visor: "gold" },
+  pdf:            { type: "drone", hue: 5 },
+  email:          { type: "pilot", hue: 200, visor: "emerald" },
 };
 
 const VISOR = {
