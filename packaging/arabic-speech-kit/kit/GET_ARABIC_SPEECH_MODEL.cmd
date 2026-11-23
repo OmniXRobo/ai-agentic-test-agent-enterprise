@@ -13,6 +13,9 @@ if /i not "%MODEL%"=="small" if /i not "%MODEL%"=="medium" (
   if not defined QA_NO_PAUSE pause
   exit /b 2
 )
+rem Started from PowerShell 7, Windows PowerShell would inherit its module path and miss Get-FileHash and the
+rem other built-in cmdlets: let it use its own.
+set "PSModulePath="
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0GET_FASTER_WHISPER_MODEL.ps1" -Model %MODEL%
 set "RC=%ERRORLEVEL%"
 echo.
