@@ -1,11 +1,21 @@
-SkyGuard QA 23.14.0 - final cumulative upgrade from SGQA-23.3.35 (Security Testing, Red Hat Fuse, ActiveMQ)
-=============================================================================================================
+SkyGuard QA 23.14.1 - cumulative upgrade from SGQA-23.3.35 (TFS speed fix on top of 23.14.0)
+===============================================================================================
 
 WHAT THIS IS
   One upgrade that brings any installed SkyGuard QA from 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1,
-  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2 or 23.13.3 to 23.14.0,
-  including every release in between. Any other version is refused and nothing is changed. No internet.
+  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3 or 23.14.0
+  to 23.14.1, including every release in between. Any other version is refused and nothing is changed. No internet.
   Windows 10 (1909 or later) or Windows 11.
+
+  New in 23.14.1 (details: PATCH_CHANGELOG.md, cause: ROOT_CAUSE_ANALYSIS.md):
+  - TFS is fast again on every TFS page for accounts with their own PAT and project: connections are reused, your
+    PAT and project are read once (not on every call), and the same TFS query is never sent twice at the same time.
+  - Dashboard: shows everything at once and never waits more than 8 seconds for TFS; slow TFS figures read
+    "TFS figures loading..." and fill in by themselves.
+  - Connection Test: the same six checks, quicker.
+  - Test design, test data, script generation, voice commands, reports and defect analysis use YOUR PAT and project
+    (they used the administrator's).
+  - All 23.14.0 features, your Arabic voice and speech model are kept exactly as installed.
 
   New in 23.14.0 (details: PATCH_CHANGELOG.md, guides: USER_GUIDE.md):
   - Security Testing menu (8 screens): AI Security Assessment, Application Discovery, Vulnerability Scanning,
@@ -29,7 +39,7 @@ WHAT THIS IS
 
   WHERE IS THE SKYGUARD QA FOLDER? (INSTALL_ARABIC_VOICE.cmd, GET_ARABIC_VOICE.ps1, INSTALL_SPEECH_MODEL.cmd)
     Paste this into the File Explorer address bar:  %LOCALAPPDATA%\Programs\AIAgenticTestAgent\app
-    If Setup made a side-by-side copy:              %LOCALAPPDATA%\SkyGuardQA\app-23.14.0
+    If Setup made a side-by-side copy:              %LOCALAPPDATA%\SkyGuardQA\app-23.14.1
     Or right-click the SkyGuard QA shortcut > Open file location.
 
   New in 23.13.3:
@@ -82,18 +92,18 @@ HOW TO INSTALL (5 minutes)
 
 YOUR DATA
   Backed up before anything changes (patch-backups folder in your installation). Never deleted. If any step fails,
-  the previous version is restored automatically. To undo later: patch-tools\23.14.0\ROLLBACK_PATCH.cmd.
+  the previous version is restored automatically. To undo later: patch-tools\23.14.1\ROLLBACK_PATCH.cmd.
   The Arabic voice, the speech models and the voice settings are not touched; Setup verifies they are unchanged.
 
 IN THIS FOLDER
   SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe   the installer (wizard; unattended: /S /APP="<folder>")
   INSTALLATION_GUIDE.md          step by step, unattended install, protected folders, rollback, troubleshooting
-  PATCH_CHANGELOG.md             what is new in 23.14.0
+  PATCH_CHANGELOG.md             what is new in 23.14.1
   USER_GUIDE.md                  Security, Fuse, ActiveMQ, result actions, Email / SMTP step by step
   COMPATIBILITY_MATRIX.md        Fuse, ActiveMQ, ZAP, SMTP, browser and Windows versions: tested or not
   DEPENDENCY_INVENTORY.md        what each feature needs, all offline
   ROOT_CAUSE_ANALYSIS.md         what was found and changed, and why
-  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.14.0) and what each one added
+  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.14.1) and what each one added
   SECURITY_REPORT.md             security checks, controls and residual risks
   sbom.cdx.json                  software bill of materials (CycloneDX 1.5)
   TEST_REPORT.md, test-results\  what was tested, passed, failed, skipped or not executed

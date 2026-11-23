@@ -1,5 +1,8 @@
-r"""SkyGuard QA 23.14.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
-23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2 and 23.13.3). 23.14.0 adds Security
+r"""SkyGuard QA 23.14.1 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3 and 23.14.0). 23.14.1 makes TFS
+fast again with personal PATs and projects (connections reused, one credential lookup instead of one per call, shared
+queries, a Dashboard that never waits forever for TFS, a quicker Connection Test) and keeps the signed-in person's PAT and
+project in background work. 23.14.0 adds Security
 Testing (eight screens, OWASP checks, read-only discovery, offline OWASP ZAP integration, bounded fuzzing), Red Hat Fuse
 Integration Testing (Karaf / Spring Boot / EAP through Jolokia or actuator, or black box; read-only), ActiveMQ Classic and
 Artemis testing (test destinations only), the same result actions everywhere (Analyze with AI, Create TFS Defect,
@@ -40,13 +43,13 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.13.3; 23.14.0 to apply again); any other version is
+  1. detects the installation and its version (23.3.35 to 23.14.0; 23.14.1 to apply again); any other version is
      refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.14.0), patches that copy and writes START_SKYGUARD_23.14.0.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.14.1), patches that copy and writes START_SKYGUARD_23.14.1.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
@@ -92,11 +95,11 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.14.0"
+PATCH_VERSION = "23.14.1"
 BASELINE = ("23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, "
-            "23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2 or 23.13.3")
+            "23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3 or 23.14.0")
 RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0",
-            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3")
+            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3", "23.14.0")
 BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
@@ -618,6 +621,19 @@ ok = (need <= {a.id for a in AGENTS}
 print('ok' if ok else '23.14.0 features incomplete')
 """
 
+RELEASE_231401_LOAD = r"""
+from qa_platform.auth import carry_user
+from qa_platform.reports.analytics import DASHBOARD_TFS_BUDGET
+from qa_platform.tfs.client import tls_context
+from qa_platform.tfs.service import TfsService, TTLCache
+from pathlib import Path
+ok = (callable(carry_user) and DASHBOARD_TFS_BUDGET > 0 and hasattr(TfsService, 'shared_client')
+      and hasattr(TfsService, '_shared_pat') and '_flights' in TTLCache(1).__dict__
+      and tls_context() is tls_context()
+      and 'pendingTries' in Path('web/js/pages/dashboard.js').read_text(encoding='utf-8'))
+print('ok' if ok else '23.14.1 TFS speed fixes incomplete')
+"""
+
 ITEST_TABLES = {"itest_targets", "itest_runs", "itest_results", "itest_cases", "itest_audit", "sec_findings", "sec_app_maps",
                 "ai_analyses", "email_outbox"}
 VOICE_SECTION_KEYS = ("stt_engine", "stt_api", "language", "fw_model", "fw_port", "fw_compute_type", "radio_voice",
@@ -807,6 +823,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("Security, Fuse, ActiveMQ, result actions, voice (23.14.0)", r140 == "ok", r140)
     except PatchError as exc:
         check("Security, Fuse, ActiveMQ, result actions, voice (23.14.0)", False, str(exc))
+    try:
+        r141 = run_py(python, app, data, RELEASE_231401_LOAD).splitlines()[-1]
+        check("TFS speed and personal PAT / project in background work (23.14.1)", r141 == "ok", r141)
+    except PatchError as exc:
+        check("TFS speed and personal PAT / project in background work (23.14.1)", False, str(exc))
     # 23.14.0: the Arabic voice and speech model are detected and reported, never installed or downloaded here
     inv = voice_inventory(app, data)
     report["voice"] = inv
@@ -917,7 +938,7 @@ def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
     step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
-         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2 + 23.13.3 + 23.14.0)")
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2 + 23.13.3 + 23.14.0 + 23.14.1)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):

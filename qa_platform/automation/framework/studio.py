@@ -26,6 +26,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ...auth import carry_user
 from ...agents.base import new_run_id
 from ...ai.gateway import AIGateway
 from ...clock import now_iso
@@ -207,7 +208,7 @@ class ScriptStudio:
             finally:
                 self._stops.pop(job_id, None)
 
-        threading.Thread(target=work, name=job_id, daemon=True).start()
+        threading.Thread(target=carry_user(work), name=job_id, daemon=True).start()  # 23.14.1
         return job_id
 
     def _resolve(self, job_id: str, req: JobRequest) -> list[dict[str, Any]]:
@@ -1411,7 +1412,7 @@ class ScriptStudio:
                         (run_id, now_iso(), script_id))
         if not background:
             return work()
-        threading.Thread(target=self._safe(work, run_id), name=run_id, daemon=True).start()
+        threading.Thread(target=carry_user(self._safe(work, run_id)), name=run_id, daemon=True).start()  # 23.14.1
         return run_id
 
     def run_many(self, script_ids: list[str], *, headless: bool | None = None) -> list[dict[str, Any]]:
@@ -1548,7 +1549,7 @@ class ScriptStudio:
                            if p and isinstance(p, str)],
             "test_case_id": rec["test_case_id"], "user_story_id": rec["user_story_id"],
         }
-        threading.Thread(target=self._safe(lambda: self.defects.record_draft(draft), result["run_id"]),
+        threading.Thread(target=carry_user(self._safe(lambda: self.defects.record_draft(draft), result["run_id"])),
                          daemon=True).start()
 
     def apply_healing(self, healing_id: int) -> dict[str, Any]:

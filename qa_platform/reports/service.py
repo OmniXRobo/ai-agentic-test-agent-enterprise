@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from ..auth import carry_user
 from .. import branding
 from ..agents.base import BaseAgent
 from ..clock import now, now_iso, parse_iso
@@ -142,7 +143,8 @@ class ReportService:
         self.db.execute("INSERT INTO reports (id, title, scope, params, status, created_at) VALUES (?,?,?,?,?,?)",
                         (report_id, title, scope, dumps(params), "running", now_iso()))
         if background:
-            threading.Thread(target=self._generate, args=(report_id, title, params), name=report_id, daemon=True).start()
+            threading.Thread(target=carry_user(self._generate), args=(report_id, title, params), name=report_id,
+                             daemon=True).start()  # 23.14.1
         else:
             self._generate(report_id, title, params)
         return self.get(report_id)
@@ -290,7 +292,7 @@ class ReportService:
             finally:
                 self._report_threads.discard(threading.current_thread())
 
-        t = threading.Thread(target=work, name=f"report-{run_id}", daemon=True)
+        t = threading.Thread(target=carry_user(work), name=f"report-{run_id}", daemon=True)  # 23.14.1
         self._report_threads.add(t)
         t.start()
 

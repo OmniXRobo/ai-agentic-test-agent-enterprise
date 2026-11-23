@@ -36,6 +36,7 @@ from typing import Any, Callable, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..auth import carry_user
 from ..agents.base import BaseAgent, new_run_id
 from ..ai.gateway import AIGateway
 from ..automation.service import AutomationService
@@ -676,7 +677,7 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
                             say, details={**base, "speak": line, "say": say, "navigate": navigate, "owner": outcome.owner,
                                           "result": status})
 
-        threading.Thread(target=work, name=f"voice-{command_id}", daemon=True).start()
+        threading.Thread(target=carry_user(work), name=f"voice-{command_id}", daemon=True).start()  # 23.14.1
 
     def _purge_transcripts(self) -> None:
         """Delete voice history older than the retention set in Voice Settings (0 = keep). At most once a minute."""
@@ -1109,7 +1110,7 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
                 except QAError as exc:
                     out["error"] = exc
 
-            t = threading.Thread(target=run, name=f"voice-perf-{run_id}", daemon=True)
+            t = threading.Thread(target=carry_user(run), name=f"voice-perf-{run_id}", daemon=True)  # 23.14.1
             t.start()
             deadline = time.monotonic() + 60
             while t.is_alive() and run_id not in self.performance.running() and time.monotonic() < deadline:

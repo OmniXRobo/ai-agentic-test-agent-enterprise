@@ -121,7 +121,8 @@ def test_dashboard_kpis_from_tfs(tclient):
     _configure(tclient)
     tfs = tclient.get("/api/dashboard/summary").json()["tfs"]
     assert tfs["connected"] is True
-    assert tfs["kpis"] == {"requirement": 1, "testcase": 1, "open_defects": 1}
+    # 23.14.1: the total number of defects comes with the counts (the Dashboard asked for it separately)
+    assert tfs["kpis"] == {"requirement": 1, "testcase": 1, "open_defects": 1, "defects_total": 1}
 
 
 def test_requests_are_cached(tclient, ado):

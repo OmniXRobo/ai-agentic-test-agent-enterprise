@@ -248,6 +248,17 @@ def dashboard_summary(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 def _tfs_kpis(rt: Runtime) -> dict[str, Any]:
     profile = rt.tfs.profile()
     base = {"mode": profile["mode"], "label": profile["label"], "project": profile["project"]}
+    analytics = getattr(rt, "analytics", None)
+    if analytics is not None:
+        # 23.14.1: the same (shared, cached) TFS counts as the analytics summary, within the Dashboard's time budget
+        from ..reports.analytics import DASHBOARD_TFS_BUDGET
+
+        counts = analytics.tfs_counts(DASHBOARD_TFS_BUDGET)
+        if counts.get("connected"):
+            return {**base, "connected": True, "kpis": {k: v for k, v in counts.items() if k != "connected"}}
+        return {**base, "connected": False, "pending": bool(counts.get("pending")),
+                "error_code": "TFS_PENDING" if counts.get("pending") else counts.get("error_code") or "TFS_UNAVAILABLE",
+                "reason": counts.get("reason") or "TFS figures could not be loaded."}
     try:
         return {**base, "connected": True, "kpis": rt.tfs.kpis()}
     except QAError as exc:
