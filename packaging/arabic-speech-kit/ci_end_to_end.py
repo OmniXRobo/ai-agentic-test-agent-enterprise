@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, os.getcwd())
+os.environ.setdefault("QA_EXTRA_HOSTS", "testserver")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -40,10 +41,11 @@ def plain(text: str) -> str:
 
 
 def main() -> int:
+    sys.stdout.reconfigure(encoding="utf-8")  # Arabic text in the log (the console is cp1252)
     paths = Paths(Path(os.environ["QA_HOME"])).ensure()
     app = create_app(paths, secret_backend=MemoryBackend())
     failures: list[str] = []
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1:8765") as c:  # the dashboard's own address
         rt = c.app.state.runtime
         started = time.monotonic()
         rt.voice.fw.ensure_ready(timeout=300)
