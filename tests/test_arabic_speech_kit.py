@@ -12,6 +12,7 @@ import json
 import socket
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,7 +66,7 @@ def test_switches_to_the_multilingual_model_and_english_plus_arabic(tmp_path, ca
     assert helper.main(["--app", str(app), "--model", "small"]) == 0
     new = json.loads(sfile.read_text(encoding="utf-8"))
     assert new["voice"] == {**old["voice"], "stt_engine": "local", "stt_api": "faster_whisper", "fw_model": "small",
-                            "language": "auto"}
+                            "language": "auto", "stt_url": "http://127.0.0.1:8766"}
     assert new["server"] == old["server"] and new["ui"] == old["ui"]  # nothing else touched
     backups = list(sfile.parent.glob("settings.before-arabic-speech-*.json"))
     assert len(backups) == 1 and json.loads(backups[0].read_text(encoding="utf-8")) == old
@@ -78,7 +79,8 @@ def test_arabic_only_and_medium_and_a_portable_copy_without_settings(tmp_path):
     assert not sfile.exists()
     assert helper.main(["--app", str(app), "--model", "medium", "--language", "ar"]) == 0
     v = json.loads(sfile.read_text(encoding="utf-8"))["voice"]
-    assert v == {"stt_engine": "local", "stt_api": "faster_whisper", "fw_model": "medium", "language": "ar"}
+    assert v == {"stt_engine": "local", "stt_api": "faster_whisper", "fw_model": "medium", "language": "ar",
+                 "stt_url": "http://127.0.0.1:8766"}
     assert sfile.parent == app / "data"
 
 
@@ -131,7 +133,10 @@ def test_the_app_picks_the_installed_multilingual_model_for_these_settings(tmp_p
     monkeypatch.setenv("QA_FASTER_WHISPER_DIR", str(home))
     app, sfile = app_folder(tmp_path, settings={"voice": {"stt_engine": "builtin", "fw_model": "small.en"}})
     assert helper.main(["--app", str(app), "--model", "small", "--no-running-check"]) == 0
-    fw = FasterWhisperService(Settings(sfile))
+    settings = Settings(sfile)
+    fw = FasterWhisperService(settings)
+    from qa_platform.voice.service import VoiceService
+    assert VoiceService.config(SimpleNamespace(settings=settings))["stt_engine"] == "local"  # not read as built-in
     assert fw.selected() and fw.config()["language"] == "auto" and fw.model_dir().name == "small"
 
 

@@ -45,15 +45,19 @@ def main() -> int:
     failures: list[str] = []
     with TestClient(app) as c:
         rt = c.app.state.runtime
-        cfg = rt.voice.config()
-        print("voice settings:", {k: cfg.get(k) for k in ("stt_engine", "stt_api", "fw_model", "language")})
         started = time.monotonic()
         rt.voice.fw.ensure_ready(timeout=300)
+        cfg = rt.voice.config()
+        print("voice settings:", {k: cfg.get(k) for k in ("stt_engine", "stt_api", "stt_url", "fw_model", "language")},
+              flush=True)
+        if cfg.get("stt_engine") != "local" or cfg.get("language") != "auto":
+            failures.append(f"voice settings are not Faster-Whisper with English and Arabic: {cfg}")
         st = c.get("/api/voice/faster-whisper").json()
-        print(f"Faster-Whisper {st['state']}: model {st['model']} (installed {st['models']}), "
-              f"ready in {time.monotonic() - started:.0f} s")
-        if st["model"] not in ("small", "medium"):
-            failures.append(f"the service runs model {st['model']}, not the kit's multilingual model")
+        print(st, flush=True)
+        print(f"Faster-Whisper {st.get('state')}: model {st.get('model')} (installed {st.get('models')}), "
+              f"ready in {time.monotonic() - started:.0f} s", flush=True)
+        if st.get("model") not in ("small", "medium"):
+            failures.append(f"the service runs model {st.get('model')}, not the kit's multilingual model")
 
         def hear(phrase: str) -> str:
             wav = rt.voice.system_voice.render(phrase)

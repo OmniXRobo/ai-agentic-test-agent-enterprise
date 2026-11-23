@@ -4,6 +4,7 @@
 
 Changes only the voice section of settings.json, and keeps a copy of the file first:
   stt_engine = local, stt_api = faster_whisper   when Faster-Whisper is installed (runtime\\faster-whisper\\lib)
+  stt_url    = http://127.0.0.1:<fw_port>         when it has no address yet
   fw_model   = <model>                           the multilingual model just installed (small or medium)
   language   = auto | ar                         auto = English and Arabic, the model detects which one is spoken
 
@@ -80,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
     before = {k: voice.get(k) for k in keys}
     if fw_installed(app):
         voice["stt_engine"], voice["stt_api"] = "local", "faster_whisper"
+        if not str(voice.get("stt_url") or "").strip():
+            # SkyGuard QA reads "local" without an address as the built-in recognizer; this is the address its
+            # Faster-Whisper service uses (it corrects it itself if that port is taken)
+            voice["stt_url"] = f"http://127.0.0.1:{int(voice.get('fw_port') or 8766)}"
     else:
         print("Faster-Whisper itself is not installed in runtime\\faster-whisper\\lib, so the speech recognizer is not "
               "changed; Arabic speech is understood once Faster-Whisper is installed (the 23.3.7 patch or the full "
