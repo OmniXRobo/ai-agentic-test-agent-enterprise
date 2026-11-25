@@ -206,3 +206,64 @@ def test_test_cases_page_end_to_end_with_a_model_that_ignores_the_format(env):  
     assert cases and cases[0]["steps"][1]["expected"] == "The Products page opens."
     sent = [b for b in llm.calls if "suite-aware test case designer" in b["messages"][0]["content"]]
     assert sent and all(b["response_format"].get("schema") for b in sent)
+
+
+# ---- speed (same quality rules, fewer and shorter AI answers) -------------------------------------------------
+
+
+def test_grammar_only_allows_this_calls_criteria_and_at_least_two_steps():
+    crit = [{"id": "AC-01", "text": "x"}, {"id": "AC-02", "text": "y"}]
+    analysis = sc.decompose([{**c, "hash": "1"} for c in crit])
+    g = sc.SuiteCaseService._grammar(crit, analysis, {"key": "functional"}, 4)
+    case = g["$defs"]["SuiteTestCase"]
+    assert case["properties"]["ac_ids"]["items"]["enum"] == ["AC-01", "AC-02"] and "ac_ids" in case["required"]
+    assert case["properties"]["ac_ids"]["minItems"] == 1
+    assert set(case["properties"]["condition_ids"]["items"]["enum"]) == {x.id for a in analysis.criteria
+                                                                          for x in a.conditions}
+    assert case["properties"]["steps"]["minItems"] == 2
+    assert g["$defs"]["TestStep"]["properties"]["action"]["maxLength"] == 240
+    assert case["properties"]["title"]["maxLength"] == 140
+    perf = sc.SuiteCaseService._grammar(crit, analysis, {"key": "performance"}, 1)
+    assert perf["$defs"]["SuiteTestCase"]["properties"]["steps"]["minItems"] == 1
+
+
+def _good(ref, ac="AC-01"):
+    return {"ref": ref, "title": f"Add item {ref}", "ac_ids": [ac], "condition_ids": [f"{ac}.1", f"{ac}.2"],
+            "steps": [{"action": "Click the 'Blue T-shirt' product on the Home page.", "expected": "The product page opens."},
+                      {"action": "Click the Add to cart button.", "expected": "The cart badge shows 1."}]}
+
+
+def test_review_sends_only_the_flagged_case_and_keeps_the_correct_one_as_written():
+    vague = _good("TC2")
+    vague["steps"][1]["expected"] = "works correctly"
+    fixed = _good("TC2")
+    fixed["steps"][1]["expected"] = "The cart badge shows 1 and the cart lists 'Blue T-shirt'."
+    calls = []
+
+    def handler(req):
+        if not req.url.path.endswith("/chat/completions"):
+            return httpx.Response(404)
+        body = json.loads(req.content)
+        calls.append(body)
+        if "test case reviewer" in body["messages"][0]["content"]:
+            return reply(json.dumps({"test_cases": [fixed]}))
+        return reply(json.dumps({"test_cases": [_good("TC1"), vague]}))
+
+    svc = service(handler)
+    result = svc.generate_story(1554, {"testing_type": "functional"}, run_id="X", act=Act(), cases_per_criterion=2)
+    review = [b for b in calls if "test case reviewer" in b["messages"][0]["content"]]
+    assert len(review) == 1
+    sent = json.loads(review[0]["messages"][1]["content"].split("Test cases:\n", 1)[1].split("\n\nIssues:", 1)[0])
+    assert [c["ref"] for c in sent["test_cases"]] == ["TC2"]  # the correct case is not sent again
+    assert review[0]["response_format"]["schema"]["properties"]["test_cases"]["maxItems"] == 1
+    steps = [[s["expected"] for s in tc["steps"]] for tc in result["test_cases"]]
+    assert steps == [["The product page opens.", "The cart badge shows 1."],
+                     ["The product page opens.", "The cart badge shows 1 and the cart lists 'Blue T-shirt'."]]
+    assert result["refined"] is True
+
+
+def test_no_review_call_when_every_rule_passes():
+    calls = []
+    svc = service(chat_only([json.dumps({"test_cases": [_good("TC1"), _good("TC2")]})], calls))
+    result = svc.generate_story(1554, {"testing_type": "functional"}, run_id="X", act=Act(), cases_per_criterion=2)
+    assert len(calls) == 1 and len(result["test_cases"]) == 2 and result["refined"] is False

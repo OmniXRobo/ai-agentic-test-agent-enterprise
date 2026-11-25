@@ -128,9 +128,22 @@ def _cut(text: str, limit: int) -> str:
 _LIST_CAPS = {"ac_ids": 4, "condition_ids": 8, "dependencies": 3, "test_data": 6, "gaps": 3, "steps": 8}
 
 
-def case_set_schema(budget: int) -> dict[str, Any]:
-    """The SuiteCaseSet JSON schema for the AI server's grammar, with at most ``budget`` test cases and short lists,
-    so a local model writes a compact answer and stops (the Pydantic model itself is not capped)."""
+# Longest text the grammar lets the model write in each field (characters). The prompt already asks for compact
+# cases; the limits stop a small model that rambles, which on a CPU costs seconds per sentence. Room is left for
+# concrete actions and observable results, so the quality rules (named page/field/button, exact values) still fit.
+_TEXT_CAPS = {"title": 140, "objective": 200, "risk_rationale": 120, "automation_reason": 120, "ref": 12}
+_STEP_TEXT = 240
+_ITEM_TEXT = {"test_data": 100, "gaps": 200, "dependencies": 120}
+
+
+def case_set_schema(budget: int, ac_ids: list[str] | None = None, condition_ids: list[str] | None = None,
+                    min_steps: int = 1) -> dict[str, Any]:
+    """The SuiteCaseSet JSON schema for the AI server's grammar, with at most ``budget`` test cases, short lists and
+    short texts, so a local model writes a compact answer and stops (the Pydantic model itself is not capped).
+
+    23.15.1 speed: with ``ac_ids`` / ``condition_ids`` the model can only link the criteria and conditions of this
+    call, at least one criterion per case, and with ``min_steps`` = 2 no one-step summary case. These were the
+    rule errors that made a second (review) call necessary, as slow as the first one on a local model."""
     schema = json.loads(json.dumps(models.SuiteCaseSet.model_json_schema()))
 
     def strip(obj: Any) -> Any:
@@ -146,11 +159,42 @@ def case_set_schema(budget: int) -> dict[str, Any]:
     props["not_applicable"]["maxItems"] = 4
     props["clarifications"]["maxItems"] = 4
     schema["required"] = ["test_cases"]
-    case = schema.get("$defs", {}).get("SuiteTestCase", {})
+    defs = schema.get("$defs", {})
+    case = defs.get("SuiteTestCase", {}).get("properties", {})
     for name, cap in _LIST_CAPS.items():
-        prop = case.get("properties", {}).get(name)
+        prop = case.get(name)
         if isinstance(prop, dict) and prop.get("type") == "array":
             prop["maxItems"] = cap
+            if isinstance(prop.get("items"), dict) and prop["items"].get("type") == "string" and name in _ITEM_TEXT:
+                prop["items"]["maxLength"] = _ITEM_TEXT[name]
+    for name, cap in _TEXT_CAPS.items():
+        prop = case.get(name)
+        if isinstance(prop, dict) and prop.get("type") == "string":
+            prop["maxLength"] = cap
+        elif isinstance(prop, dict):
+            for alt in prop.get("anyOf", []):
+                if alt.get("type") == "string":
+                    alt["maxLength"] = cap
+    for alt in (case.get("preconditions") or {}).get("anyOf", []):
+        if alt.get("type") == "string":
+            alt["maxLength"] = 300
+    for field in ("action", "expected"):
+        prop = defs.get("TestStep", {}).get("properties", {}).get(field)
+        if isinstance(prop, dict):
+            prop["maxLength"] = _STEP_TEXT
+    if ac_ids:
+        case["ac_ids"] = {"type": "array", "items": {"enum": list(dict.fromkeys(ac_ids))}, "minItems": 1,
+                          "maxItems": _LIST_CAPS["ac_ids"]}
+        defs["SuiteTestCase"]["required"] = list(dict.fromkeys([*defs["SuiteTestCase"].get("required", []), "ac_ids"]))
+        for key in ("not_applicable",):
+            item = defs.get("NotApplicable", {}).get("properties", {})
+            if "ac_id" in item:
+                item["ac_id"] = {"enum": list(dict.fromkeys(ac_ids))}
+    if condition_ids:
+        case["condition_ids"] = {"type": "array", "items": {"enum": list(dict.fromkeys(condition_ids))},
+                                 "maxItems": _LIST_CAPS["condition_ids"]}
+    if min_steps > 1 and isinstance(case.get("steps"), dict):
+        case["steps"]["minItems"] = min_steps
     return schema
 
 
@@ -913,15 +957,25 @@ class SuiteCaseService:
         ctx += f"\n\nGenerate at most {budget} test cases."
         return self._ask(CASES_PROMPT.format(type=ttype["name"], focus=ttype["focus"],
                                              max_cases="the number given at the end of the request"),
-                         ctx, budget, max_tokens=min(max(1400 * len(crit), 600 + _CASE_TOKENS * budget), 4096)), ctx
+                         ctx, budget, max_tokens=min(max(1400 * len(crit), 600 + _CASE_TOKENS * budget), 4096),
+                         grammar=self._grammar(crit, analysis, ttype, budget)), ctx
 
-    def _ask(self, system: str, user: str, budget: int, *, max_tokens: int) -> models.SuiteCaseSet:
+    @staticmethod
+    def _grammar(crit: list[dict[str, Any]], analysis: models.SuiteAnalysis, ttype: dict[str, Any],
+                 budget: int) -> dict[str, Any]:
+        """The answer schema of one call: only the criterion and condition ids of these criteria."""
+        ids = [c["id"] for c in crit]
+        conds = [x.id for a in analysis.criteria if a.ac_id in ids for x in a.conditions]
+        return case_set_schema(budget, ids, conds, min_steps=1 if ttype["key"] == "performance" else 2)
+
+    def _ask(self, system: str, user: str, budget: int, *, max_tokens: int, grammar: dict[str, Any] | None = None
+             ) -> models.SuiteCaseSet:
         """23.15.1: one test case call the way the AI Test Design page makes it: the JSON schema is sent to the AI
         server as a grammar (llama-server), and the answer is read leniently (JSON repair, common shapes, each case
         on its own, the complete cases of an answer that was cut off). One more call, from the start, when nothing
         usable came back; only then the call fails."""
         schema = json.dumps(_compact_schema(models.SuiteCaseSet.model_json_schema()), separators=(",", ":"))
-        grammar = case_set_schema(budget)
+        grammar = grammar or case_set_schema(budget)
         messages = [{"role": "system", "content": f"{system}\n\nReply with one JSON object only (no prose, no "
                      f"markdown), matching this JSON schema; each step is an object with action and expected:\n{schema}"},
                     {"role": "user", "content": user}]
@@ -960,11 +1014,13 @@ class SuiteCaseService:
                       status=502, details=("; ".join(problems) + " | answer: " + reply[:300])[:500])
 
     def _review_chunk(self, ctx: str, case_set: models.SuiteCaseSet, issues: list[str],
-                      ttype: dict[str, Any]) -> models.SuiteCaseSet:
+                      ttype: dict[str, Any], grammar: dict[str, Any] | None = None, budget: int | None = None
+                      ) -> models.SuiteCaseSet:
+        n = budget or max(1, len(case_set.test_cases))
         return self._ask(
             REVIEW_PROMPT.format(type=ttype["name"]),
-            ctx + "\n\nTest cases:\n" + case_set.model_dump_json() + "\n\nIssues:\n" + "\n".join(issues),
-            max(1, len(case_set.test_cases)), max_tokens=min(1400 * max(1, len(case_set.test_cases)), 4096))
+            ctx + "\n\nTest cases:\n" + case_set.model_dump_json(exclude_none=True) + "\n\nIssues:\n"
+            + "\n".join(issues), n, max_tokens=min(1400 * n, 4096), grammar=grammar)
 
     def _chunk(self, story_id: Any, data: dict[str, Any], crit: list[dict[str, Any]], analysis: models.SuiteAnalysis,
                ttype: dict[str, Any], per_ac: int, act: Any, label: str,
@@ -986,15 +1042,37 @@ class SuiteCaseService:
         issues += gaps
         if not issues or not (thorough or gaps or any(i["level"] == "error" or i["rule"] in _REVIEW_RULES for i in found)):
             return case_set, False
-        act.progress(None, f"US{story_id}: reviewing {label} ({len(issues)} issues found by the rules)")
+        # 23.15.1 speed: only the cases the rules flagged go to the reviewer (plus room for cases that cover what is
+        # missing); the cases that passed every rule are kept as written. The answer, and so the wait on a local
+        # model, is as long as the flagged part only, and correct cases are never rewritten for the worse.
+        reviewed = thorough or bool(gaps) or any(i["level"] == "error" or i["rule"] in _REVIEW_RULES for i in found)
+        flagged = {ref for ref, lst in check["per_case"].items()
+                   if any(i["level"] == "error" or i["rule"] in _REVIEW_RULES or (thorough and i["level"] == "warning")
+                          for i in lst)}
+        keep = [c for c in case_set.test_cases if c.ref not in flagged]
+        send = [c for c in case_set.test_cases if c.ref in flagged]
+        room = budget - len(keep)
+        if not reviewed or room <= 0 or (not send and not gaps):
+            keep, send, room = [], list(case_set.test_cases), budget
+        part = case_set.model_copy(update={"test_cases": send})
+        part_issues = [i for i in issues if not any(i.startswith(f"{c.ref}: ") for c in keep)]
+        act.progress(None, f"US{story_id}: reviewing {label} ({len(part_issues)} issues found by the rules"
+                     + (f"; {len(keep)} correct cases kept as written" if keep else "") + ")")
         try:
-            refined = self._review_chunk(ctx, case_set, issues, ttype)
+            refined = self._review_chunk(ctx, part, part_issues, ttype,
+                                         grammar=self._grammar(crit, analysis, ttype, room), budget=room)
         except QAError as exc:
             log.info(f"Refinement skipped: {exc.message}", extra={"operation": "design.suite_cases"})
             return case_set, False
-        if not refined.test_cases and case_set.test_cases:
+        if not refined.test_cases and send:
             return case_set, False
-        refined.test_cases = refined.test_cases[:budget]
+        # The reviewed cases take the places of the cases they replace, in the original order; new cases follow.
+        fixed = iter(refined.test_cases[:room])
+        merged = [c if c.ref not in flagged or not keep else next(fixed, None) for c in case_set.test_cases] if keep \
+            else []
+        refined.test_cases = ([c for c in merged if c is not None] + list(fixed))[:budget]
+        refined.not_applicable = refined.not_applicable or case_set.not_applicable
+        refined.clarifications = refined.clarifications or case_set.clarifications
         if validate(refined.model_copy(deep=True), crit, sub, ttype, data["existing"])["errors"] > check["errors"]:
             return case_set, False
         return refined, True
