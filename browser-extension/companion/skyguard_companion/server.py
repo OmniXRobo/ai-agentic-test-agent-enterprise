@@ -810,7 +810,34 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
         def log_message(self, fmt: str, *args: Any) -> None:  # path only, never bodies or headers
             log.info("%s %s", self.command, urlsplit(self.path).path)
 
+        def _discard_body(self) -> None:
+            """Read and drop a request body nothing has read yet, before the answer is sent.
+
+            A request refused before its body was read (rate limit, unknown route, wrong origin, a refused device)
+            left the body in the socket: the next request on the kept-alive connection was parsed from it, and on
+            Windows the client could see the connection aborted (WinError 10053) instead of the answer. Bodies up to
+            DRAIN_LIMIT are read; a larger one closes the connection after the answer.
+            """
+            if getattr(self, "_body_done", True):
+                return
+            self._body_done = True
+            try:
+                left = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                left = 0
+                self.close_connection = True
+            if left > DRAIN_LIMIT:
+                self.close_connection = True
+                return
+            while left > 0:
+                chunk = self.rfile.read(min(65536, left))
+                if not chunk:
+                    self.close_connection = True
+                    break
+                left -= len(chunk)
+
         def _send(self, status: int, payload: dict[str, Any], origin: str | None = None) -> None:
+            self._discard_body()
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -858,6 +885,7 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
         def _dispatch(self, method: str) -> None:
             url = urlsplit(self.path)
             origin = None
+            self._body_done = False  # 23.15.0: see _discard_body
             try:
                 check_host(self.headers.get("Host"), port)
                 if method == "GET" and url.path == "/health":  # installer and prerequisite checker; nothing private
@@ -883,6 +911,7 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
                     # client is still sending makes Windows abort the connection (WinError 10053) instead of
                     # delivering the 413. Nothing beyond DRAIN_LIMIT is read.
                     self.close_connection = True
+                    self._body_done = True
                     left = min(length, DRAIN_LIMIT)
                     while left > 0:
                         chunk = self.rfile.read(min(65536, left))
@@ -891,6 +920,7 @@ def make_handler(c: Companion) -> type[BaseHTTPRequestHandler]:
                         left -= len(chunk)
                     raise Refused(413, "TOO_LARGE", "The request is too large.")
                 raw = self.rfile.read(length) if length else b""
+                self._body_done = True
                 ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
                 body: Any = None
                 if method in ("POST", "PUT", "PATCH") and not url.path.endswith("/voice/transcribe"):
