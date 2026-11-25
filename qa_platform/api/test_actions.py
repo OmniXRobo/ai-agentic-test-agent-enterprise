@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..errors import QAError
 from ..runtime import Runtime
@@ -39,10 +39,33 @@ def store(rt: Runtime = Depends(runtime)) -> Any:
 
 
 class DefectIn(BaseModel):
+    # 23.15.0: the page sends severity as a number (1-4); 23.14.x declared it a string, so pydantic refused every
+    # "Create draft" with "Request validation failed". Numbers and the TFS labels ("2 - High", "high") are accepted.
     title: str | None = Field(default=None, max_length=250)
-    severity: str | None = Field(default=None, max_length=40)
-    priority: int | None = Field(default=None, ge=1, le=4)
+    severity: int | str | None = Field(default=None)
+    priority: int | str | None = Field(default=None)
     repro_steps: str | None = Field(default=None, max_length=60000)
+    repro_text: str | None = Field(default=None, max_length=60000)  # 23.15.0: the readable text the person edited
+    attach: bool = True  # 23.15.0: attach the screenshots and result files to the TFS bug
+    assigned_to: str | None = Field(default=None, max_length=256)
+    send_now: bool = False  # approve and send in one action (needs both permissions; never past the duplicate check)
+
+    @field_validator("severity", "priority", mode="before")
+    @classmethod
+    def _level(cls, v: Any) -> int | None:
+        if v in (None, ""):
+            return None
+        if isinstance(v, bool):
+            raise ValueError("Choose a level from 1 to 4.")
+        if isinstance(v, (int, float)):
+            n = int(v)
+        else:
+            text = str(v).strip().lower()[:40]
+            words = {"critical": 1, "high": 2, "medium": 3, "low": 4, "info": 4}
+            n = int(text[0]) if text[:1].isdigit() else next((x for k, x in words.items() if k in text), 0)
+        if not 1 <= n <= 4:
+            raise ValueError("Choose a level from 1 to 4.")
+        return n
 
 
 class EmailIn(BaseModel):
@@ -90,7 +113,9 @@ def analyses(kind: str, subject_id: str, s: Any = Depends(actions)) -> dict[str,
 
 @router.get("/api/test-actions/{kind}/{subject_id}/defect")
 def defect_preview(kind: str, subject_id: str, s: Any = Depends(actions)) -> dict[str, Any]:
-    return {"ok": True, "preview": s.defect_preview(kind, subject_id)}
+    preview = s.defect_preview(kind, subject_id)
+    preview.pop("_files", None)  # local file paths stay on the server
+    return {"ok": True, "preview": preview}
 
 
 @router.post("/api/test-actions/{kind}/{subject_id}/defect", status_code=201)

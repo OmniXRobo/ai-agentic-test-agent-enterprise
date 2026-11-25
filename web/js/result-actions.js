@@ -12,13 +12,13 @@ const enc = encodeURIComponent;
 const json = (v) => JSON.stringify(v ?? null, null, 2);
 const PASSED = new Set(["PASSED", "COMPLETED", "fixed"]);
 
-export function actionButtons(kind, id, status, { retest = true, compact = true } = {}) {
+export function actionButtons(kind, id, status, { retest = true, compact = true, defectAlways = false } = {}) {
   const passed = PASSED.has(String(status || ""));
   const cls = compact ? "btn small" : "btn";
   const b = (act, label, extra = "") => `<button type="button" class="${cls}" data-ra="${act}" data-kind="${esc(kind)}" data-id="${esc(id)}" ${extra}>${label}</button>`;
   const out = [];
   if (!passed) out.push(b("analyze", "Analyze with AI"));
-  if (!passed && canEdit()) out.push(b("defect", "Create TFS Defect"));
+  if ((!passed || defectAlways) && canEdit()) out.push(b("defect", "Create TFS Defect"));
   out.push(b("pdf", "Generate PDF Report"));
   if (canEdit()) out.push(b("email", "Email Developer"));
   out.push(b("evidence", "View Evidence"));
@@ -91,25 +91,52 @@ async function openAnalysis(kind, id) {
 }
 
 // ---- Create TFS Defect ----------------------------------------------------------------------------------------------
-async function openDefect(kind, id, onChange) {
+// 23.15.0: the body is readable text (steps, expected, actual, evidence as "label: value" lines, not a JSON dump); the
+// run's screenshots and result files are attached to the TFS bug; "Approve and send now" sends it at once.
+let people = null;
+const kb = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+export async function openDefect(kind, id, onChange) {
   const p = (await api(`${B}/${kind}/${enc(id)}/defect`)).preview;
+  const files = p.attachments || [];
   const { el, close } = openModal("Create TFS Defect (preview)", `
     <form class="grid" style="gap:10px" data-f>
       <label>Title <input name="title" required minlength="3" maxlength="250" value="${esc(p.title)}"></label>
       <div class="row" style="gap:10px;flex-wrap:wrap">
         <label>Severity <select name="severity">${["1 - Critical", "2 - High", "3 - Medium", "4 - Low"].map((s, i) => `<option value="${i + 1}" ${Number(p.severity) === i + 1 ? "selected" : ""}>${s}</option>`).join("")}</select></label>
-        <label>Priority <select name="priority">${[1, 2, 3, 4].map((n) => `<option ${Number(p.priority) === n ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
-      <label>Steps to reproduce, expected and actual result (HTML) <textarea name="repro_steps" rows="12">${esc(p.repro_steps)}</textarea></label>
-      <p class="muted small" style="margin:0">The defect goes to Defect Review first (the project's mandatory fields, duplicate check and approval). Nothing is sent to TFS until a person approves it there. If TFS refuses it later, the draft is kept.</p>
-      <div class="row"><span class="spacer"></span><button class="btn" type="button" data-close>Cancel</button><button class="btn primary">Create draft</button></div></form>`, { wide: true });
+        <label>Priority <select name="priority">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${Number(p.priority) === n ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+        <label>Assign to <select name="assigned_to"><option value="">Not assigned</option></select></label></div>
+      <label>Steps to reproduce, expected and actual result <textarea name="repro_text" rows="16" dir="auto" style="font-family:inherit;white-space:pre-wrap">${esc(p.repro_text || "")}</textarea></label>
+      ${files.length ? `<div><label><span><input type="checkbox" name="attach" checked> Attach ${files.length} file(s) to the TFS bug</span></label>
+        <ul class="small muted" style="margin:4px 0 0 18px">${files.map((f) => `<li>${esc(f.name)} (${esc(f.kind)}, ${kb(f.size)})</li>`).join("")}</ul></div>`
+        : '<p class="muted small" style="margin:0">No screenshots or result files were recorded for this item.</p>'}
+      <label><span><input type="checkbox" name="send_now"> Approve and send to TFS now (otherwise it waits in Defect Review for approval)</span></label>
+      <p class="muted small" style="margin:0" data-note>The defect goes to Defect Review first (the project's mandatory fields, duplicate check and approval) unless you tick "send now". If TFS refuses it, the draft is kept and the reason is shown.</p>
+      <div class="row"><span class="spacer"></span><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Create defect</button></div></form>`, { wide: true });
+  const sel = el.querySelector("[name=assigned_to]");
+  api("/api/defects/assignees").then((r) => {
+    people = people || r.people || [];
+    sel.innerHTML = '<option value="">Not assigned</option>' + people.map((x) => `<option value="${esc(x.unique_name || x.name)}">${esc(x.name)}</option>`).join("");
+  }).catch(() => { /* TFS people are optional */ });
   el.querySelector("[data-f]").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = Object.fromEntries(new FormData(ev.target));
+    const fd = new FormData(ev.target);
+    const btn = ev.target.querySelector("[type=submit]");
+    btn.disabled = true; btn.textContent = fd.get("send_now") ? "Sending to TFS…" : "Creating…";
     try {
-      const r = await api(`${B}/${kind}/${enc(id)}/defect`, { method: "POST", body: { ...f, priority: Number(f.priority), severity: Number(f.severity) } });
-      toast(`Defect draft #${r.id ?? ""} is waiting in Defect Review.${r.duplicates?.length ? " Possible duplicates were found." : ""}`, "success", 8000);
+      const r = await api(`${B}/${kind}/${enc(id)}/defect`, { method: "POST", body: {
+        title: String(fd.get("title") || "").trim(), severity: Number(fd.get("severity")), priority: Number(fd.get("priority")),
+        repro_text: String(fd.get("repro_text") || ""), attach: !!fd.get("attach"), send_now: !!fd.get("send_now"),
+        assigned_to: fd.get("assigned_to") || null } });
+      if (r.note) toast(r.note, "info", 9000);
+      else if (r.tfs_id) toast(`Created in TFS as #${r.tfs_id}${r.attachments?.length ? ` with ${r.attachments.length} attachment(s)` : ""}.`, "success", 9000);
+      else toast(`Defect draft #${r.id ?? ""} is waiting in Defect Review.${r.duplicates?.length ? " Possible duplicates were found." : ""}`, "success", 8000);
       close(); onChange?.();
-    } catch (err) { toast(err.message, "error", 9000); }
+      if (!r.tfs_id && r.id) location.hash = `#/${r.source === "performance" ? "perf-defects" : "defect-review"}?id=${r.id}`;
+    } catch (err) {
+      toast(err.message, "error", 12000);
+      btn.disabled = false; btn.textContent = "Create defect";
+      if (err.details?.draft_id) el.querySelector("[data-note]").textContent = `The draft #${err.details.draft_id} was kept in Defect Review: ${err.message}`;
+    }
   });
 }
 

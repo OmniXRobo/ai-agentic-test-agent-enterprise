@@ -7,6 +7,7 @@ import { api } from "./api.js";
 import { esc, toast, openModal } from "./util.js";
 import { mountAiReport, openEmail } from "./ai-report.js";
 import { canEdit } from "./auth.js";
+import { openDefect as openRunDefect } from "./result-actions.js";
 
 export const MODULE_SOURCES = {
   "ai-automation": "framework", "guided-automation": "functional", discovery: "functional", "hybrid-automation": "functional",
@@ -82,6 +83,12 @@ export function mountModuleActions(bar, route, title) {
     ${canEdit() ? '<button class="btn small" data-ma="defect" title="Write a defect; it goes to TFS after approval">Create TFS defect</button>' : ""}
     <button class="btn small" data-ma="email" title="Email the PDF report of this module through Outlook">Send email (PDF)</button></div>`;
   bar.querySelector('[data-ma="ai"]').onclick = () => openAi(route, title);
-  bar.querySelector('[data-ma="defect"]')?.addEventListener("click", () => openDefect(route, title));
+  // 23.15.0: on a run's page (Performance Results, a scheduled run ...) the defect is filled from that run: steps,
+  // figures, expected and actual, and its report and screenshots as attachments; a passed run may get one too
+  bar.querySelector('[data-ma="defect"]')?.addEventListener("click", () => {
+    const run = new URLSearchParams(location.hash.split("?")[1] || "").get("run");
+    if (run) openRunDefect("exec", run).catch((err) => toast(err.message, "error", 9000));
+    else openDefect(route, title);
+  });
   bar.querySelector('[data-ma="email"]').onclick = () => sendEmail(route);
 }

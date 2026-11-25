@@ -32,6 +32,7 @@ import base64
 import hashlib
 import html
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -187,24 +188,126 @@ class ActionService:
                 "at": run.get("finished_at") or run["started_at"]}
 
     def _facts_exec(self, run_id: str) -> dict[str, Any]:
+        """A run of Execution History (or Performance Results). 23.15.0: the steps of the run with their status, error
+        and screenshot, the environment (address, browser), the failed step, and the files to attach to a defect, so
+        Create TFS Defect carries everything the run recorded; a stopped run is a defect subject too."""
         row = self.db.query_one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+        perf = self.db.query_one("SELECT run_id FROM perf_runs WHERE run_id = ?", (run_id,))
+        if perf and (not row or row.get("kind") == "performance"):
+            return self._facts_perf(run_id, row)
         if not row:
             raise QAError("RUN_NOT_FOUND", f"Run {run_id} does not exist.", status=404)
         summary = loads(row.get("summary"))
         events = self.db.query("SELECT timestamp, name, agent_name, status, activity, details FROM events WHERE run_id = ?"
                                " ORDER BY id DESC LIMIT 60", (run_id,))
         errors = [e for e in events if e["name"] in ("agent.failed", "execution.failed") or (e.get("status") == "FAILED")]
-        steps = [{"at": e["timestamp"], "agent": e["agent_name"], "activity": _short(e["activity"], 300)}
-                 for e in reversed(events[:40])]
+        activity = [f"{e['agent_name'] or 'Agent'}: {_short(e['activity'], 200)}" for e in reversed(events[:25])
+                    if e.get("activity")]
         error = summary.get("error") if isinstance(summary, dict) else None
-        return {"module": "existing", "module_name": f"{row['kind']} run", "application": None, "environment": None,
+        ex = self.db.query_one("SELECT * FROM execution_results WHERE run_id = ? ORDER BY id DESC LIMIT 1", (run_id,))
+        steps: list[dict[str, Any]] = []
+        shots: list[str] = []
+        attach: list[dict[str, Any]] = []
+        base_url = browser = script_id = failed_desc = None
+        if ex:
+            base_url, browser, script_id = ex.get("base_url"), ex.get("browser"), ex.get("script_id")
+            ev = loads(ex.get("evidence")) or {}
+            for i, st in enumerate(loads(ex.get("steps")) or []):
+                desc = st.get("description") or st.get("action") or f"Step {i + 1}"
+                steps.append({"n": int(st.get("index", i)) + 1, "step": _short(desc, 240),
+                              "status": st.get("status") or "", "error": _short(st.get("error"), 300),
+                              "actual": _short(st.get("actual"), 200), "duration_ms": st.get("duration_ms")})
+                if st.get("status") == "FAILED" and not failed_desc:
+                    failed_desc = desc
+                if st.get("screenshot"):
+                    shots.append(str(st["screenshot"]))
+            for p in ev.get("screenshots") or []:
+                if str(p) not in shots:
+                    shots.append(str(p))
+            # the failed step's screenshot first, then the last steps and the final page (at most 12 images)
+            failed_shots = [s for s in shots if "failed" in Path(s).name]
+            ordered = failed_shots + [s for s in shots if s not in failed_shots]
+            shots = ordered[:12]
+            attach = [{"kind": "screenshot", "path": s} for s in shots]
+            traces = ev.get("trace") if isinstance(ev.get("trace"), list) else [ev.get("trace")]
+            attach += [{"kind": "trace", "path": str(t)} for t in traces if t]
+            if ev.get("video"):
+                attach.append({"kind": "video", "path": str(ev["video"])})
+            error = error or ex.get("error")
+        stopped = row["status"] in ("STOPPED", "CANCELLED", "INTERRUPTED") or "stopped by the user" in str(error or "").lower()
+        actual = error or (errors[0]["activity"] if errors else (f"Run status {row['status']}"
+                                                                 if row["status"] != "PASSED" else None))
+        if stopped and actual and "stopped" not in actual.lower():
+            actual = f"The run was stopped ({row['status']}): {actual}"
+        return {"module": "existing", "module_name": f"{row['kind']} run", "application": base_url, "environment": None,
                 "test_name": row.get("title") or row["kind"], "execution_id": run_id, "status": row["status"],
-                "test_case_id": row.get("test_case_id"), "user_story_id": row.get("user_story_id"),
+                "test_case_id": row.get("test_case_id") or (ex or {}).get("test_case_id"),
+                "user_story_id": row.get("user_story_id") or (ex or {}).get("user_story_id"),
+                "url": base_url, "browser": browser, "script_id": script_id, "failed_step": failed_desc,
+                "stopped": stopped, "steps": steps,
                 "expected": "The run completes and every check passes.",
-                "actual": error or (errors[0]["activity"] if errors else (f"Run status {row['status']}"
-                                                                         if row["status"] != "PASSED" else None)),
+                "actual": actual,
                 "evidence": {"summary": summary, "errors": [_short(e["activity"], 400) for e in errors[:10]],
-                             "activity": steps}, "kind": row["kind"], "at": row.get("finished_at") or row["started_at"]}
+                             "activity": activity},
+                "screenshots": shots, "attachments": attach,
+                "kind": row["kind"], "at": row.get("finished_at") or row["started_at"]}
+
+    def _facts_perf(self, run_id: str, row: dict[str, Any] | None) -> dict[str, Any]:
+        """23.15.0: a performance run (Performance Results, passed or failed): workload, environment, SLA checks,
+        the figures, the slowest and failing requests, and the report PDF, metrics and JMeter log as attachments."""
+        run = self.rt.performance.get_run(run_id)
+        m = run.get("metrics") or {}
+        o = m.get("overall") or {}
+        sla = run.get("sla") or {}
+        cfg = run.get("config") or {}
+        env = cfg.get("environment") or {}
+        wl = cfg.get("workload") or {}
+        checks = sla.get("checks") or []
+        failed = sla.get("failed") or [c for c in checks if c.get("status") == "FAIL"]
+        folder = Path(run.get("folder") or "")
+        attach = [{"kind": "file", "path": str(folder / n)} for n in
+                  ("qa-report.pdf", "metrics.json", "config.json", "jmeter.log", "console.log")
+                  if run.get("folder") and (folder / n).is_file()]
+        reqs = sorted(m.get("requests") or [], key=lambda r: -(r.get("p95_ms") or 0))
+        verdict = run.get("verdict") or ("FAIL" if failed else ("PASS" if checks else "NOT SPECIFIED"))
+        workload = (f"{wl.get('peak_concurrent_users') or m.get('peak_threads') or '?'} concurrent users at peak"
+                    + (f", {wl.get('total_duration_s')} s" if wl.get("total_duration_s") else "")
+                    + (f", {wl.get('load_model')}" if wl.get("load_model") else ""))
+        if failed:
+            actual = "; ".join(f"{c['name']} ({c['scope']}): {c['actual']} {c.get('unit', '')} against "
+                               f"{'at least' if c['name'] == 'Throughput' else 'at most'} {c['limit']} {c.get('unit', '')}"
+                               for c in failed[:6])
+        else:
+            actual = (f"{o.get('samples', 0)} samples, {o.get('error_pct', 0)}% errors, average {o.get('avg_ms')} ms, "
+                      f"95th percentile {o.get('p95_ms')} ms, {o.get('throughput')} requests/s"
+                      + ("" if checks else " (no service-level targets were set on this plan)"))
+        steps = [
+            {"n": 1, "step": f"Open the performance plan {run.get('plan_id')} ({run.get('kind')} test '{run.get('name')}')",
+             "status": "", "error": "", "actual": ""},
+            {"n": 2, "step": f"Run it against {env.get('name') or 'the environment'}"
+                             f"{' (' + env['base_url'] + ')' if env.get('base_url') else ''} with {workload}",
+             "status": "", "error": "", "actual": ""},
+            {"n": 3, "step": "Compare the response times, error rate and throughput with the targets", "status": "",
+             "error": "", "actual": ""}]
+        return {"module": "existing", "module_name": "Performance run", "kind": "performance",
+                "application": env.get("base_url") or env.get("name"), "environment": env.get("name"),
+                "test_name": f"{run.get('kind')} test: {run.get('name')}", "execution_id": run_id,
+                "status": "FAILED" if failed or run.get("error") else (row or {}).get("status") or run.get("status"),
+                "verdict": verdict, "url": env.get("base_url"), "steps": steps, "always_defect": True,
+                "expected": ("; ".join(f"{c['name']} ({c['scope']}) {'at least' if c['name'] == 'Throughput' else 'at most'}"
+                                       f" {c['limit']} {c.get('unit', '')}" for c in checks[:8])
+                             or "The application answers every request without errors within the agreed response times."),
+                "actual": run.get("error") or actual,
+                "evidence": {"workload": workload, "build": run.get("build") or cfg.get("build"),
+                             "started": run.get("started_at"), "ended": run.get("finished_at"),
+                             "overall": {k: o.get(k) for k in ("samples", "errors", "error_pct", "avg_ms", "p90_ms",
+                                                               "p95_ms", "p99_ms", "max_ms", "throughput") if k in o},
+                             "slowest_requests": [f"{r['label']}: avg {r.get('avg_ms')} ms, p95 {r.get('p95_ms')} ms, "
+                                                  f"errors {r.get('error_pct')}%" for r in reqs[:5]],
+                             "top_errors": [f"{e.get('error')} ({e.get('count')})" for e in (o.get("top_errors") or [])[:5]],
+                             "sla_checks": [f"{c['name']} ({c['scope']}): {c['actual']} {c.get('unit', '')} - {c.get('status')}"
+                                            for c in checks[:10]]},
+                "screenshots": [], "attachments": attach, "at": run.get("finished_at") or run.get("started_at")}
 
     def evidence(self, kind: str, subject_id: str) -> dict[str, Any]:
         f = self.facts(kind, subject_id)
@@ -294,49 +397,196 @@ class ActionService:
         return int(a.get("n") or 0) + int(b.get("n") or 0)
 
     # ---- TFS defect -----------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _evidence_lines(ev: Any, prefix: str = "") -> list[str]:
+        """23.15.0: evidence as readable "label: value" lines (it was a JSON dump with &quot; everywhere)."""
+        out: list[str] = []
+        if isinstance(ev, dict):
+            for k, v in ev.items():
+                if v in (None, "", [], {}):
+                    continue
+                label = f"{prefix}{str(k).replace('_', ' ').capitalize()}"
+                if isinstance(v, (dict, list)):
+                    sub = ActionService._evidence_lines(v, "")
+                    if len(sub) == 1:
+                        out.append(f"{label}: {sub[0]}")
+                    else:
+                        out.append(f"{label}:")
+                        out += [f"  - {x}" for x in sub[:15]]
+                else:
+                    out.append(f"{label}: {_short(v, 300)}")
+        elif isinstance(ev, list):
+            for v in ev[:15]:
+                if isinstance(v, dict):
+                    out.append(", ".join(f"{str(k).replace('_', ' ')}: {_short(x, 160)}" for k, x in v.items()
+                                         if x not in (None, "", [], {})))
+                elif v not in (None, ""):
+                    out.append(_short(v, 300))
+        elif ev not in (None, ""):
+            out.append(_short(ev, 300))
+        return [x for x in out if x.strip()]
+
+    def _attachments(self, f: dict[str, Any]) -> list[dict[str, Any]]:
+        """Files that exist and may be attached (screenshots, traces, the report PDF, metrics): the TFS bug gets them."""
+        out, seen = [], set()
+        items = list(f.get("attachments") or [])
+        items += [{"kind": "screenshot", "path": s} for s in f.get("screenshots") or []]
+        for a in items:
+            raw = str(a.get("path") or "")
+            if not raw or raw in seen:
+                continue
+            seen.add(raw)
+            p = Path(raw)
+            if not p.is_absolute():
+                p = self.rt.paths.evidence / raw
+            try:
+                if p.is_file():
+                    out.append({"kind": a.get("kind") or "file", "path": str(p.resolve()), "name": p.name,
+                                "size": p.stat().st_size})
+            except OSError:
+                continue
+        return out[:20]
+
+    def defect_text(self, f: dict[str, Any], a: dict[str, Any] | None, attachments: list[dict[str, Any]]) -> str:
+        """The readable defect body the person edits (plain text; turned into TFS HTML when the draft is made)."""
+        lines: list[str] = []
+        rows = [("Application", f.get("application")), ("Environment", f.get("environment")),
+                ("Module", f.get("module_name")), ("Test", f.get("test_name")), ("Execution ID", f.get("execution_id")),
+                ("Status", f.get("status")), ("Verdict", f.get("verdict")), ("Test case", f.get("test_case_id")),
+                ("User story", f.get("user_story_id")), ("Script", f.get("script_id")), ("Browser", f.get("browser")),
+                ("URL", f.get("url")), ("Parameter", f.get("parameter")), ("OWASP", f.get("owasp")),
+                ("Category", f.get("category")), ("Correlation ID", f.get("correlation_id"))]
+        lines += [f"{k}: {_short(v, 300)}" for k, v in rows if v not in (None, "")]
+        steps = f.get("steps") or []
+        lines += ["", "Steps to reproduce:"]
+        if steps:
+            for st in steps[:40]:
+                mark = f" [{st['status']}]" if st.get("status") else ""
+                lines.append(f"{st['n']}. {st['step']}{mark}")
+                if st.get("error"):
+                    lines.append(f"   Error: {st['error']}")
+                elif st.get("actual") and st.get("status") == "FAILED":
+                    lines.append(f"   Actual: {st['actual']}")
+        elif f.get("url"):
+            lines += [f"1. Open {f['url']}", f"2. Run the check '{f.get('test_name')}'",
+                      "3. Compare the result with the expected result below"]
+        else:
+            lines += [f"1. Run '{f.get('test_name')}' (execution {f.get('execution_id')}) again",
+                      "2. Compare the result with the expected result below"]
+        if f.get("stopped"):
+            lines += ["", "Note: the run was stopped before it finished; the steps after the last one above were not run."]
+        lines += ["", f"Expected result: {_short(f.get('expected'), 1500) or '-'}",
+                  f"Actual result: {_short(f.get('actual'), 1500) or '-'}"]
+        ev = self._evidence_lines(f.get("evidence") or {})
+        if ev:
+            lines += ["", "Evidence (sanitized, no passwords, tokens or cookies):"] + [f"- {x}" if not x.startswith("  ") else x
+                                                                                      for x in ev[:60]]
+        if a:
+            lines += ["", f"AI analysis (hypotheses to confirm, {a.get('confidence', '')} confidence):",
+                      f"- Summary: {a.get('defect_summary', '')}",
+                      f"- Potential root cause: {a.get('potential_root_cause', '')}",
+                      f"- Suggested fix: {a.get('suggested_fix', '') or '-'}",
+                      f"- Retest: {a.get('retest_recommendation', '') or '-'}"]
+        if attachments:
+            lines += ["", "Attached files:"] + [f"- {x['name']}" for x in attachments]
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def text_to_html(text: str) -> str:
+        """Plain text to TFS HTML: labels in bold, numbered lines as a list, the rest as lines. Everything escaped."""
+        e = html.escape
+        out: list[str] = []
+        in_list = False
+        for raw in (text or "").splitlines():
+            line = raw.rstrip()
+            num = re.match(r"^\s*(\d{1,3})[.)]\s+(.*)$", line)
+            if num:
+                if not in_list:
+                    out.append("<ol>")
+                    in_list = True
+                out.append(f"<li>{e(num.group(2))}</li>")
+                continue
+            if in_list and line.startswith("   ") and line.strip():
+                out[-1] = out[-1][:-5] + f"<br><i>{e(line.strip())}</i></li>"
+                continue
+            if in_list:
+                out.append("</ol>")
+                in_list = False
+            if not line.strip():
+                out.append("<br>")
+                continue
+            lab = re.match(r"^(\s*-?\s*)([^:<>]{1,60}):(\s.*)?$", line)
+            if lab and not line.lstrip().startswith(("http:", "https:")):
+                out.append(f"{e(lab.group(1))}<b>{e(lab.group(2))}:</b>{e(lab.group(3) or '')}<br>")
+            else:
+                out.append(f"{e(line)}<br>")
+        if in_list:
+            out.append("</ol>")
+        return "".join(out)
+
     def defect_preview(self, kind: str, subject_id: str) -> dict[str, Any]:
         f = self.facts(kind, subject_id)
-        if f.get("status") in ("PASSED",):
+        if f.get("status") in ("PASSED",) and not f.get("always_defect"):
             raise QAError("ITEST_NOT_A_DEFECT", "This test passed; a passed result is not a defect.", status=409)
         a = self.latest(kind, subject_id)
         sev = (a or {}).get("severity_suggestion") or (f.get("severity") or "medium")
-        prio = int((a or {}).get("priority_suggestion") or SEVERITY_NUM.get(str(sev), 3))
-        title = (a or {}).get("defect_summary") or f"{f.get('module_name')}: {f.get('test_name')} failed"
+        prio = int((a or {}).get("priority_suggestion") or SEVERITY_NUM.get(str(sev).lower(), 3))
+        title = (a or {}).get("defect_summary") or (
+            f"{f.get('module_name')}: {f.get('test_name')} " + ("stopped" if f.get("stopped") else
+                                                                 "did not meet its targets" if f.get("kind") == "performance"
+                                                                 and f.get("status") == "FAILED" else
+                                                                 "performance finding" if f.get("kind") == "performance"
+                                                                 else "failed")
+            + (f" at '{_short(f['failed_step'], 80)}'" if f.get("failed_step") else ""))
         title = " ".join(str(title).split())[:240]
-        e = html.escape
-        rows = [("Application", f.get("application")), ("Environment", f.get("environment")),
-                ("Module", f.get("module_name")), ("Test", f.get("test_name")), ("Execution ID", f.get("execution_id")),
-                ("Correlation ID", f.get("correlation_id")), ("URL", f.get("url")), ("OWASP", f.get("owasp"))]
-        steps = "".join(f"<b>{e(k)}:</b> {e(str(v))}<br>" for k, v in rows if v)
-        steps += f"<br><b>Expected:</b> {e(_short(f.get('expected'), 1500))}<br><b>Actual:</b> {e(_short(f.get('actual'), 1500))}<br>"
-        ev = f.get("evidence") or {}
-        if ev:
-            steps += f"<br><b>Evidence (sanitized):</b><pre>{e(_short(ev, 2500))}</pre>"
-        if a:
-            steps += (f"<br><b>AI analysis (hypotheses, {e(a.get('confidence', ''))} confidence):</b><br>"
-                      f"Potential root cause: {e(a.get('potential_root_cause', ''))}<br>"
-                      f"Suggested fix: {e(a.get('suggested_fix', ''))}<br>Retest: {e(a.get('retest_recommendation', ''))}")
+        attachments = self._attachments(f)
+        text = self.defect_text(f, a, attachments)
         source = f["module"] if f["module"] in MODULES else EXEC_SOURCES.get(str(f.get("kind")), "functional")
-        return {"title": title, "severity": SEVERITY_NUM.get(str(sev), 3), "priority": max(1, min(4, prio)),
-                "repro_steps": steps, "source": source, "module": f.get("module_name"),
-                "run_id": f.get("execution_id"), "ai_used": bool(a), "existing_draft": f.get("draft_id")}
+        tc = f.get("test_case_id")
+        return {"title": title, "severity": SEVERITY_NUM.get(str(sev).lower(), 3) if not str(sev).isdigit() else int(sev),
+                "priority": max(1, min(4, prio)), "repro_text": text, "repro_steps": self.text_to_html(text),
+                "source": source, "module": f.get("module_name"), "run_id": f.get("execution_id"), "ai_used": bool(a),
+                "existing_draft": f.get("draft_id"), "status": f.get("status"),
+                "test_case_id": str(tc) if tc and str(tc).isdigit() else None,
+                "attachments": [{"name": x["name"], "kind": x["kind"], "size": x["size"]} for x in attachments],
+                "_files": attachments}
 
     def defect_create(self, kind: str, subject_id: str, edits: dict[str, Any] | None = None) -> dict[str, Any]:
         p = self.defect_preview(kind, subject_id)
-        p.update({k: v for k, v in (edits or {}).items() if k in ("title", "severity", "priority", "repro_steps")
+        edits = dict(edits or {})
+        if edits.get("repro_text"):  # the readable text the person edited becomes the TFS HTML
+            edits["repro_steps"] = self.text_to_html(str(edits["repro_text"]))
+        elif edits.get("repro_steps") and "<" not in str(edits["repro_steps"]):
+            edits["repro_steps"] = self.text_to_html(str(edits["repro_steps"]))
+        p.update({k: v for k, v in edits.items() if k in ("title", "severity", "priority", "repro_steps")
                   and v not in (None, "")})
+        files = p.pop("_files", []) if edits.get("attach", True) else []
         with self.tfs_agent.activity(f"Preparing TFS defect for {kind} {subject_id}") as act:
             draft = self.rt.defects.evidence_draft(
                 source=p["source"], module=p["module"] or "", title=p["title"], severity=int(p["severity"]),
                 priority=int(p["priority"]), repro_steps=p["repro_steps"], run_id=str(p["run_id"] or subject_id),
                 facts={"subject": f"{kind}:{subject_id}"}, signature_seed=f"{kind}:{subject_id}",
-                source_ref=f"{kind}:{subject_id}")
-            act.complete(f"Defect draft #{draft['id']} waits in Defect Review")
+                source_ref=f"{kind}:{subject_id}", test_case_id=p.get("test_case_id"),
+                evidence=[{"kind": x["kind"], "path": x["path"]} for x in files])
+            act.complete(f"Defect draft #{draft['id']} waits in Defect Review"
+                         + (f" with {len(files)} attachment(s)" if files else ""))
         if kind == "result":
             self.db.execute("UPDATE itest_results SET draft_id = ? WHERE id = ?", (draft["id"], int(subject_id)))
         elif kind == "finding":
             self.db.execute("UPDATE sec_findings SET draft_id = ?, updated_at = ? WHERE id = ?",
                             (draft["id"], now_iso(), subject_id))
+        if edits.get("assigned_to") is not None and draft["status"] not in ("created", "linked"):
+            draft = self.rt.defects.update(draft["id"], {"assigned_to": edits["assigned_to"]})
+        if draft["status"] in ("created", "linked"):
+            return {**draft, "note": f"This defect is already in TFS as #{draft['tfs_id']}."}
+        if edits.get("send_now"):  # approve and send (both permissions), never past the duplicate check
+            self.rt.defects.approve(draft["id"])
+            try:
+                draft = self.rt.defects.publish(draft["id"])
+            except QAError as exc:
+                if exc.error_code != "DEFECT_LIKELY_DUPLICATE":
+                    raise
+                return {**self.rt.defects.get(draft["id"]), "note": exc.message + " It is waiting in Defect Review."}
         return draft
 
     # ---- PDF --------------------------------------------------------------------------------------------------------

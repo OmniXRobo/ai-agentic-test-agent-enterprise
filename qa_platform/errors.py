@@ -75,6 +75,16 @@ def error_body(
     }
 
 
+def _validation_message(errors: Any) -> str:
+    try:
+        first = list(errors)[0]
+        field = ".".join(str(x) for x in first.get("loc", ()) if x not in ("body", "query", "path"))
+        msg = str(first.get("msg") or "").replace("Value error, ", "")
+        return f"Request validation failed: {field + ' - ' if field else ''}{msg}"[:300]
+    except (IndexError, TypeError, AttributeError):
+        return "Request validation failed."
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(QAError)
     async def _qa_error(_: Request, exc: QAError) -> JSONResponse:
@@ -91,7 +101,8 @@ def install_error_handlers(app: FastAPI) -> None:
     async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(
             # ctx can hold the ValueError raised by a model validator, which JSON cannot carry: keep its text
-            error_body("VALIDATION_FAILED", "Request validation failed.",
+            # 23.15.0: the message names the field and the reason ("Request validation failed." alone told nobody why)
+            error_body("VALIDATION_FAILED", _validation_message(exc.errors()),
                        [{**e, "ctx": {k: str(v) for k, v in e["ctx"].items()}} if isinstance(e.get("ctx"), dict) else e
                         for e in exc.errors()]),
             status_code=422,

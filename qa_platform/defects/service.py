@@ -236,7 +236,7 @@ class DefectService:
 
     def evidence_draft(self, *, source: str, module: str, title: str, severity: int, priority: int, repro_steps: str,
                        facts: dict[str, Any], run_id: str, signature_seed: str, test_case_id: str | None = None,
-                       source_ref: str | None = None) -> dict[str, Any]:
+                       source_ref: str | None = None, evidence: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         """23.14.0: "Create TFS Defect" on a failed result of Security, Fuse, ActiveMQ or a failed run of an existing
         module. The draft carries the sanitized facts and goes through Defect Review (editable preview, mandatory TFS
         fields, duplicate check, approval) before anything is sent to TFS."""
@@ -252,7 +252,9 @@ class DefectService:
                  "severity": max(1, min(4, int(severity))), "priority": max(1, min(4, int(priority))),
                  "repro_steps": repro_steps, "facts": {"module": module, "reported_by": by, "error": "",
                                                        "manual": True, **facts},
-                 "evidence": [], "test_case_id": test_case_id, "source_ref": source_ref}
+                 # 23.15.0: the run's screenshots, traces and result files; attached to the TFS bug when it is sent
+                 "evidence": [e for e in (evidence or []) if e.get("path")][:20], "test_case_id": test_case_id,
+                 "source_ref": source_ref}
         saved = self._store(draft)
         if saved.get("_new"):
             self._event(saved["id"], by, "edited", f"Prepared from {module} evidence")
@@ -260,6 +262,16 @@ class DefectService:
                 self.check_duplicates(saved["id"])
             except QAError as exc:
                 log.info(f"Duplicate check skipped: {exc.message}")
+        elif saved["status"] in ("draft", "needs_review", "publication_failed", "approved"):
+            # 23.15.0: the same result again: the person's latest preview (title, text, levels) and the files replace
+            # the open draft's, instead of being dropped silently
+            changes = {k: draft[k] for k in ("title", "severity", "priority", "repro_steps")
+                       if draft[k] and draft[k] != saved.get(k)}
+            if changes:
+                self.update(saved["id"], changes)
+            if draft["evidence"] and not saved.get("evidence"):
+                self.db.execute("UPDATE defect_drafts SET evidence = ?, updated_at = ? WHERE id = ?",
+                                (dumps(draft["evidence"]), now_iso(), saved["id"]))
         return self.get(saved["id"])
 
     def record_draft(self, draft: dict[str, Any]) -> dict[str, Any] | None:

@@ -5,6 +5,8 @@ import { subscribe } from "../store.js";
 import { esc, toast, timeOf, dateTimeOf, isRepeat } from "../util.js";
 import { lineChart, fmtDuration } from "../charts.js";
 import { analyzeRun } from "./defect-review.js";
+import { canEdit } from "../auth.js";
+import { openDefect as openRunDefect } from "../result-actions.js";
 import { scriptEditor, importCard } from "./perf-script.js";
 import { recordCard, recorderView } from "./perf-record.js";
 import { validationCard, rateKpi } from "./perf-workload.js";
@@ -333,6 +335,7 @@ async function runDetail(view, runId) {
       ${["VALIDATING", "RUNNING"].includes(run.state) ? '<button class="btn" id="stopRun" title="JMeter stops cleanly and writes its results and report">Stop</button>' : ""}
       ${ACTIVE.includes(run.state) ? '<button class="btn" id="killRun" title="Ends JMeter at once; the HTML report may be missing">Emergency stop</button>' : ""}
       ${run.verdict === "FAIL" ? '<button class="btn" id="analyzeFailure">Analyze failure</button>' : ""}
+      ${canEdit() && !(run.state === "QUEUED" || ACTIVE.includes(run.state)) ? '<button class="btn" id="perfDefect" title="Passed or failed: the defect is filled from this run (figures, SLA checks, workload) with the report attached">Create TFS defect</button>' : ""}
       ${run.has_report ? `<a class="btn" href="${file("report/index.html")}" target="_blank" rel="noopener">JMeter HTML report</a>` : ""}
       ${run.scenario_id ? `<a class="btn" href="#/perf-scenarios?scenario=${esc(run.scenario_id)}">Open scenario</a>` : ""}
       <a class="btn" href="#/${ROUTE_FOR_KIND[run.kind]}?plan=${esc(run.plan_id)}">Open plan</a></div>
@@ -375,6 +378,10 @@ async function runDetail(view, runId) {
     </div>
     <div class="card" style="margin-top:12px"><h3 style="margin:0 0 8px">AI performance analysis</h3><div id="analysis"></div></div>` : ""}`;
   bindReportButtons(view, run);
+  view.querySelector("#perfDefect")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try { await openRunDefect("exec", run.run_id); } catch (err) { toast(err.message, "error", 9000); } finally { e.target.disabled = false; }
+  });
   view.querySelector("#analyzeFailure")?.addEventListener("click", async (e) => {
     e.target.disabled = true;
     try { await analyzeRun("performance", run.run_id); } catch (err) { toast(err.message, "error"); e.target.disabled = false; }
