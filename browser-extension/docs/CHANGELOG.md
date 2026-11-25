@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.0 (agent core shared with SkyGuard QA 23.15.0)
+
+* New name: **SkyGuard Workflow Operator**. The extension does what it is called: you teach it your application's
+  workflows, it previews them and runs them. Nothing about pairing, permissions or the companion changes, and the
+  extension ID stays the same, so an installed extension only needs Reload.
+* **Listen always**: one button in the chat starts hands-free listening. Say a request, pause, and it is transcribed
+  and sent without touching the mouse; the reply is spoken in the language you spoke. The microphone is released
+  between requests, listening stops when you leave the chat or press Stop listening, and a request that changes
+  records still waits for the confirmation under its preview.
+* Arabic spoken in the chat is understood even when speech recognition misspells it, and is answered in Arabic.
+* The agent remembers the values and requests you use, so it asks for them once, not every time; sign-in passwords
+  and authorization codes typed while teaching go to the credential store, masked (one-time codes are never kept).
+
 ## 1.4.0 (companion 1.4.0, agent core shared with SkyGuard QA 23.12.0)
 
 Simpler offline install: no command to type and no pairing or port to configure.

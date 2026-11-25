@@ -36,7 +36,7 @@ export async function mount(view) {
   try { state.tab = localStorage.getItem("aiagent.tab") || "chat"; state.conversation = sessionStorage.getItem("aiagent.conv") || null; } catch { /* storage blocked */ }
   view.innerHTML = `
     <div class="card ai-agent-head" style="margin-bottom:12px">
-      <div class="row"><div><h2 style="margin:0">AI Agent</h2>
+      <div class="row"><div><h2 style="margin:0">Workflow Operator</h2>
         <p class="muted" style="margin:4px 0 0">Connect a website, use it normally while I learn, then tell me what to do by text or voice. I show one preview and act only after you confirm.</p></div>
         <span class="spacer"></span><span id="aiStatus" class="muted"></span></div>
     </div>

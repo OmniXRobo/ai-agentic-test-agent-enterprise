@@ -84,8 +84,10 @@ const NAV = [
   ]],
   // 23.10.0: one simple AI Agent page (four tabs) replaces the eight-tab Operations Agent page, whose technical
   // screens remain only as Advanced Administrator Settings (no nav entry, admins only).
-  ["AI Agent", [
-    ["ai-agent", "AI Agent", aiAgent],
+  // 23.15.0: "AI Agent" said nothing about what it does. The page teaches, previews and runs the workflows of your
+  // own applications, so it is the Workflow Operator (the route stays ai-agent, so saved links keep working).
+  ["Workflow Operator", [
+    ["ai-agent", "Workflow Operator", aiAgent],
   ]],
   // 23.8.0: the 18 separate comparison pages (discovery, extraction, OCR, import, mapping, filters, rules, KPI
   // definitions, run, results, defects, reports, evidence ...) are one workspace; their work happens behind it.
@@ -132,7 +134,7 @@ for (const [, items] of NAV) {
 }
 // The earlier single-script AI generation page stays available (and opens its scripts) without a nav entry.
 ROUTES.set("ai-automation-classic", { route: "ai-automation", title: "AI-Driven Automation (single script)", page: aiAutomation });
-ROUTES.set("ops-agent", { route: "ops-agent", title: "AI Agent: Advanced Administrator Settings", page: opsAgent });
+ROUTES.set("ops-agent", { route: "ops-agent", title: "Workflow Operator: Advanced Administrator Settings", page: opsAgent });
 
 // 23.3.34: view-only accounts do not see the Settings pages; only an admin sees Users & Network Access.
 function visibleNav() {

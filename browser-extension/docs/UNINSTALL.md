@@ -2,7 +2,7 @@
 
 ## The extension
 
-`chrome://extensions` or `edge://extensions` > *SkyGuard Adaptive AI Agent* > **Remove**. This deletes the pairing
+`chrome://extensions` or `edge://extensions` > *SkyGuard Workflow Operator* > **Remove**. This deletes the pairing
 and sign-in kept in the browser. The companion's data is not affected.
 
 ## The companion

@@ -54,6 +54,8 @@ PAGES: list[tuple[str, str, tuple[str, ...]]] = [
     ("voice", "Voice & Command Agent", ("voice and command agent", "voice commands", "voice settings", "voice")),
     ("command-center", "AI Voice Command Center", ("voice command center", "command center", "mission control")),
     ("reports", "Reports", ("reports", "report list")),
+    # 23.15.0: the Workflow Operator page (what 23.14 and earlier called the AI Agent) can be opened by voice too.
+    ("ai-agent", "Workflow Operator", ("workflow operator", "ai agent", "operations agent", "application agent")),
     # 23.14.0: Security Testing, Integration Testing, API Testing and Email / SMTP
     ("api-testing", "API Testing", ("api testing", "api tests", "rest api tests")),
     ("integration-comparison", "Integration Comparison", ("integration comparison", "data comparison")),

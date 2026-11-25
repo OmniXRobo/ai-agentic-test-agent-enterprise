@@ -1,4 +1,4 @@
-// SkyGuard Adaptive AI Agent: service worker.
+// SkyGuard Workflow Operator: service worker.
 //
 // It is the browser "driver" of the shared agent core that runs in the local companion: for an execution it sends
 // what the page shows (a DOM snapshot made by lib/agent_dom.js) and receives the next step (navigate, click, type,

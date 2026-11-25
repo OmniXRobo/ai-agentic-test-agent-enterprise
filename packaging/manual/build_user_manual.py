@@ -83,7 +83,7 @@ CHAPTERS: list[tuple[str, str, str, list[str]]] = [
     ("scheduled-runs", "Scheduled Runs",
      "Runs tests, API tests and comparisons on a schedule, visible or headless, and emails the report.",
      ["Add a schedule, choose what to run and when, Save."]),
-    ("ai-agent", "AI Agent",
+    ("ai-agent", "Workflow Operator",
      "Works an application for you from plain commands, in one browser window for the whole conversation: "
      "'open https://...', then 'log in as manager' (the password is asked once and kept in the Windows Credential "
      "Manager), then 'go to the bookings menu'. A new window opens only when you ask for one ('open it in a new "
@@ -209,7 +209,7 @@ Your name at the top right has <i>Change password</i> and <i>Sign out</i>.</p>
 <tr><td><b>Tester</b></td><td>Create, edit, run, record, schedules and settings.</td></tr>
 <tr><td><b>Developer / Manager</b></td><td>View everything, run existing tests, view and export reports.</td></tr></table></section>
 <section><h2>2. Finding your way</h2><p>The menu on the left groups the pages: Mission Control, Test Design, Automation
-Studio, Performance Testing, AI Agent, Integration Comparison, Quality and Settings. On every testing page a bar at the
+Studio, Performance Testing, Workflow Operator, Integration Comparison, Quality and Settings. On every testing page a bar at the
 top offers <b>Generate AI result</b> (the On-Premise AI analyses the page's results), <b>Create TFS defect</b> (a defect
 that goes to TFS after approval, with the person it is assigned to) and <b>Send email (PDF)</b> (the page's report as a
 PDF through Outlook).</p></section>

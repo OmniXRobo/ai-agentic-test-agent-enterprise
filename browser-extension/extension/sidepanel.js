@@ -55,6 +55,7 @@ async function show(tab) {
   S.tab = tab;
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   clearInterval(S.poll);
+  if (tab !== "chat") S.hands = false;  // 23.15.0: listening belongs to the chat tab and stops when it is left
   if (!(await connect())) return;
   try {
     await loadApps();
@@ -70,7 +71,9 @@ async function chat() {
     <div class="chat" id="chatLog"></div>
     <div class="suggest" id="suggest"></div>
     <label>Request<textarea id="say" placeholder="Type or speak a request"></textarea></label>
-    <div class="row"><button class="btn primary" id="sendBtn">Send</button><button class="btn" id="micBtn">Speak</button></div>
+    <div class="row"><button class="btn primary" id="sendBtn">Send</button><button class="btn" id="micBtn">Speak</button>
+      <button class="btn" id="handsBtn" aria-pressed="${S.hands ? "true" : "false"}">${S.hands ? "Stop listening" : "Listen always"}</button></div>
+    <p class="muted" id="handsNote">${S.hands ? "Listening: say your request, then pause. Nothing that changes records runs without the preview." : ""}</p>
     <p class="err" id="chatErr"></p></div>`;
   $("#appSel").onchange = (e) => { S.appId = e.target.value; suggestions(); };
   renderChat();
@@ -79,6 +82,8 @@ async function chat() {
   $("#sendBtn").onclick = sendChat;
   $("#say").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) sendChat(); });
   $("#micBtn").onclick = voice;
+  $("#handsBtn").onclick = () => handsFree(!S.hands);
+  if (S.hands && !S.handsLoop) handsLoop();
 }
 
 // 1.3.0: suggestions come from what was learned for this application, the page open in the active tab, records
@@ -245,6 +250,7 @@ async function understand() {
 let rec = null;
 async function voice() {
   const btn = $("#micBtn");
+  if (S.hands) handsFree(false);  // one microphone: push-to-talk takes over from hands-free listening
   if (rec) { btn.disabled = true; btn.textContent = "Transcribing..."; const wav = await rec.stop(); rec = null;
     try { const { text } = await api.transcribe(wav); $("#say").value = text; S.voiceSource = true; $("#say").focus(); toast($("#chatErr"), "Check the text, then press Send. Nothing is run until you confirm the preview."); }
     catch (e) { toast($("#chatErr"), e.message); }
@@ -256,6 +262,49 @@ async function voice() {
   } catch (e) {
     toast($("#chatErr"), "Microphone not available. Allow it once on the microphone page.");
     chrome.tabs.create({ url: chrome.runtime.getURL("mic.html") });
+  }
+}
+
+// ---- hands-free listening (23.15.0) ------------------------------------------------------------------------------
+// "Listen always": each request is spoken and sent without a button. One recording per request, ended by the pause
+// after it; the microphone is released between requests, and the reply is spoken in the language that was spoken.
+// Previews are untouched: a request that changes records still waits for the confirmation under its preview.
+function handsFree(on) {
+  S.hands = on;
+  const btn = $("#handsBtn");
+  if (btn) { btn.textContent = on ? "Stop listening" : "Listen always"; btn.setAttribute("aria-pressed", String(on)); }
+  const note = $("#handsNote");
+  if (note) note.textContent = on ? "Listening: say your request, then pause. Nothing that changes records runs without the preview." : "";
+  if (on && !S.handsLoop) handsLoop();
+}
+
+async function handsLoop() {
+  S.handsLoop = true;
+  try {
+    while (S.hands) {
+      let r;
+      try {
+        r = await startRecording({ maxMs: 20000, silenceMs: 1200 });
+      } catch (e) {
+        handsFree(false);
+        toast($("#chatErr"), "Microphone not available. Allow it once on the microphone page.");
+        chrome.tabs.create({ url: chrome.runtime.getURL("mic.html") });
+        return;
+      }
+      const wav = await r.done;
+      if (!S.hands) return;
+      if (!r.heard()) continue;  // only noise: nothing is sent to the recognizer's answer
+      let text = "";
+      try { ({ text } = await api.transcribe(wav)); } catch (e) { toast($("#chatErr"), e.message); continue; }
+      if (!text || !text.trim() || !S.hands) continue;
+      const box = $("#say");
+      if (!box) { handsFree(false); return; }  // the panel moved to another tab
+      box.value = text;
+      S.voiceSource = true;
+      await sendChat();
+    }
+  } finally {
+    S.handsLoop = false;
   }
 }
 

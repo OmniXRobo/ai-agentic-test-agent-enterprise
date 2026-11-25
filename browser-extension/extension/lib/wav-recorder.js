@@ -1,7 +1,12 @@
 // Push-to-talk recorder: 16 kHz mono WAV, recorded only between an explicit Start and Stop (or maxMs).
 // Shared by the SkyGuard AI Operations Agent page and the Chrome/Edge extension side panel. Audio never leaves this
 // PC except to the local speech recognizer (SkyGuard's Faster-Whisper, or the companion's).
-export async function startRecording({ maxMs = 30000, onLevel = () => {} } = {}) {
+//
+// 23.15.0: with silenceMs the recorder also stops by itself once the person stops talking, which is what hands-free
+// listening needs: one spoken request per recording, with no button to press. The microphone is still released at
+// the end of every turn, and nothing is recorded while hands-free listening is off.
+export async function startRecording({ maxMs = 30000, onLevel = () => {}, silenceMs = 0, minSpeechMs = 300,
+                                       threshold = 0.07 } = {}) {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
   const ctx = new AudioContext();
   if (ctx.state !== "running") await ctx.resume().catch(() => {});
@@ -10,11 +15,17 @@ export async function startRecording({ maxMs = 30000, onLevel = () => {} } = {})
   const sink = ctx.createGain();
   sink.gain.value = 0;
   const chunks = [];
+  let speechMs = 0, quietMs = 0, spoke = false;
   node.onaudioprocess = (e) => {
     const data = e.inputBuffer.getChannelData(0);
     chunks.push(new Float32Array(data));
     let sum = 0; for (let i = 0; i < data.length; i += 16) sum += data[i] * data[i];
-    onLevel(Math.min(1, Math.sqrt(sum / (data.length / 16)) * 4));
+    const level = Math.min(1, Math.sqrt(sum / (data.length / 16)) * 4);
+    onLevel(level);
+    if (!silenceMs) return;
+    const ms = (data.length / ctx.sampleRate) * 1000;
+    if (level >= threshold) { speechMs += ms; quietMs = 0; if (speechMs >= minSpeechMs) spoke = true; }
+    else { quietMs += ms; if (spoke && quietMs >= silenceMs) stop(); }
   };
   source.connect(node); node.connect(sink); sink.connect(ctx.destination);
   let finish;
@@ -32,7 +43,7 @@ export async function startRecording({ maxMs = 30000, onLevel = () => {} } = {})
     finish(encodeWav(downsample(chunks, rate, 16000), 16000));
     return done;
   }
-  return { stop, done };
+  return { stop, done, heard: () => spoke };
 }
 
 function downsample(chunks, from, to) {
