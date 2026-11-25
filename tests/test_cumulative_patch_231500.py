@@ -114,7 +114,7 @@ def test_patch_contents(built):
     wheels = json.loads((built / "ocr-runtime" / "WHEELS.json").read_text())
     assert manifest["ocr_wheels"] == len(wheels) >= 5
     assert any(w.startswith("rapidocr-") for w in wheels) and any(w.startswith("onnxruntime-") for w in wheels)
-    assert manifest["extension_version"] == "1.4.3"
+    assert manifest["extension_version"] == "1.5.0"
     files = manifest["files"]
     for must in ("qa_platform/__init__.py", "qa_platform/automation/components.py",
                  "qa_platform/automation/js/components.js", "qa_platform/automation/semantic.py",
@@ -150,7 +150,7 @@ def test_patch_contents(built):
     for crlf in ("APPLY_PATCH.cmd", "UPDATE_EXTENSION.cmd", "UPDATE_EXTENSION.ps1", "DIAGNOSE_SITE.cmd", "DIAGNOSE_SITE.ps1"):
         assert b"\r\n" in (built / crlf).read_bytes(), crlf
     ext = built / "browser-extension-update"
-    assert json.loads((ext / "extension" / "manifest.json").read_text())["version"] == "1.4.3"
+    assert json.loads((ext / "extension" / "manifest.json").read_text())["version"] == "1.5.0"
     for must in ("app/companion_main.py", "app/skyguard_companion/server.py", "app/skyguard_agent/understanding.py",
                  "extension/background.js", "extension/lib/agent_dom.js", "app/skyguard_agent/navrec.py",
                  "app/skyguard_agent/autopilot.py", "app/skyguard_agent/intent.py"):
@@ -289,7 +289,8 @@ def test_apply_verify_rollback_and_apply_again(built, tmp_path, version):
     assert "Step reader (23.7.2)" in r.stdout and "Integration Comparison (23.8.0)" in r.stdout
     assert "FAIL" not in r.stdout
     kver, ktables, kapps = _knowledge(data)
-    assert kver == 2 and {"observations", "app_model", "conversation_state"} <= ktables
+    assert kver == 3 and {"observations", "app_model", "conversation_state", "remembered_values", "remembered_prompts",
+                          "app_secrets"} <= ktables  # 23.15.0: knowledge schema 3
     assert kapps == (1 if version in AGENT else 0)  # the agent's earlier knowledge is kept
     after = _rows(data / "qa_platform.sqlite3")
     assert all(after.get(t, 0) >= n for t, n in before.items())
@@ -325,7 +326,7 @@ def test_apply_verify_rollback_and_apply_again(built, tmp_path, version):
     assert (app / "qa_platform" / "automation" / "framework" / "steps.py").exists() == (version in ("23.7.2", "23.8.0", "23.9.0", "23.10.0", "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3", "23.14.0", "23.14.1"))
     assert (app / "qa_platform" / "comparison" / "workspace.py").exists() == (version in ("23.8.0", "23.9.0", "23.10.0", "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3", "23.14.0", "23.14.1"))
     assert (app / "qa_platform" / "comparison" / "filters.py").exists() == (version in ("23.9.0", "23.10.0", "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3", "23.14.0", "23.14.1"))
-    assert _knowledge(data)[0] == 2  # data is never deleted by a rollback
+    assert _knowledge(data)[0] == 3  # data is never deleted by a rollback (the 23.15.0 tables are ignored by older versions)
     if version in AGENT:  # the older agent opens the schema 2 knowledge database as it is
         out = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, '.'); from pathlib import Path; "
                               "from qa_platform.config import Paths; from skyguard_agent.store import Store; "
@@ -459,7 +460,7 @@ def test_setup_log_option_writes_every_message(built, tmp_path):
     r = _run(built, "apply", "--app", str(app), "--data", str(data), "--log", str(log))
     assert r.returncode == 0, r.stdout + r.stderr
     text = log.read_text(encoding="utf-8")
-    assert "Patched 23.14.1 -> 23.15.0" in text and "TFS speed and personal PAT / project in background work (23.14.1)" in text
+    assert "Patched 23.13.3 -> 23.15.0" in text and "TFS defects from every result, Workflow Operator memory, Arabic voice (23.15.0)" in text
 
 
 def _voice(app: Path, data: Path) -> None:
@@ -496,7 +497,7 @@ def test_working_arabic_voice_is_detected_kept_and_never_downloaded(built, tmp_p
     assert {p: p.read_bytes() for p in (app / "runtime").rglob("*") if p.is_file() and "ocr" not in p.parts} == \
         {p: b for p, b in voice_files.items() if "ocr" not in p.parts}
     assert json.loads((data / "settings.json").read_text())["voice"] == voice_cfg
-    backup = next(tmp_path.rglob("patch-backups/23.14.1-to-23.15.0-*"))
+    backup = next(tmp_path.rglob("patch-backups/23.13.3-to-23.15.0-*"))
     before = json.loads((backup / "VOICE_BEFORE.json").read_text())
     assert set(before["models"]) == {"small.ar", "small.en"} and "ar_JO-kareem-medium" in before["voices"]
     # applying again (repair) is idempotent: the voice is still the same

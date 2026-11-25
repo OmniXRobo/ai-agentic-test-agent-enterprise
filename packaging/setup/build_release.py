@@ -39,7 +39,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 VERSION = "23.15.0"
-EXT_VERSION = "1.4.3"
+EXT_VERSION = "1.5.0"
 PATCH_NAME = "SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch"
 SETUP_NAME = "SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe"
 EXT_NAME = "SkyGuard_Offline_Edge_Chrome_Agent_Extension"

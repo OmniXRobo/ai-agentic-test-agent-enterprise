@@ -63,8 +63,12 @@ def world(tmp_path_factory):
         except httpx.HTTPError:
             time.sleep(0.25)
     rt = app.state.runtime
-    rt.settings.update({"opsagent": {"headless": True}})
+    # 23.15.0: these tests cover the follow-up questions asked when no value is known. With "reuse_values" on
+    # (the default since 23.15.0) the values typed while teaching fill them instead, so it is off here;
+    # tests/test_ai_agent_memory_231500.py covers the filled case.
+    rt.settings.update({"opsagent": {"headless": True, "reuse_values": False}})
     svc = rt.opsagent
+    svc.pilot.reuse_values = False
     application = svc.pilot.connect(site + "/", name="Transport", by="admin", environment="Test")["application"]
     with sync_playwright() as pw:
         b = pw.chromium.launch()
