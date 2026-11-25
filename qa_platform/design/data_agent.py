@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .. import branding
+from ..ai.json_repair import close_json, parse_lenient
 from ..automation.framework.template.utilities import runtime_values
 from ..automation.generator import parse_tfs_steps
 from ..clock import now_iso
@@ -92,62 +93,14 @@ def answer_schema(batch: int, first: bool) -> dict[str, Any]:
 
 
 def _close_json(text: str) -> str | None:
-    """Cut a JSON text that stopped part way (answer limit reached) after the last complete value and close the
-    open brackets, so the rows written before the cut are kept."""
-    stack: list[str] = []
-    in_str = esc = False
-    best: tuple[int, list[str]] | None = None
-    for i, ch in enumerate(text):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-            continue
-        if ch == '"':
-            in_str = True
-        elif ch in "{[":
-            stack.append("}" if ch == "{" else "]")
-        elif ch in "}]":
-            if not stack:
-                break
-            stack.pop()
-            best = (i + 1, list(stack))
-            if not stack:
-                return text[: i + 1]
-    if not best:
-        return None
-    end, rest = best
-    return re.sub(r",\s*$", "", text[:end]) + "".join(reversed(rest))
+    """Kept for callers of 23.3.12; the lenient parser now lives in qa_platform.ai.json_repair (23.15.1)."""
+    return close_json(text)
 
 
 def parse_answer(text: str) -> Any:
-    """JSON from a small model's reply: fences, <think> blocks, prose around it, trailing commas, Python literals
-    and an answer cut off part way are all accepted. Raises ValueError when no JSON object is found."""
-    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S).strip()
-    m = re.search(r"```(?:json)?\s*(.*?)(?:```|$)", text, re.S)
-    if m and "{" in m.group(1):
-        text = m.group(1).strip()
-    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
-    if not starts:
-        raise ValueError("No JSON found in the AI answer.")
-    text = text[min(starts):]
-    candidates = [text]
-    closed = _close_json(text)
-    if closed and closed != text:
-        candidates.append(closed)
-    for cand in candidates:
-        for fix in (lambda t: t,
-                    lambda t: re.sub(r",\s*([}\]])", r"\1", t),
-                    lambda t: re.sub(r"\bNone\b", "null", re.sub(r"\bFalse\b", "false",
-                                     re.sub(r"\bTrue\b", "true", re.sub(r",\s*([}\]])", r"\1", t))))):
-            try:
-                return json.JSONDecoder().raw_decode(fix(cand))[0]
-            except json.JSONDecodeError:
-                continue
-    raise ValueError("The AI answer is not valid JSON.")
+    """JSON from a small model's reply: fences, <think> blocks, prose around it, trailing commas, comments, Python
+    literals and an answer cut off part way are all accepted. Raises ValueError when no JSON object is found."""
+    return parse_lenient(text)
 
 
 def _plain(value: Any) -> str | int | float | bool | None:

@@ -31,6 +31,7 @@ from ..errors import QAError
 from ..events import names
 from ..events.bus import EventBus, QAEvent
 from ..logging_setup import get_logger
+from .json_repair import parse_lenient
 
 log = get_logger("ai")
 
@@ -66,6 +67,18 @@ def extract_json(text: str) -> Any:
     if end <= start:
         raise ValueError("Unterminated JSON in the model reply.")
     return json.loads(text[start:end + 1])
+
+
+def _loads_reply(text: str) -> Any:
+    """23.15.1: strict parsing first, then lenient repair (trailing commas, comments, Python literals, smart quotes)
+    of a complete answer. An answer cut off part way is not closed here: the caller decides about truncation."""
+    try:
+        return extract_json(text)
+    except ValueError as strict:
+        try:
+            return parse_lenient(text, close=False)
+        except ValueError:
+            raise strict from None
 
 
 _CONTEXT_WORDS = re.compile(r"exceed_context_size|exceeds? the available context|context (?:length|size|window)|"
@@ -571,7 +584,7 @@ class AIGateway:
         reply, finish = self.chat_result(messages, json_mode=True, max_tokens=max_tokens, timeout=timeout,
                                          schema=grammar)
         try:
-            return model.model_validate(extract_json(reply))
+            return model.model_validate(_loads_reply(reply))
         except (ValueError, ValidationError) as first_error:
             if finish == "length":
                 # Cut off at the answer limit: sending the half answer back only overflows the context (HTTP 400).
@@ -590,7 +603,7 @@ class AIGateway:
             try:
                 reply, _ = self.chat_result(repair, json_mode=True, max_tokens=max_tokens, timeout=timeout,
                                             schema=grammar)
-                return model.model_validate(extract_json(reply))
+                return model.model_validate(_loads_reply(reply))
             except (ValueError, ValidationError) as exc:
                 raise QAError("AI_OUTPUT_INVALID", f"The {self.label()} did not return valid structured output.",
                               status=502, details=str(exc)[:500]) from exc
