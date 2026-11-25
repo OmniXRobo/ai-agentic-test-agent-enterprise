@@ -1,5 +1,14 @@
-r"""SkyGuard QA 23.14.1 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
-23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3 and 23.14.0). 23.14.1 makes TFS
+r"""SkyGuard QA 23.15.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3, 23.14.0 and 23.14.1).
+23.15.0 makes "Create TFS Defect" work from every result (a severity sent as a number was refused with "Request
+validation failed"), with readable steps, expected and actual, the run's screenshots and report files attached, and a
+defect that really reaches TFS after approval; performance results create a defect whether they passed or failed. The
+agent (now the Workflow Operator, extension 1.5.0) shows one preview and runs it on "yes" instead of waiting, fills what
+a request leaves unsaid from what you typed while teaching and from your own usual values, turns one request into many
+records ("10 trips, one per day, these drivers"), and keeps the sign-in password and authorization code typed while
+teaching in the credential store, masked (a one-time code is never kept). Arabic that speech recognition misspells is
+understood and answered in Arabic, and the voice popup can listen always, with no button between requests.
+23.14.1 makes TFS
 fast again with personal PATs and projects (connections reused, one credential lookup instead of one per call, shared
 queries, a Dashboard that never waits forever for TFS, a quicker Connection Test) and keeps the signed-in person's PAT and
 project in background work. 23.14.0 adds Security
@@ -43,13 +52,13 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.14.0; 23.14.1 to apply again); any other version is
+  1. detects the installation and its version (23.3.35 to 23.14.1; 23.15.0 to apply again); any other version is
      refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.14.1), patches that copy and writes START_SKYGUARD_23.14.1.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.15.0), patches that copy and writes START_SKYGUARD_23.15.0.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
@@ -95,15 +104,15 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.14.1"
+PATCH_VERSION = "23.15.0"
 BASELINE = ("23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, "
-            "23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3 or 23.14.0")
+            "23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3, 23.14.0 or 23.14.1")
 RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0",
-            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3", "23.14.0")
+            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3", "23.14.0", "23.14.1")
 BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
-AGENT_SCHEMA = 2
+AGENT_SCHEMA = 3  # 23.15.0: app_secrets (an authorization code learned once, kept in the vault)
 MIGRATION_COUNT = 23
 MARGIN_MB = 300
 
@@ -634,6 +643,33 @@ ok = (callable(carry_user) and DASHBOARD_TFS_BUDGET > 0 and hasattr(TfsService, 
 print('ok' if ok else '23.14.1 TFS speed fixes incomplete')
 """
 
+RELEASE_231500_LOAD = r"""
+import json
+from pathlib import Path
+from qa_platform.api.test_actions import DefectIn
+from qa_platform.itest.actions import ActionService
+from skyguard_agent.autopilot import CONFIRM_WORDS, Autopilot
+from skyguard_agent.knowledge import KnowledgeBase
+from skyguard_agent.translate import by_words, fuzzy_word
+from qa_platform.voice.intents import near_page, parse
+web = Path('web/js')
+ext = Path('web/js/wav-recorder.js').read_text(encoding='utf-8')
+ok = (DefectIn(severity=3, priority='2 - High').severity == 3           # the page's numbers are accepted again
+      and DefectIn(severity='2 - High').severity == 2
+      and all(hasattr(ActionService, m) for m in ('defect_text', 'text_to_html', '_attachments', '_facts_perf'))
+      and bool(CONFIRM_WORDS.match('yes')) and bool(CONFIRM_WORDS.match('\u0646\u0639\u0645'))
+      and 'reuse_values' in Autopilot.__init__.__code__.co_varnames
+      and all(hasattr(KnowledgeBase, m) for m in ('capture_secret', 'app_secrets', 'app_secret_value', 'forget_app_secret'))
+      and fuzzy_word('\u0625\u0641\u062a\u0627\u0621') == 'open'
+      and parse(by_words('\u0625\u0641\u062a\u0627\u0621 \u0627\u0644\u0625\u0634\u0627\u0631\u0627\u062a')).params['route'] == 'notifications'
+      and near_page('open the dashbord') == 'dashboard'
+      and parse('open workflow operator').params['route'] == 'ai-agent'
+      and 'silenceMs' in ext
+      and 'setHandsFree' in (web / 'voice.js').read_text(encoding='utf-8')
+      and 'Workflow Operator' in (web / 'app.js').read_text(encoding='utf-8'))
+print('ok' if ok else '23.15.0 features incomplete')
+"""
+
 ITEST_TABLES = {"itest_targets", "itest_runs", "itest_results", "itest_cases", "itest_audit", "sec_findings", "sec_app_maps",
                 "ai_analyses", "email_outbox"}
 VOICE_SECTION_KEYS = ("stt_engine", "stt_api", "language", "fw_model", "fw_port", "fw_compute_type", "radio_voice",
@@ -828,6 +864,11 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         check("TFS speed and personal PAT / project in background work (23.14.1)", r141 == "ok", r141)
     except PatchError as exc:
         check("TFS speed and personal PAT / project in background work (23.14.1)", False, str(exc))
+    try:
+        r150 = run_py(python, app, data, RELEASE_231500_LOAD).splitlines()[-1]
+        check("TFS defects from every result, Workflow Operator memory, Arabic voice (23.15.0)", r150 == "ok", r150)
+    except PatchError as exc:
+        check("TFS defects from every result, Workflow Operator memory, Arabic voice (23.15.0)", False, str(exc))
     # 23.14.0: the Arabic voice and speech model are detected and reported, never installed or downloaded here
     inv = voice_inventory(app, data)
     report["voice"] = inv
@@ -874,7 +915,9 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         finally:
             conn.close()
         want = {"applications", "accounts", "knowledge", "locators", "runs", "run_items", "audit", "observations",
-                "app_model", "conversation_state"}
+                "app_model", "conversation_state",
+                # 23.15.0: what the agent remembers so it stops asking twice, and the learned codes' references
+                "remembered_values", "remembered_prompts", "app_secrets"}
         check("Knowledge database", kver == AGENT_SCHEMA and kint == "ok" and want <= ktables,
               f"schema {kver}, integrity {kint}, tables {'present' if want <= ktables else 'missing'}")
     else:
@@ -938,7 +981,7 @@ def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
     step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
-         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2 + 23.13.3 + 23.14.0 + 23.14.1)")
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2 + 23.13.3 + 23.14.0 + 23.14.1 + 23.15.0)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):

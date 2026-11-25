@@ -1,5 +1,5 @@
 // Push-to-talk recorder: 16 kHz mono WAV, recorded only between an explicit Start and Stop (or maxMs).
-// Shared by the SkyGuard AI Operations Agent page and the Chrome/Edge extension side panel. Audio never leaves this
+// Shared by the SkyGuard Workflow Operator page and the Chrome/Edge extension side panel. Audio never leaves this
 // PC except to the local speech recognizer (SkyGuard's Faster-Whisper, or the companion's).
 //
 // 23.15.0: with silenceMs the recorder also stops by itself once the person stops talking, which is what hands-free

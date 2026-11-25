@@ -1,4 +1,4 @@
-"""Builds the SkyGuard QA user manual (PDF with screenshots of the application) for 23.14.1.
+"""Builds the SkyGuard QA user manual (PDF with screenshots of the application) for 23.15.0.
 
 It starts SkyGuard QA in-process with an empty data folder (nothing is sent anywhere), signs in, adds one example
 Guided Browser script so the script editor can be shown, takes a screenshot of each page described, writes the manual
