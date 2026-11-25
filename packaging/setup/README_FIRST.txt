@@ -1,14 +1,24 @@
-SkyGuard QA 23.15.0 - cumulative upgrade from SGQA-23.3.35 (TFS defects from every result, the Workflow Operator
-and voice in your language, on top of 23.14.1)
+SkyGuard QA 23.15.1 - cumulative upgrade from SGQA-23.3.35 (AI test case generation on the Test Cases page fixed
+and faster, on top of 23.15.0)
 ===============================================================================================
 
 WHAT THIS IS
   One upgrade that brings any installed SkyGuard QA from 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1,
-  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3, 23.14.0
-  or 23.14.1 to 23.15.0, including every release in between. Any other version is refused and nothing is changed.
-  No internet. Windows 10 (1909 or later) or Windows 11.
+  23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3, 23.14.0,
+  23.14.1 or 23.15.0 to 23.15.1, including every release in between. Any other version is refused and nothing is
+  changed. No internet. Windows 10 (1909 or later) or Windows 11.
 
-  New in 23.15.0 (details: PATCH_CHANGELOG.md, cause: ROOT_CAUSE_ANALYSIS.md, how to use it: USER_GUIDE.md):
+  New in 23.15.1 (details: PATCH_CHANGELOG.md, cause: ROOT_CAUSE_ANALYSIS.md, how to use it: USER_GUIDE.md):
+  - "GENERATE TEST CASES WITH AI" ON THE TEST CASES PAGE WORKS WITH THE LOCAL MODEL. It stopped with "The
+    On-Premise AI did not return valid structured output" while AI Test Design worked for the same story. The Test
+    Cases page did not send the answer format to the AI server (AI Test Design always did); now it does, and an
+    almost-right answer is repaired instead of refused, case by case.
+  - FASTER, SAME QUALITY: the AI server enforces valid criterion ids and at least two steps per case, texts stay
+    short, and only the cases the quality rules flag are reviewed a second time.
+  - The browser companion answers a refused request cleanly on Windows.
+  - Everything from 23.15.0 and earlier is kept (no database change).
+
+  New in 23.15.0 (details: previous-23.15.0/PATCH_CHANGELOG.md):
   - CREATE TFS DEFECT WORKS FROM EVERY RESULT. Vulnerability Scanning, Execution History (a failed run and a run you
     stopped) and Performance Results (passed or failed) answered "Request validation failed"; they now open a
     preview and create the defect. The page sent the severity as a number and the API asked for text: that was the
@@ -64,7 +74,7 @@ WHAT THIS IS
 
   WHERE IS THE SKYGUARD QA FOLDER? (INSTALL_ARABIC_VOICE.cmd, GET_ARABIC_VOICE.ps1, INSTALL_SPEECH_MODEL.cmd)
     Paste this into the File Explorer address bar:  %LOCALAPPDATA%\Programs\AIAgenticTestAgent\app
-    If Setup made a side-by-side copy:              %LOCALAPPDATA%\SkyGuardQA\app-23.15.0
+    If Setup made a side-by-side copy:              %LOCALAPPDATA%\SkyGuardQA\app-23.15.1
     Or right-click the SkyGuard QA shortcut > Open file location.
 
   New in 23.13.3:
@@ -122,18 +132,18 @@ HOW TO INSTALL (5 minutes)
 
 YOUR DATA
   Backed up before anything changes (patch-backups folder in your installation). Never deleted. If any step fails,
-  the previous version is restored automatically. To undo later: patch-tools\23.15.0\ROLLBACK_PATCH.cmd.
+  the previous version is restored automatically. To undo later: patch-tools\23.15.1\ROLLBACK_PATCH.cmd.
   The Arabic voice, the speech models and the voice settings are not touched; Setup verifies they are unchanged.
 
 IN THIS FOLDER
   SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe   the installer (wizard; unattended: /S /APP="<folder>")
   INSTALLATION_GUIDE.md          step by step, unattended install, protected folders, rollback, troubleshooting
-  PATCH_CHANGELOG.md             what is new in 23.15.0
+  PATCH_CHANGELOG.md             what is new in 23.15.1
   USER_GUIDE.md                  Create TFS Defect from any result, the Workflow Operator and voice step by step
   COMPATIBILITY_MATRIX.md        Fuse, ActiveMQ, ZAP, SMTP, browser and Windows versions: tested or not
   DEPENDENCY_INVENTORY.md        what each feature needs, all offline
   ROOT_CAUSE_ANALYSIS.md         what was found and changed, and why
-  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.15.0) and what each one added
+  RELEASE_INCLUSION_MANIFEST.md  every release included (23.4.0 to 23.15.1) and what each one added
   SECURITY_REPORT.md             security checks, controls and residual risks
   sbom.cdx.json                  software bill of materials (CycloneDX 1.5)
   TEST_REPORT.md, test-results\  what was tested, passed, failed, skipped or not executed
