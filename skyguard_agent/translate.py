@@ -94,8 +94,62 @@ MISHEARD: dict[str, str] = {
     "سجلني": "log me in", "دخلني": "log me in", "شغلي": "run", "شغلو": "run",
     "احجزلي": "book", "احجزي": "book", "ابحثلي": "search", "دورلي": "search",
 }
+# 23.15.0: words that were missing (notifications, alerts) and the pages of the dashboard said in Arabic
+WORDS.update({
+    "الاشعارات": "notifications", "الإشعارات": "notifications", "اشعارات": "notifications", "إشعارات": "notifications",
+    "الاشعار": "notification", "التنبيهات": "notifications", "تنبيهات": "notifications", "الإخطارات": "notifications",
+    "الاخطارات": "notifications", "اللوحة": "dashboard", "لوحة": "dashboard", "السجل": "history", "سجل": "history",
+    "التاريخ": "history", "النتائج": "results", "نتائج": "results", "التقرير": "report", "الاعدادات": "settings",
+    "الإعدادات": "settings", "اعدادات": "settings", "التفضيلات": "preferences", "العيوب": "defects", "عيوب": "defects",
+    "الاخطاء": "defects", "الأخطاء": "defects", "خلل": "defect", "الحالات": "test cases", "حالات": "test cases",
+    "الخطط": "test plans", "خطط": "test plans", "الاداء": "performance", "الأداء": "performance",
+    "المهام": "tasks", "المساعد": "the agent", "الوكيل": "the agent", "الصوت": "voice", "الصوتية": "voice",
+    "القصص": "user stories", "قصص": "user stories", "الاستكشاف": "discovery", "اكتشاف": "discovery",
+    "الاتمتة": "automation", "الأتمتة": "automation", "اتمتة": "automation", "البرنامج النصي": "script",
+    "السكربت": "script", "سكربت": "script", "المراقبة": "monitoring", "الملخص": "summary",
+})
+
+
+def _distance(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def fuzzy_word(core: str) -> str | None:
+    """23.15.0: the word list again, for a word the recognizer misheard by a letter or two.
+
+    Speech recognition writes Gulf Arabic as it hears it: "إفتاء" for "افتح" (open) and "الإشارات" for "الإشعارات"
+    (notifications). Those were answered "this operation is not supported". A word within one letter (two for a long
+    word) of a known command word, and no other, is taken as that word; anything less certain is left alone.
+    """
+    core = _HAMZA_ALEF.sub("ا", normalize(core or "").strip("،,.؟?!:"))
+    if len(core) < 3:
+        return None
+    if core in _FUZZY_KEYS:
+        return _FUZZY_KEYS[core]
+    budget = 1 if len(core) < 6 else 2
+    best: list[tuple[int, str]] = []
+    for key, english in _FUZZY_KEYS.items():
+        if abs(len(key) - len(core)) > budget:
+            continue
+        d = _distance(core, key)
+        if d <= budget:
+            best.append((d, english))
+    if not best:
+        return None
+    best.sort(key=lambda x: x[0])
+    closest = [e for d, e in best if d == best[0][0]]
+    return closest[0] if len({e for e in closest}) == 1 else None
+
+
 _HAMZA_ALEF = re.compile("[أإآ]")
 _DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+_FUZZY_KEYS: dict[str, str] = {}
 
 # 23.13.3: literal. The old example "open the booking page" made the model answer "Open the booking page" for a plain
 # "افتح صفحة" (open page); a page, place or object that was not said is never added.
@@ -134,6 +188,8 @@ def by_words(text: str) -> str:
             en = WORDS[core[2:]]
         if en is None and len(core) > 2 and core[0] in "وبك" and core[1:] in WORDS:  # و / ب / ك: and, with, as
             en = {"و": "and ", "ب": "with ", "ك": "as "}[core[0]] + WORDS[core[1:]]
+        if en is None:  # 23.15.0: a word the recognizer misheard by a letter or two
+            en = fuzzy_word(core)
         out.append(en if en is not None else tok)
     return re.sub(r"\s+", " ", "".join(out)).strip()
 
@@ -270,3 +326,16 @@ def spoken_reply(reply: dict[str, Any], arabic: bool, llm: Any = None) -> dict[s
     ar = to_arabic(text, llm) if text else None
     kind = "choose" if reply.get("type") == "clarify" and reply.get("options") else str(reply.get("type"))
     return {"speak": ar or ARABIC_LINES.get(kind, ARABIC_DEFAULT), "language": "ar"}
+
+
+def _build_fuzzy_keys() -> None:
+    for word, english in WORDS.items():
+        _FUZZY_KEYS.setdefault(_HAMZA_ALEF.sub("ا", normalize(word)), english)
+    for word, english in MISHEARD.items():
+        _FUZZY_KEYS.setdefault(_HAMZA_ALEF.sub("ا", normalize(word)), english)
+    for word, english in list(_FUZZY_KEYS.items()):
+        if word.startswith("ال"):
+            _FUZZY_KEYS.setdefault(word[2:], english)
+
+
+_build_fuzzy_keys()

@@ -29,6 +29,7 @@ export const voice = {
   wakeEnd: null, // {reason: "stopped"|"error", blocked: bool, at} when wake-name listening last ended
   needsGesture: false, // the browser holds audio until the user clicks or presses a key once on this page
   following: false, // the next sentence is taken without the wake name (after "<name>." alone or a question)
+  handsFree: false, // 23.15.0: "Listen always": every sentence is a command, no name and no button
   muted: false, // microphone muted for this browser session (wake listening stays enabled)
 };
 
@@ -640,6 +641,25 @@ export function followUp(seconds = Number(voice.settings?.follow_up_seconds) || 
 
 export function wakeActive() { return Boolean(wakeLoop); }
 
+/**
+ * 23.15.0 "Listen always": hands-free. While it is on, every sentence heard (that is not the agent's own voice)
+ * is sent as a command, so the person can keep talking - "open AI driven automation", "the name is online store",
+ * "generate the script", "create the defect in TFS" - without pressing anything or saying the name. It needs
+ * wake-name listening, and turning it off returns to the usual "say the name first".
+ */
+export async function setHandsFree(on) {
+  voice.handsFree = Boolean(on);
+  try { localStorage.setItem("qa-voice-hands-free", on ? "1" : "0"); } catch { /* private window */ }
+  if (on && !wakeActive()) await setWake(true);
+  followUntil = on ? Number.MAX_SAFE_INTEGER : 0;
+  voice.following = false;
+  emit();
+}
+
+export function handsFreeActive() { return Boolean(voice.handsFree); }
+
+try { voice.handsFree = localStorage.getItem("qa-voice-hands-free") === "1"; } catch { /* private window */ }
+
 function setWakeState(st) { voice.wakeState = st; emit(); }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -721,6 +741,14 @@ async function wakeLoopBody(stream, s, ctl) {
     if (isEcho(text, now)) { settle(); continue; } // the agent heard itself
     if (norm === lastText && now - lastAt < 4000) { settle(); continue; } // the same result twice
     lastText = norm; lastAt = now;
+    if (voice.handsFree && !bareWake(text, s)) {
+      // hands-free: the name is optional; everything said is the instruction
+      const said = afterName(text, s);
+      ackTone(s);
+      const r = await sendCommand(said || text, "speech").catch(() => null);
+      if (r && ASKS.has(r.status)) followUp(60);
+      continue;
+    }
     if (bareWake(text, s)) {
       settle();
       ackTone(s);

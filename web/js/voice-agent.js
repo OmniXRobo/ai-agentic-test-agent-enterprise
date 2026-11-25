@@ -13,7 +13,7 @@ import { api } from "./api.js";
 import { esc, toast } from "./util.js";
 import {
   voice, onVoice, loadSettings, agentName, wakeName, wakeCapable, setWake, wakeActive, listen, sendCommand,
-  stopSpeaking, cancelListening, settingsChanged,
+  stopSpeaking, cancelListening, settingsChanged, setHandsFree, handsFreeActive,
 } from "./voice.js";
 
 const MUTE_KEY = "qa.voice.muted";
@@ -116,6 +116,7 @@ function shell() {
         <button class="btn" type="button" id="vaTalk">Talk now</button>
         <button class="btn" type="button" id="vaMute" aria-pressed="false">Mute mic</button>
         <button class="btn" type="button" id="vaWake"></button>
+        <button class="btn" type="button" id="vaHands" aria-pressed="false" title="Every sentence is carried out, with no button and without saying the name"></button>
         <button class="btn" type="button" id="vaStopSpeak">Stop speaking</button>
       </div>
       <div class="va-foot"><a href="#/command-center" id="vaCenter">Open Voice Command Center</a><a href="#/voice">Voice settings</a></div>
@@ -140,7 +141,7 @@ function render() {
   const title = `${agentName()}: ${st.label}${micLive() ? " (microphone on)" : ""}`;
   orb.title = title; orb.setAttribute("aria-label", `Voice assistant. ${st.label}`);
   root.querySelector("#vaLabel").textContent = st.label;
-  const key = `${st.key}|${st.label}|${st.hint}|${voice.log.length}|${voice.pending?.kind}|${voice.muted}|${s.wake_listening}|${wakeCapable(s)}|${agentName()}`;
+  const key = `${st.key}|${st.label}|${st.hint}|${voice.log.length}|${voice.pending?.kind}|${voice.muted}|${s.wake_listening}|${wakeCapable(s)}|${agentName()}|${handsFreeActive()}`;
   if (key === shownKey) return;
   shownKey = key;
   root.querySelector("#vaName").textContent = agentName();
@@ -157,6 +158,10 @@ function render() {
   const wake = root.querySelector("#vaWake");
   wake.hidden = !wakeCapable(s);
   wake.textContent = s.wake_listening === false ? `Listen for "${wakeName()}"` : "Stop listening";
+  const hands = root.querySelector("#vaHands");   // 23.15.0: hands-free
+  hands.hidden = !wakeCapable(s);
+  hands.textContent = handsFreeActive() ? "Stop listening always" : "Listen always";
+  hands.setAttribute("aria-pressed", String(handsFreeActive()));
   root.querySelector("#vaTalk").disabled = s.voice_enabled === false || s.stt_engine === "off";
   // A short bubble with the newest line, when the panel is closed (the Command Center shows its own log).
   if (voice.log.length !== lastLogLen) {
@@ -199,6 +204,14 @@ function bind() {
   $("#vaTalk").addEventListener("click", () => run(talkNow));
   $("#vaMute").addEventListener("click", () => setMuted(!voice.muted));
   $("#vaWake").addEventListener("click", () => run(() => setWakeListening(voice.settings?.wake_listening === false)));
+  $("#vaHands").addEventListener("click", () => run(async () => {
+    const on = !handsFreeActive();
+    if (on && voice.settings?.wake_listening === false) await setWakeListening(true);
+    await setHandsFree(on);
+    toast(on ? `${agentName()} is listening all the time: say what you want, no button and no name. Say "stop listening always" to end it.`
+             : `${agentName()} listens for its name again.`, "info", 7000);
+    render();
+  }));
   $("#vaStopSpeak").addEventListener("click", () => stopSpeaking());
   $("#vaTyped").addEventListener("submit", (e) => {
     e.preventDefault();

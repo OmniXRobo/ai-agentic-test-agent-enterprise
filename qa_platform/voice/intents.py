@@ -435,4 +435,41 @@ def match_page(phrase: str) -> str | None:
         for alias in aliases:
             if re.search(rf"\b{re.escape(alias)}\b", phrase) and (best is None or len(alias) > best[0]):
                 best = (len(alias), route)
-    return best[1] if best else None
+    return best[1] if best else near_page(phrase)
+
+
+def near_page(phrase: str) -> str | None:
+    """23.15.0: the page whose name the words almost match ("notification", "exec history", "dashbord").
+
+    Speech, and Arabic translated to English, rarely gives the exact words of a menu item; before, anything that was
+    not an exact alias was answered "this operation is not supported". Only a clear single winner is used.
+    """
+    from difflib import SequenceMatcher
+
+    words = [w for w in re.findall(r"[a-z]+", phrase.lower()) if w not in _NOISE_WORDS]
+    if not words:
+        return None
+    said = " ".join(words)
+    scored: list[tuple[float, str]] = []
+    for route, label, aliases in PAGES:
+        best = 0.0
+        for alias in (*aliases, label.lower(), route.replace("-", " ")):
+            a = alias.lower()
+            ratio = SequenceMatcher(None, said, a).ratio()
+            shared = {w for w in words if len(w) > 3} & set(re.findall(r"[a-z]+", a))
+            if shared:
+                ratio = max(ratio, 0.8 + 0.05 * len(shared))
+            for w in words:  # one word, misheard by a letter ("notification", "dashbord")
+                for token in re.findall(r"[a-z]+", a):
+                    if len(w) > 4 and len(token) > 4 and SequenceMatcher(None, w, token).ratio() >= 0.86:
+                        ratio = max(ratio, 0.85)
+            best = max(best, ratio)
+        scored.append((best, route))
+    scored.sort(reverse=True)
+    if scored and scored[0][0] >= 0.8 and (len(scored) < 2 or scored[0][0] - scored[1][0] >= 0.02):
+        return scored[0][1]
+    return None
+
+
+_NOISE_WORDS = {"the", "a", "an", "my", "me", "please", "now", "open", "show", "go", "to", "take", "navigate",
+                "display", "of", "for", "on", "in", "it", "this", "that"}

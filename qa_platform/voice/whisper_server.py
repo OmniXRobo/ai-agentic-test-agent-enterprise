@@ -32,6 +32,7 @@ import json
 import logging
 import threading
 import time
+import re
 import traceback
 import wave
 from email.parser import BytesParser
@@ -40,7 +41,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 ENGINE = "faster-whisper"
-SERVER_VERSION = "23.3.7"
+SERVER_VERSION = "23.15.0"
 MAX_BODY = 25 * 1024 * 1024
 RATE = 16000
 
@@ -93,22 +94,46 @@ class Engine:
             self.state, self.error = "error", f"{type(exc).__name__}: {exc}"
             log.error("model could not be loaded: %s\n%s", self.error, traceback.format_exc())
 
-    def _run(self, audio: Any, language: str | None, prompt: str | None, temperature: float = 0.0) -> str:
-        lang = language or self.language or None
-        if lang in ("auto", "any", "multi"):  # 23.13.0: English and Arabic: the model detects the language
-            lang = None
-        segments, _info = self.model.transcribe(
+    ARABIC = re.compile(r"[\u0600-\u06FF]")
+
+    def _once(self, audio: Any, lang: str | None, prompt: str | None, temperature: float) -> tuple[str, Any]:
+        segments, info = self.model.transcribe(
             audio, language=lang, task="transcribe", beam_size=self.beam_size,
             temperature=temperature or 0.0, initial_prompt=prompt or None, condition_on_previous_text=False,
             without_timestamps=True, vad_filter=True, vad_parameters={"min_silence_duration_ms": 400},
             no_speech_threshold=0.6, log_prob_threshold=-1.0)
-        parts = []
+        parts, scores = [], []
         for seg in segments:
             # Whisper invents a polite sentence ("Thank you.") for noise; drop what it is unsure was speech.
             if seg.no_speech_prob > 0.6 and seg.avg_logprob < -0.7:
                 continue
             parts.append(seg.text.strip())
-        return " ".join(p for p in parts if p).strip()
+            scores.append(getattr(seg, "avg_logprob", -1.0))
+        text = " ".join(p for p in parts if p).strip()
+        return text, {"info": info, "score": (sum(scores) / len(scores)) if scores else -9.9}
+
+    def _run(self, audio: Any, language: str | None, prompt: str | None, temperature: float = 0.0) -> str:
+        lang = language or self.language or None
+        auto = lang in ("auto", "any", "multi")
+        if auto:  # 23.13.0: English and Arabic: the model detects the language
+            lang = None
+        text, meta = self._once(audio, lang, prompt, temperature)
+        if not auto:
+            return text
+        # 23.15.0: with "English and Arabic", a short Arabic sentence was often detected as English and came back as
+        # English-sounding nonsense. When the detection was not confident, or the detected language is Arabic while
+        # the text has no Arabic letters, the same audio is transcribed again as Arabic and the clearer of the two
+        # is kept. Nothing is sent anywhere: both passes run on this PC.
+        info = meta["info"]
+        detected = str(getattr(info, "language", "") or "")
+        probability = float(getattr(info, "language_probability", 0.0) or 0.0)
+        has_arabic = bool(text and self.ARABIC.search(text))
+        if (detected == "ar" and not has_arabic) or (not has_arabic and probability < 0.75):
+            second, meta2 = self._once(audio, "ar", None, temperature)
+            if second and (not text or meta2["score"] >= meta["score"] - 0.15 or detected == "ar"):
+                log.info("auto language: kept the Arabic pass (detected %s at %.2f)", detected or "?", probability)
+                return second
+        return text
 
     def transcribe(self, audio: Any, language: str | None, prompt: str | None, temperature: float = 0.0) -> str:
         if self.state != "ok":

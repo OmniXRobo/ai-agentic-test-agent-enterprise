@@ -549,8 +549,21 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
 
         if not has_arabic(text or ""):
             return self._handle(text, conversation_id=conversation_id, source=source, page=page)
-        english, _ = to_english(self.strip_wake_name(text or "") or text, self._ai_chat())
+        from skyguard_agent.translate import by_words
+
+        spoken = self.strip_wake_name(text or "") or text
+        english, _ = to_english(spoken, self._ai_chat())
         reply = self._handle(english, conversation_id=conversation_id, source=source, page=page)
+        # 23.15.0: the local AI's English sometimes misses the page the person named ("إفتاء الإشارات" -> "open the
+        # signals"); the built-in word list, with its fuzzy matching of misheard Arabic, is tried before the command
+        # is called unsupported, so a known page or command is still opened instead of "this operation is not
+        # supported".
+        if reply.get("status") in ("unsupported", "unclear"):
+            words = by_words(spoken)
+            if words and words.lower() != (english or "").lower():
+                second = self._handle(words, conversation_id=conversation_id, source=source, page=page)
+                if second.get("status") not in ("unsupported", "unclear"):
+                    reply, english = second, words
         reply["heard"] = text
         reply["understood"] = english
         arabic = self.to_arabic(reply.get("say") or "")
