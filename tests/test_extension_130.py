@@ -34,8 +34,11 @@ EXT = ROOT / "browser-extension" / "extension"
 def test_versions_are_130():
     from skyguard_agent import __version__ as core
     from skyguard_companion import VERSION
-    assert VERSION == "1.3.0" and core == "1.3.0"
-    assert json.loads((EXT / "manifest.json").read_text())["version"] == "1.3.0"
+    # 1.3.1 (SkyGuard 23.11.2) keeps every 1.3.0 feature and adds the missing-information follow-up
+    # 1.4.0 (23.12.0): installs without pairing; 1.4.1 (23.13.0): Arabic commands, public sites, changing addresses; 1.4.2 (23.13.2): spoken replies; 1.4.3 (23.13.3): page choices as buttons
+    # 1.5.0 (23.15.0): the Workflow Operator name, Listen always, remembered values and vaulted secrets
+    assert VERSION == "1.5.0" and core == "1.5.0"
+    assert json.loads((EXT / "manifest.json").read_text())["version"] == "1.5.0"
 
 
 def test_side_panel_has_no_fixed_examples_or_permanent_warning():

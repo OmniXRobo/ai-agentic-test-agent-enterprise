@@ -786,6 +786,279 @@ MIGRATIONS: list[str] = [
         updated_at TEXT NOT NULL
     );
     """,
+    # 21 - 23.12.0: API Testing (applications, tests, suites, runs, results, script versions, audit). Secrets are
+    # never stored here: they live in the OS credential store under the "apicred" namespace.
+    """
+    CREATE TABLE IF NOT EXISTS api_apps (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        environment TEXT NOT NULL DEFAULT 'Test',
+        description TEXT,
+        api_type TEXT NOT NULL DEFAULT 'REST',
+        config TEXT NOT NULL DEFAULT '{}',
+        targets TEXT NOT NULL DEFAULT '[]',
+        authorized_by TEXT,
+        authorized_at TEXT,
+        spec TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS api_tests (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'manual',
+        operation TEXT,
+        origin TEXT,
+        status TEXT NOT NULL DEFAULT 'ready',
+        review_reason TEXT,
+        definition TEXT NOT NULL,
+        destructive INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        version INTEGER NOT NULL DEFAULT 1,
+        position INTEGER NOT NULL DEFAULT 0,
+        last_status TEXT,
+        last_run_id TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_tests_app ON api_tests(app_id, position);
+    CREATE TABLE IF NOT EXISTS api_test_versions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        test_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        definition TEXT NOT NULL,
+        note TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS api_suites (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        test_ids TEXT NOT NULL DEFAULT '[]',
+        chain INTEGER NOT NULL DEFAULT 0,
+        parallel INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS api_runs (
+        id TEXT PRIMARY KEY,
+        app_id TEXT NOT NULL,
+        suite_id TEXT,
+        label TEXT,
+        trigger TEXT NOT NULL DEFAULT 'manual',
+        mode TEXT NOT NULL DEFAULT 'api',
+        mode_reason TEXT,
+        status TEXT NOT NULL,
+        counts TEXT,
+        environment TEXT,
+        started_by TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        duration_ms INTEGER,
+        summary TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_runs_app ON api_runs(app_id, started_at);
+    CREATE TABLE IF NOT EXISTS api_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        test_id TEXT,
+        test_name TEXT NOT NULL,
+        test_version INTEGER,
+        row_label TEXT,
+        status TEXT NOT NULL,
+        request TEXT,
+        response TEXT,
+        assertions TEXT,
+        error TEXT,
+        classification TEXT,
+        draft_id INTEGER,
+        time_ms INTEGER,
+        status_code INTEGER,
+        at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_results_run ON api_results(run_id, id);
+    CREATE TABLE IF NOT EXISTS api_scripts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        app_id TEXT NOT NULL,
+        suite_id TEXT,
+        version INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        edited INTEGER NOT NULL DEFAULT 0,
+        note TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_scripts_app ON api_scripts(app_id, version);
+    CREATE TABLE IF NOT EXISTS api_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        by TEXT,
+        action TEXT NOT NULL,
+        app_id TEXT,
+        target TEXT,
+        detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_api_audit_app ON api_audit(app_id, id);
+    """,
+    # 22 - 23.13.0: the person a defect is assigned to in TFS (chosen from the project's people in Defect Review).
+    """
+    ALTER TABLE defect_drafts ADD COLUMN assigned_to TEXT;
+    """,
+    # 23 - 23.14.0: Security Testing, Red Hat Fuse Testing and ActiveMQ Testing (targets, runs, results, test cases,
+    # security findings and approved application maps, audit), the AI analysis history of every result, and the
+    # Email Developer outbox (drafts, SMTP acceptance, duplicate-send protection).
+    """
+    CREATE TABLE IF NOT EXISTS itest_targets (
+        id TEXT PRIMARY KEY,
+        module TEXT NOT NULL,
+        name TEXT NOT NULL,
+        environment TEXT NOT NULL,
+        config TEXT NOT NULL DEFAULT '{}',
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_itest_targets_module ON itest_targets(module, name);
+    CREATE TABLE IF NOT EXISTS itest_runs (
+        id TEXT PRIMARY KEY,
+        module TEXT NOT NULL,
+        target_id TEXT,
+        kind TEXT NOT NULL,
+        label TEXT,
+        status TEXT NOT NULL,
+        counts TEXT,
+        config TEXT,
+        checkpoint TEXT,
+        summary TEXT,
+        started_by TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_itest_runs_module ON itest_runs(module, started_at);
+    CREATE TABLE IF NOT EXISTS itest_results (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        module TEXT NOT NULL,
+        target_id TEXT,
+        test_name TEXT NOT NULL,
+        category TEXT,
+        status TEXT NOT NULL,
+        severity TEXT,
+        expected TEXT,
+        actual TEXT,
+        evidence TEXT,
+        correlation_id TEXT,
+        finding_id TEXT,
+        draft_id INTEGER,
+        at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_itest_results_run ON itest_results(run_id, id);
+    CREATE INDEX IF NOT EXISTS ix_itest_results_module ON itest_results(module, status);
+    CREATE TABLE IF NOT EXISTS itest_cases (
+        id TEXT PRIMARY KEY,
+        module TEXT NOT NULL,
+        target_id TEXT,
+        name TEXT NOT NULL,
+        definition TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        origin TEXT,
+        created_by TEXT,
+        approved_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS itest_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        by TEXT,
+        module TEXT NOT NULL,
+        action TEXT NOT NULL,
+        target TEXT,
+        detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_itest_audit_module ON itest_audit(module, id);
+    CREATE TABLE IF NOT EXISTS sec_findings (
+        id TEXT PRIMARY KEY,
+        target_id TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        category TEXT,
+        owasp TEXT,
+        severity TEXT NOT NULL,
+        confidence TEXT,
+        url TEXT,
+        param TEXT,
+        description TEXT,
+        evidence TEXT,
+        source TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        first_run TEXT,
+        last_run TEXT,
+        occurrences INTEGER NOT NULL DEFAULT 1,
+        reviewed_by TEXT,
+        reviewed_at TEXT,
+        review_note TEXT,
+        retest_status TEXT,
+        retest_at TEXT,
+        draft_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_sec_findings_sig ON sec_findings(target_id, signature);
+    CREATE TABLE IF NOT EXISTS sec_app_maps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        target_id TEXT NOT NULL,
+        run_id TEXT,
+        map TEXT NOT NULL,
+        approved INTEGER NOT NULL DEFAULT 0,
+        approved_by TEXT,
+        approved_at TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_sec_app_maps_target ON sec_app_maps(target_id, id);
+    CREATE TABLE IF NOT EXISTS ai_analyses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject_kind TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        module TEXT,
+        analysis TEXT NOT NULL,
+        facts TEXT,
+        model TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_ai_analyses_subject ON ai_analyses(subject_kind, subject_id, id);
+    CREATE TABLE IF NOT EXISTS email_outbox (
+        id TEXT PRIMARY KEY,
+        module TEXT,
+        subject_kind TEXT,
+        subject_id TEXT,
+        status TEXT NOT NULL,
+        to_addrs TEXT NOT NULL DEFAULT '[]',
+        cc_addrs TEXT NOT NULL DEFAULT '[]',
+        bcc_addrs TEXT NOT NULL DEFAULT '[]',
+        subject TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        context TEXT,
+        attachments TEXT NOT NULL DEFAULT '[]',
+        fingerprint TEXT,
+        smtp_reply TEXT,
+        error TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        sent_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_email_outbox_subject ON email_outbox(subject_kind, subject_id);
+    """,
 ]
 
 

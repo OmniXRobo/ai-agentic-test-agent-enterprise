@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, Field
 
+from ..auth import carry_user
 from ..agents.base import new_run_id
 from ..errors import QAError
 from ..logging_setup import get_logger
@@ -157,7 +158,7 @@ async def start_design(body: DesignIn, rt: Runtime = Depends(runtime)) -> dict[s
         except Exception:
             log.info("Test design run failed", extra={"run_id": run_id})
 
-    asyncio.get_running_loop().run_in_executor(None, work)
+    asyncio.get_running_loop().run_in_executor(None, carry_user(work))  # 23.14.1: as the signed-in person
     return {"ok": True, "run_id": run_id}
 
 
@@ -254,7 +255,7 @@ async def start_suite_run(body: SuiteRunIn, rt: Runtime = Depends(runtime)) -> d
             finally:
                 _publishing.discard(r["run_id"])
 
-    asyncio.get_running_loop().run_in_executor(None, work)
+    asyncio.get_running_loop().run_in_executor(None, carry_user(work))  # 23.14.1: as the signed-in person
     return {"ok": True, "run_id": runs[0]["run_id"], "testing_type": runs[0]["testing_type"], "runs": runs}
 
 
@@ -387,7 +388,7 @@ async def generate_test_data(body: GenerateDataIn, rt: Runtime = Depends(runtime
         except Exception as exc:
             rt.runs.finish(run_id, "FAILED", {"error": getattr(exc, "message", None) or str(exc)})
 
-    asyncio.get_running_loop().run_in_executor(None, work)
+    asyncio.get_running_loop().run_in_executor(None, carry_user(work))  # 23.14.1: as the signed-in person
     return {"ok": True, "run_id": run_id, "test_case_ids": ids}
 
 

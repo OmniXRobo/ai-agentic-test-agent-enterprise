@@ -33,6 +33,7 @@ class ScheduleIn(BaseModel):
     browsers: list[str] | None = None
     parallel: int | None = Field(default=None, ge=1, le=8)
     headless: bool | None = None
+    mode: str | None = Field(default=None, max_length=20)  # 23.12.0: visible | headless | smart
     data_rows: str | None = None
     catch_up: bool | None = None
     publish_tfs: bool | None = None
@@ -66,6 +67,14 @@ class EmailSettingsIn(BaseModel):
     sender_name: str | None = Field(default=None, max_length=120)
     default_to: str | None = Field(default=None, max_length=2000)
     verify_tls: bool | None = None
+    timeout_seconds: int | None = Field(default=None, ge=5, le=300)
+    # 23.14.0: intranet SMTP for Email Developer
+    ca_file: str | None = Field(default=None, max_length=500)
+    allowed_domains: str | None = Field(default=None, max_length=1000)
+    allow_external: bool | None = None
+    max_attachment_mb: int | None = Field(default=None, ge=1, le=50)
+    max_total_attachment_mb: int | None = Field(default=None, ge=1, le=100)
+    developer_directory: list[dict[str, Any]] | None = Field(default=None, max_length=500)
     secret: str | None = Field(default=None, max_length=500)  # the SMTP password / app password (kept in the vault)
     clear_secret: bool = False
 
@@ -148,6 +157,12 @@ def email_settings(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 def save_email_settings(body: EmailSettingsIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     values = body.model_dump(exclude_none=True, exclude={"secret", "clear_secret"})
     return {"ok": True, "email": rt.mailer.save(values, password=body.secret, clear_password=body.clear_secret)}
+
+
+@router.post("/email/test-connection")
+def test_email_connection(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.14.0: connect, STARTTLS / TLS and sign in to the SMTP server without sending anything."""
+    return {"ok": True, **rt.mailer.test_connection()}
 
 
 @router.post("/email/test")

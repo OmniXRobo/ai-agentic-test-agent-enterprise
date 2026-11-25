@@ -258,8 +258,35 @@ class Launcher:
         except Exception:
             return False
 
+    def start_https(self, app: Any) -> None:
+        try:
+            server = https_listener(app, self.data)
+        except Exception as exc:
+            self.log(f"HTTPS could not be set up: {exc!r}")
+            return
+        if server is None:
+            return
+        self.https_server = server
+
+        def serve() -> None:
+            for _ in range(600):  # after the HTTP server: the application is started there
+                if self.server.started or self.exiting.is_set():
+                    break
+                time.sleep(0.1)
+            try:
+                server.run()
+            except SystemExit:
+                self.log(f"HTTPS port {server.config.port} is used by another program; HTTPS is off for now.")
+            except Exception as exc:
+                self.log(f"HTTPS stopped: {exc!r}")
+
+        threading.Thread(target=serve, name="https", daemon=True).start()
+        self.log(f"HTTPS on port {server.config.port}.")
+
     def exit(self) -> None:
         self.exiting.set()
+        if getattr(self, "https_server", None) is not None:
+            self.https_server.should_exit = True
         with self.lock:
             if self.window is not None and self.window.poll() is None:
                 self.window.terminate()
@@ -295,6 +322,7 @@ class Launcher:
 
             threading.Thread(target=open_when_ready, name="open-window", daemon=True).start()
         self.log(f"Starting SkyGuard QA on {self.url} ({'background' if self.background else 'window'}).")
+        self.start_https(app)
         try:
             self.server.run()
         except SystemExit:  # uvicorn ends this way when it cannot listen on the port
@@ -305,6 +333,29 @@ class Launcher:
                                "another port in data\\settings.json (server, port).")
         self.log("SkyGuard QA stopped.")
         return 0
+
+
+def https_listener(app: Any, data: Path) -> Any:
+    """23.13.0: a second listener with HTTPS for the friendly name (Settings > Users & Network > HTTPS), or None.
+
+    It serves the same application (lifespan off: the HTTP server already started everything). The HTTP address on
+    127.0.0.1 stays for this PC's own programs."""
+    import uvicorn
+
+    from . import https_setup
+
+    try:
+        settings_data = json.loads((data / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    c = https_setup.config(settings_data)
+    if not c["enabled"] or not https_setup.ready(data):
+        return None
+    f = https_setup.files(data)
+    from .api.auth import bind_host
+    return uvicorn.Server(uvicorn.Config(app, host=bind_host(settings_data), port=c["port"], log_level="warning",
+                                         log_config=None, lifespan="off", ssl_certfile=str(f["cert"]),
+                                         ssl_keyfile=str(f["key"])))
 
 
 def main(argv: list[str] | None = None) -> int:

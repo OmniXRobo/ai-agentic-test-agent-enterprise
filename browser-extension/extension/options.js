@@ -17,9 +17,15 @@ async function refresh() {
   if (!portEdited) $("#port").value = s.port;  // never replace a port the person is typing
   $("#trusted").checked = s.trusted_input;
   $("#autoLearn").checked = s.auto_learn;
+  // 1.4.2: spoken replies (on by default for voice requests)
+  const v = await chrome.storage.local.get({ speak_replies: true, reply_gender: "male" });
+  $("#speakReplies").checked = v.speak_replies !== false;
+  $("#replyGender").value = v.reply_gender === "female" ? "female" : "male";
   const pill = $("#conn");
   let online = true, err = "";
   try { await api.hello(); } catch (e) { online = false; err = e.message; }
+  if (online && !s.device_id) await api.autoSetup().catch(() => null);  // 1.4.0: set up by the installer
+  if (online && s.owner && !(await api.currentUser())) await api.deviceLogin().catch(() => null);
   const user = await api.currentUser();
   if (gen !== refreshGen) return;
   if (!online) msg("#connErr", err);
@@ -64,6 +70,8 @@ $("#trusted").onchange = async (e) => {
   }
   await chrome.storage.local.set({ trusted_input: e.target.checked });
 };
+$("#speakReplies").onchange = (e) => chrome.storage.local.set({ speak_replies: e.target.checked });
+$("#replyGender").onchange = (e) => chrome.storage.local.set({ reply_gender: e.target.value });
 $("#autoLearn").onchange = async (e) => {
   await chrome.storage.local.set({ auto_learn: e.target.checked });
   chrome.runtime.sendMessage({ type: "auto-learn", on: e.target.checked }).catch(() => {});

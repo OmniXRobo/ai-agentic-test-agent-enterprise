@@ -54,6 +54,28 @@ PAGES: list[tuple[str, str, tuple[str, ...]]] = [
     ("voice", "Voice & Command Agent", ("voice and command agent", "voice commands", "voice settings", "voice")),
     ("command-center", "AI Voice Command Center", ("voice command center", "command center", "mission control")),
     ("reports", "Reports", ("reports", "report list")),
+    # 23.15.0: the Workflow Operator page (what 23.14 and earlier called the AI Agent) can be opened by voice too.
+    ("ai-agent", "Workflow Operator", ("workflow operator", "ai agent", "operations agent", "application agent")),
+    # 23.14.0: Security Testing, Integration Testing, API Testing and Email / SMTP
+    ("api-testing", "API Testing", ("api testing", "api tests", "rest api tests")),
+    ("integration-comparison", "Integration Comparison", ("integration comparison", "data comparison")),
+    ("sec-assessment", "AI Security Assessment", ("ai security assessment", "security assessment", "security testing",
+                                                 "security applications")),
+    ("sec-discovery", "Application Discovery (Security)", ("security discovery", "security application discovery",
+                                                           "attack surface")),
+    ("sec-scanning", "Vulnerability Scanning", ("vulnerability scanning", "vulnerability scan", "security scan",
+                                                "security scanning", "zap scan", "owasp scan")),
+    ("sec-scenarios", "Security Test Scenarios", ("security test scenarios", "security scenarios")),
+    ("sec-findings", "Security Findings", ("security findings", "vulnerabilities", "findings")),
+    ("sec-regression", "Security Regression", ("security regression", "security retest")),
+    ("sec-reports", "Security Reports", ("security reports", "security report", "vulnerability report")),
+    ("sec-preferences", "Security Preferences", ("security preferences", "security settings", "owasp checks")),
+    ("fuse-testing", "Red Hat Fuse Testing", ("red hat fuse testing", "red hat fuse", "fuse testing", "fuse tests",
+                                             "fuse", "camel routes", "fuse connections")),
+    ("activemq-testing", "ActiveMQ Testing", ("activemq testing", "active mq testing", "activemq", "active mq", "artemis",
+                                             "message broker", "broker testing", "broker connections", "amq")),
+    ("email-settings", "Email / SMTP", ("email settings", "smtp settings", "email smtp", "smtp", "mail settings",
+                                        "email configuration")),
     ("analytics", "Analytics", ("analytics", "quality analytics", "trends")),
 ]
 PAGE_LABELS = {route: label for route, label, _ in PAGES}
@@ -150,6 +172,11 @@ def parse(text: str) -> Intent | None:
         return interrupted
     if re.search(r"\b(stop|abort|halt|cancel)\b.*\b(test|run|load|jmeter|execution|playback|everything|it)\b", t):
         return Intent("stop_run")
+
+    from .intents_itest import itest_intent
+    module = itest_intent(t)  # 23.14.0: security, Fuse, ActiveMQ and email screens (open only, nothing is started)
+    if module:
+        return module
 
     launched = launch_intent(t)  # "launch my application": the guided browser session
     if launched:
@@ -410,4 +437,41 @@ def match_page(phrase: str) -> str | None:
         for alias in aliases:
             if re.search(rf"\b{re.escape(alias)}\b", phrase) and (best is None or len(alias) > best[0]):
                 best = (len(alias), route)
-    return best[1] if best else None
+    return best[1] if best else near_page(phrase)
+
+
+def near_page(phrase: str) -> str | None:
+    """23.15.0: the page whose name the words almost match ("notification", "exec history", "dashbord").
+
+    Speech, and Arabic translated to English, rarely gives the exact words of a menu item; before, anything that was
+    not an exact alias was answered "this operation is not supported". Only a clear single winner is used.
+    """
+    from difflib import SequenceMatcher
+
+    words = [w for w in re.findall(r"[a-z]+", phrase.lower()) if w not in _NOISE_WORDS]
+    if not words:
+        return None
+    said = " ".join(words)
+    scored: list[tuple[float, str]] = []
+    for route, label, aliases in PAGES:
+        best = 0.0
+        for alias in (*aliases, label.lower(), route.replace("-", " ")):
+            a = alias.lower()
+            ratio = SequenceMatcher(None, said, a).ratio()
+            shared = {w for w in words if len(w) > 3} & set(re.findall(r"[a-z]+", a))
+            if shared:
+                ratio = max(ratio, 0.8 + 0.05 * len(shared))
+            for w in words:  # one word, misheard by a letter ("notification", "dashbord")
+                for token in re.findall(r"[a-z]+", a):
+                    if len(w) > 4 and len(token) > 4 and SequenceMatcher(None, w, token).ratio() >= 0.86:
+                        ratio = max(ratio, 0.85)
+            best = max(best, ratio)
+        scored.append((best, route))
+    scored.sort(reverse=True)
+    if scored and scored[0][0] >= 0.8 and (len(scored) < 2 or scored[0][0] - scored[1][0] >= 0.02):
+        return scored[0][1]
+    return None
+
+
+_NOISE_WORDS = {"the", "a", "an", "my", "me", "please", "now", "open", "show", "go", "to", "take", "navigate",
+                "display", "of", "for", "on", "in", "it", "this", "that"}

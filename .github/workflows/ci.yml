@@ -83,6 +83,41 @@ jobs:
           call "%PKG%\INSTALL.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
           call "%RUNNER_TEMP%\qa-install\VALIDATE_OFFLINE.cmd" || exit /b 1
           type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"
+      - name: "23.12.1: first install, repair over it, and the parts the 23.3.35 package lacked"
+        # The reported failure: on a new Windows 11 PC the 23.3.35 INSTALL.cmd stopped with WinError 5 renaming
+        # app.new to app. A first install now copies straight into app (no rename); here it starts with the app.new
+        # the old installer left behind, then INSTALL.cmd runs again over it (repair: data backup, app.new -> app).
+        shell: pwsh
+        env:
+          QA_NO_PAUSE: "1"
+        run: |
+          $pkg = (Resolve-Path dist_offline\SGQA).Path
+          $t = Join-Path $env:RUNNER_TEMP "qa-fresh"
+          New-Item -ItemType Directory -Force "$t\app.new\runtime" | Out-Null
+          "left by the 23.3.35 installer" | Set-Content "$t\app.new\runtime\left.txt"
+          cmd /c "`"$pkg\INSTALL.cmd`" --target `"$t`" --no-shortcuts"
+          if ($LASTEXITCODE -ne 0) { throw "first install failed" }
+          $log = Get-Content (Get-ChildItem "$t\logs\install-*.log" | Select-Object -Last 1).FullName -Raw
+          $log
+          if ($log -notmatch "Installing SkyGuard QA") { throw "not a first install" }
+          if (Test-Path "$t\app.new") { throw "app.new left over" }
+          if (Test-Path "$t\INSTALL_NOT_FINISHED.txt") { throw "marker left over" }
+          if (-not (Test-Path "$t\app\skyguard_agent\__init__.py")) { throw "AI Agent module missing" }
+          if (-not (Test-Path "$t\app\runtime\ocr\site-packages\rapidocr")) { throw "OCR runtime missing" }
+          if (-not (Test-Path "$pkg\Browser_Extension\INSTALL.cmd")) { throw "browser extension missing" }
+          $v = Get-Content (Get-ChildItem "$t\logs\validation-*.txt" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName -Raw
+          $v
+          if ($v -notmatch "\[PASS\] Application modules") { throw "application modules check did not pass" }
+          if ($v -notmatch "\[PASS\] Offline OCR runtime") { throw "OCR runtime check did not pass" }
+          # data for the backup check
+          & "$t\app\runtime\python\python.exe" -E -s -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('CREATE TABLE IF NOT EXISTS ci_probe (x)'); c.execute('INSERT INTO ci_probe VALUES (7)'); c.commit()" "$t\data\qa_platform.sqlite3"
+          cmd /c "`"$pkg\INSTALL.cmd`" --target `"$t`" --no-shortcuts"
+          if ($LASTEXITCODE -ne 0) { throw "repair install failed" }
+          Get-Content (Get-ChildItem "$t\logs\install-*.log" | Select-Object -Last 1).FullName
+          if (-not (Test-Path "$t\app.previous\INSTALLED.json")) { throw "previous version not kept" }
+          $b = Get-ChildItem "$t\backups" -Directory | Select-Object -First 1
+          if (-not $b -or -not (Test-Path "$($b.FullName)\qa_platform.sqlite3")) { throw "data was not backed up" }
+          if (Test-Path "$t\app.new") { throw "app.new left over after repair" }
       - name: Publish the package for download (Actions run page, Artifacts)
         uses: actions/upload-artifact@v4
         with:
@@ -96,9 +131,9 @@ jobs:
       - name: Publish the zip, its checksum and the SBOM (hand these to the security team)
         uses: actions/upload-artifact@v4
         with:
-          name: SGQA-windows-zip
+          name: SkyGuard_QA_Full_Offline_Installer
           path: |
-            dist_offline/SGQA-*.zip
+            dist_offline/SkyGuard_QA_*_Full_Offline_Installer.zip
             dist_offline/SHA256SUMS.txt
             dist_offline/SGQA/sbom.cdx.json
           retention-days: 14
@@ -125,7 +160,7 @@ jobs:
           call "%PKG%\INSTALL.cmd" --target "%RUNNER_TEMP%\qa-install" --no-shortcuts || exit /b 1
           type "%RUNNER_TEMP%\qa-install\logs\validation-latest.txt"
   setup-exe-build:
-    # 23.10.0 (now 23.11.1): builds the cumulative patch and the Setup wizard exactly as released (NSIS, per user), for the
+    # 23.10.0 (now 23.15.0): builds the cumulative patch and the Setup wizard exactly as released (NSIS, per user), for the
     # Windows job below.
     runs-on: ubuntu-latest
     steps:
@@ -145,7 +180,7 @@ jobs:
         run: python packaging/setup/build_release.py --out dist_release --ocr-wheels ocr-wheels --skip-extension
       - uses: actions/upload-artifact@v4
         with:
-          name: SGQA-23.11.1-setup
+          name: SGQA-23.15.0-setup
           path: |
             dist_release/SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch/SkyGuard_SGQA-23.3.35_to_Latest_Offline_Setup.exe
             dist_release/SkyGuard_SGQA-23.3.35_to_Latest_Cumulative_Patch/Manual_Install/
@@ -153,14 +188,14 @@ jobs:
           compression-level: 0
   setup-exe-windows:
     # Runs the Setup wizard unattended on Windows (Windows PowerShell 5.1, a standard runner account) over real
-    # 23.3.35, 23.10.0 and 23.11.0 installations, checks the result, verifies, rolls back, refuses an unsupported version,
+    # 23.3.35, 23.11.0 and 23.11.1 installations, checks the result, verifies, rolls back, refuses an unsupported version,
     # and runs the manual APPLY_PATCH.ps1 with Windows PowerShell 5.1.
     needs: setup-exe-build
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        baseline: ["23.3.35:6d448fa", "23.10.0:8c8dcc4", "23.11.0:292743c"]
+        baseline: ["23.3.35:6d448fa", "23.11.1:8e8df0d", "23.12.0:fd5a117", "23.13.0:e0f9ac4", "23.13.1:0a7ed57", "23.13.2:89a6429", "23.13.3:9b42d1b", "23.14.0:18d9fde", "23.14.1:cd0a585"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -170,7 +205,7 @@ jobs:
           python-version: "3.13"
       - uses: actions/download-artifact@v4
         with:
-          name: SGQA-23.11.1-setup
+          name: SGQA-23.15.0-setup
           path: rel
       - name: Install the baseline release (its own code, a virtual environment, a database with data)
         shell: pwsh
@@ -207,25 +242,196 @@ jobs:
         run: |
           $exe = Get-ChildItem rel -Recurse -Filter "*Offline_Setup.exe" | Select-Object -First 1
           $p = Start-Process -FilePath $exe.FullName -ArgumentList "/S", "/APP=$env:INST", "/NOSTART" -Wait -PassThru
-          Get-ChildItem "$env:INST\logs\setup-23.11.1-*.txt" | ForEach-Object { Get-Content $_.FullName }
+          Get-ChildItem "$env:INST\logs\setup-23.15.0-*.txt" | ForEach-Object { Get-Content $_.FullName }
           "exit code $($p.ExitCode)"
           if ($p.ExitCode -ne 0) { throw "Setup failed with exit code $($p.ExitCode)" }
-          if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.11.1"') { throw "version is not 23.11.1" }
-          if (-not (Test-Path "$env:INST\patch-tools\23.11.1\ROLLBACK_PATCH.cmd")) { throw "patch-tools missing" }
+          if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.15.0"') { throw "version is not 23.15.0" }
+          if (-not (Test-Path "$env:INST\patch-tools\23.15.0\ROLLBACK_PATCH.cmd")) { throw "patch-tools missing" }
           $env:QA_HOME = "$env:INST\data"
-          & "$env:INST\app\.venv\Scripts\python.exe" -E -s "$env:INST\patch-tools\23.11.1\install_patch.py" verify --app "$env:INST" --python "$env:INST\app\.venv\Scripts\python.exe"
+          & "$env:INST\app\.venv\Scripts\python.exe" -E -s "$env:INST\patch-tools\23.15.0\install_patch.py" verify --app "$env:INST" --python "$env:INST\app\.venv\Scripts\python.exe"
           if ($LASTEXITCODE -ne 0) { throw "verify failed" }
       - name: Roll back to the baseline, then upgrade again with APPLY_PATCH.ps1 (Windows PowerShell 5.1)
         shell: pwsh
         run: |
           $env:QA_HOME = "$env:INST\data"
-          & "$env:INST\app\.venv\Scripts\python.exe" -E -s "$env:INST\patch-tools\23.11.1\install_patch.py" rollback --app "$env:INST" --skip-running-check
+          & "$env:INST\app\.venv\Scripts\python.exe" -E -s "$env:INST\patch-tools\23.15.0\install_patch.py" rollback --app "$env:INST" --skip-running-check
           if ($LASTEXITCODE -ne 0) { throw "rollback failed" }
           if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch [regex]::Escape("""$env:BASEV""")) { throw "rollback did not restore $env:BASEV" }
           $manual = Get-ChildItem rel -Recurse -Directory -Filter "Manual_Install" | Select-Object -First 1
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$($manual.FullName)\APPLY_PATCH.ps1" -InstallDir "$env:INST" -NoStart
           if ($LASTEXITCODE -ne 0) { throw "APPLY_PATCH.ps1 failed" }
-          if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.11.1"') { throw "version is not 23.11.1 after APPLY_PATCH.ps1" }
+          if ((Get-Content "$env:INST\app\qa_platform\__init__.py" -Raw) -notmatch '"23.15.0"') { throw "version is not 23.15.0 after APPLY_PATCH.ps1" }
+      - name: INSTALL_SPEECH_MODEL.cmd installs a model zip offline (Windows PowerShell 5.1)
+        shell: pwsh
+        run: |
+          $app = "$env:INST\app"
+          foreach ($f in "INSTALL_SPEECH_MODEL.cmd", "INSTALL_SPEECH_MODEL.ps1", "GET_FASTER_WHISPER_MODEL.ps1") {
+            if (-not (Test-Path "$app\$f")) { throw "$f is not in the application folder" } }
+          $src = Join-Path $env:RUNNER_TEMP "faster-whisper-small"
+          New-Item -ItemType Directory -Force $src | Out-Null
+          foreach ($f in "model.bin", "config.json", "tokenizer.json", "vocabulary.txt") { "x" | Set-Content "$src\$f" }
+          Compress-Archive -Path "$src\*" -DestinationPath "$src.zip" -Force
+          $env:QA_NO_PAUSE = "1"
+          cmd /c "`"$app\INSTALL_SPEECH_MODEL.cmd`" `"$src.zip`""
+          if ($LASTEXITCODE -ne 0) { throw "INSTALL_SPEECH_MODEL.cmd failed" }
+          $dest = @("$app\runtime\faster-whisper\models\small", "$env:INST\runtime\faster-whisper\models\small") | Where-Object { Test-Path "$_\model.bin" } | Select-Object -First 1
+          if (-not $dest) { throw "the model was not installed" }
+          "installed in $dest"
+          # a zip without a model is refused and changes nothing
+          Compress-Archive -Path "$src\config.json" -DestinationPath "$env:RUNNER_TEMP\faster-whisper-bad.zip" -Force
+          cmd /c "`"$app\INSTALL_SPEECH_MODEL.cmd`" `"$env:RUNNER_TEMP\faster-whisper-bad.zip`""
+          if ($LASTEXITCODE -eq 0) { throw "a zip without a model was accepted" }
+          if (Test-Path ($dest -replace 'small$', 'bad')) { throw "a model folder was made for the bad zip" }
+          exit 0  # the refused zip above left exit code 1 behind on purpose
+      - name: Arabic voice replies offline (GET_ARABIC_VOICE.ps1, INSTALL_ARABIC_VOICE.cmd, Piper renders Arabic)
+        shell: pwsh
+        run: |
+          $app = "$env:INST\app"
+          foreach ($f in "INSTALL_ARABIC_VOICE.cmd", "INSTALL_ARABIC_VOICE.ps1", "GET_ARABIC_VOICE.ps1") {
+            if (-not (Test-Path "$app\$f")) { throw "$f is not in the application folder" } }
+          # the internet PC step (this runner has Internet): Piper (pinned SHA-256) + ar_JO-kareem-medium (HF SHA-256)
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$app\GET_ARABIC_VOICE.ps1" -OutDir "$env:RUNNER_TEMP\usb"
+          if ($LASTEXITCODE -ne 0) { throw "GET_ARABIC_VOICE.ps1 failed" }
+          # the office PC step: install from the zip, offline
+          $env:QA_NO_PAUSE = "1"
+          cmd /c "`"$app\INSTALL_ARABIC_VOICE.cmd`" `"$env:RUNNER_TEMP\usb\skyguard-arabic-voice.zip`""
+          if ($LASTEXITCODE -ne 0) { throw "INSTALL_ARABIC_VOICE.cmd failed" }
+          if (-not (Test-Path "$app\runtime\piper\piper.exe")) { throw "piper.exe was not installed" }
+          if (-not (Test-Path "$app\runtime\piper\voices\ar_JO-kareem-medium.onnx")) { throw "the Arabic voice was not installed" }
+          # SkyGuard QA speaks an Arabic reply with it (the runner has only English Windows voices, like the office PC)
+          $py = @'
+          import sys, tempfile
+          from pathlib import Path
+          from qa_platform.voice.tts import SystemVoice
+          sv = SystemVoice(Path(tempfile.mkdtemp()) / "voice-cache")
+          print("arabic:", sv.arabic_status())
+          assert sv.arabic_status()["engine"] in ("piper", "windows"), sv.arabic_status()
+          wav = sv.render("\u062a\u0645. \u062c\u0627\u0631\u064a \u0641\u062a\u062d \u0627\u0644\u0635\u0641\u062d\u0629.")
+          assert wav[:4] == b"RIFF" and len(wav) > 8000, len(wav)
+          print("Arabic reply rendered:", len(wav), "bytes")
+          import io, wave
+          male = wave.open(io.BytesIO(wav)).getframerate()
+          female = sv.render("\u062d\u0627\u0636\u0631.", gender="female")
+          print("female:", sv.arabic_status(gender="female")["female"], wave.open(io.BytesIO(female)).getframerate())
+          assert female[:4] == b"RIFF" and wave.open(io.BytesIO(female)).getframerate() > male
+          print("voices seen by SkyGuard QA:", sv.voices())
+          '@
+          $env:QA_HOME = "$env:INST\data"
+          Push-Location $app
+          $py | & "$app\.venv\Scripts\python.exe" -E -s -
+          $rc = $LASTEXITCODE
+          Pop-Location
+          if ($rc -ne 0) { throw "the Arabic reply was not rendered" }
+  arabic-speech-kit-windows:
+    # Arabic speech kit (add-on for 23.14.1): the real download (GET_ARABIC_SPEECH_MODEL.cmd), the offline install
+    # (INSTALL_ARABIC_SPEECH_MODEL.cmd, Windows PowerShell 5.1) into an installed copy found by itself in
+    # %LOCALAPPDATA%\Programs\AIAgenticTestAgent, the refusals, and Arabic and English speech understood by SkyGuard QA.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: An installed SkyGuard QA 23.14.1 with Faster-Whisper and only the English model's settings
+        shell: pwsh
+        run: |
+          $inst = Join-Path $env:LOCALAPPDATA "Programs\AIAgenticTestAgent"
+          New-Item -ItemType Directory -Force "$inst\app", "$inst\data" | Out-Null
+          $parts = @("qa_platform", "web", "skyguard_agent", "requirements.txt", "GET_FASTER_WHISPER_MODEL.ps1", "INSTALL_SPEECH_MODEL.cmd",
+                     "INSTALL_SPEECH_MODEL.ps1", "GET_ARABIC_VOICE.ps1", "INSTALL_ARABIC_VOICE.cmd", "INSTALL_ARABIC_VOICE.ps1")
+          foreach ($p in $parts) { Copy-Item -Recurse $p "$inst\app\" }
+          '{"installed": true}' | Set-Content "$inst\app\INSTALLED.json"
+          python -m venv "$inst\app\.venv"
+          & "$inst\app\.venv\Scripts\python.exe" -m pip install -q -r "$inst\app\requirements.txt"
+          if ($LASTEXITCODE -ne 0) { throw "pip failed" }
+          & "$inst\app\.venv\Scripts\python.exe" -m pip install -q --require-hashes --target "$inst\app\runtime\faster-whisper\lib" -r packaging\requirements-faster-whisper-win.txt
+          if ($LASTEXITCODE -ne 0) { throw "Faster-Whisper packages failed" }
+          '{"server": {"port": 8765}, "voice": {"stt_engine": "local", "stt_api": "faster_whisper", "fw_model": "small.en", "language": "en"}}' |
+            Set-Content "$inst\data\settings.json"
+          "INST=$inst" | Out-File -Append $env:GITHUB_ENV
+      - name: Build the kit
+        shell: pwsh
+        run: |
+          python packaging\arabic-speech-kit\build_kit.py --out "$env:RUNNER_TEMP\dist"
+          Expand-Archive "$env:RUNNER_TEMP\dist\SkyGuard_Arabic_Speech_Kit.zip" "$env:RUNNER_TEMP\kitzip"
+          "KIT=$env:RUNNER_TEMP\kitzip\SkyGuard_Arabic_Speech_Kit" | Out-File -Append $env:GITHUB_ENV
+      - name: "Step 1, PC with Internet: GET_ARABIC_SPEECH_MODEL.cmd downloads the multilingual model"
+        shell: pwsh
+        run: |
+          $env:QA_NO_PAUSE = "1"
+          cmd /c "`"$env:KIT\GET_ARABIC_SPEECH_MODEL.cmd`""
+          if ($LASTEXITCODE -ne 0) { throw "GET_ARABIC_SPEECH_MODEL.cmd failed" }
+          $zip = Get-Item "$env:KIT\faster-whisper-small.zip"
+          "faster-whisper-small.zip: $([int]($zip.Length / 1MB)) MB"
+          # the model.bin the user downloaded on 2026-11-23 and shared (faster-whisper-small.zip in the project files)
+          $src = Get-Content "$env:KIT\faster-whisper-small\SOURCE.json" -Raw | ConvertFrom-Json
+          $hf = $src.files."model.bin".sha256
+          "Hugging Face model.bin SHA-256: $hf (revision $($src.revision))"
+          if ($hf -eq "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671") { "the shared model.bin is the official file: MATCH" }
+          else { "::warning::the shared model.bin differs from Hugging Face's current model.bin ($hf)" }
+          cmd /c "`"$env:KIT\GET_ARABIC_SPEECH_MODEL.cmd`" small.en"
+          if ($LASTEXITCODE -eq 0) { throw "the English-only model was accepted" }
+          exit 0
+      - name: "INSTALL_ARABIC_SPEECH_MODEL.cmd refuses an English-only or damaged model and changes nothing"
+        shell: pwsh
+        run: |
+          $env:QA_NO_PAUSE = "1"
+          $before = Get-Content "$env:INST\data\settings.json" -Raw
+          function Fake([string]$model, [string]$repo, [string]$sha) {
+            $d = Join-Path $env:RUNNER_TEMP "fake\faster-whisper-$model"
+            New-Item -ItemType Directory -Force $d | Out-Null
+            foreach ($f in "model.bin", "config.json", "tokenizer.json") { "x" | Set-Content "$d\$f" }
+            $files = [ordered]@{}
+            foreach ($f in "model.bin", "config.json", "tokenizer.json") {
+              $h = if ($sha) { $sha } else { (Get-FileHash "$d\$f" -Algorithm SHA256).Hash.ToLower() }
+              $files[$f] = @{ sha256 = $h; size = (Get-Item "$d\$f").Length } }
+            @{ model = $model; repo = $repo; revision = "0123456789abcdef"; files = $files } | ConvertTo-Json -Depth 5 | Set-Content "$d\SOURCE.json"
+            $z = "$d.zip"
+            Compress-Archive -Path $d -DestinationPath $z -Force
+            return $z
+          }
+          $en = Fake "small.en" "Systran/faster-whisper-small.en" ""
+          cmd /c "`"$env:KIT\INSTALL_ARABIC_SPEECH_MODEL.cmd`" `"$en`""
+          if ($LASTEXITCODE -eq 0) { throw "an English-only model was accepted" }
+          $bad = Fake "tiny" "Systran/faster-whisper-tiny" ("0" * 64)
+          cmd /c "`"$env:KIT\INSTALL_ARABIC_SPEECH_MODEL.cmd`" `"$bad`""
+          if ($LASTEXITCODE -eq 0) { throw "a model whose SHA-256 does not match was accepted" }
+          if (Test-Path "$env:INST\app\runtime\faster-whisper\models\tiny") { throw "the damaged model was installed" }
+          if ((Get-Content "$env:INST\data\settings.json" -Raw) -ne $before) { throw "settings were changed" }
+          exit 0
+      - name: "Step 2, SkyGuard QA PC: INSTALL_ARABIC_SPEECH_MODEL.cmd finds the folder and the zip by itself"
+        shell: pwsh
+        run: |
+          $env:QA_NO_PAUSE = "1"
+          cmd /c "`"$env:KIT\INSTALL_ARABIC_SPEECH_MODEL.cmd`""
+          if ($LASTEXITCODE -ne 0) { throw "INSTALL_ARABIC_SPEECH_MODEL.cmd failed" }
+          $m = "$env:INST\app\runtime\faster-whisper\models"
+          if (-not (Test-Path "$m\small\model.bin")) { throw "the model was not installed" }
+          $v = (Get-Content "$env:INST\data\settings.json" -Raw | ConvertFrom-Json).voice
+          $v | Format-List
+          if ($v.fw_model -ne "small" -or $v.language -ne "auto" -or $v.stt_api -ne "faster_whisper") { throw "Voice settings were not set" }
+          if (-not (Get-ChildItem "$env:INST\data\settings.before-arabic-speech-*.json")) { throw "no copy of the previous settings" }
+      - name: The offline Arabic voice (to say the Arabic test phrases)
+        shell: pwsh
+        run: |
+          $app = "$env:INST\app"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$app\GET_ARABIC_VOICE.ps1" -OutDir "$env:RUNNER_TEMP\usb"
+          if ($LASTEXITCODE -ne 0) { throw "GET_ARABIC_VOICE.ps1 failed" }
+          $env:QA_NO_PAUSE = "1"
+          cmd /c "`"$app\INSTALL_ARABIC_VOICE.cmd`" `"$env:RUNNER_TEMP\usb\skyguard-arabic-voice.zip`""
+          if ($LASTEXITCODE -ne 0) { throw "INSTALL_ARABIC_VOICE.cmd failed" }
+      - name: Spoken Arabic and English are understood by SkyGuard QA (POST /api/voice/transcribe, real model)
+        shell: pwsh
+        run: |
+          $app = "$env:INST\app"
+          Copy-Item packaging\arabic-speech-kit\ci_end_to_end.py "$env:RUNNER_TEMP\ci_end_to_end.py"
+          $env:QA_HOME = "$env:INST\data"
+          Push-Location $app
+          & "$app\.venv\Scripts\python.exe" -u -E -s "$env:RUNNER_TEMP\ci_end_to_end.py"
+          $rc = $LASTEXITCODE
+          Pop-Location
+          Get-Content "$env:INST\data\logs\faster-whisper.log" -Tail 20 -ErrorAction SilentlyContinue
+          if ($rc -ne 0) { throw "speech was not understood" }
   extension-install-windows:
     # 1.2.0 installer fix: runs the companion installer (Install-SkyGuardAgent.ps1) for real under Windows
     # PowerShell 5.1 on a brand-new per-user profile. First the script as released in 23.10.0 (expected to fail with
@@ -277,6 +483,10 @@ jobs:
             if (-not (Test-Path "$env:LOCALAPPDATA\SkyGuardAgent\$f")) { throw "$f missing" }
           }
           if (Get-ChildItem "$env:LOCALAPPDATA\SkyGuardAgent\runtime" -Filter "staging-*") { throw "staging folder left behind" }
+          # 1.4.0: the extension sets itself up (no pairing code, no sign-in): the one-time ticket is in its folder
+          $auto = Get-Content "$env:LOCALAPPDATA\SkyGuardAgent\extension\auto-setup.json" -Raw | ConvertFrom-Json
+          if (-not $auto.ticket -or $auto.port -ne 8790) { throw "auto-setup.json has no ticket" }
+          if ($out -notmatch "pair and sign in by itself") { throw "the automatic set-up was not prepared" }
       - name: The fixed installer runs again over the existing installation
         shell: powershell
         run: |

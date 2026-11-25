@@ -6,6 +6,7 @@ import { api } from "../api.js";
 import { esc, toast } from "../util.js";
 import { voice, loadSettings, localVoices, speak, stopSpeaking, applyAmbience, agentName, settingsChanged } from "../voice.js";
 import { testRadio } from "../radio.js";
+import { startRecording } from "../wav-recorder.js";
 
 const ENGINES = {
   builtin: ["Built-in offline recognizer (recommended)", "Speech is recognized on this PC by the bundled offline model (Vosk). No Internet and no speech server are needed."],
@@ -76,7 +77,8 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
             <label data-url ${s.stt_api === "faster_whisper" ? "hidden" : ""}>Server URL <input name="stt_url" value="${esc(s.stt_url)}" placeholder="http://127.0.0.1:8081"></label>
             <label data-openai ${s.stt_api === "openai" ? "" : "hidden"}>Model name <input name="stt_model" value="${esc(s.stt_model)}" placeholder="as the server lists it"></label>
           </div>
-          <label>Language <input name="language" value="${esc(s.language)}" maxlength="5" style="width:90px"></label>
+          <label>Language <select name="language">${[["en", "English"], ["auto", "English and Arabic (detected)"], ["ar", "Arabic (UAE and other)"]].concat((s.language && !["en", "auto", "ar"].includes(s.language)) ? [[s.language, s.language]] : []).map(([v, l]) => `<option value="${esc(v)}" ${v === (s.language || "en") ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+          <p class="muted">Arabic needs a multilingual Faster-Whisper model (small, not small.en). Get it once with GET_FASTER_WHISPER_MODEL.ps1 -Model small on a PC with Internet and copy faster-whisper-small.zip to this PC (Downloads) and double-click INSTALL_SPEECH_MODEL.cmd in the SkyGuard QA application folder (both scripts are there). Arabic commands are translated to English by the local AI before they run, and Arabic replies are spoken by an Arabic voice: a Windows Arabic voice, or the offline Arabic voice from INSTALL_ARABIC_VOICE.cmd (see Voice reply).</p>
         </section>
         <section class="ck-panel">
           <h3>Voice reply</h3>
@@ -86,9 +88,12 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
             <option value="plain" ${s.reply_style === "plain" ? "selected" : ""}>Plain voice</option></select></label>
           <label>Radio voice (Windows) <select name="radio_voice" ${radio.available ? "" : "disabled"}><option value="">Adult male voice (default)</option>
             ${radio.voices.map((v) => `<option value="${esc(v.name)}" ${v.name === s.radio_voice ? "selected" : ""}>${esc(v.name)} (${esc(v.gender)}, ${esc(v.lang)})</option>`).join("")}</select></label>
-          <p class="muted">${radio.available ? `Installed Windows voices: ${radio.voices.map((v) => esc(v.name)).join(", ") || "none"}. They are rendered on this PC, so replies work offline.` : "No Windows voices were found by the runtime, so the browser's installed voice is used with the radio beeps and static around it."}</p>
+          <p class="muted">${radio.voices.length ? `Installed Windows voices: ${radio.voices.map((v) => esc(v.name)).join(", ")}. They are rendered on this PC, so replies work offline.` : "No Windows voices were found by the runtime, so the browser's installed voice is used with the radio beeps and static around it."}</p>
+          <label>Arabic reply voice <select name="arabic_voice_gender">${[["", "Like the radio voice"], ["male", "Male"], ["female", "Female"]].map(([v, l]) => `<option value="${v}" ${v === (s.arabic_voice_gender || "") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <p class="muted" id="arabicVoice">${arabicLine(radio.arabic)}</p>
           <label>Browser voice (fallback) <select name="tts_voice"><option value="">Male voice for the language</option>
             ${voices.map((v) => `<option value="${esc(v.name)}" ${v.name === s.tts_voice ? "selected" : ""}>${esc(v.name)} (${esc(v.lang)})</option>`).join("")}</select></label>
+          <p class="muted">Used only when the Windows voice cannot speak. It keeps the gender of the Radio voice above (a male setting is never answered by a female voice).</p>
           <p class="muted">Installed browser voices: ${voices.length ? voices.map((v) => esc(v.name)).join(", ") : "none found"}.</p>
           <label>Speaking speed <input type="number" name="tts_rate" min="0.5" max="2" step="0.1" value="${esc(s.tts_rate)}" style="width:90px"></label>
           ${range("voice_volume", pct(s.voice_volume, 0.9), "Voice volume")}
@@ -113,6 +118,7 @@ function formHtml(s, radio, pb, fw = { installed: false, models: [] }) {
       </div>
       <div class="row" style="margin-top:14px"><button class="btn primary" type="submit">Save</button>
         <button class="btn" type="button" id="testVoice">Test Voice</button>
+        <button class="btn" type="button" id="testArabic">Test Arabic Voice</button>
         <button class="btn" type="button" id="testRadio">Test Radio</button>
         <button class="btn" type="button" id="stopSpeak">Stop Speaking</button>
         <button class="btn" type="button" id="diag">Check voice setup</button>
@@ -137,7 +143,7 @@ function readForm(form) {
       stt_engine: f("stt_engine").value, stt_api: f("stt_api").value, stt_url: f("stt_url").value, stt_model: f("stt_model").value,
       ...(f("fw_model")?.value ? { fw_model: f("fw_model").value } : {}),
       stt_model_dir: f("stt_model_dir").value.trim(), language: f("language").value.trim() || "en",
-      speak_replies: f("speak_replies").checked, reply_style: f("reply_style").value, radio_voice: f("radio_voice").value,
+      speak_replies: f("speak_replies").checked, reply_style: f("reply_style").value, radio_voice: f("radio_voice").value, arabic_voice_gender: f("arabic_voice_gender").value,
       tts_voice: f("tts_voice").value, tts_rate: Number(f("tts_rate").value) || 1, voice_volume: frac("voice_volume"),
       radio_intensity: frac("radio_intensity"), wireless_tone: f("wireless_tone").checked, static_volume: frac("static_volume"),
       ambience_enabled: f("ambience_enabled").checked, ambience_volume: frac("ambience_volume"),
@@ -148,6 +154,19 @@ function readForm(form) {
       click_sound: f("click_sound").checked, click_volume: frac("click_volume"),
     },
   };
+}
+
+// 23.13.0: which voice speaks Arabic replies, and how to get one on an offline PC.
+function arabicLine(ar) {
+  const who = (c) => c ? `${esc(c.label || c.voice)} (${c.engine === "windows" ? "Windows" : "offline"})` : "none";
+  if (ar?.available) {
+    return `Arabic replies are spoken now by <b dir="auto">${esc(ar.voice)}</b> (${esc((ar.gender || "").toLowerCase())}). ` +
+      `Male: ${who(ar.male)}. Female: ${who(ar.female)}. ` +
+      "A Windows Arabic voice of the chosen gender (Arabic language pack with speech: Naayf, Hoda) is used first when IT has installed one.";
+  }
+  return "Arabic replies: no Arabic voice is installed, so Arabic replies are shown but not spoken (an English voice never reads them). " +
+    "On a PC with Internet run GET_ARABIC_VOICE.ps1, copy skyguard-arabic-voice.zip to this PC (Downloads) and double-click INSTALL_ARABIC_VOICE.cmd in the SkyGuard QA folder. " +
+    "A Windows Arabic voice (Arabic language pack with speech, installed by IT) is used instead when there is one.";
 }
 
 async function render(view) {
@@ -166,7 +185,9 @@ async function render(view) {
       </header>
       <p class="muted" style="margin:0">Voice &amp; Command Agent settings. Everything runs on this PC: offline recognition, installed voices and locally generated radio effects.</p>
       ${formHtml(s, radio, all.settings.playback || {}, fw)}
+      ${voiceTestsHtml()}
     </div>`;
+  wireVoiceTests(view);
 
   const form = view.querySelector("#vset");
   form.querySelectorAll(".range input").forEach((r) => r.addEventListener("input", () => { r.nextElementSibling.textContent = `${r.value}%`; }));
@@ -204,6 +225,12 @@ async function render(view) {
     if (trial.radio_voice !== voice.settings.radio_voice || trial.tts_rate !== voice.settings.tts_rate) toast("Save first to hear a different Windows voice or speed.", "info");
     await speak(`${trial.agent_display_name} on frequency. Radio check, loud and clear. Ready for your instructions.`, trial);
   });
+  view.querySelector("#testArabic").addEventListener("click", async () => {
+    const trial = { ...voice.settings, ...readForm(form).voice, speak_replies: true, voice_enabled: true };
+    if (!radio.arabic?.available) toast("No Arabic voice is installed yet. Run INSTALL_ARABIC_VOICE.cmd in the SkyGuard QA folder.", "info");
+    else if ((trial.arabic_voice_gender || "") !== (voice.settings.arabic_voice_gender || "") || trial.radio_voice !== voice.settings.radio_voice) toast("Save first to hear the other Arabic voice.", "info");
+    await speak("حاضر. جاري فتح صفحة الحجز.", trial);
+  });
   view.querySelector("#testRadio").addEventListener("click", () => testRadio(readForm(form).voice).catch((err) => toast(err.message, "error")));
   view.querySelector("#stopSpeak").addEventListener("click", stopSpeaking);
   view.querySelector("#deleteHistory").addEventListener("click", async () => {
@@ -239,6 +266,71 @@ async function render(view) {
     checks.push({ name: "Browser voices", status: n ? "PASS" : "WARN", detail: n ? `${n} voices installed on this PC.` : "No installed browser voices." });
     out.innerHTML = `<table class="data"><tbody>${checks.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="pill ${c.status === "NOT_CONFIGURED" ? "WAITING" : esc(c.status)}">${esc(c.status.replace("_", " "))}</span></td><td class="muted">${esc(c.detail)}</td></tr>`).join("")}</tbody></table>`;
   });
+}
+
+// 23.14.0: three tests with real results only. The microphone passes only when real sound was recorded; nothing is
+// executed by the interpretation test.
+const AR_SAMPLE = "افتح الثغرات الأمنية";
+function voiceTestsHtml() {
+  return `<section class="card" id="voiceTests" style="margin-top:14px"><h3 style="margin:0 0 6px">Voice tests</h3>
+    <p class="muted small" style="margin:0 0 8px">Each test reports only what really happened on this PC. Recording stays on this PC and goes only to the local speech recognizer.</p>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px">
+      <div class="card"><b>1. Test microphone</b><p class="muted small">Records 3 seconds. Speak or tap near the microphone. Passes only if real sound is heard.</p>
+        <button class="btn" type="button" id="vtMic">Test microphone</button><div class="vt-level" style="height:6px;background:var(--border);border-radius:3px;margin:8px 0"><div id="vtLevel" style="height:6px;width:0;background:var(--ok);border-radius:3px"></div></div><div id="vtMicOut" class="small"></div></div>
+      <div class="card"><b>2. Test Arabic transcription</b><p class="muted small">Press, then read aloud: <b dir="rtl" lang="ar">${esc(AR_SAMPLE)}</b> (5 seconds). The local recognizer writes what it heard.</p>
+        <button class="btn" type="button" id="vtAr">Test Arabic transcription</button><div id="vtArOut" class="small" style="margin-top:8px"></div></div>
+      <div class="card"><b>3. Test command interpretation</b><p class="muted small">Type a command in English or Arabic. Shows how it is understood; nothing is executed.</p>
+        <div class="row" style="gap:6px"><input id="vtCmd" dir="auto" value="${esc(AR_SAMPLE)}" style="flex:1"><button class="btn" type="button" id="vtInt">Interpret</button></div><div id="vtIntOut" class="small" style="margin-top:8px"></div></div>
+    </div></section>`;
+}
+
+const vpill = (st, text) => `<span class="pill ${st}">${esc(text)}</span>`;
+
+function interpretationHtml(r) {
+  return `<div>${r.arabic ? `<div>Heard: <span dir="auto">${esc(r.heard)}</span></div><div>English: ${esc(r.english)}</div>` : ""}
+    <div>${r.understood ? vpill("PASS", "Understood") : vpill("WARN", "Not covered by the rules")} ${esc(r.result || "")}</div>
+    ${r.command ? `<div class="muted">Command: <code>${esc(r.command)}</code>${r.needs_confirmation ? " · asks for confirmation first" : ""} · not executed</div>` : ""}</div>`;
+}
+
+function wireVoiceTests(view) {
+  const level = view.querySelector("#vtLevel");
+  view.querySelector("#vtMic").addEventListener("click", async (e) => {
+    const out = view.querySelector("#vtMicOut"); e.target.disabled = true; out.textContent = "Recording 3 seconds…";
+    let peak = 0;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("The microphone is not available on this address. Open the dashboard on http://127.0.0.1 or https.");
+      const rec = await startRecording({ maxMs: 3000, onLevel: (v) => { peak = Math.max(peak, v); level.style.width = `${Math.round(v * 100)}%`; } });
+      const wav = await rec.done;
+      level.style.width = "0";
+      const bytes = wav?.size || wav?.byteLength || 0;
+      out.innerHTML = peak > 0.04 ? `${vpill("PASS", "PASS")} Sound recorded (peak level ${Math.round(peak * 100)}%, ${Math.round(bytes / 1024)} KB).`
+        : bytes ? `${vpill("WARN", "NO SOUND")} The microphone opened but no sound was heard (peak ${Math.round(peak * 100)}%). Check that it is not muted and speak closer.`
+          : `${vpill("FAIL", "FAIL")} Nothing was recorded.`;
+    } catch (err) { out.innerHTML = `${vpill("FAIL", "FAIL")} ${esc(err.name === "NotAllowedError" ? "The browser blocked the microphone. Allow it for this site." : err.name === "NotFoundError" ? "No microphone is connected." : err.message)}`; }
+    finally { e.target.disabled = false; }
+  });
+  view.querySelector("#vtAr").addEventListener("click", async (e) => {
+    const out = view.querySelector("#vtArOut"); e.target.disabled = true; out.textContent = "Recording 5 seconds… read the sentence now.";
+    try {
+      const rec = await startRecording({ maxMs: 5000 });
+      const wav = await rec.done;
+      out.textContent = "Recognizing on this PC…";
+      const { text } = await api("/api/voice/transcribe", { method: "POST", rawBody: wav, contentType: "audio/wav" });
+      const arabic = /[\u0600-\u06FF]/.test(text || "");
+      const r = text ? await api("/api/voice/interpret", { method: "POST", body: { text } }).catch(() => null) : null;
+      out.innerHTML = `${!text ? `${vpill("WARN", "NOTHING HEARD")} The recognizer returned no text.` : arabic ? `${vpill("PASS", "PASS")} Arabic text recognized:` : `${vpill("WARN", "NOT ARABIC")} The recognizer wrote non-Arabic text. Set the speech language to Arabic or Auto.`}
+        ${text ? `<div dir="auto" style="margin:4px 0"><b>${esc(text)}</b></div>` : ""}${r ? interpretationHtml(r) : ""}`;
+    } catch (err) { out.innerHTML = `${vpill("FAIL", "FAIL")} ${esc(err.message)}`; }
+    finally { e.target.disabled = false; }
+  });
+  const interpret = async (btn) => {
+    const out = view.querySelector("#vtIntOut"); btn.disabled = true;
+    try { out.innerHTML = interpretationHtml(await api("/api/voice/interpret", { method: "POST", body: { text: view.querySelector("#vtCmd").value } })); }
+    catch (err) { out.innerHTML = `${vpill("FAIL", "FAIL")} ${esc(err.message)}`; }
+    finally { btn.disabled = false; }
+  };
+  view.querySelector("#vtInt").addEventListener("click", (e) => interpret(e.target));
+  view.querySelector("#vtCmd").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); interpret(view.querySelector("#vtInt")); } });
 }
 
 export async function mount(view) {

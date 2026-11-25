@@ -26,18 +26,21 @@ The installer prints every step:
    *SkyGuard Agent*,
 6. starts the companion, checks it answers on `http://127.0.0.1:8790`, runs the prerequisite check, reads your
    browser policy (read only) and warns if it blocks Load unpacked,
-7. shows the **pairing code** (valid 10 minutes, single use).
+7. copies the AI and speech models when they are found on this PC (a SkyGuard QA installation), and writes a one-time
+   set-up ticket for the extension (`extension\auto-setup.json`, valid 7 days, single use),
+8. opens your browser's extensions page and copies the extension folder path to the clipboard.
 
 Options: `INSTALL.cmd -Port 8795` (another port), `-NoAutostart` (no sign-in entry), `-NoStart`.
 
 If any step fails, the previous program files are put back and the window says why.
 
-## 2. Optional: AI and speech models
+## 2. Optional: AI and speech models from another folder
 
 ```
 powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\SkyGuardAgent\Install-Models.ps1"
 ```
 
+The installer already ran this once. Run it yourself only when the models are on a USB drive or another folder.
 It looks for the Qwen GGUF and the Faster-Whisper small.en model in a SkyGuard QA installation on this PC, or in a
 folder you name with `-From <folder>` (for example a USB drive), checks each file's SHA-256 against the pinned values
 and copies them to `%LOCALAPPDATA%\SkyGuardAgent\models`. Nothing is downloaded. See OFFLINE_DEPENDENCIES.md for the
@@ -45,19 +48,21 @@ file names and checksums. Restart the companion afterwards (sign out and in, or 
 
 ## 3. Load the extension
 
-Follow INSTALL_CHROME.md or INSTALL_EDGE.md. In short: open `chrome://extensions` or `edge://extensions`, turn on
-**Developer mode**, press **Load unpacked**, choose `%LOCALAPPDATA%\SkyGuardAgent\extension`.
+The installer has opened the extensions page. Turn on **Developer mode**, press **Load unpacked**, paste the folder
+path (it is on the clipboard: `%LOCALAPPDATA%\SkyGuardAgent\extension`) and press *Select Folder*. Edge and Chrome
+only allow this by hand; SkyGuard does not get around it.
 
 The extension's ID must be `fmiiaecpdgbhhhbbkkfhnjfkbmllladb`. The companion only answers that ID.
 
-## 4. Pair and sign in
+## 4. Set-up is automatic
 
-1. Right-click the extension icon > **Options**.
-2. *Local companion*: keep port 8790 (or the one you chose) and press **Save**. It shows *connected*.
-3. *Pair with the companion*: type the pairing code. A new code: Start menu > *SkyGuard Agent - Pairing code*.
-4. *Create the first companion user (admin)*: user name and a password of at least 10 characters.
-5. You are signed in. Other people on this PC get their own companion users (Options > Companion users) with the role
-   admin, operator or viewer.
+Nothing to type. Within a few seconds of loading, the extension reads its one-time ticket, pairs with the companion
+and signs you in as the owner of this PC (the first admin, created for your Windows user). Options shows
+*connected* and your name.
+
+Only if the ticket was used or is older than 7 days: Options > *Pair with the companion* and type the code from
+Start menu > *SkyGuard Agent - Pairing code*, or run INSTALL.cmd again for a fresh ticket. Other people on this PC
+get their own companion users (Options > Companion users) with the role admin, operator or viewer.
 
 ## 5. Use it
 

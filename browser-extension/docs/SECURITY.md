@@ -20,6 +20,11 @@
   (protects against DNS rebinding).
 * Only requests whose `Origin` is the allowed extension ID are accepted. Web pages cannot call it.
 * Pairing: 8-digit code shown on this PC, single use, 10 minutes, 5 attempts. Device secrets are stored hashed.
+* Install ticket (1.4.0): the installer writes a random ticket (256 bits) into the extension folder under the
+  Windows user's own `%LOCALAPPDATA%`. It is single use, valid 7 days, 5 attempts, accepted only from the extension's
+  fixed ID, and the companion deletes the file once used. A device paired this way may sign in without a password
+  only as the PC owner's companion user; a device paired with a code never can. Anyone who can read your
+  `%LOCALAPPDATA%` could already read the companion's own data, so the ticket adds no new exposure.
 * Users: PBKDF2-SHA256 with 310 000 iterations, roles admin / operator / viewer, lockout after 5 failures.
 * Tokens: 15 minutes, rotated on refresh, 8-hour absolute limit.
 * Requests: JSON only, size limits (256 KB, 4 MB for page observations, 10 MB for audio), schema checked with unknown

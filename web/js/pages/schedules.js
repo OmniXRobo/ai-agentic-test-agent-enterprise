@@ -1,4 +1,4 @@
-// 23.3.21: Automation Studio > Scheduled Runs, and Settings > Outlook Email.
+// 23.3.21: Automation Studio > Scheduled Runs, and Settings > Email / SMTP.
 import { api, defaultBrowser } from "../api.js";
 import { productName } from "../brand.js";
 import { esc, toast, dateTimeOf, openModal } from "../util.js";
@@ -6,7 +6,11 @@ import { confirmDelete } from "../confirm-delete.js";
 
 const BROWSERS = [["chromium", "Chromium"], ["msedge", "Microsoft Edge"], ["chrome", "Google Chrome"]];
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const PAGES = ["AI-Driven Automation", "Guided Browser Automation", "Hybrid Test Automation", "Application Discovery & Update"];
+const PAGES = ["AI-Driven Automation", "Guided Browser Automation", "Hybrid Test Automation", "Application Discovery & Update", "API Testing", "Integration Comparison"];
+// 23.12.0: API Testing and Integration Comparison items run without a browser (Authorized API / data comparison).
+const NO_BROWSER = new Set(["API Testing", "Integration Comparison"]);
+const MODES = [["visible", "Visible browser"], ["headless", "Headless (hidden browser)"], ["smart", "Smart Auto (chooses per item and shows why)"]];
+const tz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "this PC's time zone"; } catch { return "this PC's time zone"; } };
 const pill = (status) => status ? `<span class="pill ${esc({ PASSED: "PASS", FAILED: "FAIL", ERROR: "FAIL", RUNNING: "RUNNING", QUEUED: "WAITING", STOPPED: "WARN" }[status] || "WAITING")}">${esc(status)}</span>` : '<span class="muted">-</span>';
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const inAMinute = () => { const d = new Date(Date.now() + 5 * 60000); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
@@ -20,27 +24,30 @@ function scheduleForm(selected, current = {}, { runNow = false, emailReady = fal
   const c = { repeat: "daily", time: inAMinute(), start_date: today(), browsers: [chosenBrowser], parallel: 1, headless: false,
     data_rows: "first", catch_up: true, publish_tfs: false, email: { enabled: false, to: "", cc: "", on: "always" }, days: [0, 1, 2, 3, 4], every_hours: 1, ...current };
   const em = c.email || {};
+  const browserless = selected.length && selected.every((s) => NO_BROWSER.has(s.page));
+  const mode = c.mode || (c.headless ? "headless" : "visible");
   return `<form class="grid" id="schForm" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
     <p style="grid-column:1/-1;margin:0"><strong>${selected.length} script(s):</strong> ${selected.map((s) => esc(s.name)).join(", ")}</p>
     ${runNow ? "" : `<label>Schedule name <input name="name" value="${esc(c.name || "")}" placeholder="e.g. Nightly regression"></label>
     <label>Repeat <select name="repeat">
       ${[["once", "Once (a future date and time)"], ["daily", "Every day"], ["weekdays", "Monday to Friday"], ["weekly", "Chosen days of the week"], ["hourly", "Every few hours"]]
         .map(([v, l]) => `<option value="${v}" ${c.repeat === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-    <label>Time (this PC) <input name="time" type="time" required value="${esc(c.time)}"></label>
+    <label>Time (this PC, ${esc(tz())}) <input name="time" type="time" required value="${esc(c.time)}"></label>
     <label><span data-start-label>${c.repeat === "once" ? "Date" : "Start date"}</span> <input name="start_date" type="date" required value="${esc(c.start_date)}"></label>
     <label data-end>Until (empty = continues) <input name="end_date" type="date" value="${esc(c.end_date || "")}"></label>
     <label data-hours>Every (hours) <input name="every_hours" type="number" min="1" max="24" value="${esc(c.every_hours || 1)}"></label>
     <div data-days style="grid-column:1/-1"><span class="muted">Days</span><div class="chips" style="margin-top:4px">
       ${DAYS.map((d, i) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" name="day" value="${i}" style="width:auto;margin:0" ${(c.days || []).includes(i) ? "checked" : ""}>${d}</label>`).join("")}</div></div>`}
-    <div style="grid-column:1/-1"><span class="muted">Browsers (each script runs in each one)</span><div class="chips" style="margin-top:4px">
+    ${browserless ? `<p class="muted" style="grid-column:1/-1;margin:0">Test type: ${esc([...new Set(selected.map((s) => s.test_type || s.page))].join(", "))}. These run without a browser: API tests send authorized HTTP requests to the configured targets only.</p>` : ""}
+    <div style="grid-column:1/-1" ${browserless ? "hidden" : ""}><span class="muted">Browsers (each script runs in each one)</span><div class="chips" style="margin-top:4px">
       ${BROWSERS.map(([v, l]) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" name="browser" value="${v}" style="width:auto;margin:0" ${(c.browsers || []).includes(v) ? "checked" : ""}>${l}</label>`).join("")}</div></div>
     <label>Runs at the same time <input name="parallel" type="number" min="1" max="8" value="${esc(c.parallel)}"></label>
-    <label>Excel / CSV data <select name="data_rows"><option value="first" ${c.data_rows === "first" ? "selected" : ""}>Row 1 only</option><option value="all" ${c.data_rows === "all" ? "selected" : ""}>Every row (one run per row)</option></select></label>
-    <label>Browser window <select name="headless"><option value="0" ${!c.headless ? "selected" : ""}>Visible</option><option value="1" ${c.headless ? "selected" : ""}>Hidden (headless)</option></select></label>
+    <label ${browserless ? "hidden" : ""}>Excel / CSV data <select name="data_rows"><option value="first" ${c.data_rows === "first" ? "selected" : ""}>Row 1 only</option><option value="all" ${c.data_rows === "all" ? "selected" : ""}>Every row (one run per row)</option></select></label>
+    <label ${browserless ? "hidden" : ""}>Execution mode <select name="mode">${MODES.map(([v, l]) => `<option value="${v}" ${mode === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="publish_tfs" style="width:auto;margin:0" ${c.publish_tfs ? "checked" : ""}>Write Passed / Failed to TFS test runs</label>
     ${runNow ? "" : `<label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="catch_up" style="width:auto;margin:0" ${c.catch_up ? "checked" : ""}>Run a missed time when the app opens</label>`}
     <fieldset style="grid-column:1/-1;border:1px solid var(--border);border-radius:8px;padding:10px 12px"><legend>Email report (Outlook)</legend>
-      ${emailReady ? "" : '<p class="muted" style="margin:0 0 8px">Set up the sender first in <a href="#/email-settings">Settings > Outlook Email</a>.</p>'}
+      ${emailReady ? "" : '<p class="muted" style="margin:0 0 8px">Set up the sender first in <a href="#/email-settings">Settings > Email / SMTP</a>.</p>'}
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
       <label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="email_enabled" style="width:auto;margin:0" ${em.enabled ? "checked" : ""}>Send the report by email</label>
       <label>To <input name="email_to" value="${esc(em.to || "")}" placeholder="lead@company.com; qa@company.com"></label>
@@ -66,11 +73,11 @@ function wireForm(root) {
   return f;
 }
 
-function readForm(f, ids) {
+function readForm(f, ids, browserless = false) {
   const fd = new FormData(f);
   const body = {
     script_ids: ids, browsers: fd.getAll("browser"), parallel: Number(fd.get("parallel")) || 1,
-    headless: fd.get("headless") === "1", data_rows: fd.get("data_rows"), publish_tfs: fd.get("publish_tfs") === "on",
+    mode: fd.get("mode") || "visible", headless: fd.get("mode") === "headless" || fd.get("mode") === "smart", data_rows: fd.get("data_rows"), publish_tfs: fd.get("publish_tfs") === "on",
     email: { enabled: fd.get("email_enabled") === "on", to: fd.get("email_to") || "", cc: fd.get("email_cc") || "", on: fd.get("email_on") },
   };
   if (fd.has("repeat")) {
@@ -79,6 +86,7 @@ function readForm(f, ids) {
       catch_up: fd.get("catch_up") === "on" });
     if (body.repeat === "once") body.end_date = null;
   }
+  if (!body.browsers.length && browserless) body.browsers = [chosenBrowser];
   if (!body.browsers.length) throw new Error("Choose at least one browser.");
   return body;
 }
@@ -92,11 +100,11 @@ function batchHtml(b) {
       ${pill(b.status)}<strong>${esc(b.name)}</strong><span class="muted">${esc(dateTimeOf(b.started_at))} · ${b.trigger === "schedule" ? "scheduled" : b.trigger === "missed" ? "missed time, run when the app opened" : "run now"} ·
       ${b.status === "RUNNING" ? `${done}/${b.items.length} done` : `${c.PASSED || 0}/${b.items.length} passed`}</span></summary>
     ${extra ? `<p class="muted" style="margin:8px 0">${extra}</p>` : ""}
-    <table class="data"><thead><tr><th>Script</th><th>Browser</th><th>Data row</th><th>Result</th><th>Time</th><th>Failure</th><th>Run</th></tr></thead><tbody>
-    ${b.items.map((i) => `<tr><td>${esc(i.name)}</td><td>${esc(i.browser || "")}</td><td>${i.row != null ? `${i.row + 1}` : ""}</td><td>${pill(i.status)}</td>
+    <table class="data"><thead><tr><th>Script</th><th>Mode</th><th>Data row</th><th>Result</th><th>Time</th><th>Failure</th><th>Run</th></tr></thead><tbody>
+    ${b.items.map((i) => `<tr><td>${esc(i.name)}</td><td title="${esc(i.mode_reason || "")}">${esc(i.browser || (i.mode === "api" ? "Authorized API" : i.mode === "comparison" ? "Comparison" : ""))}${i.mode && i.browser ? `<div class="muted" style="font-size:12px">${esc(i.mode)}</div>` : ""}</td><td>${i.row != null ? `${i.row + 1}` : ""}</td><td>${pill(i.status)}</td>
       <td>${i.duration_ms != null ? `${(i.duration_ms / 1000).toFixed(1)} s` : ""}</td>
       <td style="max-width:420px">${i.failed_step ? `Step ${esc(i.failed_step)}: ` : ""}${esc(i.error || "")}</td>
-      <td>${i.run_id && !["QUEUED"].includes(i.status) ? `<a href="#/history?run=${esc(i.run_id)}">${esc(i.run_id)}</a>` : ""}</td></tr>`).join("")}
+      <td>${i.link && !["QUEUED"].includes(i.status) ? `<a href="${esc(i.link)}">Open</a>${i.counts ? `<div class="muted" style="font-size:12px">${esc(Object.entries(i.counts).filter(([, v]) => v).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(", "))}</div>` : ""}` : i.run_id && !["QUEUED"].includes(i.status) ? `<a href="#/history?run=${esc(i.run_id)}">${esc(i.run_id)}</a>` : ""}</td></tr>`).join("")}
     </tbody></table></details>`;
 }
 
@@ -109,7 +117,7 @@ async function mountSchedules(view) {
       <select id="fApp"><option value="">All applications</option></select>
       <input id="fText" placeholder="Filter by name or test case" style="min-width:220px">
       <label class="row" style="gap:6px"><input type="checkbox" id="fSched" style="width:auto;margin:0">Only scheduled</label></div>
-      <p class="muted" style="margin:6px 0 10px">Tick scripts, then <strong>Schedule</strong> (a future date and time, or repeating every day, Monday to Friday, chosen days or every few hours, until a date or continuing) or <strong>Run now</strong>. Times are this PC's clock; the application must be running.</p>
+      <p class="muted" style="margin:6px 0 10px">Tick scripts, then <strong>Schedule</strong> (a future date and time, or repeating every day, Monday to Friday, chosen days or every few hours, until a date or continuing) or <strong>Run now</strong>. Times are this PC's clock (${esc(tz())}); the application must be running. API Testing and Integration Comparison items are listed here too.</p>
       <div class="row" style="gap:8px;margin-bottom:8px"><button class="btn primary" id="schBtn" disabled>Schedule</button><button class="btn" id="runBtn" disabled>Run now</button>
         <span class="muted" id="selCount"></span><span class="spacer"></span>
         <label class="row" style="gap:6px">Runs at the same time (Run all, Play selected) <input id="parallelRuns" type="number" min="1" max="8" style="width:70px"></label></div>
@@ -123,7 +131,7 @@ async function mountSchedules(view) {
     const shown = scripts.filter((s) => (!state.filterPage || s.page === state.filterPage) && (!state.filterApp || (s.application || "") === state.filterApp)
       && (!state.onlyScheduled || s.schedules.length) && (!t || `${s.name} ${s.id} ${s.test_case_id || ""}`.toLowerCase().includes(t)));
     const box = view.querySelector("#scriptList");
-    box.innerHTML = shown.length ? `<table class="data"><thead><tr><th><input type="checkbox" id="selAll" style="width:auto;margin:0"></th><th>Script</th><th>Page</th><th>Test case</th><th>Application</th><th>Steps</th><th>Data rows</th><th>Schedules</th></tr></thead><tbody>
+    box.innerHTML = shown.length ? `<table class="data"><thead><tr><th><input type="checkbox" id="selAll" style="width:auto;margin:0"></th><th>Script</th><th>Page / test type</th><th>Test case</th><th>Application</th><th>Steps</th><th>Data rows</th><th>Schedules</th></tr></thead><tbody>
       ${shown.map((s) => `<tr><td><input type="checkbox" data-sel="${esc(s.id)}" style="width:auto;margin:0" ${state.selected.has(s.id) ? "checked" : ""}></td>
         <td><strong>${esc(s.name)}</strong><div class="muted" style="font-size:12px">${esc(s.id)}</div></td><td>${esc(s.page)}</td><td>${esc(s.test_case_id || "")}</td>
         <td>${esc(s.application || "")}</td><td>${esc(s.steps ?? "")}</td><td>${s.rows || ""}</td>
@@ -174,7 +182,7 @@ async function mountSchedules(view) {
     f.addEventListener("submit", async (e) => {
       e.preventDefault();
       try {
-        const body = readForm(f, ids);
+        const body = readForm(f, ids, selected.every((s) => NO_BROWSER.has(s.page)));
         if (runNow) {
           await api("/api/schedule-runs", { method: "POST", body: { ...body, name: selected.length === 1 ? selected[0].name : `Run now (${selected.length} scripts)` } });
           toast("Started. Progress is in Run history.", "success");
@@ -223,8 +231,8 @@ async function mountSchedules(view) {
 async function mountEmail(view) {
   const { email: e } = await api("/api/email/settings");
   view.innerHTML = `<form class="card grid" id="emailForm" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
-    <h3 style="grid-column:1/-1;margin:0">Outlook email for run reports</h3>
-    <p class="muted" style="grid-column:1/-1;margin:0">Scheduled Runs send their HTML report (and the screenshot of each failure) through this account.</p>
+    <h3 style="grid-column:1/-1;margin:0">Email / SMTP</h3>
+    <p class="muted" style="grid-column:1/-1;margin:0">Scheduled Runs, module reports and Email Developer send through this account. On the office intranet choose "Company Exchange / other SMTP server". Nothing is sent without you pressing Send.</p>
     <label>Send with <select name="mode"><option value="smtp" ${e.mode !== "outlook_app" ? "selected" : ""}>Outlook / Microsoft 365 account (SMTP)</option>
       <option value="outlook_app" ${e.mode === "outlook_app" ? "selected" : ""}>The Outlook app on this PC (no password)</option></select></label>
     <label data-smtp>Account type <select name="preset"><option value="office365" ${e.preset === "office365" ? "selected" : ""}>Microsoft 365 / Office 365 (smtp.office365.com)</option>
@@ -238,14 +246,28 @@ async function mountEmail(view) {
     <label data-smtp>From address <input name="sender" value="${esc(e.sender || "")}" placeholder="qa.reports@company.com"></label>
     <label>From name <input name="sender_name" value="${esc(e.sender_name || "")}" placeholder="Product name from Preferences"></label>
     <label>Default recipients <input name="default_to" value="${esc(e.default_to || "")}" placeholder="lead@company.com; team@company.com"></label>
+    <fieldset data-smtp style="grid-column:1/-1;border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))"><legend>Intranet SMTP and safety rules</legend>
+      <label class="row" style="gap:6px"><input type="checkbox" name="verify_tls" ${e.verify_tls !== false ? "checked" : ""}> Verify the server certificate</label>
+      <label>Company CA certificate file (PEM, on this PC) <input name="ca_file" value="${esc(e.ca_file || "")}" placeholder="C:\\SkyGuard\\certs\\company-ca.pem"></label>
+      <label>Timeout (seconds) <input name="timeout_seconds" type="number" min="5" max="300" value="${esc(e.timeout_seconds || 30)}"></label>
+      <label>Allowed recipient domains <input name="allowed_domains" value="${esc(e.allowed_domains || "")}" placeholder="company.local, company.com"></label>
+      <label class="row" style="gap:6px"><input type="checkbox" name="allow_external" ${e.allow_external ? "checked" : ""}> Allow recipients outside these domains</label>
+      <label>Largest attachment (MB) <input name="max_attachment_mb" type="number" min="1" max="50" value="${esc(e.max_attachment_mb || 10)}"></label>
+      <label>All attachments together (MB) <input name="max_total_attachment_mb" type="number" min="1" max="100" value="${esc(e.max_total_attachment_mb || 20)}"></label>
+      <label style="grid-column:1/-1">Developer directory (one per line: name, email, team, modules separated by |)
+        <textarea name="developer_directory" rows="4" dir="auto" placeholder="Ahmed Ali, ahmed.ali@company.local, Integration, fuse|activemq">${esc((e.developer_directory || []).map((p) => [p.name, p.email, p.team || "", (p.modules || []).join("|")].join(", ")).join("\n"))}</textarea></label>
+    </fieldset>
     <p class="muted" data-app style="grid-column:1/-1;margin:0">Outlook (classic desktop) must be installed and signed in for the Windows user that runs ${esc(productName())}. The mail is sent from that mailbox and appears in its Sent Items.</p>
     <p role="alert" data-cloud style="grid-column:1/-1;margin:0;color:var(--fail);font-weight:600">Microsoft 365 and Outlook.com are on the Internet: on a PC without Internet these emails cannot be sent. Choose "Company Exchange / other SMTP server" with your company's mail server, or "Outlook app on this PC" connected to your company's Exchange.</p>
     <p class="muted" data-smtp style="grid-column:1/-1;margin:0">The password is kept in the Windows Credential Manager, never in the settings file. Microsoft 365 needs SMTP sign-in (SMTP AUTH) allowed for this mailbox; with multi-factor sign-in use an app password.</p>
     <div class="row" style="grid-column:1/-1;gap:8px"><span class="muted">${e.configured ? "Ready to send." : "Not set up yet."}</span><span class="spacer"></span>
       ${e.has_password ? '<button class="btn" type="button" id="clearPw">Remove saved password</button>' : ""}
       <input id="testTo" placeholder="Send a test email to…" value="${esc(e.default_to || e.sender || "")}" style="max-width:260px">
+      <button class="btn" type="button" id="connBtn" title="Connect, start TLS and sign in without sending anything">Test connection</button>
       <button class="btn" type="button" id="testBtn">Send test email</button><button class="btn primary" type="submit">Save</button></div>
-  </form>`;
+    <p class="muted small" id="connOut" style="grid-column:1/-1;margin:0"></p>
+  </form>
+  <div class="card" id="sendHistory"><p class="muted">Loading send history…</p></div>`;
   const f = view.querySelector("#emailForm");
   const sync = () => {
     const app = f.mode.value === "outlook_app", custom = f.preset.value === "custom";
@@ -259,15 +281,49 @@ async function mountEmail(view) {
     const body = { mode: fd.mode, preset: fd.preset, username: fd.username ?? undefined, sender: fd.sender ?? undefined, sender_name: fd.sender_name,
       default_to: fd.default_to, ...extra };
     if (fd.preset === "custom") Object.assign(body, { host: fd.host, port: Number(fd.port) || 587, security: fd.security });
+    if (fd.mode !== "outlook_app") {
+      Object.assign(body, { verify_tls: f.verify_tls.checked, ca_file: fd.ca_file || "", timeout_seconds: Number(fd.timeout_seconds) || 30,
+        allowed_domains: fd.allowed_domains || "", allow_external: f.allow_external.checked,
+        max_attachment_mb: Number(fd.max_attachment_mb) || 10, max_total_attachment_mb: Number(fd.max_total_attachment_mb) || 20,
+        developer_directory: String(fd.developer_directory || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
+          const [name, email, team, modules] = l.split(",").map((x) => (x || "").trim());
+          return { name, email, team, modules: (modules || "").split("|").map((m) => m.trim()).filter(Boolean) };
+        }) });
+    }
     if (fd.secret) body.secret = fd.secret;
     await api("/api/email/settings", { method: "PUT", body });
   };
   f.addEventListener("submit", async (ev) => { ev.preventDefault(); try { await save(); toast("Email settings saved.", "success"); await mountEmail(view); } catch (err) { toast(err.message, "error"); } });
   view.querySelector("#clearPw")?.addEventListener("click", async () => { try { await save({ clear_secret: true }); toast("Saved password removed.", "success"); await mountEmail(view); } catch (err) { toast(err.message, "error"); } });
+  view.querySelector("#connBtn").addEventListener("click", async (ev) => {
+    const out = view.querySelector("#connOut"); ev.target.disabled = true; out.textContent = "Testing…";
+    try { await save(); const r = await api("/api/email/test-connection", { method: "POST", body: {} }); out.innerHTML = `<span class="pill PASS">Connected</span> ${esc(r.detail || "")} (nothing was sent)`; }
+    catch (err) { out.innerHTML = `<span class="pill FAIL">Failed</span> ${esc(err.message)}${err.details ? ` (${esc(err.details)})` : ""}`; }
+    finally { ev.target.disabled = false; }
+  });
+  drawSendHistory(view.querySelector("#sendHistory"));
   view.querySelector("#testBtn").addEventListener("click", async () => {
     try { await save(); const r = await api("/api/email/test", { method: "POST", body: { to: view.querySelector("#testTo").value } }); toast(`Test email sent to ${r.to.join(", ")}.`, "success"); }
     catch (err) { toast(`${err.message}${err.details ? ` (${err.details})` : ""}`, "error", 9000); }
   });
+}
+
+// 23.14.0: what Email Developer sent from every module. "Accepted" means the SMTP server took the message; it does not
+// prove delivery to the mailbox.
+async function drawSendHistory(box, status = "") {
+  try {
+    const { emails } = await api(`/api/test-actions/email-history?limit=200${status ? `&status=${encodeURIComponent(status)}` : ""}`);
+    const pillOf = { accepted: "PASS", failed: "FAIL", sending: "RUNNING", draft: "WAITING" };
+    box.innerHTML = `<div class="row" style="gap:8px"><h3 style="margin:0">Email Developer send history</h3><span class="spacer"></span>
+      <select id="shStatus" aria-label="Status"><option value="">All</option>${["accepted", "failed", "sending", "draft"].map((x) => `<option value="${x}" ${x === status ? "selected" : ""}>${x}</option>`).join("")}</select></div>
+      <p class="muted small">Accepted means the SMTP server accepted the message for delivery; it does not prove the developer received it. A failed email keeps its draft so you can correct it and send again.</p>
+      ${emails.length ? `<table class="data compact"><thead><tr><th>When</th><th>Module</th><th>Subject</th><th>To</th><th>Status</th><th>By</th></tr></thead><tbody>
+      ${emails.map((m) => `<tr><td class="small">${esc(m.sent_at || m.updated_at || "")}</td><td>${esc(m.module || "")}<div class="muted small">${esc(m.subject_kind)} ${esc(m.subject_id)}</div></td>
+        <td>${esc(m.subject || "")}${m.error ? `<div class="small" style="color:var(--fail)">${esc(m.error)}</div>` : ""}</td><td class="small">${esc([...(m.to_addrs || []), ...(m.cc_addrs || [])].join(", "))}</td>
+        <td><span class="pill ${pillOf[m.status] || "WAITING"}">${esc(m.status)}</span>${m.attempts > 1 ? `<div class="muted small">${m.attempts} attempts</div>` : ""}</td><td class="small">${esc(m.created_by || "")}</td></tr>`).join("")}</tbody></table>`
+      : '<p class="muted">Nothing sent yet.</p>'}`;
+    box.querySelector("#shStatus").addEventListener("change", (e) => drawSendHistory(box, e.target.value));
+  } catch (err) { box.innerHTML = `<p class="muted">Send history is not available: ${esc(err.message)}</p>`; }
 }
 
 export const scheduledRuns = {

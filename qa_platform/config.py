@@ -56,7 +56,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
            "logo_path": "",  # 23.3.30: product name, tagline and logo (Preferences)
            # 23.3.35: the desktop icon opens the dashboard as a browser tab with an address bar ("browser") or as its
            # own app window without one ("app"); Microsoft Edge first either way
-           "open_as": "browser"},
+           "open_as": "browser",
+           # 23.14.0: the look of Agent Workflow: classic, command_center, holographic, skyguard_core, mission_control
+           "workflow_look": "classic"},
     "tfs": {
         # "online" = Azure DevOps Online, "offline" = local TFS / Azure DevOps Server
         "active_mode": "online",
@@ -105,6 +107,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # radio = replies sound like a pilot on the radio (Windows voice through a radio filter, squelch, static)
         "reply_style": "radio",
         "radio_voice": "",
+        "arabic_voice_gender": "",  # 23.13.0: "" = like the radio voice, "male" or "female"
         # Voice & Command Agent: names are settings, never code. The display name may be in any script (e.g. Arabic);
         # the command name is what the recognizer listens for and the voice says, in Latin letters.
         "agent_display_name": "HAMI",

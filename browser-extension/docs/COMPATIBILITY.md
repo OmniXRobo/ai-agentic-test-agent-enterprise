@@ -1,4 +1,4 @@
-# Compatibility notes: extension and companion 1.3.0
+# Compatibility notes: extension and companion 1.3.1 (same as 1.3.0)
 
 ## Browsers
 

@@ -4,8 +4,8 @@
 const DEFAULT_PORT = 8790;
 
 export async function settings() {
-  const s = await chrome.storage.local.get(["port", "device_id", "device_secret", "trusted_input", "auto_learn"]);
-  return { port: Number(s.port) || DEFAULT_PORT, device_id: s.device_id || "", device_secret: s.device_secret || "", trusted_input: !!s.trusted_input, auto_learn: !!s.auto_learn };
+  const s = await chrome.storage.local.get(["port", "device_id", "device_secret", "trusted_input", "auto_learn", "owner"]);
+  return { port: Number(s.port) || DEFAULT_PORT, device_id: s.device_id || "", device_secret: s.device_secret || "", trusted_input: !!s.trusted_input, auto_learn: !!s.auto_learn, owner: s.owner || "" };
 }
 
 export async function setPort(port) {
@@ -32,7 +32,8 @@ async function raw(method, path, { body, audio, auth = true, device = true } = {
     headers["X-SG-Secret"] = s.device_secret;
   }
   if (auth) {
-    const t = await token();
+    let t = await token();
+    if (!t.token && s.owner && path !== "/v1/auth/device") { await deviceLogin().catch(() => null); t = await token(); }
     if (!t.token) throw new ApiError(401, "AUTH_REQUIRED", "Sign in to the companion (Options).");
     headers.Authorization = "Bearer " + t.token;
   }
@@ -70,9 +71,44 @@ export async function call(method, path, body) {
   try {
     return await raw(method, path, { body });
   } catch (e) {
-    if (e.status === 401 && (e.code === "AUTH_EXPIRED" || e.code === "AUTH_REQUIRED")) await chrome.storage.session.remove(["token", "token_expires", "user"]);
+    if (e.status === 401 && (e.code === "AUTH_EXPIRED" || e.code === "AUTH_REQUIRED")) {
+      await chrome.storage.session.remove(["token", "token_expires", "user"]);
+      // 1.4.0: a browser set up by this PC's installer signs in again by itself, once
+      if (await deviceLogin().catch(() => null)) return raw(method, path, { body });
+    }
     throw e;
   }
+}
+
+// ---- 1.4.0: set up by the installer (no pairing code, no user to create, no sign-in) ------------------------------
+// INSTALL.cmd leaves auto-setup.json (port and a one-time ticket) inside this extension's own folder in the person's
+// profile. The ticket is used once; the companion then binds this browser to this PC's owner user.
+export async function autoSetup() {
+  let file;
+  try {
+    const r = await fetch(chrome.runtime.getURL("auto-setup.json"), { cache: "no-store" });
+    if (!r.ok) return { done: false };
+    file = await r.json();
+  } catch (e) { return { done: false }; }
+  if (!file || typeof file.ticket !== "string" || file.ticket.length < 40 || file.ticket.length > 64) return { done: false };
+  const seen = (await chrome.storage.local.get("ticket_used")).ticket_used;
+  const fp = file.ticket.slice(0, 12);
+  if (seen === fp) return { done: true };
+  if (Number.isInteger(file.port) && file.port >= 1024 && file.port <= 65535) await chrome.storage.local.set({ port: file.port });
+  const brand = (globalThis.navigator?.userAgentData?.brands || []).map((b) => b.brand).find((b) => /Edge|Chrome/.test(b)) || "browser";
+  const r = await raw("POST", "/v1/pair", { body: { ticket: file.ticket, name: brand }, auth: false, device: false });
+  await chrome.storage.local.set({ device_id: r.device_id, device_secret: r.device_secret, owner: r.owner || "", ticket_used: fp });
+  await chrome.storage.session.remove(["token", "token_expires", "user"]);
+  if (r.owner) await deviceLogin();
+  return { done: true, owner: r.owner || "" };
+}
+
+export async function deviceLogin() {
+  const s = await settings();
+  if (!s.owner || !s.device_id) return null;
+  const r = await raw("POST", "/v1/auth/device", { body: {}, auth: false });
+  await chrome.storage.session.set({ token: r.token, token_expires: Date.now() + r.expires_in * 1000, user: r.user });
+  return r.user;
 }
 
 export const get = (p) => call("GET", p);
@@ -86,6 +122,20 @@ export async function transcribe(wavBlob) {
   return raw("POST", "/v1/voice/transcribe", { audio: wavBlob });
 }
 
+// 1.4.2: an Arabic reply as WAV bytes, spoken by the offline Arabic voice on this PC (companion + Piper)
+export async function speakArabic(text, gender = "male") {
+  const r = await call("POST", "/v1/voice/speak", { text: text.slice(0, 600), gender });
+  const bin = atob(r.wav);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: r.content_type || "audio/wav" });
+}
+
+// 1.4.3: what to say when a task of a spoken request moves on, in Arabic (English is said as written)
+export async function lineToSpeak(kind, text, language) {
+  return call("POST", "/v1/voice/line", { kind, text: (text || "").slice(0, 600), language });
+}
+
 export async function hello() { return raw("GET", "/v1/hello", { auth: false, device: false }); }
 
 export async function pair(code, name) {
@@ -95,7 +145,7 @@ export async function pair(code, name) {
 }
 
 export async function unpair() {
-  await chrome.storage.local.remove(["device_id", "device_secret"]);
+  await chrome.storage.local.remove(["device_id", "device_secret", "owner"]);
   await chrome.storage.session.remove(["token", "token_expires", "user"]);
 }
 

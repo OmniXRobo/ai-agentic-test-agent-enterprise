@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import ssl
+import threading
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
@@ -23,7 +24,34 @@ from ..errors import QAError
 WORK_ITEM_BATCH = 200
 
 
+_TLS_CACHE: dict[tuple[str, float], ssl.SSLContext] = {}
+_TLS_LOCK = threading.Lock()
+
+
 def tls_context(verify_tls: bool = True, ca_bundle: str | None = None) -> ssl.SSLContext | bool:
+    """23.14.1: built once and reused. Reading the Windows certificate store and the certifi list took a noticeable
+    time on every TFS call (each call made a new client), which added up on pages that make many calls. The context
+    is made again when the CA bundle file changes."""
+    if not verify_tls:
+        return False
+    stamp = 0.0
+    if ca_bundle:
+        try:
+            stamp = Path(ca_bundle).expanduser().stat().st_mtime
+        except OSError:
+            stamp = -1.0  # missing: _build_tls_context reports it
+    key = (ca_bundle or "", stamp)
+    with _TLS_LOCK:
+        hit = _TLS_CACHE.get(key)
+    if hit is not None:
+        return hit
+    ctx = _build_tls_context(ca_bundle)
+    with _TLS_LOCK:
+        _TLS_CACHE[key] = ctx
+    return ctx
+
+
+def _build_tls_context(ca_bundle: str | None = None) -> ssl.SSLContext:
     """Final patch: the certificates TFS is checked against.
 
     Earlier versions trusted only the certifi list shipped with Python. A TFS server inside a company usually has a
@@ -33,8 +61,6 @@ def tls_context(verify_tls: bool = True, ca_bundle: str | None = None) -> ssl.SS
     optional CA bundle file (Preferences > TFS Integration). Certificate checking is never switched off here; only the
     existing per-profile "verify TLS" choice for a local TFS server can do that.
     """
-    if not verify_tls:
-        return False
     ctx = ssl.create_default_context()
     try:  # the Windows certificate store on Windows, the system store elsewhere
         ctx.load_default_certs()
@@ -91,7 +117,7 @@ class AzureDevOpsClient:
         api_version: str = "7.1",
         *,
         verify_tls: bool = True,
-        timeout: float = 30.0,
+        timeout: float | httpx.Timeout = 30.0,
         transport: httpx.BaseTransport | None = None,
         ca_bundle: str | None = None,
     ) -> None:
@@ -103,13 +129,17 @@ class AzureDevOpsClient:
         token = base64.b64encode(f":{pat}".encode()).decode()
         self._http = httpx.Client(
             headers={"Authorization": f"Basic {token}", "Accept": "application/json"},
-            timeout=timeout,
+            # 23.14.1: an unreachable server fails within 10 s instead of 30 s; connections are kept and reused
+            timeout=httpx.Timeout(timeout, connect=min(10.0, timeout)) if isinstance(timeout, (int, float)) else timeout,
             verify=tls_context(verify_tls, ca_bundle) if transport is None else verify_tls,
             transport=transport,
             follow_redirects=False,
+            limits=httpx.Limits(max_connections=16, max_keepalive_connections=8, keepalive_expiry=60),
         )
+        self.closed = False
 
     def close(self) -> None:
+        self.closed = True
         self._http.close()
 
     # ---- low level ----------------------------------------------------------
@@ -199,6 +229,30 @@ class AzureDevOpsClient:
 
     def get_project(self) -> dict[str, Any]:
         return self.request("GET", f"_apis/projects/{quote(self.project, safe='')}", project_scoped=False)
+
+    def team_members(self, max_teams: int = 25) -> list[dict[str, Any]]:
+        """23.13.0: the people of the project's teams (display name and unique name), for "Assigned To" lists."""
+        pid = quote(self.project, safe="")
+        teams = self.request("GET", f"_apis/projects/{pid}/teams", project_scoped=False,
+                             params={"$top": 200}).get("value", [])
+        seen: dict[str, dict[str, Any]] = {}
+        for team in teams[:max_teams]:
+            tid = quote(str(team.get("id") or team.get("name") or ""), safe="")
+            if not tid:
+                continue
+            try:
+                members = self.request("GET", f"_apis/projects/{pid}/teams/{tid}/members", project_scoped=False,
+                                       params={"$top": 500}).get("value", [])
+            except QAError:
+                continue
+            for m in members:
+                ident = m.get("identity") or m
+                name = ident.get("displayName") or ""
+                unique = ident.get("uniqueName") or ""
+                if not name or ident.get("isContainer"):
+                    continue
+                seen.setdefault((unique or name).lower(), {"name": name, "unique_name": unique})
+        return sorted(seen.values(), key=lambda p: p["name"].lower())
 
     # ---- work item tracking -------------------------------------------------
 

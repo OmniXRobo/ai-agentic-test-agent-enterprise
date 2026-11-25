@@ -104,6 +104,7 @@ function render() {
     <section class="ws-sec"><h3>Step 4 · Run comparison</h3>
       <div class="row"><button class="btn primary ws-big" id="wsRun" ${saved && canEdit() ? "" : "disabled"}>RUN COMPARISON</button>
       ${saved ? "" : '<span class="muted">Approve and save the mapping first.</span>'}
+      ${saved ? '<a class="btn" href="#/scheduled-runs" title="Integration Comparison is listed in Scheduled Runs (Page: Integration Comparison)">Schedule…</a>' : ""}
       ${d.runs.length ? `<label class="ws-check">Earlier runs <select id="wsRuns">${d.runs.map((r) => `<option value="${esc(r.id)}" ${st.run && st.run.id === r.id ? "selected" : ""}>${esc(dateTimeOf(r.started_at))} · ${esc(r.result)}</option>`).join("")}</select></label>` : ""}</div></section>
     <section class="ws-sec" id="wsResults"></section>`;
   api(BASE).then(({ items }) => {
@@ -535,6 +536,8 @@ async function runComparison() {
   try {
     const r = await api(`${BASE}/${st.id}/run`, { method: "POST" });
     st.run = r.run;
+    const drafts = (r.run && r.run.review_drafts) || [];  // 23.12.0: confirmed mismatches become Defect Review drafts
+    if (drafts.length) toast(`${drafts.length} confirmed mismatch(es) are drafts in Defect Review. Nothing is sent to TFS until a person approves.`, "info", 8000);
     st.data = await api(`${BASE}/${st.id}`);
     render();
     root.querySelector("#wsResults")?.scrollIntoView({ behavior: "smooth" });

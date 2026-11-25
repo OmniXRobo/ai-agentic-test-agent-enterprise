@@ -32,6 +32,8 @@ class PlaywrightDriver:
         self._frames: list[Any] = []
         self.manual_events: list[dict[str, Any]] = []
         self._observing = False
+        # 23.15.0: hand the sign-in password / authorization code typed while teaching to the credential store
+        self._learn_secrets = False
         self._open("default")
 
     # ---- contexts ------------------------------------------------------------------------------------------------
@@ -40,6 +42,8 @@ class PlaywrightDriver:
         if name not in self.contexts:
             ctx = (self.context_factory or self.browser.new_context)(**self.context_options)
             ctx.add_init_script(JS)
+            if self._learn_secrets:
+                ctx.add_init_script("window.__sgLearnSecrets = true")
             ctx.expose_binding("__sgReport", lambda source, event: self._on_event(event))
             self.contexts[name] = ctx
             self.pages[name] = ctx.new_page()
@@ -53,6 +57,21 @@ class PlaywrightDriver:
     def _on_event(self, event: Any) -> None:
         if isinstance(event, dict) and self._observing:
             self.manual_events.append(event)
+
+    def learn_secrets(self, on: bool = True) -> None:
+        """23.15.0: while a learning session runs, the password or code the person types is handed over once and
+        goes straight into the credential store (Windows). Off at every other time."""
+        self._learn_secrets = bool(on)
+        for ctx in self.contexts.values():
+            try:
+                ctx.add_init_script(f"window.__sgLearnSecrets = {str(bool(on)).lower()}")
+            except Exception:
+                pass
+        for frame in self.page.frames:
+            try:
+                frame.evaluate("on => { window.__sgLearnSecrets = on; }", bool(on))
+            except Exception:
+                pass
 
     def observe_user(self, on: bool = True) -> None:
         """Record the person's own clicks and entries (guided learning, manual intervention)."""
@@ -186,9 +205,14 @@ class PlaywrightDriver:
 
     def run(self, engine: Any, run_id: str, *, stop: threading.Event | None = None,
             resumed: threading.Event | None = None, on_directive: Callable[[dict[str, Any]], None] | None = None,
-            on_wait: Callable[["PlaywrightDriver", dict[str, Any]], None] | None = None, poll_s: float = 0.5, max_steps: int = 20000) -> dict[str, Any]:
-        """Drive one execution until it finishes, waiting (browser open) while it is paused or unconfirmed."""
-        obs: dict[str, Any] = {"snapshot": self.snapshot(), "capabilities": {"isolated_contexts": True}}
+            on_wait: Callable[["PlaywrightDriver", dict[str, Any]], None] | None = None, poll_s: float = 0.5, max_steps: int = 20000,
+            isolated: bool = True) -> dict[str, Any]:
+        """Drive one execution until it finishes, waiting (browser open) while it is paused or unconfirmed.
+
+        23.13.0 ``isolated=False``: the chat browser. Another account signs out and in again in the same window
+        instead of opening an isolated window per account."""
+        caps = {"isolated_contexts": bool(isolated)}
+        obs: dict[str, Any] = {"snapshot": self.snapshot(), "capabilities": caps}
         for _ in range(max_steps):
             if stop is not None and stop.is_set():
                 break
@@ -212,11 +236,11 @@ class PlaywrightDriver:
                         on_wait(self, run)
                     self._idle(poll_s)
                 self.observe_user(False)
-                obs = {"snapshot": self.snapshot(), "capabilities": {"isolated_contexts": True}}
+                obs = {"snapshot": self.snapshot(), "capabilities": caps}
                 continue
             action = directive["action"]
             result = self.perform(action)
-            obs = {"snapshot": self.snapshot(), "result": result, "capabilities": {"isolated_contexts": True}}
+            obs = {"snapshot": self.snapshot(), "result": result, "capabilities": caps}
         return {"status": engine.run(run_id)["status"]}
 
     # ---- 23.7.0: learn while the person browses -------------------------------------------------------------------

@@ -36,6 +36,7 @@ from typing import Any, Callable, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..auth import carry_user
 from ..agents.base import BaseAgent, new_run_id
 from ..ai.gateway import AIGateway
 from ..automation.service import AutomationService
@@ -131,6 +132,15 @@ FAILURE_PHRASES = {
     "test_setup": "a test setup problem: {error}",
 }
 
+
+
+# 23.13.0: spoken when an Arabic command's reply cannot be translated (the local AI is not running).
+ARABIC_STATUS = {
+    "completed": "تم. التفاصيل على الشاشة.", "accepted": "حاضر، جاري التنفيذ.",
+    "needs_input": "أحتاج معلومة إضافية. شوف السؤال على الشاشة.", "needs_confirmation": "أكد الأمر لو سمحت.",
+    "unclear": "ما فهمت الأمر. ممكن تعيده؟", "failed": "ما قدرت أنفذ الأمر. السبب على الشاشة.",
+    "unsupported": "هذا الأمر غير مدعوم. التفاصيل على الشاشة.",
+}
 
 class VoiceCommandAgent(BaseAgent):
     agent_id = "voice_command"
@@ -243,6 +253,13 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
             m = re.match(rf"^\s*(?:hey|ok|okay|hi)?[\s,]*{re.escape(n)}\b[\s,.:!-]*", t, re.I)
             if m:
                 return t[m.end():].strip()
+        from skyguard_agent.translate import has_arabic, strip_arabic_wake
+
+        if has_arabic(t):
+            # 23.13.0: the name spoken in Arabic, in any spelling the recognizer writes (كابتن, كابدان, كبتن ...)
+            rest = strip_arabic_wake(t, sorted(names_))
+            if rest is not None:
+                return rest
         return t
 
     # ---- settings and speech recognition ------------------------------------------------------
@@ -304,11 +321,15 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
 
     def _stt_request(self, cfg: dict[str, Any]) -> tuple[str, dict[str, str]]:
         language = (cfg.get("language") or "en").split("-")[0]
+        # 23.13.0: "auto" = English and Arabic (the model detects which); the English vocabulary hint is only given
+        # for English, because it would push Arabic speech towards English words
+        prompt = self.vocabulary_prompt(cfg) if language == "en" else ""
         if cfg.get("stt_api") == "openai":
-            return "/audio/transcriptions", {"model": cfg.get("stt_model") or "whisper-1", "response_format": "json",
-                                             "language": language, "prompt": self.vocabulary_prompt(cfg)}
-        return "/inference", {"response_format": "json", "language": language, "temperature": "0",
-                              "prompt": self.vocabulary_prompt(cfg)}
+            data = {"model": cfg.get("stt_model") or "whisper-1", "response_format": "json", "prompt": prompt}
+            if language != "auto":
+                data["language"] = language
+            return "/audio/transcriptions", data
+        return "/inference", {"response_format": "json", "language": language, "temperature": "0", "prompt": prompt}
 
     def _try_recording(self, url: str, cfg: dict[str, Any], timeout: float) -> tuple[str, str]:
         """Send half a second of silence to the real recognition endpoint: PASS only if it answers with text JSON.
@@ -398,6 +419,12 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
             checks.append({"name": "Radio voice (Windows voices)", "status": "PASS" if n else "WARN",
                            "detail": f"{n} Windows voices found; replies are played as radio transmissions." if n else
                            "No Windows voices here; the browser's voice is used with radio static instead."})
+        lang = str(cfg.get("language") or "en").split("-")[0].lower()
+        if cfg.get("speak_replies") and lang != "en":
+            ar = self.system_voice.arabic_status(cfg.get("radio_voice") or "", str(cfg.get("arabic_voice_gender") or ""))
+            checks.append({"name": "Arabic spoken replies", "status": "PASS" if ar["available"] else "WARN",
+                           "detail": f"Arabic replies ({ar['gender'].lower()}) are spoken by {ar['voice']} ({'Windows' if ar['engine'] == 'windows' else 'offline Piper'} voice)."
+                           if ar["available"] else ar["hint"] + " Until then Arabic replies are shown, not spoken."})
         name = "On-Premise AI for free-form requests"
         if not self.ai.config()["base_url"]:
             checks.append({"name": name, "status": "NOT_CONFIGURED", "detail": "Only the fixed command phrases are understood."})
@@ -412,11 +439,14 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
         return {"checks": checks}
 
     def radio_voices(self) -> dict[str, Any]:
-        return {"available": self.system_voice.available(), "voices": self.system_voice.voices()}
+        return {"available": self.system_voice.available(), "voices": self.system_voice.voices(),
+                "arabic": self.system_voice.arabic_status(self.config().get("radio_voice") or "",
+                                                          str(self.config().get("arabic_voice_gender") or ""))}
 
     def speak(self, text: str) -> bytes:
         cfg = self.config()
-        return self.system_voice.render(text, cfg.get("radio_voice") or "", float(cfg.get("tts_rate") or 1))
+        return self.system_voice.render(text, cfg.get("radio_voice") or "", float(cfg.get("tts_rate") or 1),
+                                        str(cfg.get("arabic_voice_gender") or ""))
 
     # ---- conversations -------------------------------------------------------------------------
 
@@ -483,8 +513,104 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
 
     # ---- entry point ---------------------------------------------------------------------------
 
+    # 23.13.0: Arabic. A command spoken or typed in Arabic (or UAE Arabic) is translated to English by the local AI
+    # (built-in word list when the model is not running), runs as the English command, and the reply is given in
+    # Arabic again. Nothing leaves the PC.
+    def _ai_chat(self) -> Any:
+        ai = self.ai
+
+        class _Gateway:
+            def chat(self, messages: list[dict[str, str]], *, max_tokens: int = 200, json_mode: bool = False) -> str:
+                if not ai.config().get("base_url"):
+                    raise RuntimeError("no local AI configured")
+                return ai.chat(messages, max_tokens=max_tokens, timeout=60)
+
+        return _Gateway()
+
+    def to_arabic(self, text: str) -> str | None:
+        """The reply in Arabic (local AI), or None when it cannot be translated now."""
+        from skyguard_agent.translate import has_arabic
+
+        if not text:
+            return None
+        try:
+            out = self._ai_chat().chat([
+                {"role": "system", "content": "Translate this short reply of a software testing assistant into clear "
+                 "Arabic as spoken in the UAE. Keep names, numbers, test case IDs and page names unchanged. Reply "
+                 "with the Arabic text only."}, {"role": "user", "content": text[:800]}], max_tokens=300)
+        except Exception:  # noqa: BLE001 - the English reply is kept
+            return None
+        out = (out or "").strip()
+        return out if out and has_arabic(out) and len(out) < 1200 else None
+
     def handle(self, text: str, *, conversation_id: str, source: str = "typed",
                page: dict[str, Any] | None = None) -> dict[str, Any]:
+        from skyguard_agent.translate import has_arabic, to_english
+
+        if not has_arabic(text or ""):
+            return self._handle(text, conversation_id=conversation_id, source=source, page=page)
+        from skyguard_agent.translate import by_words
+
+        spoken = self.strip_wake_name(text or "") or text
+        english, _ = to_english(spoken, self._ai_chat())
+        reply = self._handle(english, conversation_id=conversation_id, source=source, page=page)
+        # 23.15.0: the local AI's English sometimes misses the page the person named ("إفتاء الإشارات" -> "open the
+        # signals"); the built-in word list, with its fuzzy matching of misheard Arabic, is tried before the command
+        # is called unsupported, so a known page or command is still opened instead of "this operation is not
+        # supported".
+        if reply.get("status") in ("unsupported", "unclear"):
+            words = by_words(spoken)
+            if words and words.lower() != (english or "").lower():
+                second = self._handle(words, conversation_id=conversation_id, source=source, page=page)
+                if second.get("status") not in ("unsupported", "unclear"):
+                    reply, english = second, words
+        reply["heard"] = text
+        reply["understood"] = english
+        arabic = self.to_arabic(reply.get("say") or "")
+        if arabic:
+            reply["say_en"] = reply.get("say")
+            reply["say"] = arabic
+            reply["speak"] = arabic
+            reply["language"] = "ar"
+        else:
+            # The local AI is not running: the details stay on screen in English, and a short Arabic line is spoken
+            # so that an Arabic command is still answered in Arabic.
+            reply["speak"] = ARABIC_STATUS.get(str(reply.get("status")), ARABIC_STATUS["completed"])
+            reply["language"] = "ar"
+        return reply
+
+    def interpret(self, text: str) -> dict[str, Any]:
+        """23.14.0: what a command would do, without doing it (Voice page > Test command interpretation). Rules and the
+        built-in Arabic word list only: deterministic, nothing is executed, stored or sent to the AI."""
+        from skyguard_agent.translate import has_arabic, to_english
+
+        heard = (text or "").strip()[:500]
+        if not heard:
+            raise QAError("VALIDATION_FAILED", "Say or type a command.", status=422)
+        arabic = has_arabic(heard)
+        english = to_english(self.strip_wake_name(heard) or heard)[0] if arabic else self.strip_wake_name(heard)
+        intent = intents.parse(english)
+        out: dict[str, Any] = {"heard": privacy.redact(heard), "arabic": arabic, "english": privacy.redact(english),
+                               "executed": False, "understood": intent is not None and intent.command != "unclear"}
+        if intent is None:
+            out["result"] = ("The fixed rules do not cover this sentence. When you say it, the agent asks the local AI to "
+                             "choose one of the registered commands, or asks you to say it again.")
+            return out
+        spec = registry.BY_ID.get(intent.command)
+        out.update(command=intent.command, params=privacy.redact_params(dict(intent.params)), summary=spec.summary if spec else "",
+                   needs_confirmation=bool(spec and spec.destructive))
+        if intent.command == "open_page":
+            route = intent.params.get("route")
+            query = intent.params.get("query")
+            out["result"] = f"Would open {intents.PAGE_LABELS.get(route, route)}" + (f" ({query})" if query else "") + "."
+            out["navigate"] = f"#/{route}{'?' + query if query else ''}"
+        else:
+            out["result"] = f"Would run the command '{intent.command}'" + (" after you confirm it" if out["needs_confirmation"]
+                                                                           else "") + "."
+        return out
+
+    def _handle(self, text: str, *, conversation_id: str, source: str = "typed",
+                page: dict[str, Any] | None = None) -> dict[str, Any]:
         text = self.strip_wake_name(text or "")
         if not text:
             raise QAError("VALIDATION_FAILED", "Say or type a command.", status=422)
@@ -564,7 +690,7 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
                             say, details={**base, "speak": line, "say": say, "navigate": navigate, "owner": outcome.owner,
                                           "result": status})
 
-        threading.Thread(target=work, name=f"voice-{command_id}", daemon=True).start()
+        threading.Thread(target=carry_user(work), name=f"voice-{command_id}", daemon=True).start()  # 23.14.1
 
     def _purge_transcripts(self) -> None:
         """Delete voice history older than the retention set in Voice Settings (0 = keep). At most once a minute."""
@@ -709,7 +835,14 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
                                verify={"route": "test-suites", "label": "Test Suites"})
         # The dashboard opens the page and checks it really loaded before anything says it is done.
         say = f"I'm opening {label} now." if self.style() == "conversational" else f"{label} opened."
-        return Outcome("completed", say, navigate=f"#/{route}", verify={"route": route, "label": label})
+        # 23.14.0: a fixed filter or tab from the rules in intents_itest.py (never from the AI)
+        query = intent.params.get("query") if intent.via == "rules" else None
+        if query and not re.fullmatch(r"[a-z_]+=[a-z0-9_,]+", str(query)):
+            query = None
+        if intent.via == "rules" and intent.params.get("note"):
+            say = str(intent.params["note"])
+        return Outcome("completed", say, navigate=f"#/{route}{'?' + query if query else ''}",
+                       verify={"route": route, "label": label})
 
     def _cmd_open_work_item(self, conv: Conversation, intent: Intent) -> Outcome:
         item_id = int(intent.params["id"])
@@ -990,7 +1123,7 @@ class VoiceService(SafetyCommands, AutomationCommands, GuidedCommands, DesignCom
                 except QAError as exc:
                     out["error"] = exc
 
-            t = threading.Thread(target=run, name=f"voice-perf-{run_id}", daemon=True)
+            t = threading.Thread(target=carry_user(run), name=f"voice-perf-{run_id}", daemon=True)  # 23.14.1
             t.start()
             deadline = time.monotonic() + 60
             while t.is_alive() and run_id not in self.performance.running() and time.monotonic() < deadline:

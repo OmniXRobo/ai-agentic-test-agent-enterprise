@@ -58,7 +58,7 @@ function form(c, scenarios, host, emailReady) {
     <label>Application build (optional) <input name="build" value="${esc(s.build || "")}" placeholder="the environment's build"></label>
     <label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="pdf" style="width:auto;margin:0" ${(s.report || {}).pdf !== false ? "checked" : ""}>Make the PDF report after each run</label>
     <fieldset style="grid-column:1/-1;border:1px solid var(--border);border-radius:8px;padding:10px 12px"><legend>Notifications</legend>
-      <p class="muted" style="margin:0 0 8px">The bell shows every finished, skipped or missed run.${emailReady ? "" : ' Email: set up the sender first in <a href="#/email-settings">Settings > Outlook Email</a>.'}</p>
+      <p class="muted" style="margin:0 0 8px">The bell shows every finished, skipped or missed run.${emailReady ? "" : ' Email: set up the sender first in <a href="#/email-settings">Settings > Email / SMTP</a>.'}</p>
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
       <label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" name="email_enabled" style="width:auto;margin:0" ${em.enabled ? "checked" : ""}>Email the result (PDF attached)</label>
       <label>To <input name="email_to" value="${esc(Array.isArray(em.to) ? em.to.join("; ") : em.to || "")}" placeholder="lead@company.com; qa@company.com"></label>

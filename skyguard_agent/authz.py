@@ -2,7 +2,8 @@
 changes business data. All six checks must pass; the first failure stops the step with its reason.
 
 1 active account is the account the plan assigned to this stage
-2 the account's identity is verified from the application's own display
+2 the account's identity is verified from the application's own display (23.11.2: or, for an application that never
+  displays the signed-in user, from its acceptance of that account's own sign-in, for unrestricted operations only)
 3 its role is verified, and the approved workflow allows that role (the user's description is never trusted)
 4 the workflow is the approved version that was previewed (and, where learned, the record has the expected status)
 5 the target record is identified (no "first row" guesses)
@@ -25,9 +26,13 @@ def check(*, plan: dict[str, Any], stage: dict[str, Any], session: dict[str, Any
     problems: list[str] = []
     if session.get("account_id") != stage.get("account_id"):
         problems.append("The signed-in account is not the account this stage must use.")
-    if not session.get("verified"):
-        problems.append("The signed-in identity has not been verified from the application.")
     allowed = {norm(r) for r in (workflow or {}).get("data", {}).get("roles", []) if r}
+    if not session.get("verified"):
+        # An application that never shows who is signed in (Swag Labs, for example) cannot verify the identity from
+        # its display. Its own acceptance of the account's sign-in is enough only for an operation that no role
+        # restricts, and never in production mode.
+        if not (session.get("sign_in_confirmed") and not allowed and mode != "production"):
+            problems.append("The signed-in identity has not been verified from the application.")
     if allowed:
         if not session.get("role_verified"):
             problems.append("The account's role could not be verified from the application, so a role-restricted "

@@ -1,4 +1,4 @@
-; SkyGuard QA cumulative upgrade wizard: SGQA-23.3.35 (or any later release up to 23.11.0) to the latest release.
+; SkyGuard QA cumulative upgrade wizard: SGQA-23.3.35 (or any later release up to 23.11.2) to the latest release.
 ;
 ; Welcome -> Detect -> Backup -> Install -> Verify -> Finish. Per user, no administrator rights (RequestExecutionLevel
 ; user), offline. The work is done by install_patch.py with the application's own Python (the same installer the
@@ -7,7 +7,7 @@
 ; no services, no writes to protected folders (a protected application folder gets a patched side-by-side copy).
 ;
 ; Built on the build machine by packaging/setup/build_release.py:
-;   makensis -DVERSION=23.11.1 -DPAYLOAD=<patch folder> -DOUTFILE=<Setup.exe> SkyGuardSetup.nsi
+;   makensis -DVERSION=23.14.1 -DPAYLOAD=<patch folder> -DOUTFILE=<Setup.exe> SkyGuardSetup.nsi
 ;
 ; Unattended (for IT, or a test):
 ;   Setup.exe /S /APP=<installation folder> [/SIDEBYSIDE] [/NOSTART] [/KEEPRUNNING]
@@ -23,7 +23,7 @@ SetCompressor /SOLID lzma
 SetCompressorDictSize 64
 
 !ifndef VERSION
-  !error "VERSION is required (-DVERSION=23.11.1)"
+  !error "VERSION is required (-DVERSION=23.14.1)"
 !endif
 !ifndef PAYLOAD
   !error "PAYLOAD is required (-DPAYLOAD=<patch folder>)"
@@ -43,7 +43,7 @@ SetCompressorDictSize 64
 Name "SkyGuard QA ${VERSION} Upgrade"
 Caption "SkyGuard QA ${VERSION} Upgrade"
 OutFile "${OUTFILE}"
-BrandingText "SkyGuard QA ${VERSION} - offline, no administrator rights"
+BrandingText "SkyGuard QA ${VERSION}"
 ShowInstDetails show
 InstallDir "$LOCALAPPDATA\Programs\AIAgenticTestAgent"
 VIProductVersion "${VERSION}.0"
@@ -51,7 +51,12 @@ VIAddVersionKey "ProductName" "SkyGuard QA"
 VIAddVersionKey "FileDescription" "SkyGuard QA ${VERSION} cumulative upgrade (from 23.3.35)"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
-VIAddVersionKey "LegalCopyright" "SkyGuard QA"
+!ifndef PUBLISHER
+  !define PUBLISHER "Muhammad Tufail"
+!endif
+VIAddVersionKey "CompanyName" "${PUBLISHER}"
+VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
+VIAddVersionKey "Comments" "Published by ${PUBLISHER}"
 
 Var AppDir        ; folder the person chose (holds app or qa_platform)
 Var App           ; the folder that holds qa_platform
@@ -85,9 +90,9 @@ Var hStop
 !define MUI_ABORTWARNING
 !define MUI_ABORTWARNING_TEXT "Cancel the upgrade? Nothing has been changed yet."
 !define MUI_WELCOMEPAGE_TITLE "Upgrade SkyGuard QA to ${VERSION}"
-!define MUI_WELCOMEPAGE_TEXT "This wizard upgrades an installed SkyGuard QA (version 23.3.35 or any later release up to 23.11.0) to ${VERSION} in one step. It includes every release in between.$\r$\n$\r$\n\
-What you get: the repaired AI Agent (commands understood by intent, a navigation only opens a page, one short preview, the confirmation checked by SkyGuard, learning of multi-role flows and a test of what was learned), and everything from 23.4.0 to 23.11.0 (including editable Python tests, Smart Wait and Defect Review).$\r$\n$\r$\n\
-It works offline, needs no administrator rights and changes nothing outside the SkyGuard QA folders. Your data is backed up first and is never deleted; if anything fails, the previous version is restored automatically.$\r$\n$\r$\n\
+!define MUI_WELCOMEPAGE_TEXT "Publisher: ${PUBLISHER}$\r$\n$\r$\nThis wizard upgrades an installed SkyGuard QA (version 23.3.35 or any later release up to 23.11.2) to ${VERSION} in one step. It includes every release in between.$\r$\n$\r$\n\
+New: API Testing, scheduled API tests and Integration Comparisons, more Agent Workflow agents, a larger Python editor and AI Agent fixes.$\r$\n$\r$\n\
+It works offline and changes nothing outside the SkyGuard QA folders. Your data is backed up first and is never deleted; if anything fails, the previous version is restored automatically.$\r$\n$\r$\n\
 Close SkyGuard QA if it is open, then press Next."
 !insertmacro MUI_PAGE_WELCOME
 Page custom DetectPage DetectLeave
@@ -276,7 +281,7 @@ Function ShowDetect
     StrCpy $1 "Installed version: $Version$\r$\nTarget version: ${VERSION}$\r$\nApplication: $App$\r$\nData (kept): $DataDir$\r$\n$\r$\n$Message"
     EnableWindow $0 1
   ${Else}
-    StrCpy $1 "Cannot upgrade this folder.$\r$\n$\r$\n$Message$\r$\n$\r$\nSupported versions: 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0 (and ${VERSION} again, to repair)."
+    StrCpy $1 "Cannot upgrade this folder.$\r$\n$\r$\n$Message$\r$\n$\r$\nSupported versions: 23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2 (and ${VERSION} again, to repair)."
     EnableWindow $0 0
   ${EndIf}
   ${NSD_SetText} $hResult "$1"
@@ -461,9 +466,9 @@ Function FinishPre
   ${If} $Result == "ok"
     StrCpy $FinishTitle "SkyGuard QA ${VERSION} is installed"
     ${If} $Warnings > 0
-      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION}. Every check passed except $Warnings warning(s) on the Verify page (see the log).$\r$\n$\r$\nIn the browser press Ctrl+F5 once. New: the repaired AI Agent. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
+      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION}. Every check passed except $Warnings warning(s) on the Verify page (see the log).$\r$\n$\r$\nIn the browser press Ctrl+F5 once. New: API Testing in Automation Studio. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
     ${Else}
-      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION} and every check passed.$\r$\n$\r$\nIn the browser press Ctrl+F5 once. New: the repaired AI Agent. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
+      StrCpy $FinishText "SkyGuard QA was upgraded from $Version to ${VERSION} and every check passed.$\r$\n$\r$\nIn the browser press Ctrl+F5 once. New: API Testing in Automation Studio. To undo: ROLLBACK_PATCH.cmd in patch-tools\${VERSION}."
     ${EndIf}
   ${Else}
     StrCpy $FinishTitle "The upgrade did not complete"

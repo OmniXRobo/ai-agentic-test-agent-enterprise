@@ -22,13 +22,17 @@ from __future__ import annotations
 import re
 import threading
 from typing import Any
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlsplit
 
 from . import authz, guard, locator, rules as rule_engine, sessions
-from .knowledge import KnowledgeBase, origin_of
+from .knowledge import KnowledgeBase, origin_of, same_site
 from .planner import build_preview, rules_for
 from .store import Store
 from .util import AgentError, dumps, loads, norm, now_iso
+
+# words with which a result page says the submission went through ("Thank you for your order!", "Order complete")
+_DONE_WORDS = re.compile(r"\b(thank you|thanks for|successfully|has been (?:placed|created|submitted|saved|dispatched|received)|"
+                         r"order (?:is )?(?:complete|confirmed|placed)|checkout: complete)", re.I)
 
 FINAL = {"completed", "partial", "failed", "stopped", "cancelled"}
 ITEM_FINAL = {"confirmed_success", "confirmed_failure", "skipped"}
@@ -121,6 +125,65 @@ class Engine:
             except Exception:
                 pass
 
+    # ---- 23.13.0: the chat browser ----------------------------------------------------------------------------
+
+    def seed_session(self, run_id: str, session: dict[str, Any]) -> None:
+        """A task that runs in the chat browser starts with the account already signed in there (verified by an
+        earlier task in the same window), so it is not signed in a second time. The application's own sign-in page,
+        if it shows up, still triggers a new sign-in (``logged_out``)."""
+        if not session or not session.get("account_id"):
+            return
+        with self._lock(run_id):
+            run = self.run(run_id)
+            cp = run["checkpoint"]
+            if (cp.get("session") or {}).get("account_id"):
+                return
+            cp["session"] = {k: session.get(k) for k in ("account_id", "identity", "role", "verified",
+                                                           "sign_in_confirmed", "role_verified", "context")
+                             if k in session}
+            self._save(run, checkpoint=cp)
+
+    def create_sign_in(self, *, app_id: str, account_id: str, interface: str, by: str | None) -> dict[str, Any]:
+        """A sign-in on its own ("log in as manager"): the same verified sign-in a task does, then done. The window
+        stays signed in for the next request. The password comes from the secure store only."""
+        app = self.kb.application(app_id)
+        acc = self.kb.account(account_id)
+        if acc["application_id"] != app["id"]:
+            raise AgentError("ACCOUNT_INVALID", "That account belongs to another application.")
+        if not acc["has_credential"] and not (app.get("profile") or {}).get("login", {}).get("manual"):
+            raise AgentError("CREDENTIAL_MISSING", f"{acc['label']} has no saved credential. Add it through the "
+                             "secure credential form first.", 409)
+        run_id = f"OPS-{now_iso()[:19].replace('-', '').replace(':', '').replace('T', '-')}-{_rand()}"
+        now = now_iso()
+        stage = {"index": 0, "workflow": None, "workflow_entry_id": None, "title": f"Sign in as {acc['label']}",
+                 "account_id": acc["id"], "account": acc["label"], "login_id": acc["login_id"],
+                 "role_claimed": acc.get("role_key"), "commits": False}
+        plan = {"app_id": app["id"], "app_name": app["name"], "kind": "signin", "stages": [stage], "options": {},
+                "mode": app.get("mode", "testing"), "warnings": []}
+        cp = {"phase": "signin", "stage": 0, "item": 0, "step": 0, "sub": "session", "session": {}}
+        self.store.execute("INSERT INTO runs (id, application_id, workflow_key, interface, status, plan, checkpoint, "
+                           "created_by, created_at, updated_at, confirmed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                           (run_id, app["id"], None, interface, "running", dumps(plan), dumps(cp), by, now, now, now))
+        self._event(run_id, "plan", f"Sign in to {app['name']} as {acc['label']}.")
+        self.audit.record("run.sign_in", actor=by, interface=interface, target=run_id,
+                          details={"application": app["name"], "account": acc["label"]})
+        return self.view(run_id)
+
+    def _sign_in_step(self, run: dict[str, Any], cp: dict[str, Any], snap: dict[str, Any],
+                      app: dict[str, Any]) -> dict[str, Any]:
+        stage = run["plan"]["stages"][0]
+        d = self._ensure_session(run, cp, snap, app, stage)
+        if d is not None:
+            return d
+        sess = cp.get("session") or {}
+        note = f"Signed in to {app['name']} as {stage['account']}" + (
+            "" if sess.get("verified") else " (the application shows no user name to verify)") + "."
+        cp["phase"] = "done"
+        self._save(run, status="completed", summary={"message": note, "counts": {}, "total": 0}, checkpoint=cp,
+                   finished_at=now_iso())
+        self._event(run["id"], "done", note)
+        return {"done": self.view_summary(self.run(run["id"]))}
+
     # ---- creating a run: INSPECT -> VALIDATE -> PREVIEW ---------------------------------------------------------
 
     def create(self, *, app_id: str, stages: list[dict[str, Any]], records: list[dict[str, Any]], interface: str,
@@ -139,6 +202,16 @@ class Engine:
                 raise AgentError("WORKFLOW_NOT_APPROVED", f"The workflow '{s['workflow']}' has no approved version. "
                                  "Review and approve it in Knowledge first.", 409)
             acc = self.kb.account(s["account_id"]) if s.get("account_id") else None
+            if acc is None and not sessions.needs_sign_in(app, wf, self.kb.accounts(app["id"])):
+                # 23.13.0: a public site (no sign-in): the task runs in the browser as it is, without an account
+                plan_stages.append({
+                    "index": i, "workflow": wf["key"], "workflow_entry_id": wf["id"], "workflow_version": wf["version"],
+                    "title": wf["data"].get("title") or wf["key"], "account_id": None, "account": "no sign-in",
+                    "login_id": None, "role_claimed": None, "role_verified": None, "public": True,
+                    "commits": bool(wf["data"].get("commits", True)), "page": wf["data"].get("start_url"),
+                    "expected_status": wf["data"].get("expected_status"),
+                })
+                continue
             if not acc or acc["application_id"] != app["id"]:
                 raise AgentError("ACCOUNT_REQUIRED", f"Choose the account for '{wf['data'].get('title') or wf['key']}'.")
             if not acc["has_credential"] and not (app.get("profile") or {}).get("login", {}).get("manual"):
@@ -436,6 +509,8 @@ class Engine:
             handled = self._action_failed(run, cp, awaiting, result, snap)
             if handled:
                 return handled
+        if cp["phase"] == "signin":
+            return self._sign_in_step(run, cp, snap, app)
         if cp["phase"] == "discover" and self.learning is not None:
             return self.learning.discovery_step(run, cp, snap, app)
         if cp["phase"] == "inspect":
@@ -550,11 +625,13 @@ class Engine:
     def _ensure_session(self, run: dict[str, Any], cp: dict[str, Any], snap: dict[str, Any], app: dict[str, Any],
                         stage: dict[str, Any]) -> dict[str, Any] | None:
         """None when the right account is signed in and verified; otherwise the next directive."""
+        if not stage.get("account_id") and stage.get("public"):
+            return None  # 23.13.0: a public site: nothing to sign in to
         sess = sessions.SessionState(cp.get("session"))
         profile = app.get("profile") or {}
         login = cp.setdefault("login", {})
         account = self.kb.account(stage["account_id"])
-        if sess.account_id == stage["account_id"] and sess.verified and not login.get("phase"):
+        if sess.account_id == stage["account_id"] and (sess.verified or sess.sign_in_confirmed) and not login.get("phase"):
             if snap and sessions.logged_out(snap, profile):  # the application ended the session
                 self._event(run["id"], "session", "The application session ended (sign-in page shown). Signing in "
                                                   "again with the same account.")
@@ -656,6 +733,7 @@ class Engine:
             if res.status != "found":
                 return self._locate_problem(run, cp, res, lp.get("submit") or "the sign-in button")
             login["phase"] = "login_verify"
+            login["submitted"] = True  # the account's own credentials were submitted through the sign-in form
             return {"action": {"type": "click", "handle": res.element["h"], "target": lp.get("submit") or "Sign in"}}
         if login["phase"] == "login_verify":
             challenge = sessions.auth_challenge(snap) if snap else None
@@ -703,15 +781,27 @@ class Engine:
                                                   f"{account['label']}, not '{account.get('role_key')}'. The verified "
                                                   "role is used for authorization.")
                 role_ok = True
+            # The application accepted this account's own sign-in but shows no user name and has no learned identity
+            # rule: recorded as a confirmed sign-in, which authz accepts only for operations no role restricts.
+            # 23.12.0: also when a learned identity rule finds nothing on this page. On Swag Labs a rule learned from
+            # the sign-in page's help text ("Accepted usernames are: standard_user ...") never matches a signed-in
+            # page, and every run was refused with "identity has not been verified". A user name that the page does
+            # show and that differs is still a mismatch above, which stops the run.
+            confirmed = check["identity"] == "unverified" and bool(login.get("submitted"))
+            if confirmed and (profile.get("identity") or {}).get("pattern"):
+                self._event(run["id"], "session", "The learned rule for reading the signed-in user found nothing on "
+                                                  "this page; the application's acceptance of the sign-in is used.")
             sess = sessions.SessionState({"account_id": account["id"], "identity": check["displayed_user"] or
                                           account["login_id"], "role": role, "verified": check["identity"] == "verified",
-                                          "role_verified": role_ok, "context": account["id"]})
+                                          "role_verified": role_ok, "sign_in_confirmed": confirmed,
+                                          "context": account["id"]})
             cp["session"] = sess.to_dict()
             self.kb.mark_account(account["id"], auth_status="verified" if sess.verified else "signed_in_unverified",
                                  identity=sess.identity, role=role if role_ok else None)
             login.clear()
-            self._event(run["id"], "session", f"Signed in as {account['label']}: identity "
-                                              f"{'verified' if sess.verified else 'NOT verified'}, role "
+            shown = ("verified" if sess.verified else "confirmed by the application accepting the sign-in (it does "
+                     "not display the user name)" if confirmed else "NOT verified")
+            self._event(run["id"], "session", f"Signed in as {account['label']}: identity {shown}, role "
                                               f"{role if role_ok else 'not verified'}.")
             self._stage_roles(run, stage, sess)
             return None
@@ -858,7 +948,15 @@ class Engine:
             step = steps[cp["step"]]
             act = step.get("action")
             if act == "navigate":
-                url = urljoin(app["base_url"], _fill(step.get("url") or "", record))
+                raw = step.get("url") or ""
+                url = urljoin(app["base_url"], _fill(raw, record))
+                if not re.search(r"\{\w+\}", raw):
+                    # 23.13.3: an address recorded while learning, on a site that changes its addresses on every
+                    # visit: the changing parts come from the page open now, or the start page is opened
+                    from .understanding import rebase_url
+
+                    here = (snap or {}).get("url") or (cp.get("page") or {}).get("url")
+                    url = rebase_url(url, here) or app["base_url"]
                 if not _url_allowed(url, app):
                     return self._pause(run, "url_refused", "The workflow points outside the registered application; "
                                        "it was not opened.")
@@ -871,11 +969,27 @@ class Engine:
                 cp["step"] += 1
                 return {"action": {"type": "snapshot", "wait_ms": min(int(step.get("ms") or 1000), 15000)}}
             if act == "manual_secret":
-                # 23.11.1: a code only a person may enter (driver authentication, a one-time code on a form). The
-                # agent never asks for it in chat and never types or stores it: the person types it directly into
-                # the application, then presses Resume.
+                # 23.11.1: a code only a person may enter (driver authentication, a code on a form). The agent never
+                # asks for it in chat.
+                # 23.15.0: if the person typed that code while teaching and chose to have it remembered, it is in
+                # the credential vault (Windows) and is filled from there, never shown and never written anywhere
+                # else. Otherwise the run still pauses for the person, as before.
+                label = step.get("target") or "The code"
+                secret = None
+                try:
+                    secret = self.kb.app_secret_value(app["id"], str(label))
+                except Exception:  # noqa: BLE001 - a vault problem only means: ask the person
+                    secret = None
+                if secret:
+                    res = self._resolve(app["id"], step.get("screen") or "*", str(label), snap, "fill")
+                    if res.status == "found":
+                        cp["step"] += 1
+                        self._event(run["id"], "secret", f"'{label}' filled from the credential store (saved when you "
+                                                         "taught me this task; it is never shown or logged).")
+                        return {"action": {"type": "fill", "handle": res.element["h"], "value": secret,
+                                           "secret": True, "target": str(label)}}
                 cp["step"] += 1
-                return self._pause(run, "auth_secret_step", f"'{step.get('target') or 'The code'}' is required here. "
+                return self._pause(run, "auth_secret_step", f"'{label}' is required here. "
                                    "Type it yourself directly in the application window (I do not read, store or "
                                    "type it), then press Resume.", target=step.get("target"))
             if sessions.logged_out(snap, app.get("profile") or {}) and step.get("screen") != "login":
@@ -910,6 +1024,7 @@ class Engine:
                 cp["heal_waits"] = 0
                 commit = bool(step.get("commit"))
                 if commit:
+                    cp["commit_url"] = snap.get("url")
                     d = self._authorize(run, cp, stage, wf_entry, item)
                     if d:
                         return d
@@ -941,6 +1056,7 @@ class Engine:
                 cp["heal_pending"] = pending
             cp["step"] += 1
             if step.get("commit"):
+                cp["commit_url"] = snap.get("url")
                 d = self._authorize(run, cp, stage, wf_entry, item)
                 if d:
                     cp["step"] -= 1
@@ -1005,6 +1121,22 @@ class Engine:
 
     # -- verification --
 
+    @staticmethod
+    def _success_page(cp: dict[str, Any], snap: dict[str, Any], ver: dict[str, Any]) -> str | None:
+        """23.12.0: the page the application moves on to after a successful submit, for applications that show no
+        success message (Swag Labs: "Thank you for your order!"). Only a different page than the one submitted, with
+        no error, no invalid field and no sign-in form, counts."""
+        url = urlsplit(snap.get("url") or "").path
+        if not url or url == urlsplit(cp.get("commit_url") or "").path or (snap.get("auth") or {}).get("password_fields"):
+            return None
+        heading = (snap.get("heading") or snap.get("title") or "").strip()
+        page = ver.get("success_page") or {}
+        if page.get("path"):
+            return (page.get("title") or heading or url) if url == page["path"] else None
+        # knowledge learned before 23.12.0 has no result page: the new page must say so itself
+        m = _DONE_WORDS.search(" ".join([heading, snap.get("text") or ""])[:3000])
+        return (heading or m.group(0)) if m else None
+
     def _verify(self, run: dict[str, Any], cp: dict[str, Any], snap: dict[str, Any], app: dict[str, Any],
                 stage: dict[str, Any], wf: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
         record = item["record"]
@@ -1031,6 +1163,13 @@ class Engine:
                                        f"{item['seq']} because the application rejected it: \"{detail}\". I am paused "
                                        "on this page. Correct the data and run the record again, or Resume to "
                                        "continue with the next record.")
+                return self._next_item(run, cp)
+            reached = None if (success_msg or ver.get("record_listed")) else self._success_page(cp, snap, ver)
+            if reached:
+                self._promote_heal(app["id"], cp.pop("heal_pending", None))
+                self._stage_result(run, item, stage["index"], "confirmed_success",
+                                   f"the application showed its result page \"{reached}\"",
+                                   evidence={"page": reached, "url": snap.get("url")})
                 return self._next_item(run, cp)
             if success_msg and not ver.get("record_listed"):
                 self._promote_heal(app["id"], cp.pop("heal_pending", None))
@@ -1365,7 +1504,7 @@ def _url_allowed(url: str, app: dict[str, Any]) -> bool:
     if not url or url.startswith(("about:", "chrome-error:", "data:")) or url == "about:blank":
         return True
     try:
-        return origin_of(url) in app["origins"]
+        return origin_of(url) in app["origins"] or same_site(url, app)  # 23.13.0: www./booking. of the same site
     except Exception:
         return False
 

@@ -605,3 +605,52 @@ def test_the_worker_probe_reads_a_test_image_and_loads_the_cpp_runtime_first():
     if ocr.engines()["rapidocr"]:  # the runtime is on this machine: the probe must really read
         eng = next(e for e in ocr.diagnose()["engines"] if e["engine"] == "rapidocr")
         assert eng["status"] == "ready" and "4120" in eng["detail"], eng
+
+
+# ---- 23.12.0: tables whose Next stays active on the last page (tabulizer.com demo), filters without Apply -----------
+
+@pytest.mark.parametrize("query", ["", "?wrap=1", "?count=1", "?wrap=1&count=1"])
+def test_231200_next_active_on_the_last_page_is_the_end_not_incomplete(site, query):
+    """Reported on the tabulizer.com demo: "page 6 repeats an earlier page (Next did not move on)". When Next shows a
+    page already read, the end is confirmed by the application's record count or its last page number."""
+    pytest.importorskip("playwright")
+    r, _, _, _, _ = _extract(site, "tabulizer.html" + query)
+    st = r["stats"]
+    assert st["records"] == 25 and st["complete"] and st["reason"] is None and st["pages_visited"] == 3, st
+    ids = _values(r, "Invoice No")
+    assert len(set(ids)) == 25 and ids[0] == "INV-001" and ids[-1] == "INV-025"
+
+
+def test_231200_next_that_does_not_move_without_any_count_stays_incomplete(site, tmp_path):
+    """Without a record count or page numbers the end cannot be confirmed: it is still reported, never a pass."""
+    pytest.importorskip("playwright")
+    from qa_platform.comparison.extract_web import WebExtractor
+
+    conf = {"base_url": f"{site}/integration_live/tabulizer.html", "auth_method": "none"}
+    with WebExtractor(conf) as ex:
+        ex.login()
+        ex.wait_for_data()
+        ex.page.evaluate("() => { const s = document.createElement('style'); s.textContent = '.pg a[data-p]:not([data-p=next])"
+                         "{display:none}'; document.head.appendChild(s); }")
+        r = ex.table({})
+    st = r["stats"]
+    assert not st["complete"] and "could not be confirmed" in st["reason"] and st["records"] == 25, st
+
+
+def test_231200_filter_without_apply_button_and_regex_flag(site):
+    """Reported: "Apply filters" failed with InvalidSelectorError on /(?i).../i. A Search box that filters as you type
+    (no Apply button) is now set, verified and fetched."""
+    pytest.importorskip("playwright")
+    from qa_platform.comparison import filters as F
+    from qa_platform.comparison.extract_web import WebExtractor
+
+    conf = {"base_url": f"{site}/integration_live/tabulizer.html?count=1", "auth_method": "none"}
+    with WebExtractor(conf) as ex:
+        ex.login()
+        ex.wait_for_data()
+        controls = F.classify(ex.page.evaluate(F.FILTERS_JS))
+        search = next(c for c in controls if c["label"].lower().startswith("search"))
+        # an apply button that no longer exists on the page: the fallback must not raise a selector error
+        out = F.apply(ex, [search], {search["id"]: "INV-017"}, {"apply": {"css": "#gone", "text": "Apply"}})
+        r = ex.table({})
+    assert r["stats"]["records"] == 1 and r["records"][0]["fields"]["Invoice No"]["value"] == "INV-017", (out, r["stats"])

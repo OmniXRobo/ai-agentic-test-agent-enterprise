@@ -20,7 +20,7 @@ from urllib.parse import urljoin, urlsplit
 
 from . import locator
 from .guard import SYSTEM_RULES, wrap_untrusted
-from .knowledge import KnowledgeBase, origin_of
+from .knowledge import KnowledgeBase, origin_of, same_site
 from .llm import extract_json
 from .util import AgentError, dumps, loads, new_id, norm, now_iso
 
@@ -31,6 +31,11 @@ COMMIT_WORDS = re.compile(r"\b(save|submit|create|add|approve|authori[sz]e|confi
                           r"register|book|assign|apply|finish|complete|mark|ready|post)\b", re.I)
 MAX_PAGES_DEFAULT = 25
 
+
+# names that end like a record number but are shared by many records (23.12.0: "Zip/Postal Code must be unique")
+NOT_UNIQUE = re.compile(r"(zip|postal|post|pin|area|country|currency|phone|dial|language|lang|region|state|city|"
+                        r"promo|coupon|discount|tax|vat|color|colour|size)[_ ]?(code|no|number)$|^(phone|mobile|tel)",
+                        re.I)
 
 def screen_key(snap: dict[str, Any]) -> str:
     """A readable, stable name for a screen: its heading (or title) and path."""
@@ -94,6 +99,8 @@ class Learning:
         self.kb = kb
         self.engine = engine
         self.llm = llm
+        # 23.15.0: set by OperationsAgent; hands a password or code typed while teaching to the credential vault
+        self.on_secrets: Any = None
 
     # ---- automatic discovery: a read-only run in the engine --------------------------------------------------
 
@@ -105,7 +112,7 @@ class Learning:
             if acc["application_id"] != app["id"]:
                 raise AgentError("ACCOUNT_INVALID", "That account belongs to another application.")
         start = urljoin(app["base_url"], start_url or app["base_url"])
-        if origin_of(start) not in app["origins"]:
+        if not same_site(start, app):
             raise AgentError("URL_REFUSED", "Discovery can only start inside the registered application.")
         run_id = f"DISC-{new_id('x')[2:]}"
         now = now_iso()
@@ -135,7 +142,7 @@ class Learning:
         disc = cp["discover"]
         cur = disc.get("current")
         if cur and snap and snap.get("url"):
-            if origin_of(snap["url"]) in app["origins"]:
+            if same_site(snap["url"], app):
                 self._record_screen(run, app, snap, disc, stage)
             disc["current"] = None
         while disc["queue"] and len(disc["visited"]) < disc["max_pages"]:
@@ -279,6 +286,10 @@ class Learning:
             r["result"] = d.get("result")
         return rows
 
+    def agent_capture(self, app_id: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Set by OperationsAgent: hand the secrets typed while teaching to the credential vault."""
+        return self.on_secrets(app_id, events) if self.on_secrets else []
+
     def add_events(self, sid: str, events: list[dict[str, Any]], snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         s = self.session(sid)
         if s["status"] != "recording":
@@ -286,11 +297,20 @@ class Learning:
         _guided_only(s)
         app = self.kb.application(s["application_id"])
         data = s["data"]
+        # 23.15.0: a password or authorization code typed here goes into the credential vault and is stripped from
+        # the events before anything is stored
+        try:
+            data.setdefault("remembered_secrets", [])
+            for got in self.agent_capture(app["id"], events):
+                if got not in data["remembered_secrets"]:
+                    data["remembered_secrets"].append(got)
+        except Exception:  # learning never fails because of this
+            pass
         for e in events[:200]:
             if not isinstance(e, dict) or e.get("kind") not in ("click", "fill", "select", "check", "submit", "navigate"):
                 continue
             url = str(e.get("url") or "")
-            if url and origin_of(url) not in app["origins"]:
+            if url and not same_site(url, app):
                 continue  # only the registered application is learned
             el = e.get("element") or {}
             secret = bool(e.get("secret") or el.get("secret"))
@@ -418,7 +438,8 @@ class Learning:
             if p.get("type") == "select" and p.get("options"):
                 out.append(("allowed", f"{p['field']} must be an offered option",
                             {"type": "allowed_values", "field": p["name"], "source": "options", "applies_to": wf_key}))
-            if re.search(r"(number|no|code|ref)$", p["name"]):
+            # a record's own number or reference; never a postal, area, country, currency or phone code (23.12.0)
+            if re.search(r"(number|no|code|ref)$", p["name"]) and not NOT_UNIQUE.search(p["name"]):
                 out.append(("unique", f"{p['field']} must be unique", {"type": "unique", "field": p["name"],
                                                                          "applies_to": wf_key}))
         entries = [self.kb.propose(app["id"], "rule", f"{wf_key}: {name}", rule, source="guided_learning",

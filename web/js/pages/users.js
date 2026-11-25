@@ -49,6 +49,46 @@ async function networkCard(view) {
   });
 }
 
+// 23.13.0: HTTPS with a friendly name (offline; the certificate is made on this PC)
+async function httpsCard(view) {
+  const host = view.querySelector("#httpsCard");
+  let h;
+  try { h = await api("/api/auth/network/https"); } catch (err) { host.innerHTML = `<p class="muted">${esc(err.message)}</p>`; return; }
+  const state = h.running ? `<span class="pill PASS">ON</span> <a href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.url)}</a>`
+    : h.enabled ? '<span class="pill WARN">SET UP</span> Exit SkyGuard QA and open it again to start HTTPS.' : '<span class="pill WAITING">OFF</span>';
+  host.innerHTML = `
+    <h2>HTTPS and a friendly address</h2>
+    <p>${state}</p>
+    <p class="muted">Open SkyGuard QA as <b>https://${esc(h.hostname)}/</b> instead of an IP address or PC name. Everything stays offline: SkyGuard QA makes its own certificate authority on this PC (no internet, no outside service). The address <code>http://127.0.0.1:${h.http_port}/</code> keeps working on this PC.</p>
+    <form class="row" id="httpsForm" style="flex-wrap:wrap;gap:8px">
+      <label>Name <input name="hostname" value="${esc(h.hostname)}" maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9.\-]*" required></label>
+      <label>Port <input name="port" type="number" min="1" max="65535" value="${h.port}" style="width:90px"></label>
+      <label><span><input type="checkbox" name="enabled" ${h.enabled ? "checked" : ""}> Use HTTPS</span></label>
+      <button class="btn primary" type="submit">Save</button>
+    </form>
+    <h3>Steps</h3>
+    <ol class="muted">
+      <li>Tick <b>Use HTTPS</b> and Save (the certificate is made now).</li>
+      <li><button class="btn small" id="trustBtn" ${h.ready ? "" : "disabled"}>Trust on this PC</button> runs <code>ENABLE_HTTPS.cmd</code> as administrator: it trusts the SkyGuard QA certificate in Windows (Edge uses it), adds <code>${esc(h.hostname)}</code> to the hosts file and opens the port on office networks.</li>
+      <li>Exit SkyGuard QA and open it again.</li>
+      <li>Colleagues: ${h.network_enabled ? "" : "turn on Network access below, then "}copy <code>TRUST_SKYGUARD_QA.cmd</code> from the application folder and the certificate <a href="/api/auth/https-ca.crt">SkyGuard_QA_Local_CA.crt</a> to their PC and run <code>TRUST_SKYGUARD_QA.cmd &lt;this PC's IP address&gt; ${esc(h.hostname)}</code> once. If IT adds <b>${esc(h.hostname)}</b> to the office DNS, only the certificate step is needed.</li>
+    </ol>
+    ${h.ca_sha256 ? `<p class="muted">Certificate fingerprint (SHA-256): <code style="word-break:break-all">${esc(h.ca_sha256)}</code></p>` : ""}`;
+  host.querySelector("#httpsForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api("/api/auth/network/https", { method: "PUT", body: { hostname: String(f.get("hostname")).trim(), port: Number(f.get("port") || 443), enabled: !!f.get("enabled") } });
+      toast(r.made ? "Certificate made. Now trust it on this PC, then restart SkyGuard QA." : "Saved. Restart SkyGuard QA to apply.", "success");
+    } catch (err) { toast(err.message, "error"); }
+    httpsCard(view);
+  });
+  host.querySelector("#trustBtn").addEventListener("click", async () => {
+    try { await api("/api/auth/network/https/trust", { method: "POST" }); toast("Windows is asking for administrator permission on this PC's screen.", "success"); }
+    catch (err) { toast(err.message, "error"); }
+  });
+}
+
 async function usersCard(view) {
   const host = view.querySelector("#usersCard");
   const { users, roles } = await api("/api/auth/users");
@@ -60,20 +100,30 @@ async function usersCard(view) {
       <label>Full name <input name="display_name" maxlength="80" placeholder="Shown at the top right"></label>
       <label>Password <input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
       <label>Role <select name="role">${roleOptions(roles, "tester")}</select></label>
-      <div class="row"><button class="btn primary" type="submit">Create user</button></div>
+      <label>Email <input name="email" type="email" required maxlength="254" placeholder="name@company.ae"></label>
+      <label>TFS project <input name="tfs_project" required maxlength="200" placeholder="This person's own project"></label>
+      <label>TFS Personal Access Token <input name="tfs_pat" type="password" required minlength="8" maxlength="512" autocomplete="off" placeholder="Must be valid for that project"></label>
+      <label><span><input type="checkbox" name="send_welcome" checked> Email the address, user name, password and the user manual (PDF)</span></label>
+      <div class="row"><button class="btn primary" type="submit">Create user</button> <a class="btn" href="/manual/SkyGuard_QA_User_Manual.pdf" target="_blank" rel="noopener">User manual (PDF)</a></div>
     </form>
+    <p class="muted">Each person works in their own TFS project with their own PAT: changing it never changes anyone else's project. The PAT is checked against the project before the account is made and is kept in the Windows Credential Manager, never in a file.</p>
     <ul class="muted role-help">${Object.entries(roles).map(([v, l]) => `<li><b>${esc(l)}</b>: ${esc(ROLE_HELP[v] || "")}</li>`).join("")}</ul>
-    <div style="overflow-x:auto"><table class="data users-table"><thead><tr><th>User name</th><th>Name</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead><tbody>
+    <div style="overflow-x:auto"><table class="data users-table"><thead><tr><th>User name</th><th>Name</th><th>Email</th><th>TFS project</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead><tbody>
     ${users.map((u) => {
       const self = u.id === currentUser?.id;
       return `<tr data-id="${u.id}">
         <td><b>${esc(u.username)}</b>${self ? ' <span class="muted">(you)</span>' : ""}</td>
         <td>${esc(u.display_name)}</td>
+        <td>${esc(u.email || "")}</td>
+        <td>${esc(u.tfs_project || "shared")}</td>
         <td><select data-role ${self ? "disabled" : ""}>${roleOptions(roles, u.role)}</select></td>
         <td>${u.disabled ? '<span class="pill FAIL">Disabled</span>' : u.must_change ? '<span class="pill WARN">Must change password</span>' : '<span class="pill PASS">Active</span>'}</td>
         <td>${esc(dateTimeOf(u.last_login_at) || "never")}</td>
         <td class="row" style="flex-wrap:wrap;gap:4px">
           <button class="btn small" data-reset>Reset password</button>
+          <button class="btn small" data-tfs>TFS project / PAT</button>
+          <button class="btn small" data-email>Email</button>
+          ${u.email ? '<button class="btn small" data-welcome>Send manual</button>' : ""}
           ${self ? "" : `<button class="btn small" data-toggle>${u.disabled ? "Enable" : "Disable"}</button><button class="btn small danger" data-del>Delete</button>`}
         </td></tr>`;
     }).join("")}
@@ -83,8 +133,12 @@ async function usersCard(view) {
     e.preventDefault();
     const f = new FormData(e.target);
     try {
-      const { user } = await api("/api/auth/users", { method: "POST", body: { username: String(f.get("username")).trim(), display_name: String(f.get("display_name") || "").trim(), password: String(f.get("password")), role: f.get("role") } });
-      toast(`${user.username} can now sign in as ${user.role_name}.`, "success");
+      const r = await api("/api/auth/users", { method: "POST", body: { username: String(f.get("username")).trim(), display_name: String(f.get("display_name") || "").trim(), password: String(f.get("password")), role: f.get("role"),
+        email: String(f.get("email")).trim(), tfs_project: String(f.get("tfs_project")).trim(), tfs_pat: String(f.get("tfs_pat")), send_welcome: !!f.get("send_welcome") } });
+      const user = r.user;
+      const mail = r.welcome?.sent ? ` Welcome email sent to ${r.welcome.to}.` : (f.get("send_welcome") ? ` No email was sent: ${r.welcome?.reason || "unknown reason"}` : "");
+      const pat = r.pat_check?.checked ? "" : ` ${r.pat_check?.detail || ""}`;
+      toast(`${user.username} can now sign in as ${user.role_name}.${mail}${pat}`, r.welcome?.sent || !f.get("send_welcome") ? "success" : "info");
       reload();
     } catch (err) { toast(err.message, "error"); }
   });
@@ -103,6 +157,23 @@ async function usersCard(view) {
       const pw = window.prompt(`New password for ${name} (at least 8 characters). Tell it to them; they can change it after signing in.`);
       if (pw) patch({ password: pw }, `The password of ${name} was changed.`);
     });
+    tr.querySelector("[data-tfs]").addEventListener("click", () => {
+      const project = window.prompt(`TFS project of ${name}:`, tr.children[3].textContent === "shared" ? "" : tr.children[3].textContent);
+      if (project === null) return;
+      const pat = window.prompt(`TFS Personal Access Token of ${name} for "${project}" (leave empty to keep the saved one):`, "");
+      if (pat === null) return;
+      patch({ tfs_project: project.trim(), ...(pat.trim() ? { tfs_pat: pat.trim() } : {}) }, `TFS settings of ${name} saved.`);
+    });
+    tr.querySelector("[data-email]").addEventListener("click", () => {
+      const email = window.prompt(`Email of ${name}:`, tr.children[2].textContent);
+      if (email !== null) patch({ email: email.trim() }, `Email of ${name} saved.`);
+    });
+    tr.querySelector("[data-welcome]")?.addEventListener("click", async () => {
+      try {
+        const { welcome } = await api(`/api/auth/users/${id}/welcome`, { method: "POST" });
+        toast(welcome.sent ? `Sign-in address and user manual sent to ${welcome.to}.` : `Not sent: ${welcome.reason}`, welcome.sent ? "success" : "error");
+      } catch (err) { toast(err.message, "error"); }
+    });
     tr.querySelector("[data-del]")?.addEventListener("click", async () => {
       if (!(await confirmDelete({ name, title: "Delete user?", body: "This person can no longer sign in. Their tests, results and reports stay." }))) return;
       try { await api(`/api/auth/users/${id}`, { method: "DELETE" }); toast(`${name} was deleted.`, "success"); } catch (err) { toast(err.message, "error"); }
@@ -112,7 +183,8 @@ async function usersCard(view) {
 }
 
 export async function mount(view) {
-  view.innerHTML = `<div class="card" id="usersCard"><p class="muted">Loading…</p></div><div class="card" id="netCard"><p class="muted">Loading…</p></div>`;
+  view.innerHTML = `<div class="card" id="usersCard"><p class="muted">Loading…</p></div><div class="card" id="netCard"><p class="muted">Loading…</p></div><div class="card" id="httpsCard"><p class="muted">Loading…</p></div>`;
   await usersCard(view);
   await networkCard(view);
+  await httpsCard(view);
 }

@@ -49,9 +49,57 @@ def meta() -> dict[str, Any]:
     }
 
 
+AI_AGENTS = ("requirements", "test_planning", "test_case_design", "test_data", "ai_bug_analysis")
+BROWSER_AGENTS = ("app_discovery", "automation_engineering", "guided_browser", "test_execution", "self_healing",
+                  "manual_playback", "ai_operations", "integration_comparison")
+
+
+def _availability(rt: Runtime) -> dict[str, str]:
+    """23.12.0: agents whose engine or dependency is known to be unavailable, with the reason. Only facts already
+    known are used (services that did not start, the last On-Premise AI status check); nothing is probed here."""
+    import importlib.util
+
+    out: dict[str, str] = {}
+    if getattr(rt, "opsagent", None) is None:
+        out["ai_operations"] = "The AI Agent did not start on this PC (see the application log)."
+    if getattr(rt, "comparison", None) is None:
+        out["integration_comparison"] = "Integration Comparison did not start on this PC (see the application log)."
+    if getattr(rt, "apitesting", None) is None:
+        for a in ("api_testing", "api_failure_analysis", "api_contract"):
+            out[a] = "API Testing did not start on this PC (see the application log)."
+    if getattr(rt, "scheduler", None) is None:
+        out["scheduled_execution"] = "The scheduler is not running."
+    # 23.14.0
+    if getattr(rt, "aura", None) is None:
+        out["aura_memory"] = "AURA did not start on this PC (see Preferences > AURA)."
+    for attr, ids, label in (
+            ("security", ("security_discovery", "vulnerability_assessment", "authn_authz_testing", "controlled_fuzzing",
+                          "finding_validation"), "Security Testing"),
+            ("fuse", ("fuse_route_discovery", "fuse_route_mapping", "fuse_test_execution"), "Red Hat Fuse Testing"),
+            ("activemq", ("broker_discovery", "message_publish_verification", "consumer_delivery_validation",
+                          "retry_dlq_testing"), "ActiveMQ Testing"),
+            ("test_actions", ("ai_bug_analysis", "evidence_collection", "tfs_defect_preparation", "pdf_reporting",
+                              "email_developer"), "The result actions")):
+        if getattr(rt, attr, None) is None:
+            for a in ids:
+                out[a] = f"{label} did not start on this PC (see the application log)."
+
+    if importlib.util.find_spec("playwright") is None:
+        for a in BROWSER_AGENTS:
+            out.setdefault(a, "Playwright is not installed.")
+    health = getattr(rt, "health", None)
+    hit = getattr(health, "_cache", {}).get("ai") if health is not None else None
+    if hit and (hit[1] or {}).get("status") == "FAIL":
+        for a in AI_AGENTS:
+            out.setdefault(a, "On-Premise AI is offline: " + str((hit[1] or {}).get("detail") or "")[:160])
+    return out
+
+
 def _agents_payload(rt: Runtime) -> list[dict[str, Any]]:
     states = {s["agent_id"]: s for s in rt.state.snapshot()}
-    return [{**a.to_dict(), **states[a.id]} for a in AGENTS]
+    missing = _availability(rt)
+    return [{**a.to_dict(), **states[a.id], "available": a.id not in missing,
+             "unavailable_reason": missing.get(a.id)} for a in AGENTS]
 
 
 @router.get("/agents")
@@ -200,6 +248,17 @@ def dashboard_summary(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 def _tfs_kpis(rt: Runtime) -> dict[str, Any]:
     profile = rt.tfs.profile()
     base = {"mode": profile["mode"], "label": profile["label"], "project": profile["project"]}
+    analytics = getattr(rt, "analytics", None)
+    if analytics is not None:
+        # 23.14.1: the same (shared, cached) TFS counts as the analytics summary, within the Dashboard's time budget
+        from ..reports.analytics import DASHBOARD_TFS_BUDGET
+
+        counts = analytics.tfs_counts(DASHBOARD_TFS_BUDGET)
+        if counts.get("connected"):
+            return {**base, "connected": True, "kpis": {k: v for k, v in counts.items() if k != "connected"}}
+        return {**base, "connected": False, "pending": bool(counts.get("pending")),
+                "error_code": "TFS_PENDING" if counts.get("pending") else counts.get("error_code") or "TFS_UNAVAILABLE",
+                "reason": counts.get("reason") or "TFS figures could not be loaded."}
     try:
         return {**base, "connected": True, "kpis": rt.tfs.kpis()}
     except QAError as exc:
@@ -218,6 +277,7 @@ def get_settings(rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     return {"ok": True, "settings": rt.settings.get()}
 
 
+WORKFLOW_LOOKS = ("classic", "command_center", "holographic", "skyguard_core", "mission_control")
 ALLOWED_SETTINGS_SECTIONS = {"ui", "tfs", "ai", "defects", "performance", "playback", "comparison"}
 
 
@@ -233,6 +293,9 @@ def patch_settings(patch: dict[str, Any], rt: Runtime = Depends(runtime)) -> dic
     if open_as is not None and open_as not in ("browser", "app"):
         raise QAError("SETTINGS_INVALID", "Open as must be 'browser' or 'app'.")
     branding.validate(patch.get("ui", {}))  # 23.3.30: product name, tagline and logo path
+    look = patch.get("ui", {}).get("workflow_look")  # 23.14.0: the look of Agent Workflow (Preferences)
+    if look is not None and look not in WORKFLOW_LOOKS:
+        raise QAError("SETTINGS_INVALID", f"The Agent Workflow look must be one of: {', '.join(WORKFLOW_LOOKS)}.")
     if "sidebar_collapsed" in patch.get("ui", {}) and not isinstance(patch["ui"]["sidebar_collapsed"], bool):
         raise QAError("SETTINGS_INVALID", "sidebar_collapsed must be true or false.")
     pb = patch.get("playback", {})

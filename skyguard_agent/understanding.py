@@ -124,17 +124,51 @@ def page_problems(p: dict[str, Any]) -> tuple[list[str], list[str]]:
 DETAIL_STATUS = re.compile(r"\bstatus\s*[:\-]?\s*\n?\s*([A-Z][A-Za-z]+(?:[ -][A-Z][A-Za-z]+){0,3})")
 
 
+_SESSION_PARAM = re.compile(r";(jsessionid|sid|phpsessid)=[^/?#]*", re.I)
+
+
+def dynamic_segment(seg: str) -> bool:
+    """23.13.3: a part of an address that changes from visit to visit or record to record: numbers and codes with
+    digits (12345, by123), long hex / UUIDs, ASP.NET session folders ((S(abc...))), long random tokens."""
+    return bool(seg == "{id}" or re.search(r"\d", seg) or re.fullmatch(r"[a-f0-9-]{16,}", seg, re.I) or len(seg) > 40
+                or re.fullmatch(r"\(\w\(.*\)\)", seg)
+                or (len(seg) >= 16 and re.fullmatch(r"[A-Za-z0-9_-]+", seg) and re.search(r"[a-z]", seg)
+                    and re.search(r"[A-Z]", seg)))
+
+
 def path_template(url: str) -> str:
-    path = urlsplit(url or "").path or "/"
+    path = _SESSION_PARAM.sub("", urlsplit(url or "").path or "/")
     segs = []
     for s in path.strip("/").split("/"):
         if not s:
             continue
-        if re.search(r"\d", s) or re.fullmatch(r"[a-f0-9-]{16,}", s, re.I) or len(s) > 40:
-            segs.append("{id}")
-        else:
-            segs.append(s.lower())
+        segs.append("{id}" if dynamic_segment(s) else s.lower())
     return "/" + "/".join(segs)
+
+
+def rebase_url(target: str, current: str | None) -> str | None:
+    """23.13.3: a learned address on a site whose addresses change on every visit (abc.com/12345/booking learned,
+    abc.com/by123/home open now): the changing parts are taken from the page open now (abc.com/by123/booking). A
+    changing part that cannot be filled (a learned "{id}" with nothing to take it from) gives None: open the start
+    page instead of an address that no longer exists. The query is kept; another site is never mixed in."""
+    t = urlsplit(target or "")
+    tsegs = [s for s in _SESSION_PARAM.sub("", t.path).split("/") if s]
+    c = urlsplit(current or "") if current else None
+    csegs = [s for s in _SESSION_PARAM.sub("", c.path).split("/") if s] if c else []
+    from .knowledge import site_of
+
+    same = bool(c and site_of(c.hostname or "") == site_of(t.hostname or "") and (t.hostname or "") != "")
+    out: list[str] = []
+    for i, seg in enumerate(tsegs):
+        if dynamic_segment(seg) and same and i < len(csegs) and dynamic_segment(csegs[i]) and \
+                path_template("/" + "/".join(tsegs[:i])) == path_template("/" + "/".join(csegs[:i])):
+            out.append(csegs[i])
+        elif seg == "{id}" or "{" in seg:
+            return None
+        else:
+            out.append(seg)
+    path = "/" + "/".join(out) + ("/" if t.path.endswith("/") and out else "")
+    return t._replace(path=path).geturl()
 
 
 def text_template(text: str) -> str:
@@ -284,6 +318,11 @@ def derive_identity_pattern(text: str, user: str) -> str | None:
     before = text[max(0, m.start() - 40):m.start()]
     words = re.findall(r"[A-Za-z][A-Za-z,:]*", before.split("|")[-1])[-3:]
     if not words:
+        return None
+    # 23.12.0: a list of sign-in names or help text ("Accepted usernames are: standard_user locked_out_user ...",
+    # "Password for all users") names users; it does not show who is signed in
+    if re.search(r"(?i)\b(usernames|users|accepted|password|demo|sample|test accounts?)\b", " ".join(words)) or \
+            re.search(r"(?i)password for all users|accepted usernames", text):
         return None
     prefix = r"\s+".join(re.escape(w) for w in words)
     after = text[m.end():m.end() + 60]
@@ -745,6 +784,7 @@ class Miner:
         changed = self.screen_id(p) != inst["screen"] or (p.get("url") or "") != inst["url"]
         inst["after_url"] = p.get("url")
         inst["after_screen"] = self.screen_id(p) if p else None
+        inst["after_title"] = (p.get("heading") or p.get("title") or "") if p else None
         if any(REFUSAL_WORDS.search(e) for e in errors):
             inst["outcome"], inst["messages"] = "refused", errors
             return True
@@ -1065,7 +1105,17 @@ class Miner:
                         pattern = pattern.replace(re.escape(ex), "{" + p["name"] + "}")
                 patterns[pattern.replace("\x00KEY\x00", KEY_GROUP)] += 1
         if not patterns:
-            return {}
+            # 23.12.0: the application showed no message, but after the submit it moved on to its own page
+            # (Swag Labs: "Thank you for your order!" at /checkout-complete.html). That page is the success.
+            pages: Counter[tuple[str, str]] = Counter()
+            for i in succ:
+                after = urlsplit(i.get("after_url") or "").path
+                if after and after != urlsplit(i.get("url") or "").path and not i.get("messages"):
+                    pages[(after, str(i.get("after_title") or ""))] += 1
+            if not pages:
+                return {}
+            (path, title), _ = pages.most_common(1)[0]
+            return {"success_page": {"path": path, "title": title[:120]}}
         best, _ = max(patterns.items(), key=lambda kv: (kv[1], "{" in kv[0]))
         return {"success_pattern": best}
 
@@ -1147,7 +1197,7 @@ class Miner:
                              **({"status_column": sc} if sc else {})},
             "usable": bool(succ)})
         pattern = self._success_pattern(succ, base["parameters"])
-        if pattern:
+        if pattern.get("success_pattern"):
             for i in succ:
                 v = ((i.get("row") or {}).get("row") or {}).get(kc)
                 if v and re.escape(v) in pattern["success_pattern"]:
@@ -1209,7 +1259,7 @@ class Miner:
         for i in succ:  # the key in the address is this record's: the success message names it, not a new one
             i["values"].setdefault(kc, i["record_key"]["value"])
         pattern = self._success_pattern(succ, params) if succ else {}
-        if pattern:
+        if pattern.get("success_pattern"):
             for i in succ:
                 v = (i.get("record_key") or {}).get("value")
                 if v and re.escape(v) in pattern["success_pattern"]:

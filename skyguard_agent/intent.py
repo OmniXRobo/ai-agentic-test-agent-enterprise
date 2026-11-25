@@ -182,7 +182,13 @@ def compatible(intent: Intent, wf: dict[str, Any]) -> bool:
         return False
     if intent.verb in ("approve", "reject") or v in ("approve", "reject"):
         return v == intent.verb
-    return CATEGORY.get(v, v) == intent.kind
+    if CATEGORY.get(v, v) == intent.kind:
+        return True
+    # 23.12.0: the name the person gave the task counts too. A task recorded as "buy item" whose last click is
+    # "Finish" (an operation of another kind) is still the task for "buy item".
+    d = wf.get("data") or wf
+    tv = canonical_verb((d.get("title") or wf.get("key") or "").split(" ")[0])
+    return bool(tv) and tv not in ("approve", "reject") and CATEGORY.get(tv, tv) == intent.kind
 
 
 def relevance(intent: Intent, wf: dict[str, Any], *, other_entities: set[str] | None = None) -> float:

@@ -143,6 +143,44 @@ def test_pairing_code_single_use_and_attempt_limit(comp):
     assert call(base, "POST", "/v1/pair", {"code": code})[0] in (409, 429)  # locked after too many attempts
 
 
+
+def _raw_exchange(port: int, requests: list[bytes]) -> list[int]:
+    """Send the requests on one kept-alive connection and return the status of each answer, in order."""
+    statuses = []
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        f = s.makefile("rb")
+        for req in requests:
+            s.sendall(req)
+            line = f.readline()
+            if not line:
+                break
+            statuses.append(int(line.split()[1]))
+            length = 0
+            while True:
+                h = f.readline()
+                if h in (b"\r\n", b"\n", b""):
+                    break
+                if h.lower().startswith(b"content-length:"):
+                    length = int(h.split(b":", 1)[1])
+            f.read(length)
+    return statuses
+
+
+def test_a_refused_request_still_has_its_body_read(comp):
+    """23.15.0: a request refused before its body was read (here the pairing rate limit, 429) left the JSON body in
+    the socket. The next request on the connection was parsed from that body (a 400 here), and on Windows the client
+    could see the connection aborted before the 429 arrived (WinError 10053, the CI failure on Windows / 3.12). The
+    body is now read and dropped before any answer, so the connection stays usable and the answer always arrives."""
+    c, base, port = comp
+    c.pairing.new_code()
+    body = json.dumps({"code": "99999999"}).encode()
+    req = (b"POST /v1/pair HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: %s\r\nContent-Type: application/json\r\n"
+           b"Content-Length: %d\r\n\r\n" % (port, EXT.encode(), len(body))) + body
+    statuses = _raw_exchange(port, [req] * 8)
+    assert len(statuses) == 8, statuses             # every request on the connection got its own answer
+    assert 429 in statuses and 400 not in statuses, statuses
+
+
 def test_requests_need_pairing_and_a_token(comp):
     c, base, _ = comp
     assert call(base, "GET", "/v1/applications")[1]["error_code"] == "NOT_PAIRED"

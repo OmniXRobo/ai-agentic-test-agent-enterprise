@@ -67,6 +67,46 @@ def origin_of(url: str) -> str:
     return f"{p.scheme}://{(p.hostname or '').lower()}{port}"
 
 
+_SECOND_LEVEL = {"co", "com", "org", "net", "gov", "ac", "edu", "mil", "sch", "ltd", "plc", "nic"}
+
+
+def site_of(host: str) -> str:
+    """The registrable part of a host name ("fly4.emirates.com" -> "emirates.com", "www.dubai.gov.ae" ->
+    "dubai.gov.ae"). IP addresses, single-label names (intranet servers) and localhost are their own site."""
+    host = (host or "").lower().strip(".")
+    if not host or host == "localhost" or re.fullmatch(r"[\d.]+|\[?[0-9a-f:]+\]?", host) or "." not in host:
+        return host
+    labels = host.split(".")
+    if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def same_site(url: str, app: dict[str, Any]) -> bool:
+    """23.13.0: is this address part of the registered application? Its own origins, and also the other host names
+    of the same site (www., booking., fly4. ... of the same domain) on the same scheme. Many websites move between
+    such host names and change the path on every visit (dynamic addresses); neither means the person left the
+    application. A different domain is never the same application."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    origins = app.get("origins") or ([origin_of(app["base_url"])] if app.get("base_url") else [])
+    if origin_of(url) in origins:
+        return True
+    host = (parts.hostname or "").lower()
+    mine = site_of(host)
+    if not mine or "." not in mine or mine == host and re.fullmatch(r"[\d.]+", host or ""):
+        return False
+    for o in origins:
+        op = urlsplit(o)
+        if site_of(op.hostname or "") == mine and "." in mine and not re.fullmatch(r"[\d.]+", mine):
+            return True
+    return False
+
+
 def screen_signature(screen: dict[str, Any]) -> dict[str, list[str]]:
     """The parts of a screen whose change means learned workflows must be checked again."""
     return {
@@ -195,6 +235,9 @@ class KnowledgeBase:
         for app in self.applications():
             if origin in app["origins"]:
                 return app
+        for app in self.applications():  # 23.13.0: another host name of the same site
+            if same_site(url, app):
+                return app
         return None
 
     # ---- accounts and credentials --------------------------------------------------------------------------------
@@ -300,6 +343,79 @@ class KnowledgeBase:
         else:
             rows = self.store.query("SELECT * FROM accounts ORDER BY application_id, label")
         return [self._account_row(r) for r in rows]
+
+    # ---- 23.15.0: secrets the person typed while teaching ----------------------------------------------------
+
+    def capture_secret(self, app_id: str, *, kind: str, label: str, value: str, login_id: str | None = None,
+                       by: str | None = None) -> dict[str, Any] | None:
+        """A password or an authorization code the person typed while teaching. The value goes straight into the
+        credential vault (Windows Credential Manager / DPAPI); this database keeps only a reference, and the value
+        is never returned to a page, a chat, a log or a report. A one-time code is never captured (the browser does
+        not hand it over). Returns what was remembered, masked, or None when nothing was."""
+        value = str(value or "")
+        label = (label or "code").strip()[:120] or "code"
+        if not value or len(value) > 200 or not self.vault.available:
+            return None
+        app = self.application(app_id)
+        if kind == "password":
+            who = (login_id or "").strip()
+            acc = next((a for a in self.accounts(app["id"]) if norm(a["login_id"]) == norm(who)), None) if who else None
+            if acc is None and who:
+                try:
+                    acc = self.add_account(app["id"], who, who, by=by or "learning",
+                                           role_description="Seen signing in while teaching.")
+                except AgentError:
+                    acc = next((a for a in self.accounts(app["id"]) if norm(a["label"]) == norm(who)), None)
+            if acc is None:
+                return None
+            self.set_credential(acc["id"], value, consent=True, by=by or "learning")
+            return {"kind": "password", "account": acc["label"], "value": "********"}
+        row = self.store.query_one("SELECT * FROM app_secrets WHERE application_id = ? AND label = ?",
+                                   (app["id"], label))
+        ref = self.vault.save(value, consent=True, ref=(row or {}).get("secret_ref") or None)
+        self.vault.remember(value)
+        now = now_iso()
+        if row:
+            self.store.execute("UPDATE app_secrets SET secret_ref = ?, updated_at = ? WHERE id = ?", (ref, now, row["id"]))
+        else:
+            self.store.execute("INSERT INTO app_secrets (application_id, label, kind, secret_ref, learned_from, "
+                               "created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                               (app["id"], label, "code", ref, "learning", by, now, now))
+        self.audit.record("secret.learned", actor=by, target=app["id"],
+                          details={"label": label, "backend": self.vault.backend_name})
+        return {"kind": "code", "label": label, "value": "********"}
+
+    def app_secrets(self, app_id: str) -> list[dict[str, Any]]:
+        """What is remembered, masked: never the values."""
+        rows = self.store.query("SELECT label, kind, uses, created_at, updated_at FROM app_secrets WHERE "
+                                "application_id = ? ORDER BY label", (self.application(app_id)["id"],))
+        for r in rows:
+            r["value"] = "********"
+        return rows
+
+    def app_secret_value(self, app_id: str, label: str) -> str | None:
+        """For the executor only, at the moment the field is filled."""
+        row = self.store.query_one("SELECT * FROM app_secrets WHERE application_id = ? AND label = ?",
+                                   (app_id, (label or "").strip()[:120]))
+        if not row:
+            rows = self.store.query("SELECT * FROM app_secrets WHERE application_id = ?", (app_id,))
+            row = next((r for r in rows if norm(r["label"]) == norm(label or "")), None)
+        if not row:
+            return None
+        value = self.vault.reveal(row["secret_ref"])
+        if value:
+            self.store.execute("UPDATE app_secrets SET uses = uses + 1, updated_at = ? WHERE id = ?",
+                               (now_iso(), row["id"]))
+        return value
+
+    def forget_app_secret(self, app_id: str, label: str, by: str | None = None) -> bool:
+        row = self.store.query_one("SELECT * FROM app_secrets WHERE application_id = ? AND label = ?", (app_id, label))
+        if not row:
+            return False
+        self.vault.revoke(row["secret_ref"])
+        self.store.execute("DELETE FROM app_secrets WHERE id = ?", (row["id"],))
+        self.audit.record("secret.forgotten", actor=by, target=app_id, details={"label": label})
+        return True
 
     def credential_for(self, acc_id: str) -> str | None:
         """For the executor only: the password at the moment the login field is filled."""

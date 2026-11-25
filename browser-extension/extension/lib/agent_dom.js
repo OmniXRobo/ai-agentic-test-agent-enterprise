@@ -390,7 +390,16 @@
     const onChange = (e) => { const el = target(e); const t = el.tagName.toLowerCase(); if (!["input", "select", "textarea"].includes(t)) return;
       const secret = isSecretField(el);
       const value = secret ? "[secret]" : t === "select" ? clean(el.selectedOptions[0]?.text, 120) : ["checkbox", "radio"].includes(el.type) ? String(el.checked) : clean(el.value, 200);
-      send(t === "select" ? "select" : ["checkbox", "radio"].includes(el.type) ? "check" : "fill", el, { value, secret }); };
+      // 23.15.0: while teaching, with "remember sign-in details" on, the secret value itself is handed over ONCE,
+      // straight into the Windows credential store (never into the knowledge, the chat, a log or a snapshot). A
+      // one-time code (OTP/MFA) is never handed over: it expires and would be useless and unsafe to keep.
+      const extra = { value, secret };
+      if (secret && window.__sgLearnSecrets === true && !["checkbox", "radio"].includes(el.type)) {
+        const oneTime = el.getAttribute("autocomplete") === "one-time-code"
+          || /(otp|one[\s_-]?time|2fa|mfa|verification|sms)/i.test([el.name, el.id, el.getAttribute("placeholder"), labelOf(el)].join(" "));
+        if (!oneTime && el.value) { extra.secret_value = String(el.value).slice(0, 200); extra.secret_kind = el.type === "password" ? "password" : "code"; }
+      }
+      send(t === "select" ? "select" : ["checkbox", "radio"].includes(el.type) ? "check" : "fill", el, extra); };
     const onSubmit = (e) => send("submit", e.target);
     document.addEventListener("click", onClick, true);
     document.addEventListener("change", onChange, true);

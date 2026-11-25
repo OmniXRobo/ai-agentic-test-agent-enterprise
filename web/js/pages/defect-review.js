@@ -14,10 +14,10 @@ const MODES = {
 const STATUS_PILL = { draft: "WAITING", needs_review: "WARN", approved: "RUNNING", publishing: "RUNNING", created: "PASS",
   publication_failed: "FAIL", dismissed: "WAITING", linked: "PASS" };
 const CLASS_PILL = { application_defect: "FAIL", automation_script: "WARN", test_data: "WARN", environment: "WARN",
-  timing: "WARN", inconclusive: "WAITING" };
+  timing: "WARN", inconclusive: "WAITING", api_contract: "FAIL", authentication: "WARN", performance: "WARN" };
 const SEVERITY = { 1: "1 - Critical", 2: "2 - High", 3: "3 - Medium", 4: "4 - Low" };
 const SOURCES = [["", "All modules"], ["framework", "AI-Driven Automation"], ["functional", "Guided Browser"],
-  ["python", "Guided Browser (Python)"], ["comparison", "Integration Comparison"], ["performance", "Performance"]];
+  ["python", "Guided Browser (Python)"], ["comparison", "Integration Comparison"], ["api", "API Testing"], ["performance", "Performance"]];
 const STATUSES = [["open", "Open"], ["approved", "Approved"], ["publication_failed", "Publication Failed"],
   ["created", "Published to TFS"], ["dismissed", "Rejected"], ["linked", "Duplicate"], ["all", "All"]];
 
@@ -37,6 +37,7 @@ function fmtFact(v) {
 function sourceLink(d) {
   if (d.source === "performance") return `#/perf-results?run=${encodeURIComponent(d.source_run_id)}`;
   if (d.source === "comparison") return "#/integration-comparison";
+  if (d.source === "api") return `#/api-testing?run=${encodeURIComponent(d.source_run_id)}`;
   return `#/history?run=${encodeURIComponent(d.source_run_id)}`;
 }
 
@@ -113,6 +114,8 @@ async function detail(view, id) {
             <label>Severity <select name="severity" ${editable ? "" : "disabled"}>${Object.entries(SEVERITY).map(([k, v]) => `<option value="${k}" ${Number(k) === d.severity ? "selected" : ""}>${v}</option>`).join("")}</select></label>
             <label>Priority <select name="priority" ${editable ? "" : "disabled"}>${[1, 2, 3, 4].map((p) => `<option ${p === d.priority ? "selected" : ""}>${p}</option>`).join("")}</select></label>
           </div>
+          <label>Assign to <select name="assigned_to" ${editable ? "" : "disabled"}><option value="">Not assigned</option>${d.assigned_to ? `<option value="${esc(d.assigned_to)}" selected>${esc(d.assigned_to)}</option>` : ""}</select>
+            <span class="muted" id="assignNote">Loading people from TFS…</span></label>
           <label ${editable ? "" : "hidden"}>Repro steps (HTML) <textarea name="repro_steps" rows="10" ${editable ? "" : "disabled"}>${esc(d.repro_steps)}</textarea></label>
           ${editable ? "" : "<strong>Repro steps</strong>"}
           <div class="rich card" style="background:var(--surface-2)" id="preview"></div>
@@ -142,7 +145,8 @@ async function detail(view, id) {
   const render = () => { preview.innerHTML = safeHtml(form.repro_steps.value); };
   render();
   form.repro_steps.addEventListener("input", render);
-  const values = () => ({ title: form.title.value, severity: Number(form.severity.value), priority: Number(form.priority.value), repro_steps: form.repro_steps.value });
+  const values = () => ({ title: form.title.value, severity: Number(form.severity.value), priority: Number(form.priority.value), repro_steps: form.repro_steps.value, assigned_to: form.assigned_to.value });
+  loadAssignees(form.assigned_to, view.querySelector("#assignNote"), d.assigned_to);
   const reload = () => detail(view, id);
   const act = (sel, fn) => view.querySelector(sel)?.addEventListener("click", async (e) => {
     e.preventDefault();
@@ -192,6 +196,25 @@ async function detail(view, id) {
   };
   view.querySelectorAll("[data-link]").forEach((b) => b.addEventListener("click", () => link(b.dataset.link)));
   view.querySelector("#linkForm")?.addEventListener("submit", (e) => { e.preventDefault(); link(new FormData(e.target).get("tfs_id")); });
+}
+
+// 23.13.0: "Assign to" lists the people of the TFS project (team members and anyone work was assigned to), for every
+// kind of defect. The value sent to TFS is the unique name (DOMAIN\\user or email), which TFS resolves reliably.
+let peopleCache = null;
+async function loadAssignees(select, note, current) {
+  try {
+    peopleCache = peopleCache || (await api("/api/defects/assignees")).people || [];
+    const opts = peopleCache.map((p) => {
+      const value = p.unique_name || p.name;
+      return `<option value="${esc(value)}" ${current && (current === value || current === p.name) ? "selected" : ""}>${esc(p.name)}${p.unique_name && p.unique_name !== p.name ? ` (${esc(p.unique_name)})` : ""}</option>`;
+    });
+    const known = !current || peopleCache.some((p) => current === (p.unique_name || p.name) || current === p.name);
+    select.innerHTML = `<option value="">Not assigned</option>${known ? "" : `<option value="${esc(current)}" selected>${esc(current)}</option>`}${opts.join("")}`;
+    note.textContent = peopleCache.length ? `${peopleCache.length} people in the TFS project` : "TFS returned no people for this project.";
+  } catch (err) {
+    peopleCache = null;
+    note.textContent = `Could not load people from TFS: ${err.message}`;
+  }
 }
 
 async function list(view, fixedSource) {

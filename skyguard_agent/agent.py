@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
-from . import AGENT_NAME, __version__, planner, secrets_guard
+from . import AGENT_NAME, __version__, planner, secrets_guard, sessions
 from .assistant import Assistant, canonical, is_question
 from .intent import Intent, classify, compatible
 from .audit import Audit
@@ -49,6 +49,7 @@ class OperationsAgent:
         self.engine = Engine(self.store, self.kb, self.audit)
         self.llm = llm or NoLLM()
         self.learning = Learning(self.kb, self.engine, None if isinstance(self.llm, NoLLM) else self.llm)
+        self.learning.on_secrets = self.capture_secrets
         self.engine.learning = self.learning
         # 23.7.0: passive learning (journal -> understanding) and chat that answers from what was understood
         self.journal = Journal(self.kb, known_secrets=vault.known_values)
@@ -81,8 +82,10 @@ class OperationsAgent:
         """Record what the person did and saw; rebuild the understanding every few observations."""
         app = self.kb.application(app_id)
         sid = self.journal.ensure_session(app["id"], session_id, interface=interface or self.interface, by=by)
+        remembered = self.capture_secrets(app["id"], events or [], by=by)
         stored = self.journal.record(app["id"], sid, events or [], snapshot)
-        out: dict[str, Any] = {"session_id": sid, **stored, "digested": False}
+        out: dict[str, Any] = {"session_id": sid, **stored, "digested": False,
+                               "remembered_secrets": remembered}
         if final:
             self.journal.end_session(sid, by=by)
         if final or self.understanding.pending(app["id"]) >= self.DIGEST_EVERY:
@@ -90,6 +93,36 @@ class OperationsAgent:
             out.update(digested=True, changes=res["changes"])
             if self.after_digest:
                 out["trusted"] = self.after_digest(app["id"])
+        return out
+
+    def capture_secrets(self, app_id: str, events: list[dict[str, Any]], by: str | None = None) -> list[dict[str, Any]]:
+        """23.15.0: the password or authorization code the person typed while teaching goes into the credential
+        vault (never into the knowledge, the chat, a log or a snapshot) and is removed from the events here, so
+        nothing downstream can ever see it. A one-time code is never handed over by the browser."""
+        out: list[dict[str, Any]] = []
+        for ev in events or []:
+            if not isinstance(ev, dict):
+                continue
+            value = ev.pop("secret_value", None)
+            kind = str(ev.pop("secret_kind", "") or "code")
+            if not value:
+                continue
+            el = ev.get("element") or {}
+            label = (el.get("label") or el.get("name") or el.get("placeholder") or el.get("name_attr")
+                     or ("Password" if kind == "password" else "Code"))
+            login_id = None
+            if kind == "password":
+                login_id = next((str(e.get("value") or "") for e in events
+                                 if isinstance(e, dict) and e.get("kind") == "fill" and not e.get("secret")
+                                 and (e.get("element") or {}).get("type") in (None, "text", "email")
+                                 and str(e.get("url") or "") == str(ev.get("url") or "")), None)
+            try:
+                got = self.kb.capture_secret(app_id, kind=kind, label=str(label), value=str(value),
+                                             login_id=login_id, by=by)
+            except AgentError:
+                got = None
+            if got:
+                out.append(got)
         return out
 
     def understanding_view(self, app_id: str) -> dict[str, Any]:
@@ -273,18 +306,22 @@ class OperationsAgent:
             return {"type": "clarify", "app_id": app["id"],
                     "text": "Which operation do you mean? I know: " + ", ".join(w["data"].get("title") or w["key"]
                                                                                for w in same_kind)}
-        account = planner.match_account(text, accounts)
-        if not account:
+        account = planner.match_account(text, accounts) if sessions.needs_sign_in(app, wf, accounts) else None
+        if not account and sessions.needs_sign_in(app, wf, accounts):
             allowed = {norm(r) for r in wf["data"].get("roles", [])}
             fitting = [a for a in accounts if not allowed or norm(a.get("verified_role") or a.get("role_key")) in allowed]
             if len(fitting) > 1:  # 23.11.1: of several accounts with the role, the one that can sign in now
                 usable = [a for a in fitting if a.get("has_credential") and not a.get("credential_expired")]
                 fitting = usable if len(usable) == 1 else fitting
             account = fitting[0] if len(fitting) == 1 else None
+        if not account and not sessions.needs_sign_in(app, wf, accounts):
+            account = {"id": None, "label": "no sign-in"}  # 23.13.0: public site, nothing to sign in to
         if not account:
             return {"type": "clarify", "app_id": app["id"], "workflow": wf["key"],
                     "text": f"Which account should perform '{wf['data'].get('title') or wf['key']}'? "
-                            + ", ".join(f"{a['label']} ({a.get('role_key') or 'role not set'})" for a in accounts),
+                            + (", ".join(f"{a['label']} ({a.get('role_key') or 'role not set'})" for a in accounts)
+                               or "No account is saved yet.")
+                            + " If this website needs no sign-in, say 'no account needed' and I continue without one.",
                     "accounts": [{"id": a["id"], "label": a["label"]} for a in accounts]}
         rules = planner.rules_for(self.kb, app["id"], wf)
         options = planner.field_options(self.kb, app["id"], wf)

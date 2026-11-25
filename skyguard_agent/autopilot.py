@@ -29,7 +29,7 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import planner, secrets_guard
+from . import planner, secrets_guard, sessions
 from .intent import Intent, classify, compatible, navigation_target, relevance, workflow_category
 from .knowledge import NAME_RE, origin_of, safe_app_url
 from .util import AgentError, digest, dumps, loads, norm, now_iso
@@ -57,7 +57,66 @@ CREATE TABLE IF NOT EXISTS conversation_state (
     data TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS remembered_values (
+    app_id TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    param TEXT NOT NULL,
+    value TEXT NOT NULL,
+    uses INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, workflow, param)
+);
+CREATE TABLE IF NOT EXISTS remembered_prompts (
+    app_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    workflow TEXT,
+    uses INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, text)
+);
 """
+
+# 23.15.0: "yes" / "confirm" / "run it" (typed or spoken, English or Arabic) confirms the preview of this chat, so a
+# learned task needs one preview and one word, not a second round of questions
+CONFIRM_WORDS = re.compile(r"^\W*(?:(?:ok|okay|yes|yeah|yep|sure|please|now)[\s,]+)*(?:yes|confirm(?:ed)?|go(?: ahead)?|"
+                           r"run(?: it| now)?|do it|execute(?: it)?|start(?: it)?|proceed|approve the preview|"
+                           r"نعم|أكد|اكد|تأكيد|نفذ|نفّذ|ابدأ|موافق|تمام)(?:\s+(?:it|now|please|the task|الآن|من فضلك))*\W*$",
+                           re.I)
+# "one per day", "each day", "daily", "every 2 days", "different date for each": the date moves on per record
+DAILY = re.compile(r"\b(?:one|a|1)\s+(?:trip|record|\w+)?\s*(?:per|a|each)\s+day\b|\beach\s+day\b|\bdaily\b|"
+                   r"\bevery\s+day\b|\bconsecutive\s+days\b|\bdifferent\s+(?:date|day)s?\b|\bchange\s+(?:the\s+)?date\b|"
+                   r"\bevery\s+(\d{1,2})\s+days\b", re.I)
+SECRET_FIELD = re.compile(r"pass(word|code|phrase)?|pin\b|otp|one.?time|secret|token|auth.?code|security.?code|cvv|"
+                          r"card.?number", re.I)
+
+
+# 23.13.0: the chat browser (one window, signed in once)
+LOGIN_RE = re.compile(
+    r"^\W*(?:(?:now|please|then|and|ok|okay)\s+)*(?:log\s*-?\s*in|sign\s*-?\s*in|login|signin)\b"
+    r"(?:\s+(?:to|into|on|in)\s+(?:the\s+)?(?:page|site|website|web\s*site|application|app|portal|it|system|[\w.-]+))?"
+    r"(?:\s+(?:with|as|using|by|for)\s+(?:the\s+|my\s+|an?\s+)?(?P<who>[\w .@'-]{1,60}?))?"
+    r"(?:\s+(?:account|user|role|credentials?|id|login))?\W*$", re.I)
+NEW_WINDOW = re.compile(r"\b(in |into |on )?(a |the )?new (browser )?(window|tab|browser)\b|\bopen (a )?new browser\b", re.I)
+URL_IN_TEXT = re.compile(r"(?:https?://|www\.)[^\s<>\"']+|\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.(?:com|net|org|ae|gov|edu|io|"
+                         r"co|info|biz|local|corp|intra|internal|lan)(?:/[^\s<>\"']*)?", re.I)
+BROWSE_WORDS = re.compile(r"^\W*(?:(?:now|please|then|ok|okay)\s+)*(?:browse|open|go to|goto|navigate to|visit|load|"
+                          r"show me|take me to)\b", re.I)
+
+
+def account_for(who: str | None, accounts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The account a person means by "admin", "client", "the manager" or a user name."""
+    if not who:
+        return accounts[0] if len(accounts) == 1 else None
+    w = norm(who)
+    for key in ("label", "role_key", "login_id", "verified_role"):
+        for a in accounts:
+            if norm(a.get(key)) and norm(a.get(key)) == w:
+                return a
+    for a in accounts:
+        hay = " ".join(norm(a.get(k)) for k in ("label", "role_key", "login_id", "verified_role"))
+        if w and re.search(rf"\b{re.escape(w)}", hay):
+            return a
+    return None
 
 
 # ---- small pure helpers (unit-tested) ---------------------------------------------------------------------------
@@ -147,13 +206,109 @@ def next_key(keys: list[str]) -> str | None:
     return f"{prefix}{int(top.group(2)) + 1:0{width}d}"
 
 
+# 23.11.2: answers to "I still need: ..." ------------------------------------------------------------------------
+
+# words that only push the request on ("prepare it", "pre pare it", "go ahead"): never a field's value
+FILLER = re.compile(r"(please|pls|prepare|prepareit|preparethe(preview|request)|doit|goahead|go|ok|okay|yes|continue|"
+                    r"proceed|again|retry|tryagain|done|next|submit|run|runit|confirm|thanks|thankyou)+")
+
+
+def field_aliases(label: str, name: str | None = None) -> list[str]:
+    """The ways a person names a field: "Zip/Postal Code" is also "zip", "postal code" and "zip code"; a unit in
+    brackets may be left out; the internal name with spaces ("first_name" -> "first name")."""
+    out: list[str] = []
+    for n in (label, re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name or "")):  # "postalCode" -> "postal code"
+        n = norm(n).replace("_", " ").strip()
+        if not n:
+            continue
+        bare = re.sub(r"\s*\([^)]*\)\s*", " ", n).strip()
+        for v in (n, bare, *[x.strip() for x in re.split(r"\s*/\s*", bare)]):
+            if len(v) >= 2 and v not in out:
+                out.append(v)
+        parts = [x.strip() for x in re.split(r"\s*/\s*", bare) if x.strip()]
+        if len(parts) > 1 and len(parts[-1].split()) > 1:  # "zip/postal code" -> "zip code"
+            tail = parts[-1].split()[-1]
+            for x in parts[:-1]:
+                if f"{x} {tail}" not in out:
+                    out.append(f"{x} {tail}")
+    return sorted(out, key=len, reverse=True)
+
+
+def _option_value(value: str, options: list[str]) -> str | None:
+    v = norm(value)
+    exact = [o for o in options if norm(o) == v]
+    if exact:
+        return exact[0]
+    part = [o for o in options if v and (v in norm(o) or norm(o) in v)]
+    return part[0] if len(part) == 1 else None
+
+
+def parse_answer(text: str, fields: list[dict[str, Any]],
+                 others: list[dict[str, Any]] | None = None) -> tuple[dict[str, str], list[str]]:
+    """Reads an answer to a question for ``fields`` ({label, name, options}), in the person's own form:
+    "First Name; muhammad", "first name muhammad", "First name: Muhammad, last name Ali, zip 12345", or only the value
+    when one field was asked ("muhammad"), or the values in the order they were asked ("Muhammad; Ali; 12345").
+    Returns ({label: value}, problems). A value for a list field must be one of its options. Nothing is invented: a
+    reply that only pushes the request on ("prepare it") gives no value. ``others`` are the task's fields that were
+    not asked: a value named for one of them ("last name Ali") is read as that field (a correction), and is never
+    taken as the value of the asked field."""
+    raw = (text or "").strip()
+    if not raw or not fields:
+        return {}, []
+    hits: list[tuple[int, int, dict[str, Any]]] = []
+    asked = {f["label"] for f in fields}
+    names = [(alias, f) for f in [*fields, *[o for o in others or [] if o["label"] not in asked]]
+             for alias in field_aliases(f["label"], f.get("name"))]
+    for alias, f in sorted(names, key=lambda a: -len(a[0])):  # the longest name wins where two overlap
+        pat = r"(?<![\w])" + r"\s+".join(re.escape(w) for w in alias.split()) + r"(?![\w])"
+        for m in re.finditer(pat, raw, re.I):
+            if not any(s <= m.start() < e or m.start() <= s < m.end() for s, e, _ in hits):
+                hits.append((m.start(), m.end(), f))
+    hits.sort(key=lambda h: h[0])
+    found: dict[str, str] = {}
+    problems: list[str] = []
+
+    def take(f: dict[str, Any], value: str) -> None:
+        value = re.sub(r"^(?:\s*(?:[:;=,\-–]|\bis\b|\bshould be\b|\bto\b)\s*)+", "", value, flags=re.I)
+        # trailing joiners before the next field's name: "Sara and my | last name", "Ali, the | zip"
+        value = re.sub(r"(?:[\s;,.]+|\s+(?:and|also|then|my|the|his|her|their|our|your|with|plus))+$", "", value,
+                       flags=re.I).strip().strip("\"'")
+        if not value or FILLER.fullmatch(re.sub(r"[^a-z]", "", value.lower())):
+            return
+        if f.get("options"):
+            opt = _option_value(value, f["options"])
+            if not opt:
+                problems.append(f"'{value}' is not one of the {f['label']} values ({', '.join(f['options'][:6])})")
+                return
+            value = opt
+        found[f["label"]] = value
+
+    if hits:
+        for i, (s, e, f) in enumerate(hits):
+            end = hits[i + 1][0] if i + 1 < len(hits) else len(raw)
+            take(f, raw[e:end])
+        return found, problems
+    if FILLER.fullmatch(re.sub(r"[^a-z]", "", raw.lower())):
+        return {}, []
+    if len(fields) == 1:
+        take(fields[0], raw)
+        return found, problems
+    parts = [p for p in re.split(r"\s*[;\n|]\s*|\s*,\s*", raw) if p.strip()]
+    if len(parts) == len(fields):
+        for f, p in zip(fields, parts):
+            take(f, p)
+    return found, problems
+
+
 # ---- the agent -------------------------------------------------------------------------------------------------
 
 class Autopilot:
     """Simple-mode front of the OperationsAgent (the four tabs of SkyGuard's AI Agent page and the extension panel)."""
 
-    def __init__(self, agent: Any, *, today: Any = None, auto_trust: bool = True) -> None:
+    def __init__(self, agent: Any, *, today: Any = None, auto_trust: bool = True, reuse_values: bool = False) -> None:
         self.agent = agent
+        # 23.15.0: values typed while teaching and the person's usual values fill what a request leaves unsaid
+        self.reuse_values = reuse_values
         self.kb = agent.kb
         self.store = agent.store
         self._today = today
@@ -178,6 +333,16 @@ class Autopilot:
             if origin in (app.get("origins") or [origin_of(app["base_url"])]):
                 if env and env != app.get("environment"):
                     app = self.kb.update_application(app["id"], by=by, environment=env)
+                return {"application": app, "created": False}
+        # 23.13.3: the same website with or without "www." (or http / https), whatever the path, is the application
+        # already learned, unless another environment was named for it. Other host names (test., uat. ...) stay
+        # their own application, as before.
+        def bare(u: str) -> str:
+            return re.sub(r"^www\.", "", (urlsplit(u).hostname or "").lower())
+
+        for app in self.kb.applications():
+            if any(bare(o) == bare(url) for o in (app.get("origins") or [app["base_url"]])) and \
+                    (not env or env == app.get("environment")):
                 return {"application": app, "created": False}
         base = (name or "").strip() or suggest_name(url)
         candidate, n = base, 2
@@ -260,6 +425,70 @@ class Autopilot:
                     continue
         return made
 
+    # ---- 23.15.0: the person's usual data -------------------------------------------------------------------------
+
+    def remembered(self, app_id: str, workflow: str) -> dict[str, str]:
+        rows = self.store.query("SELECT param, value FROM remembered_values WHERE app_id = ? AND workflow = ?",
+                                (app_id, workflow))
+        return {r["param"]: r["value"] for r in rows}
+
+    def remember_values(self, app_id: str, wf: dict[str, Any], values: dict[str, Any]) -> None:
+        """Keeps what the person said for this task (never secrets, record keys, dates or times: those change)."""
+        params = {p["name"]: p for p in planner.workflow_params(wf)}
+        key_p = wf["data"].get("key_param") or (wf["data"].get("exists_check") or {}).get("param")
+        for name, value in (values or {}).items():
+            p = params.get(name)
+            v = str(value or "").strip()
+            if not p or not v or len(v) > 200 or name == key_p or p.get("type") in ("date", "time") or \
+                    SECRET_FIELD.search(f"{name} {p.get('field') or ''}") or \
+                    secrets_guard.inspect(v, self.agent._known_secrets()).contains_secret:
+                continue
+            self.store.execute(
+                "INSERT INTO remembered_values (app_id, workflow, param, value, uses, updated_at) VALUES (?,?,?,?,1,?) "
+                "ON CONFLICT(app_id, workflow, param) DO UPDATE SET value = excluded.value, uses = uses + 1, "
+                "updated_at = excluded.updated_at", (app_id, wf["key"], name, v, now_iso()))
+
+    def remember_prompt(self, app_id: str, text: str, workflow: str | None) -> None:
+        t = " ".join((text or "").split())[:300]
+        if not t or secrets_guard.inspect(t, self.agent._known_secrets()).contains_secret:
+            return
+        self.store.execute(
+            "INSERT INTO remembered_prompts (app_id, text, workflow, uses, updated_at) VALUES (?,?,?,1,?) "
+            "ON CONFLICT(app_id, text) DO UPDATE SET uses = uses + 1, workflow = excluded.workflow, "
+            "updated_at = excluded.updated_at", (app_id, t, workflow, now_iso()))
+
+    def usual_prompts(self, app_id: str, limit: int = 6) -> list[dict[str, Any]]:
+        return self.store.query("SELECT text, workflow, uses, updated_at FROM remembered_prompts WHERE app_id = ? "
+                                "ORDER BY uses DESC, updated_at DESC LIMIT ?", (app_id, limit))
+
+    def usual_data(self, app_id: str) -> list[dict[str, Any]]:
+        return self.store.query("SELECT workflow, param, value, uses, updated_at FROM remembered_values WHERE "
+                                "app_id = ? ORDER BY workflow, param", (app_id,))
+
+    def forget_usual(self, app_id: str, workflow: str | None = None) -> int:
+        if workflow:
+            cur = self.store.execute("DELETE FROM remembered_values WHERE app_id = ? AND workflow = ?", (app_id, workflow))
+        else:
+            cur = self.store.execute("DELETE FROM remembered_values WHERE app_id = ?", (app_id,))
+            self.store.execute("DELETE FROM remembered_prompts WHERE app_id = ?", (app_id,))
+        return int(getattr(cur, "rowcount", 0) or 0)
+
+    def _latest_preview(self, conv: str, app_id: str) -> dict[str, Any] | None:
+        """The newest run of this chat that waits for its confirmation."""
+        rows = self.store.query("SELECT data FROM chat WHERE conversation_id = ? AND speaker = 'agent' ORDER BY id "
+                                "DESC LIMIT 12", (conv,))
+        for r in rows:
+            rid = (loads(r["data"]) or {}).get("run_id") if r.get("data") else None
+            if not rid:
+                continue
+            try:
+                run = self.agent.engine.run(rid)
+            except AgentError:
+                continue
+            if run.get("status") == "awaiting_confirmation" and run.get("application_id") in (app_id, None):
+                return run
+        return None
+
     # ---- conversation state ----------------------------------------------------------------------------------------
 
     def _state(self, conv: str) -> dict[str, Any]:
@@ -313,7 +542,7 @@ class Autopilot:
                  if s.get("type") not in ("sign-in", "verification")]
         unverified = [t["title"] for t in tasks if t["certainty"] != "verified"] + \
             [r["rule"] for r in suggestions]
-        return {"application": app, "tasks": tasks, "rules": rules, "suggestions": suggestions, "pages": pages,
+        return {"application": app, "public": bool((app.get("profile") or {}).get("public")), "tasks": tasks, "rules": rules, "suggestions": suggestions, "pages": pages,
                 "unverified": unverified,
                 "last_session": ({"id": sess["id"], "status": sess["status"], "by": sess["created_by"],
                                   "started": sess["created_at"], "ended": sess["updated_at"],
@@ -364,20 +593,90 @@ class Autopilot:
             had = state.pop("pending", None)
             return done({"type": "cleared", "text": "OK, I dropped that request." if had else
                          "OK. Nothing is waiting."})
+        if sessions.NO_SIGN_IN_WORDS.search(raw) and len(raw) < 160:
+            # 23.13.0: "there is no account and no need of account": this website is used without signing in. It is
+            # remembered for the application (Applications & Accounts shows it and can undo it) and the request
+            # that was waiting for an account continues without one.
+            profile = dict(app.get("profile") or {})
+            profile["public"] = True
+            self.kb.set_profile(app["id"], profile, by=user)
+            app = self.kb.application(app["id"])
+            self.agent.audit.record("application.public", actor=user, interface=iface, target=app["id"],
+                                    details={"public": True})
+            waiting = self._fresh_pending(state, app)
+            if waiting and waiting.get("text"):
+                state.pop("pending", None)
+                self._save_state(conv, state)
+                again = self.command(waiting["text"], conversation=conv, user=user, interface=interface,
+                                     app_id=app["id"], source=source)
+                rep = again.get("reply") or {}
+                rep["text"] = f"Understood: {app['name']} needs no sign-in. " + (rep.get("text") or "")
+                return again
+            return done({"type": "public", "text": f"Understood: {app['name']} needs no sign-in, so I will not ask "
+                                                   "for an account. Tell me what you want me to do."})
+        waiting = self._fresh_pending(state, app)
+        if CONFIRM_WORDS.match(raw) and not (waiting and waiting.get("retry")):
+            # 23.15.0: "yes" / "confirm" / "run it" (or نعم / نفذ) confirms this chat's preview: one preview, one word
+            run = self._latest_preview(conv, app["id"])
+            if run:
+                try:
+                    self.confirm(run["id"], run["preview_hash"], acknowledge=True, by=user, interface=iface,
+                                 app_id=app["id"])
+                except AgentError as exc:
+                    return done({"type": "clarify", "run_id": run["id"], "text": exc.message})
+                return done({"type": "confirmed", "run_id": run["id"],
+                             "text": "Confirmed. Running it now in the browser; I will tell you when it is done."})
+            if not waiting:
+                return done({"type": "cleared", "text": "There is no preview waiting for confirmation. Tell me what "
+                                                        "you want me to do."})
+        if waiting and waiting.get("retry") and LOGIN_RE.match(waiting.get("text") or "") and re.fullmatch(
+                r"\W*(again|retry|try again|done|ok|okay|saved|go|go ahead|continue|yes)\W*", raw, re.I):
+            raw = waiting["text"]  # the password (or account) was saved: sign in now
+            state.pop("pending", None)
+        new_window = bool(NEW_WINDOW.search(raw))
+        login = LOGIN_RE.match(raw)
+        if login:
+            reply = self._sign_in_reply(app, (login.group("who") or "").strip() or None, raw)
+            if reply["type"] in ("need_credential", "need_account"):
+                return done(reply, pending={"app_id": app["id"], "text": raw, "retry": True,
+                                            "intent": {"kind": "navigate"}, "at": now_iso()})
+            state.pop("pending", None)
+            return done(reply)
+        found = URL_IN_TEXT.search(raw)
+        if found and (BROWSE_WORDS.match(raw) or len(raw.split()) <= 3):
+            return done(self._browse_reply(app, found.group(0).rstrip(".,;)"), new_window))
+        if new_window and re.fullmatch(r"\W*(?:(?:now|please|ok)\s+)*(?:open\s+)?(?:it\s+|this\s+)?(?:in\s+)?(?:a\s+)?new "
+                                       r"(?:browser\s+)?(?:window|tab|browser)\W*", raw, re.I):
+            return done({"type": "navigate", "url": app["base_url"], "title": app["name"], "new_window": True,
+                         "text": f"Opening {app['name']} in a new window. Your next requests continue there."})
         intent = classify(raw, app_names=[a["name"] for a in self.kb.applications()])
         pending = self._fresh_pending(state, app)
         combined = raw
+        answers: dict[str, str] = {}
+        got: dict[str, str] = {}
+        problems: list[str] = []
         if pending and pending.get("retry") and re.fullmatch(
                 r"\W*(again|retry|try again|done|ok|okay|saved|go|go ahead|continue|yes)\W*", raw, re.I):
             combined, intent = pending["text"], Intent(**pending["intent"])
+            answers = dict(pending.get("answers") or {})
         elif pending and intent.kind in ("data_entry", "unknown"):
             combined, intent = f"{pending['text']}; {raw}", Intent(**pending["intent"])  # the answer to my question
+            # 23.11.2: the answer is read field by field ("First Name; muhammad", "first name muhammad", only the
+            # value when one field was asked) and kept with the earlier answers, so only what is still missing is
+            # asked again
+            answers = dict(pending.get("answers") or {})
+            got, problems = parse_answer(raw, self._pending_fields(app, pending),
+                                         self._pending_fields(app, pending, every=True))
+            answers.update(got)
         state.pop("pending", None)  # a new request replaces an unanswered one (it is never glued to it)
         self.agent.audit.record("chat.intent", actor=user, interface=iface, target=app["id"],
                                 details={"intent": intent.kind, "verb": intent.verb, "continued": combined != raw})
 
         if intent.kind == "navigate":
-            return done(self._navigate(app, intent))
+            nav = self._navigate(app, intent)
+            if new_window and nav.get("type") == "navigate":
+                nav["new_window"] = True
+            return done(nav)
         if intent.kind == "read":
             listing = self._show(app, raw if combined == raw else combined, state)
             if listing:
@@ -408,15 +707,26 @@ class Autopilot:
             return done({"type": "no_workflows", "intent": intent.as_dict(),
                          "text": f"I have not learned any task in {app['name']} yet. Open Connect & Learn, press Start "
                                  "learning and do the task once in the browser; then ask me again."})
-        wf, why = self._choose(app, intent, combined)
+        base = combined
+        if answers:
+            combined = base + "; " + "; ".join(f"{k}: {v}" for k, v in answers.items())
+        wf = next((w for w in self._workflows(app["id"]) if pending and w["key"] == pending.get("workflow")
+                   and combined != raw), None)  # an answer continues the task that asked for it
+        why = ""
+        if not wf:
+            wf, why = self._choose(app, intent, combined)
         if not wf:
             return done({"type": "clarify", "intent": intent.as_dict(), "text": why})
         prepared = self._prepare(app, combined, state, wf=wf)
         if prepared.get("ask"):
-            return done({"type": "clarify", "text": prepared["ask"], "missing": prepared.get("missing", []),
+            heard = ("Got it: " + "; ".join(f"{k} = {v}" for k, v in got.items()) + ". ") if got else ""
+            issue = ("I could not use this: " + "; ".join(problems) + ". ") if problems else ""
+            return done({"type": "clarify", "text": heard + issue + prepared["ask"],
+                         "missing": prepared.get("missing", []), "received": answers,
                          "workflow": wf["key"], "intent": intent.as_dict()},
-                        pending={"app_id": app["id"], "text": combined, "intent": intent.as_dict(),
-                                 "workflow": wf["key"], "at": now_iso()})
+                        pending={"app_id": app["id"], "text": base, "intent": intent.as_dict(),
+                                 "workflow": wf["key"], "missing": prepared.get("missing", []),
+                                 "answers": answers, "at": now_iso()})
         dup = self._duplicate(app["id"], prepared["text"], wf["key"])
         if dup:
             return done({"type": "run", "run_id": dup, "duplicate": True, "workflow": wf["key"],
@@ -447,7 +757,49 @@ class Autopilot:
             reply.update(consequential=bool(prepared.get("consequential")), workflow=wf["key"],
                          understood=prepared["text"] if prepared["text"] != raw else None,
                          filled=prepared.get("filled", []), intent=intent.as_dict())
+            try:  # 23.15.0: the person's usual data and requests, for next time (never secrets)
+                self.remember_values(app["id"], wf, planner.parse_structured(prepared["text"], wf).get("fixed") or {})
+                self.remember_prompt(app["id"], base if base != raw or not answers else raw, wf["key"])
+            except Exception:  # memory never breaks a request
+                pass
         return done(reply)
+
+    # ---- 23.13.0: chat browser helpers --------------------------------------------------------------------------
+
+    def _sign_in_reply(self, app: dict[str, Any], who: str | None, raw: str) -> dict[str, Any]:
+        accounts = self.kb.accounts(app["id"])
+        acc = account_for(who, accounts)
+        if acc and acc.get("has_credential") and not acc.get("revoked"):
+            return {"type": "sign_in", "account_id": acc["id"], "account": acc["label"],
+                    "text": f"Signing in to {app['name']} as {acc['label']} in the chat browser. It stays signed in "
+                            "for your next requests."}
+        if acc:
+            return {"type": "need_credential", "account_id": acc["id"], "account": acc["label"], "then": "sign_in",
+                    "security_notice": "Passwords go only into this secure form (Windows Credential Manager). Never "
+                                       "type them in the chat.",
+                    "text": f"I have the {acc['label']} account ({acc['login_id']}) but no saved password. Save it "
+                            "once in the secure form; I sign in right after and remember it."}
+        label = (who or "my account").strip()[:60]
+        return {"type": "need_account", "role": label, "then": "sign_in",
+                "security_notice": "The user name and password go only into this secure form (password: Windows "
+                                   "Credential Manager). Never type them in the chat.",
+                "text": f"I do not have {'a' if who else 'an'} {label} account for {app['name']} yet. Enter its user "
+                        f"name and password once in the secure form; I sign in with it now, and next time you only "
+                        f"say 'log in as {label}'."}
+
+    def _browse_reply(self, app: dict[str, Any], url: str, new_window: bool) -> dict[str, Any]:
+        from .knowledge import same_site
+
+        full = url if re.match(r"^https?://", url, re.I) else "https://" + url.lstrip("/")
+        if same_site(full, app):
+            return {"type": "navigate", "url": full, "title": full, "new_window": new_window,
+                    "text": f"Opening {full}" + (" in a new window." if new_window else " in the chat browser.")}
+        other = self.kb.allowed_origin(full)
+        if other:
+            return {"type": "navigate", "url": full, "title": full, "app_id": other["id"], "new_window": new_window,
+                    "text": f"That address belongs to {other['name']}; opening it there."}
+        return {"type": "clarify", "text": f"{full} is not part of {app['name']} ({app['base_url']}). Connect it first "
+                                           "(Connect & Learn) so that I may open it."}
 
     # ---- 23.11.1: routing helpers -------------------------------------------------------------------------------
 
@@ -465,16 +817,32 @@ class Autopilot:
             return None
         return p if age <= self.PENDING_MINUTES else None
 
+    def _pending_fields(self, app: dict[str, Any], pending: dict[str, Any], every: bool = False) -> list[dict[str, Any]]:
+        """The fields the pending question asked for (``every``: all the task's fields), with their options (23.11.2)."""
+        wf = next((w for w in self._workflows(app["id"]) if w["key"] == pending.get("workflow")), None)
+        if not wf:
+            return []
+        asked = {norm(x) for x in pending.get("missing") or []}
+        out = []
+        for p in planner.workflow_params(wf):
+            label = p.get("field") or p["name"]
+            if every or norm(label) in asked:
+                out.append({"label": label, "name": p.get("name"), "options": p.get("options") or []})
+        return out
+
     def _screens(self, app_id: str) -> list[dict[str, Any]]:
         return list((self.agent.understanding.model(app_id) or {}).get("screens") or [])
 
     def _navigate(self, app: dict[str, Any], intent: Intent) -> dict[str, Any]:
         page = navigation_target(intent, app, self._screens(app["id"]), self._workflows(app["id"]))
         if not page:
-            known = [s["name"] for s in self._screens(app["id"]) if s.get("type") not in ("sign-in", "verification")]
-            return {"type": "clarify", "intent": intent.as_dict(),
+            # 23.13.3: page names a person would say (no addresses, no "| Emirates" title tails, no duplicates), also
+            # offered as buttons
+            known = page_names(self._screens(app["id"]), app)[:6]
+            options = [f"Open the {n} page" for n in known] + ["Open the start page"]
+            return {"type": "clarify", "intent": intent.as_dict(), "options": options,
                     "text": f"Which page of {app['name']} do you mean?"
-                            + (f" I know: {', '.join(known[:8])}." if known else
+                            + (f" I know: {', '.join(known)}." if known else
                                " I have not learned its pages yet; I can open its start page.")}
         return {"type": "navigate", "url": page["url"], "title": page["title"], "intent": intent.as_dict(),
                 "text": f"Opening {page['title']}" + (f" in {app['name']}" if page["kind"] == "page" else "") + "."}
@@ -709,6 +1077,40 @@ class Autopilot:
                 more.append(f"{label}: available")
                 filled.append(f"{label}: an available one that no learned rule rejects")
                 given.add(p["name"])
+        # 23.15.0: one value per record for a date that moves on ("one trip per day", "change the date for each")
+        dm = DAILY.search(t)
+        date_p = next((p for p in params if p.get("type") == "date"), None)
+        if dm and date_p and count > 1:
+            step = int(dm.group(1) or 1)
+            fixed_date = (parsed.get("fixed") or {}).get(date_p["name"])
+            start = None
+            if fixed_date:
+                from .rules import parse_date
+                start = parse_date(fixed_date, date_p.get("format"))
+            start = start or (self.today() + _dt.timedelta(days=1))
+            dates = [(start + _dt.timedelta(days=step * i)).isoformat() for i in range(count)]
+            label = date_p.get("field") or date_p["name"]
+            rewritten = re.sub(rf"\b{re.escape(label)}\s*:\s*[^;]+;?", "", rewritten, flags=re.I).rstrip("; ")
+            more.append(f"{label}: {', '.join(dates)}")
+            filled.append(f"{label}: {dates[0]} to {dates[-1]} (one per {'day' if step == 1 else f'{step} days'})")
+            given.add(date_p["name"])
+        # 23.15.0: what the request leaves unsaid comes from the person's usual values for this task (what they said
+        # last time) or the values they typed while teaching it; the preview lists each one, nothing is hidden
+        if self.reuse_values:
+            usual = self.remembered(app["id"], wf["key"])
+            for p in params:
+                if p["name"] in given or not p.get("required") or p["name"] == key_p or \
+                        p.get("type") in ("date", "time") or SECRET_FIELD.search(f"{p['name']} {p.get('field') or ''}"):
+                    continue
+                label = p.get("field") or p["name"]
+                value, why = usual.get(p["name"]), "your usual value"
+                if value in (None, ""):
+                    value, why = p.get("example"), "the value you used while teaching me"
+                if value in (None, "") or (p.get("options") and value not in p["options"]):
+                    continue
+                more.append(f"{label}: {value}")
+                filled.append(f"{label}: {value} ({why})")
+                given.add(p["name"])
         if more:
             rewritten += "; " + "; ".join(more)
         missing = [p for p in params if p.get("required") and p["name"] not in given]
@@ -869,18 +1271,24 @@ class Autopilot:
         for wf in workflows:
             if permitted(wf) and workflow_category(wf) == "create":
                 add(self._task_phrase(wf, lcs), "task", "a learned task")
-        # 4. the person's recent requests in this application
+        # 4. 23.15.0: the person's usual requests (kept across conversations and restarts), then the recent ones
+        if can_act:
+            for u in self.usual_prompts(app["id"], 3):
+                if len(u["text"]) < 160:
+                    add(u["text"], "usual", f"you asked this {u['uses']} time(s)")
         if conversation:
             for h in reversed(self.agent.history(conversation, limit=40)):
                 if h["speaker"] == "user" and (h.get("data") or {}).get("app_id") == app["id"] and \
-                        not h["text"].startswith("[message withheld") and len(h["text"]) < 120:
+                        not h["text"].startswith("[message withheld") and len(h["text"]) < 120 and \
+                        classify(h["text"]).kind not in ("data_entry", "unknown"):  # 23.11.2: not answers
                     add(h["text"], "recent", "you asked this before")
                 if sum(1 for x in out if x["kind"] == "recent") >= 2:
                     break
         # 5. places and explanations
         for sc in sorted(model.get("screens") or [], key=lambda x: -(x.get("visits") or 0))[:3]:
             if sc.get("type") not in ("sign-in", "verification") and sc is not here and sc.get("name"):
-                add(f"Open the {sc['name']} page", "navigate", "a page you used")
+                for n in page_names([sc], app):
+                    add(f"Open the {n} page", "navigate", "a page you used")
         for ent, lc in list(lcs.items())[:1]:
             sts = lc.get("statuses") or []
             if len(sts) >= 2 and ent:
@@ -1079,3 +1487,26 @@ def _fingerprint(app_id: str, wf_key: str, text: str) -> str:
 def _conv_id() -> str:
     from .util import new_id
     return new_id("conv")
+
+
+def page_names(screens: list[dict[str, Any]], app: dict[str, Any]) -> list[str]:
+    """23.13.3: the learned pages as a person names them. A title like "Book Flights | Find Hotels and Car Rental |
+    Emirates" becomes "Book Flights"; addresses ("/ae/english/book") and the site's own name are left out; the same
+    name in another case is listed once."""
+    site = norm(app.get("name") or "")
+    site_words = {w for w in re.split(r"\W+", site) if len(w) > 2}
+    out: list[str] = []
+    seen: set[str] = set()
+    for sc in screens:
+        if sc.get("type") in ("sign-in", "verification"):
+            continue
+        name = str(sc.get("name") or "").strip()
+        if not name or name.startswith("/") or "://" in name or re.fullmatch(r"[\w./-]*/[\w./-]*", name):
+            continue
+        name = re.split(r"\s+[|\u2013\u2014-]\s+", name)[0].strip()  # first part of a "Page | Site" title
+        key = norm(name)
+        if not key or key in seen or key == site or (site_words and set(key.split()) <= site_words):
+            continue
+        seen.add(key)
+        out.append(name[:60])
+    return out

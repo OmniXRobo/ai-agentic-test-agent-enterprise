@@ -12,6 +12,9 @@ export WINEDEBUG=-all PYTHONLEGACYWINDOWSSTDIO=1 DISPLAY=:57
 Xvfb :57 -screen 0 1100x800x24 >/dev/null 2>&1 &
 XPID=$!
 sleep 2
+# Windows NumPy (the OCR check) crashes under Wine; without this, Wine's crash window waits for a click and holds the
+# install until its time limit. Real Windows has no such window for it (NumPy starts there).
+wine reg add "HKCU\\Software\\Wine\\WineDbg" /v ShowCrashDialog /t REG_DWORD /d 0 /f >/dev/null 2>&1
 wine "$SETUP" "/APP=$APPDIR" /NOSTART "$@" >/dev/null 2>&1 &
 WPID=$!
 
@@ -25,10 +28,15 @@ next; shot 2-detect 8
 next; shot 3-backup 4
 next; shot 4-install-running 6
 # wait for the install to finish
-for i in $(seq 1 200); do
+UAPP=$(winepath -u "$APPDIR" 2>/dev/null)
+for i in $(seq 1 300); do
   sleep 3
-  # the second verification (the Verify page) writes its own log as the last step of the install
-  if grep -qs "Patch files present" "$(winepath -u "$APPDIR" 2>/dev/null)"/logs/*verify*; then sleep 10; break; fi
+  # the Setup log (UTF-16, next to "app" or in the app folder): the install verifies once, then the Verify page
+  # verifies again; both end with "Patch files present". A failed install ends with "PATCH FAILED" instead.
+  LOGTXT=$(cat "$UAPP"/../logs/setup-*.txt "$UAPP"/logs/setup-*.txt 2>/dev/null | tr -d '\000')
+  if [ "$(grep -c "Patch files present" <<<"$LOGTXT")" -ge 2 ] || grep -qs "PATCH FAILED" <<<"$LOGTXT"; then
+    sleep 10; break
+  fi
   [ "$i" -eq 40 ] && shot 4b-install-progress 0
 done
 # the install page moves on by itself to Verify when it ends

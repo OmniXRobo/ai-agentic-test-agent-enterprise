@@ -72,7 +72,13 @@ class Runtime:
     ai_reports: Any = None  # 23.3.31: AI analysis reports with PDF and email
     aura: Any = None  # final patch: AURA learning memory
     comparison: Any = None  # final patch: Application Data Comparison Agent
+    apitesting: Any = None  # 23.12.0: API Testing
     opsagent: Any = None  # 23.5.0: Adaptive AI Application Learning & Operations Agent
+    itest: Any = None  # 23.14.0: shared store for Security / Fuse / ActiveMQ testing
+    security: Any = None  # 23.14.0: AI Security & Vulnerability Testing
+    fuse: Any = None  # 23.14.0: Red Hat Fuse Integration Testing
+    activemq: Any = None  # 23.14.0: ActiveMQ Classic / Artemis testing
+    test_actions: Any = None  # 23.14.0: Analyze with AI, TFS defect, PDF, Email Developer, evidence, retest
 
     def close(self) -> None:
         if self.opsagent is not None:
@@ -223,3 +229,51 @@ def _final_patch(rt: Runtime, ai_transport: Any) -> None:
         rt.defects.on_published.append(rt.comparison.on_review_published)  # 23.11.0
     except Exception as exc:
         log.warning(f"Data Comparison Agent did not start: {exc}")
+    # 23.12.0: API Testing, the Scheduled Execution Agent card, and API / Integration Comparison in Scheduled Runs
+    from .agents.base import BaseAgent
+
+    class ScheduledExecutionAgent(BaseAgent):
+        agent_id = "scheduled_execution"
+
+    rt.scheduler.agent = ScheduledExecutionAgent(rt.bus)
+    try:
+        from .apitesting.service import ApiScheduleProvider, ApiTestingService
+
+        rt.apitesting = ApiTestingService(rt)
+        rt.scheduler.providers.append(ApiScheduleProvider(rt.apitesting))
+    except Exception as exc:  # SkyGuard starts without it; the API Testing page and its cards say why
+        log.warning(f"API Testing did not start: {exc}")
+    if rt.comparison is not None:
+        from .comparison.schedule import ComparisonScheduleProvider
+
+        rt.scheduler.providers.append(ComparisonScheduleProvider(rt))
+    _integration_patch(rt)
+
+
+def _integration_patch(rt: Runtime) -> None:
+    """23.14.0: Security Testing, Red Hat Fuse Testing, ActiveMQ Testing and the shared result actions. Each module
+    starts on its own; one that cannot start is reported on its page and the rest of SkyGuard keeps working."""
+    from .itest.actions import ActionService
+    from .itest.common import ItestStore
+
+    rt.itest = ItestStore(rt.db, rt.secrets)
+    try:
+        n = rt.itest.mark_interrupted()
+        if n:
+            log.info(f"{n} integration / security run(s) were interrupted by the last shutdown")
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"Could not mark interrupted runs: {exc}")
+    rt.test_actions = ActionService(rt)
+    for attr, module_path, cls_name, label in (
+            ("security", "sectest.service", "SecurityService", "Security Testing"),
+            ("fuse", "fusetest.service", "FuseService", "Red Hat Fuse Testing"),
+            ("activemq", "amqtest.service", "ActiveMQService", "ActiveMQ Testing")):
+        try:
+            import importlib
+
+            mod = importlib.import_module(f".{module_path}", __package__)
+            svc = getattr(mod, cls_name)(rt)
+            setattr(rt, attr, svc)
+            rt.test_actions.retesters[attr] = svc.retest
+        except Exception as exc:  # noqa: BLE001
+            log.warning(f"{label} did not start: {exc}")

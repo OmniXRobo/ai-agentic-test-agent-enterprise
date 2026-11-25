@@ -38,12 +38,13 @@ class VoiceSettingsIn(BaseModel):
     fw_model: str | None = Field(default=None, max_length=60, pattern=r"^[A-Za-z0-9._-]+$")
     fw_compute_type: Literal["int8", "int8_float32", "float32", "default"] | None = None
     stt_model: str | None = Field(default=None, max_length=120)
-    language: str | None = Field(default=None, pattern=r"^[a-z]{2}(-[A-Za-z]{2})?$")
+    language: str | None = Field(default=None, pattern=r"^([a-z]{2}(-[A-Za-z]{2})?|auto)$")
     speak_replies: bool | None = None
     tts_voice: str | None = Field(default=None, max_length=200)
     tts_rate: float | None = Field(default=None, ge=0.5, le=2)
     reply_style: Literal["radio", "plain"] | None = None
     radio_voice: str | None = Field(default=None, max_length=200)
+    arabic_voice_gender: Literal["", "male", "female"] | None = None
     agent_display_name: str | None = Field(default=None, min_length=1, max_length=40)
     agent_command_name: str | None = Field(default=None, min_length=2, max_length=30, pattern=r"^[A-Za-z][A-Za-z' -]*$")
     voice_enabled: bool | None = None
@@ -72,6 +73,16 @@ class SpeakIn(BaseModel):
 def command(body: CommandIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
     page = body.page.model_dump() if body.page else None
     return {"ok": True, **rt.voice.handle(body.text, conversation_id=body.conversation_id, source=body.source, page=page)}
+
+
+class InterpretIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+@router.post("/interpret")
+def interpret(body: InterpretIn, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
+    """23.14.0: how a spoken or typed command (English or Arabic) is understood; nothing is executed."""
+    return {"ok": True, **rt.voice.interpret(body.text)}
 
 
 @router.get("/commands")

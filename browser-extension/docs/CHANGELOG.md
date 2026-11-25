@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.5.0 (agent core shared with SkyGuard QA 23.15.0)
+
+* New name: **SkyGuard Workflow Operator**. The extension does what it is called: you teach it your application's
+  workflows, it previews them and runs them. Nothing about pairing, permissions or the companion changes, and the
+  extension ID stays the same, so an installed extension only needs Reload.
+* **Listen always**: one button in the chat starts hands-free listening. Say a request, pause, and it is transcribed
+  and sent without touching the mouse; the reply is spoken in the language you spoke. The microphone is released
+  between requests, listening stops when you leave the chat or press Stop listening, and a request that changes
+  records still waits for the confirmation under its preview.
+* Arabic spoken in the chat is understood even when speech recognition misspells it, and is answered in Arabic.
+* The agent remembers the values and requests you use, so it asks for them once, not every time; sign-in passwords
+  and authorization codes typed while teaching go to the credential store, masked (one-time codes are never kept).
+
+## 1.4.0 (companion 1.4.0, agent core shared with SkyGuard QA 23.12.0)
+
+Simpler offline install: no command to type and no pairing or port to configure.
+
+* The installer copies the AI and speech models when it finds them on this PC, writes a one-time set-up ticket into
+  the extension folder, opens the browser's extensions page and puts the extension folder path on the clipboard.
+* On first start the extension pairs with the companion by itself using that ticket and signs in as the PC owner
+  (the first admin is created for the Windows user). The ticket is single use, valid 7 days and deleted once used.
+* A device paired with the ticket may sign in again without a password only as that owner; code pairing is unchanged.
+* UPDATE_EXTENSION writes a fresh ticket, so an update also needs no pairing.
+* Still by hand, because Edge and Chrome require it: Developer mode and Load unpacked, once.
+
+## 1.3.1 (companion 1.3.1, agent core shared with SkyGuard QA 23.11.2)
+
+* **Answers to missing information**: when the agent says "I still need: First Name, Last Name, Zip/Postal Code", an
+  answer such as "First Name; muhammad", "last name Ali, zip 54000" or just "54000" (one field asked) is read field by
+  field. The reply confirms what was received and asks only for what is still missing; "prepare it" asks again for
+  the missing fields only. (Agent core, `skyguard_agent/autopilot.py`.)
+* **Postal codes are not secrets**: "Zip/Postal Code: 54000" is no longer stopped by the side panel's secret check
+  (`lib/secret-check.js`, identical to SkyGuard's). One-time codes, driver codes and PINs still are.
+* **Applications that never show the signed-in user** (Swag Labs, for example) can run operations that no role
+  restricts, after accepting the sign-in the agent made with the saved account. Role-restricted operations still need
+  the role shown by the application.
+* Nothing else changed: permissions, routes, pairing and the local channel are the same as 1.3.0.
+
 ## 1.3.0 (companion 1.3.0, agent core shared with SkyGuard QA 23.11.1)
 
 * **Start learning / Stop & save learning** for the selected application in the Learn tab, with a visible status: a

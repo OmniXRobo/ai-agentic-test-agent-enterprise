@@ -17,6 +17,7 @@ Files are kept under ``<data>/reports/ai/<kind>/<id>/``: ``analysis.json`` (run 
 from __future__ import annotations
 
 import html
+from collections import Counter
 import json
 import re
 from pathlib import Path
@@ -33,10 +34,33 @@ from .service import CSS, _data_uri, e, kpi, pill, print_pdf
 
 log = get_logger("ai_reports")
 
-KINDS = ("run", "perf", "dashboard")
-ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
-MAX_STEP_IMAGES = 80
-LIST_KEYS = ("observations", "issues", "recommendations", "undetermined")
+KINDS = ("run", "perf", "dashboard", "module")
+
+# 23.13.0: "Generate AI result" and "Send email" on the module pages and on Analytics. Each module has a title and the
+# recorded data its report is made from (runs, results, defect drafts, healing ...); nothing is estimated.
+MODULES: dict[str, dict[str, Any]] = {
+    "analytics": {"title": "Analytics", "sources": None},
+    "ai-automation": {"title": "AI-Driven Automation", "sources": ("framework",), "kinds": ("automation",),
+                      "prefixes": ("GEN", "FW", "RUN")},
+    "guided-automation": {"title": "Guided Browser Automation", "sources": ("functional", "python"),
+                          "kinds": ("functional",), "executions": True},
+    "discovery": {"title": "Application Discovery & Update", "sources": ("functional",), "prefixes": ("DISC",),
+                  "discoveries": True},
+    "hybrid-automation": {"title": "Hybrid Test Automation", "sources": ("functional", "python"),
+                          "kinds": ("functional",), "executions": True},
+    "api-testing": {"title": "API Testing", "sources": ("api",), "api": True},
+    "scheduled-runs": {"title": "Scheduled Runs", "sources": ("functional", "framework"), "kinds": ("functional",),
+                       "executions": True, "schedules": True},
+    "perf-load": {"title": "Load Tests", "sources": ("performance",), "perf": ("load",)},
+    "perf-stress": {"title": "Stress Tests", "sources": ("performance",), "perf": ("stress",)},
+    "perf-spike": {"title": "Spike Tests", "sources": ("performance",), "perf": ("spike",)},
+    "perf-soak": {"title": "Soak Tests", "sources": ("performance",), "perf": ("soak",)},
+    "perf-live": {"title": "Performance Live Dashboard", "sources": ("performance",), "perf": None},
+    "perf-schedules": {"title": "Performance Schedules", "sources": ("performance",), "perf": None,
+                       "perf_schedules": True},
+    "perf-results": {"title": "Performance Results", "sources": ("performance",), "perf": None},
+    "integration-comparison": {"title": "Integration Comparison", "sources": ("comparison",), "comparison": True},
+}
 
 
 class AiAnalysis(BaseModel):
@@ -68,6 +92,16 @@ DASHBOARD_PROMPT = (
     "(counts and percentages). Issues are gaps and risks: user stories without acceptance criteria, test cases not "
     "automated or without data, failing tests, open defects, performance SLA failures. Recommendations must be "
     "concrete next steps in priority order. Never invent numbers." + LENGTH_RULE)
+
+MODULE_PROMPT = (
+    "You are a senior QA lead reviewing one module of a QA platform (named in the data). Use only the data provided; "
+    "a missing figure means it is not available, never zero. Summarise the state of this module's testing. "
+    "Observations must cite counts, results, dates and run ids. Issues are failures, flaky results, open defects, "
+    "missed SLAs and gaps. Recommendations must be concrete next steps for this module in priority order. Never "
+    "invent numbers, runs or pages." + LENGTH_RULE)
+ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+MAX_STEP_IMAGES = 80
+LIST_KEYS = ("observations", "issues", "recommendations", "undetermined")
 
 
 def _short(text: Any, n: int) -> Any:
@@ -121,9 +155,11 @@ class AiReportService:
 
     def _check(self, kind: str, item_id: str) -> None:
         if kind not in KINDS:
-            raise QAError("VALIDATION_FAILED", "The report kind must be run, perf or dashboard.", status=422)
+            raise QAError("VALIDATION_FAILED", "The report kind must be run, perf, dashboard or module.", status=422)
         if not ID_RE.match(item_id or ""):
             raise QAError("VALIDATION_FAILED", "That id is not valid.", status=422)
+        if kind == "module" and item_id not in MODULES:
+            raise QAError("VALIDATION_FAILED", "That module has no AI report.", status=422)
 
     def folder(self, kind: str, item_id: str) -> Path:
         self._check(kind, item_id)
@@ -238,14 +274,117 @@ class AiReportService:
             "performance": a.get("performance"),
         }
 
+    def module_facts(self, module: str) -> dict[str, Any]:
+        """The recorded data of one module page (23.13.0)."""
+        m = MODULES[module]
+        db = self.analytics.db
+        out: dict[str, Any] = {"module": m["title"], "as_of": now_iso()}
+
+        def safe(key: str, fn: Any) -> None:
+            try:
+                value = fn()
+                if value not in (None, [], {}):
+                    out[key] = value
+            except Exception as exc:  # an older database layout must not stop the report
+                log.info(f"module facts {module}/{key} skipped: {exc!r}")
+
+        if module == "analytics":
+            safe("functional_30_days", lambda: {k: v for k, v in self.analytics.functional(30).items()
+                                                if k not in ("trend",)})
+            safe("performance_30_days", lambda: {k: v for k, v in self.analytics.performance(30).items()
+                                                 if k in ("sla", "max_users", "plans")})
+            safe("dashboard", self.dashboard_facts)
+            return out
+        if m.get("kinds") or m.get("prefixes"):
+            def runs() -> dict[str, Any]:
+                rows = db.query("SELECT run_id, kind, title, status, started_at, finished_at FROM runs "
+                                "ORDER BY started_at DESC LIMIT 400")
+                keep = [r for r in rows if r["kind"] in (m.get("kinds") or ()) or
+                        str(r["run_id"]).split("-", 1)[0] in (m.get("prefixes") or ())]
+                return {"total": len(keep), "by_status": dict(Counter(r["status"] for r in keep)),
+                        "latest": [{"run_id": r["run_id"], "title": _short(r["title"], 100), "status": r["status"],
+                                    "started": r["started_at"]} for r in keep[:15]]}
+            safe("runs", runs)
+        if m.get("executions"):
+            def executions() -> dict[str, Any]:
+                rows = db.query("SELECT run_id, script_id, status, started_at, failed_step, error, browser "
+                                "FROM execution_results ORDER BY started_at DESC LIMIT 300")
+                return {"total": len(rows), "by_status": dict(Counter(r["status"] for r in rows)),
+                        "browsers": dict(Counter(r["browser"] or "unknown" for r in rows)),
+                        "latest_failures": [{"run_id": r["run_id"], "test": self._script_name(r["script_id"]),
+                                             "failed_step": (r["failed_step"] + 1) if r["failed_step"] is not None else None,
+                                             "error": _short(r["error"], 200), "started": r["started_at"]}
+                                            for r in rows if r["status"] == "FAILED"][:8]}
+            safe("executions", executions)
+            safe("self_healing", lambda: dict(Counter(r["result"] for r in db.query(
+                "SELECT result FROM healing_events ORDER BY id DESC LIMIT 500"))))
+        if m.get("discoveries"):
+            safe("discoveries", lambda: [{"url": r["base_url"], "at": r["created_at"]} for r in db.query(
+                "SELECT base_url, created_at FROM discoveries ORDER BY created_at DESC LIMIT 10")])
+        if m.get("api"):
+            safe("api_runs", lambda: [{"run_id": r["id"], "label": r["label"], "status": r["status"],
+                                       "counts": json.loads(r["counts"] or "{}"), "started": r["started_at"],
+                                       "environment": r["environment"]} for r in db.query(
+                "SELECT id, label, status, counts, started_at, environment FROM api_runs ORDER BY started_at DESC LIMIT 12")])
+            safe("api_failures", lambda: [{"test": r["test_name"], "status_code": r["status_code"],
+                                           "error": _short(r["error"], 200), "class": r["classification"]}
+                                          for r in db.query("SELECT test_name, status_code, error, classification "
+                                                            "FROM api_results WHERE status = 'FAILED' ORDER BY id DESC LIMIT 10")])
+        if m.get("schedules"):
+            def schedules() -> Any:
+                path = self.paths.root / "schedules.json"
+                data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+                items = data.get("schedules", data if isinstance(data, list) else [])
+                return [{"name": x.get("name"), "enabled": x.get("enabled"), "next_run": x.get("next_run_at"),
+                         "last_status": x.get("last_status")} for x in items[:20] if isinstance(x, dict)]
+            safe("schedules", schedules)
+        if "perf" in m:
+            def perf() -> dict[str, Any]:
+                rows = db.query("SELECT run_id, kind, name, status, started_at, metrics, sla FROM perf_runs "
+                                "ORDER BY started_at DESC LIMIT 200")
+                if m["perf"]:
+                    rows = [r for r in rows if (r["kind"] or "").lower() in m["perf"]]
+                latest = []
+                for r in rows[:12]:
+                    o = (json.loads(r["metrics"] or "{}") or {}).get("overall") or {}
+                    sla = json.loads(r["sla"] or "null")
+                    latest.append({"run_id": r["run_id"], "name": r["name"], "type": r["kind"], "status": r["status"],
+                                   "started": r["started_at"], "p95_ms": o.get("p95_ms"), "avg_ms": o.get("avg_ms"),
+                                   "error_pct": o.get("error_pct"), "throughput": o.get("throughput"),
+                                   "sla": (sla or {}).get("verdict") if isinstance(sla, dict) else sla})
+                return {"total": len(rows), "by_status": dict(Counter(r["status"] for r in rows)), "latest": latest}
+            safe("performance_runs", perf)
+        if m.get("perf_schedules"):
+            safe("performance_schedules", lambda: [{"name": r["name"], "enabled": bool(r["enabled"]),
+                                                    "next_run": r["next_run_at"], "last_run": r["last_run_id"]}
+                                                   for r in db.query("SELECT name, enabled, next_run_at, last_run_id "
+                                                                     "FROM perf_schedules LIMIT 30")])
+        if m.get("comparison"):
+            safe("comparison_runs", lambda: [{"id": r["id"], "status": r["status"], "result": r["result"],
+                                              "summary": json.loads(r["summary"] or "{}"), "started": r["started_at"]}
+                                             for r in db.query("SELECT id, status, result, summary, started_at FROM "
+                                                               "cmp_executions ORDER BY started_at DESC LIMIT 10")])
+            safe("open_discrepancies", lambda: (db.query_one("SELECT COUNT(*) AS n FROM cmp_discrepancies") or {}).get("n"))
+        if m.get("sources"):
+            marks = ",".join("?" * len(m["sources"]))
+            safe("defect_drafts", lambda: dict(Counter(r["status"] for r in db.query(
+                f"SELECT status FROM defect_drafts WHERE source IN ({marks})", m["sources"]))))
+        return out
+
     def analyze(self, kind: str, item_id: str) -> dict[str, Any]:
         self._check(kind, item_id)
         if kind == "perf":
             self.performance.analyze(item_id)
             return self.get(kind, item_id)
-        facts = self.run_facts(item_id) if kind == "run" else self.dashboard_facts()
-        prompt = RUN_PROMPT if kind == "run" else DASHBOARD_PROMPT
-        label = f"Analyzing run {item_id} with the On-Premise AI" if kind == "run" else "Analyzing the dashboard with the On-Premise AI"
+        if kind == "module":
+            facts = self.module_facts(item_id)
+            prompt = MODULE_PROMPT
+            label = f"Analyzing {MODULES[item_id]['title']} with the On-Premise AI"
+        else:
+            facts = self.run_facts(item_id) if kind == "run" else self.dashboard_facts()
+            prompt = RUN_PROMPT if kind == "run" else DASHBOARD_PROMPT
+            label = (f"Analyzing run {item_id} with the On-Premise AI" if kind == "run"
+                     else "Analyzing the dashboard with the On-Premise AI")
 
         def call() -> AiAnalysis:
             # 23.3.34: the long-answer time limit (generation_timeout_seconds, 10 minutes by default) instead of the
@@ -263,7 +402,7 @@ class AiReportService:
         else:
             result = call()
         analysis = {**result.model_dump(), "created_at": now_iso(), "model": self.ai.config().get("model"),
-                    "facts": facts if kind == "dashboard" else None, "edited": False}
+                    "facts": facts if kind in ("dashboard", "module") else None, "edited": False}
         self._store(kind, item_id, analysis)
         return self.get(kind, item_id)
 
@@ -300,10 +439,10 @@ class AiReportService:
     def make_pdf(self, kind: str, item_id: str) -> dict[str, Any]:
         self._check(kind, item_id)
         analysis = self._load(kind, item_id)
-        if not analysis:
+        if not analysis and kind != "module":
             raise QAError("AI_REPORT_EMPTY", "Analyze with the AI first; the PDF is made from the analysis.", status=409)
-        title, body = {"run": self._run_html, "perf": self._perf_html, "dashboard": self._dashboard_html}[kind](
-            item_id, analysis)
+        title, body = {"run": self._run_html, "perf": self._perf_html, "dashboard": self._dashboard_html,
+                       "module": self._module_html}[kind](item_id, analysis or {})
         page = self.page(title, body)
         folder = self.folder(kind, item_id)
         folder.mkdir(parents=True, exist_ok=True)
@@ -320,7 +459,8 @@ class AiReportService:
 
     def file_name(self, kind: str, item_id: str) -> str:
         return {"run": f"{item_id}-ai-analysis.pdf", "perf": f"{item_id}-ai-performance-analysis.pdf",
-                "dashboard": f"dashboard-ai-analysis-{now().strftime('%Y%m%d')}.pdf"}[kind]
+                "dashboard": f"dashboard-ai-analysis-{now().strftime('%Y%m%d')}.pdf",
+                "module": f"{item_id}-report-{now().strftime('%Y%m%d')}.pdf"}[kind]
 
     @staticmethod
     def page(title: str, body: str) -> str:
@@ -486,14 +626,41 @@ ul { margin: 4px 0 10px; padding-left: 20px; } li { margin: 2px 0; }
                 + f"<p class='muted'>Figures as they were when the analysis was made ({e(_when(a.get('created_at')))}).</p>")
         return title, body
 
+    def _module_html(self, module: str, a: dict[str, Any]) -> tuple[str, str]:
+        facts = (a or {}).get("facts") or self.module_facts(module)
+        title = f"{MODULES[module]['title']} report"
+
+        def table(value: Any) -> str:
+            if isinstance(value, dict):
+                return "<table>" + "".join(f"<tr><th style='width:220px'>{e(str(k).replace('_', ' '))}</th>"
+                                           f"<td>{table(v)}</td></tr>" for k, v in value.items()) + "</table>"
+            if isinstance(value, list):
+                if value and all(isinstance(x, dict) for x in value):
+                    keys = list(dict.fromkeys(k for x in value for k in x))[:8]
+                    return ("<table><thead><tr>" + "".join(f"<th>{e(k.replace('_', ' '))}</th>" for k in keys)
+                            + "</tr></thead><tbody>" + "".join(
+                                "<tr>" + "".join(f"<td>{e(_short(x.get(k), 160) if x.get(k) is not None else '—')}</td>"
+                                                 for k in keys) + "</tr>" for x in value) + "</tbody></table>")
+                return ", ".join(e(str(x)) for x in value) or "—"
+            return e("—" if value is None else str(value))
+
+        sections = "".join(f"<h2>{e(str(k).replace('_', ' ').capitalize())}</h2>{table(v)}"
+                           for k, v in facts.items() if k not in ("module", "as_of"))
+        body = (self._cover(title, f"Data as of {_when(facts.get('as_of'))}")
+                + (self.analysis_html(a) if a and a.get("summary") else
+                   "<p class='ai-note'>No AI analysis was generated for this report; it shows the recorded data only.</p>")
+                + sections)
+        return title, body
+
     # ---- the email -----------------------------------------------------------------------------
 
     def email_draft(self, kind: str, item_id: str) -> dict[str, Any]:
         """The subject and body written from the analysis (no AI call, so the form opens at once)."""
         self._check(kind, item_id)
         a = self._load(kind, item_id)
-        if not a:
+        if not a and kind != "module":
             raise QAError("AI_REPORT_EMPTY", "Analyze with the AI first; the email is written from the analysis.", status=409)
+        a = a or {}
         name = branding.name()
         day = now().astimezone().strftime("%d %b %Y")
         if kind == "run":
@@ -515,6 +682,11 @@ ul { margin: 4px 0 10px; padding-left: 20px; } li { margin: 2px 0; }
                      f"95th percentile {_ms(o.get('p95_ms'))}, {float(o.get('throughput') or 0):.1f} requests per second. "
                      f"Run: {item_id}, {_when(run.get('started_at'))}.")
             intro = f"Please find attached the AI performance analysis of \"{run.get('name') or item_id}\"."
+        elif kind == "module":
+            title = MODULES[item_id]["title"]
+            subject = f"{title} report ({day})"
+            facts = "The attached PDF has the recorded results" + (" and the AI analysis." if a.get("summary") else ".")
+            intro = f"Please find attached the {title} report."
         else:
             f = a.get("facts") or {}
             cov, fn = f.get("automation_coverage") or {}, f.get("functional_latest_results") or {}

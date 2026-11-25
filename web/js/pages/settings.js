@@ -1,6 +1,7 @@
 import { api } from "../api.js";
 import { toast, esc } from "../util.js";
 import { loadBrand } from "../brand.js";
+import { WORKFLOW_LOOKS } from "./workflow.js";
 
 export async function mount(view) {
   const { settings } = await api("/api/settings");
@@ -26,6 +27,12 @@ export async function mount(view) {
           <option value="light" ${settings.ui.theme === "light" ? "selected" : ""}>Light</option>
         </select>
       </label>
+      <label>Agent Workflow look
+        <select name="workflow_look" id="wfLook">
+          ${WORKFLOW_LOOKS.map(([v, l]) => `<option value="${v}" ${(settings.ui.workflow_look || "classic") === v ? "selected" : ""}>${l}</option>`).join("")}
+        </select>
+      </label>
+      <p class="muted" id="wfLookNote">${esc((WORKFLOW_LOOKS.find(([v]) => v === (settings.ui.workflow_look || "classic")) || WORKFLOW_LOOKS[0])[2])} Every look shows the same agents, states, activity and Stop / Pause / Resume buttons, works offline and follows the SkyGuard colours.</p>
       <label>Defect Creation Mode
         <select name="creation_mode">
           ${[["review", "Review Before Create"], ["automatic", "Automatic"], ["disabled", "Disabled"]]
@@ -68,6 +75,10 @@ export async function mount(view) {
       <p class="muted">Times always follow the Windows system clock. There is no separate time zone setting.</p>
       <div class="row"><button class="btn primary" type="submit">Save</button></div>
     </form>`;
+  view.querySelector("#wfLook").addEventListener("change", (e) => {
+    const d = (WORKFLOW_LOOKS.find(([v]) => v === e.target.value) || WORKFLOW_LOOKS[0])[2];
+    view.querySelector("#wfLookNote").textContent = `${d} Every look shows the same agents, states, activity and Stop / Pause / Resume buttons, works offline and follows the SkyGuard colours.`;
+  });
   view.querySelector("#prefs").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -77,7 +88,7 @@ export async function mount(view) {
         method: "PATCH",
         body: {
           ui: { theme, open_as: f.get("open_as") || "browser", brand_name: String(f.get("brand_name") || "").trim(), brand_tagline: String(f.get("brand_tagline") || "").trim(),
-                logo_path: String(f.get("logo_path") || "").trim() },
+                logo_path: String(f.get("logo_path") || "").trim(), workflow_look: f.get("workflow_look") || "classic" },
           defects: { creation_mode: f.get("creation_mode") },
           playback: {
             visual_cursor: f.get("visual_cursor") === "on", highlight: f.get("highlight") === "on",
@@ -99,7 +110,7 @@ export async function mount(view) {
         },
       });
       document.documentElement.dataset.theme = theme;
-      try { localStorage.setItem("qa.theme", theme); } catch { /* ignore */ }
+      try { localStorage.setItem("qa.theme", theme); localStorage.setItem("qa.workflowLook", f.get("workflow_look") || "classic"); } catch { /* ignore */ }
       const b = await loadBrand();
       toast(b.logo_problem ? `Preferences saved. ${b.logo_problem}` : "Preferences saved", b.logo_problem ? "warning" : "success");
     } catch (err) {

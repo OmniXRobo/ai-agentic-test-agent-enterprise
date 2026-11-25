@@ -54,12 +54,22 @@ class HealthService:
             item = fn()
         except Exception as exc:  # a status light must never break the dashboard
             log.exception("Status check %s failed", key)
-            item = _item(key, key.upper(), "FAIL", "Error", f"The check itself failed ({type(exc).__name__}).")
+            name = key.split(":", 1)[0]
+            item = _item(name, name.upper(), "FAIL", "Error", f"The check itself failed ({type(exc).__name__}).")
         if item.get("value") not in ("Starting", "Loading"):  # 23.3.33: a starting service is checked again next time
             self.remember(key, item)
         return item
 
     # ---- individual checks -------------------------------------------------------------------
+
+    def _tfs_key(self) -> str:
+        """23.14.1: the TFS light is kept per person and project (people with their own PAT / project saw the light of
+        whoever loaded the page first)."""
+        try:
+            scope = self.tfs._scope()
+        except Exception:  # noqa: BLE001 - a status light must never break the dashboard
+            scope = ""
+        return f"tfs:{scope[0]}:{scope[1]}" if scope else "tfs"
 
     def check_tfs(self) -> dict[str, Any]:
         p = self.tfs.profile()
@@ -80,7 +90,7 @@ class HealthService:
             return  # a test of the other profile does not change the active connection's light
         ok = bool(result.get("ok"))
         reason = _failed_detail(result)
-        self.remember("tfs", _item("tfs", label, "PASS" if ok else "FAIL", "Connected" if ok else "Unavailable",
+        self.remember(self._tfs_key(), _item("tfs", label, "PASS" if ok else "FAIL", "Connected" if ok else "Unavailable",
                                    reason or (f"{p['label']} · {p['project']}" if ok else "Connection test failed.")))
 
     def check_ai(self) -> dict[str, Any]:
@@ -129,7 +139,7 @@ class HealthService:
         return _item("speech", "Speech", "WARN", "Browser", "Browser recognition needs Internet in Chrome and Edge.")
 
     def summary(self, force: bool = False) -> dict[str, Any]:
-        checks = (("tfs", self.check_tfs), ("ai", self.check_ai), ("playwright", self.check_playwright),
+        checks = ((self._tfs_key(), self.check_tfs), ("ai", self.check_ai), ("playwright", self.check_playwright),
                   ("speech", self.check_speech))
         items = [self._cached(key, fn, force) for key, fn in checks]
         overall = "FAIL" if any(i["status"] == "FAIL" for i in items) else \

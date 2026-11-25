@@ -47,6 +47,7 @@ LOCK_SECONDS = 300
 IDLE_SECONDS = 8 * 3600
 COOKIE = "sgqa_session"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$")
+EMAIL_RE = re.compile(r"^[^@\s<>,;\"']{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -101,6 +102,27 @@ def reset_current_user(token: contextvars.Token) -> None:
     _current.reset(token)
 
 
+def carry_user(fn: Any) -> Any:
+    """23.14.1: fn, run later on another thread, as the person signed in now (their own TFS PAT and project).
+
+    Background work started with threading.Thread or run_in_executor does not inherit the request's signed-in person,
+    so test design, script generation, voice commands, reports and defect analysis used the shared (administrator's)
+    PAT and project instead of the person's own, and found nothing in projects only the person works in."""
+    import functools
+
+    user = current_user()
+
+    @functools.wraps(fn)
+    def run(*args: Any, **kwargs: Any) -> Any:
+        token = _current.set(user)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _current.reset(token)
+
+    return run
+
+
 # ---- passwords ------------------------------------------------------------------------------------------------------
 
 
@@ -152,6 +174,11 @@ class UserStore:
                        "updated_at) VALUES (?, ?, 'admin', ?, 1, ?, ?)",
                        (DEFAULT_ADMIN[0], "Administrator", hash_password(DEFAULT_ADMIN[1], iterations=iterations),
                         stamp, stamp))
+        # 23.13.0: an email address (for the welcome email) and a personal TFS project per account
+        have = {r["name"] for r in db.query("PRAGMA table_info(users)")}
+        for col in ("email", "tfs_project"):
+            if col not in have:
+                db.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
 
     # -- rows --
     @staticmethod
@@ -164,7 +191,8 @@ class UserStore:
                 "role": row["role"], "role_name": ROLES.get(row["role"], row["role"]),
                 "view_only": row["role"] in VIEW_ROLES, "disabled": bool(row["disabled"]),
                 "must_change": bool(row["must_change"]), "created_at": row["created_at"],
-                "last_login_at": row["last_login_at"]}
+                "last_login_at": row["last_login_at"], "email": row.get("email") or "",
+                "tfs_project": row.get("tfs_project") or ""}
 
     def _row(self, user_id: int) -> dict[str, Any]:
         row = self.db.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
@@ -181,8 +209,25 @@ class UserStore:
         return int(row["n"]) if row else 0
 
     # -- admin actions --
-    def create(self, username: str, password: str, role: str, display_name: str = "") -> dict[str, Any]:
+    @staticmethod
+    def check_email(email: str | None) -> str:
+        email = (email or "").strip()
+        if email and not EMAIL_RE.match(email):
+            raise QAError("EMAIL_INVALID", "Enter a valid email address, like name@company.ae.")
+        return email
+
+    def tfs_project_of(self, username: str) -> str:
+        row = self.db.query_one("SELECT tfs_project FROM users WHERE username = ?", ((username or "").strip(),))
+        return (row or {}).get("tfs_project") or ""
+
+    def set_tfs_project(self, username: str, project: str) -> None:
+        self.db.execute("UPDATE users SET tfs_project = ?, updated_at = ? WHERE username = ?",
+                        ((project or "").strip()[:200], now_iso(), (username or "").strip()))
+
+    def create(self, username: str, password: str, role: str, display_name: str = "", *, email: str = "",
+               tfs_project: str = "") -> dict[str, Any]:
         username = (username or "").strip()
+        email = self.check_email(email)
         if not USERNAME_RE.match(username):
             raise QAError("USERNAME_INVALID", "The user name needs 2 to 32 letters, digits, dots, dashes or "
                                               "underscores, starting with a letter or digit.")
@@ -193,14 +238,15 @@ class UserStore:
             raise QAError("USERNAME_TAKEN", f"An account named {username} already exists.", status=409)
         stamp = now_iso()
         cur = self.db.execute(
-            "INSERT INTO users (username, display_name, role, password_hash, must_change, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, 0, ?, ?)",
+            "INSERT INTO users (username, display_name, role, password_hash, must_change, created_at, updated_at, "
+            "email, tfs_project) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)",
             (username, (display_name or "").strip()[:80], role, hash_password(password, iterations=self.iterations),
-             stamp, stamp))
+             stamp, stamp, email, (tfs_project or "").strip()[:200]))
         return self._public(self._row(int(cur.lastrowid)))
 
     def update(self, user_id: int, *, role: str | None = None, display_name: str | None = None,
-               disabled: bool | None = None, password: str | None = None) -> dict[str, Any]:
+               disabled: bool | None = None, password: str | None = None, email: str | None = None,
+               tfs_project: str | None = None) -> dict[str, Any]:
         with self._lock:
             row = self._row(user_id)
             fields: dict[str, Any] = {}
@@ -213,6 +259,10 @@ class UserStore:
                 fields["role"] = role
             if display_name is not None:
                 fields["display_name"] = display_name.strip()[:80]
+            if email is not None:
+                fields["email"] = self.check_email(email)
+            if tfs_project is not None:
+                fields["tfs_project"] = tfs_project.strip()[:200]
             if disabled is not None:
                 if disabled and row["role"] == "admin" and self._active_admins(excluding=user_id) == 0:
                     raise QAError("LAST_ADMIN", "The only admin account cannot be disabled.", status=409)
@@ -349,8 +399,15 @@ VIEW_WRITES = [re.compile(p) for p in (
     r"^/api/schedules/[^/]+/run$",
     r"^/api/reports/[^/]+/pdf$",
     r"^/api/ai-reports/[^/]+/[^/]+/pdf$",
-    r"^/api/voice/(commands|transcribe|warmup|speak)$",
+    r"^/api/voice/(commands|transcribe|warmup|speak|interpret)$",
+    r"^/api/fuse/compare$",  # 23.14.0: compares two messages given in the request; nothing is sent or stored
     r"^/api/app/window$",
+    # 23.12.0: run saved API tests (a view-only account cannot confirm tests that change data; see apitesting)
+    r"^/api/apitest/apps/[^/]+/run$",
+    r"^/api/apitest/runs/[^/]+/cancel$",
+    r"^/api/apitest/results/\d+/rerun$",
+    # 23.14.0: a view-only account may make the PDF report of a result (no data changes)
+    r"^/api/test-actions/[^/]+/[^/]+/pdf$",
 )]
 
 

@@ -4,6 +4,9 @@
     pair     show a new pairing code for the extension (valid 10 minutes, single use)
     check    prerequisite check (Windows version, browsers, runtimes, models, port, vault)
     status   is the companion running on this PC?
+    install-ticket <file>
+             (used by INSTALL.cmd) write a one-time install ticket and the port into <file>, the auto-setup.json of
+             the extension folder in this user's profile, so the extension pairs and signs in by itself
 """
 
 from __future__ import annotations
@@ -50,6 +53,22 @@ def main(argv: list[str] | None = None) -> int:
         code = Pairing(paths.devices_file, paths.pairing_file).new_code()
         print(f"\n  Pairing code for the SkyGuard extension:  {code[:4]}-{code[4:]}\n"
               "  Type it in the extension (Options > Pair with companion). Valid for 10 minutes, single use.\n")
+        return 0
+    if cmd == "install-ticket":
+        import os
+        from pathlib import Path
+
+        from .security import Pairing, Users
+
+        if len(args) < 2:
+            print(__doc__)
+            return 2
+        out = Path(args[1])
+        owner = Users(paths.users_file).owner_for_ticket(os.environ.get("USERNAME") or os.environ.get("USER") or "")
+        ticket = Pairing(paths.devices_file, paths.pairing_file).new_ticket(owner)
+        port = int(Config(paths).get("port"))
+        out.write_text(json.dumps({"port": port, "ticket": ticket}), encoding="utf-8")
+        print(f"The extension will pair and sign in by itself{' as ' + owner if owner else ''} (ticket valid 7 days).")
         return 0
     if cmd != "serve":
         print(__doc__)

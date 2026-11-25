@@ -26,6 +26,8 @@ CATEGORIES: dict[str, tuple[bool, int, str]] = {
     "performance_errors": (True, 2, "Requests failed under load beyond the allowed error rate."),
     "performance_latency": (True, 3, "Response times exceeded the agreed service levels under load."),
     "performance_throughput": (True, 3, "Throughput stayed below the agreed service level."),
+    # 23.12.0: an API test failed (the API Testing rules classify it; qa_platform/apitesting/analysis.py)
+    "api": (True, 3, "The API did not answer as its test expects."),
 }
 
 _VOLATILE = re.compile(r"\b(RUN|PERF|DISC|GEN|REC)-[\w-]+|\d{2,}|0x[0-9a-f]+", re.I)

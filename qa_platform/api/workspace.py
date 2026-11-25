@@ -195,7 +195,11 @@ def mapping_history(pid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
 
 @router.post("/{pid}/run")
 def run(pid: str, rt: Runtime = Depends(runtime)) -> dict[str, Any]:
-    return {"ok": True, "run": _ws(rt).run(pid)}
+    # 23.12.0: the Integration Comparison Agent card reports the run, and confirmed mismatches become review drafts
+    from ..comparison import schedule as cmp_schedule
+
+    _ws(rt)
+    return {"ok": True, "run": cmp_schedule.run(rt, pid)}
 
 
 @router.get("/runs/{exe}")

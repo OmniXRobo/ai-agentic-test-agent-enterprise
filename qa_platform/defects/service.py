@@ -19,6 +19,7 @@ to the open draft as another occurrence instead of a new draft.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 import threading
@@ -27,6 +28,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from ..auth import carry_user
 from .. import auth, branding
 from ..agents.base import BaseAgent
 from ..clock import now_iso
@@ -51,7 +53,9 @@ STATUS_LABELS = {"draft": "Draft", "needs_review": "Needs Review", "approved": "
                  "linked": "Duplicate"}
 SOURCE_LABELS = {"functional": "Guided Browser Automation", "framework": "AI-Driven Automation",
                  "python": "Guided Browser Automation (Python)", "comparison": "Integration Comparison",
-                 "performance": "Performance"}
+                 "performance": "Performance", "api": "API Testing",
+                 # 23.14.0
+                 "security": "Security Testing", "fuse": "Red Hat Fuse Testing", "activemq": "ActiveMQ Testing"}
 MAX_ATTACHMENT = 20 * 1024 * 1024
 
 
@@ -196,6 +200,78 @@ class DefectService:
             self.check_duplicates(saved["id"])
             if automatic and self.mode == "automatic":
                 self._auto_create(saved["id"])
+        return self.get(saved["id"])
+
+    def manual_draft(self, *, source: str, module: str, title: str, severity: int = 2, priority: int = 2,
+                     repro_steps: str = "", assigned_to: str | None = None, run_id: str | None = None) -> dict[str, Any]:
+        """23.13.0: "Create TFS defect" on a module page: a draft a person wrote (it still goes through Defect Review's
+        approval and duplicate check before it is sent to TFS)."""
+        by = self._actor("edit")
+        title = (title or "").strip()[:250]
+        if len(title) < 3:
+            raise QAError("VALIDATION_FAILED", "Write a title of at least 3 characters.", status=422)
+        if source not in SOURCE_LABELS:
+            source = "functional"
+        stamp = now_iso()
+        run = (run_id or "").strip()[:80] or f"MANUAL-{stamp.replace(':', '').replace('-', '')[:15]}"
+        steps = repro_steps.strip() or html.escape(title)
+        if "<" not in steps:
+            steps = "<br>".join(html.escape(line) for line in steps.splitlines())
+        draft = {"source": source, "source_run_id": run,
+                 "signature": hashlib.sha256(f"manual|{module}|{title.lower()}".encode()).hexdigest()[:40],
+                 "category": "manual", "product_defect": True, "title": title, "severity": int(severity),
+                 "priority": int(priority), "repro_steps": steps,
+                 "facts": {"module": module, "reported_by": by, "error": "", "manual": True}, "evidence": []}
+        saved = self._store(draft)
+        if assigned_to is not None:
+            self.db.execute("UPDATE defect_drafts SET assigned_to = ? WHERE id = ?",
+                            ((assigned_to or "").strip()[:256] or None, saved["id"]))
+        if saved.get("_new"):
+            self._event(saved["id"], by, "edited", f"Written on {module}")
+            try:
+                self.check_duplicates(saved["id"])
+            except QAError as exc:
+                log.info(f"Duplicate check skipped: {exc.message}")
+        return self.get(saved["id"])
+
+    def evidence_draft(self, *, source: str, module: str, title: str, severity: int, priority: int, repro_steps: str,
+                       facts: dict[str, Any], run_id: str, signature_seed: str, test_case_id: str | None = None,
+                       source_ref: str | None = None, evidence: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """23.14.0: "Create TFS Defect" on a failed result of Security, Fuse, ActiveMQ or a failed run of an existing
+        module. The draft carries the sanitized facts and goes through Defect Review (editable preview, mandatory TFS
+        fields, duplicate check, approval) before anything is sent to TFS."""
+        by = self._actor("edit")
+        title = (title or "").strip()[:250]
+        if len(title) < 3:
+            raise QAError("VALIDATION_FAILED", "Write a title of at least 3 characters.", status=422)
+        if source not in SOURCE_LABELS:
+            source = "functional"
+        draft = {"source": source, "source_run_id": (run_id or "")[:80] or "MANUAL",
+                 "signature": hashlib.sha256(f"evidence|{source}|{signature_seed}".encode()).hexdigest()[:40],
+                 "category": "manual", "product_defect": True, "title": title,
+                 "severity": max(1, min(4, int(severity))), "priority": max(1, min(4, int(priority))),
+                 "repro_steps": repro_steps, "facts": {"module": module, "reported_by": by, "error": "",
+                                                       "manual": True, **facts},
+                 # 23.15.0: the run's screenshots, traces and result files; attached to the TFS bug when it is sent
+                 "evidence": [e for e in (evidence or []) if e.get("path")][:20], "test_case_id": test_case_id,
+                 "source_ref": source_ref}
+        saved = self._store(draft)
+        if saved.get("_new"):
+            self._event(saved["id"], by, "edited", f"Prepared from {module} evidence")
+            try:
+                self.check_duplicates(saved["id"])
+            except QAError as exc:
+                log.info(f"Duplicate check skipped: {exc.message}")
+        elif saved["status"] in ("draft", "needs_review", "publication_failed", "approved"):
+            # 23.15.0: the same result again: the person's latest preview (title, text, levels) and the files replace
+            # the open draft's, instead of being dropped silently
+            changes = {k: draft[k] for k in ("title", "severity", "priority", "repro_steps")
+                       if draft[k] and draft[k] != saved.get(k)}
+            if changes:
+                self.update(saved["id"], changes)
+            if draft["evidence"] and not saved.get("evidence"):
+                self.db.execute("UPDATE defect_drafts SET evidence = ?, updated_at = ? WHERE id = ?",
+                                (dumps(draft["evidence"]), now_iso(), saved["id"]))
         return self.get(saved["id"])
 
     def record_draft(self, draft: dict[str, Any]) -> dict[str, Any] | None:
@@ -405,7 +481,8 @@ class DefectService:
             return
         if cfg.get("mode") != "on_premise" or not cfg.get("base_url"):
             return  # failure facts are never sent to a cloud AI automatically
-        t = threading.Thread(target=self._ai_quietly, args=(draft_id,), daemon=True, name=f"defect-ai-{draft_id}")
+        t = threading.Thread(target=carry_user(self._ai_quietly), args=(draft_id,), daemon=True,
+                             name=f"defect-ai-{draft_id}")  # 23.14.1
         t.start()
 
     def _ai_quietly(self, draft_id: int) -> None:
@@ -423,10 +500,16 @@ class DefectService:
         draft = self.get(draft_id)
         by = by or (auth.current_user() or auth.LOCAL_PROGRAM).username
         facts = self._facts_for_triage(draft)
-        category = "comparison" if draft["source"] == "comparison" else draft["category"]
+        category = "comparison" if draft["source"] == "comparison" else "api" if draft["source"] == "api" \
+            else draft["category"]
         rules = triage.rules_classify(category, facts)
-        result = triage.ai_classify(self.ai, facts, rules, timeout=float(
-            self.settings.section("defects").get("ai_timeout_seconds") or 90))
+        timeout = float(self.settings.section("defects").get("ai_timeout_seconds") or 90)
+        if draft["source"] == "api":  # 23.12.0: API failures have their own classes and AI instructions
+            from ..apitesting import analysis as api_analysis
+
+            result = api_analysis.ai_view(self.ai, facts, rules, timeout=timeout)
+        else:
+            result = triage.ai_classify(self.ai, facts, rules, timeout=timeout)
         self.db.execute("UPDATE defect_drafts SET classification = ?, confidence = ?, analysis = ?, updated_at = ?"
                         " WHERE id = ?", (result["classification"], result["confidence"], dumps(result), now_iso(), draft_id))
         ai_used = result.get("ai", {}).get("used")
@@ -445,6 +528,9 @@ class DefectService:
         self.db.execute("UPDATE defect_drafts SET status = 'approved', approved_by = ?, approved_at = ?, updated_at = ?"
                         " WHERE id = ?", (by, now_iso(), now_iso(), draft_id))
         self._event(draft_id, by, "approved", note)
+        self.agent.emit(names.DEFECT_APPROVED, f"Defect draft #{draft_id} approved by {by}: {draft['title'][:120]}",
+                        run_id=draft["source_run_id"], details={"draft_id": draft_id,
+                                                                "link": f"#/defect-review?id={draft_id}"})
         return self.get(draft_id)
 
     def reject(self, draft_id: int, reason: str = "") -> dict[str, Any]:
@@ -493,7 +579,9 @@ class DefectService:
     def _publish_patch(self, draft: dict[str, Any], corr: str,
                        extra: dict[str, Any] | None = None) -> tuple[str, list[dict[str, Any]], list[str]]:
         type_name = self.tfs.default_type("bug")  # Bug, Defect or Issue, from the process
-        kind = {"performance": "Performance", "comparison": "Integration Comparison"}.get(draft["source"], "Functional")
+        kind = {"performance": "Performance", "comparison": "Integration Comparison",
+                "api": "API Testing", "security": "Security Testing", "fuse": "Red Hat Fuse Testing",
+                "activemq": "ActiveMQ Testing"}.get(draft["source"], "Functional")
         values: dict[str, Any] = {
             "System.Title": draft["title"],
             "Microsoft.VSTS.TCM.ReproSteps": draft["repro_steps"],
@@ -501,6 +589,8 @@ class DefectService:
             "Microsoft.VSTS.Common.Severity": self._severity_value(type_name, draft["severity"]),
             "System.Tags": f"QA-Automation; {kind}; SkyGuard-{corr}",
         }
+        if draft.get("assigned_to"):  # 23.13.0: chosen in Defect Review from the TFS project's people
+            values["System.AssignedTo"] = draft["assigned_to"]
         values.update(self._environment_values(type_name, draft))  # Environment, System Info
         values.update({k: v for k, v in (extra or {}).items() if v not in (None, "")})
         patch, skipped = self.tfs.build_patch(type_name, values)
@@ -674,7 +764,10 @@ class DefectService:
         if draft["status"] in ("created", "linked", "publishing"):
             raise QAError("DEFECT_LOCKED", "This draft is already in TFS (or being sent); edit the defect there.",
                           status=409)
-        allowed = {k: v for k, v in values.items() if k in ("title", "severity", "priority", "repro_steps") and v is not None}
+        allowed = {k: v for k, v in values.items()
+                   if k in ("title", "severity", "priority", "repro_steps", "assigned_to") and v is not None}
+        if "assigned_to" in allowed:
+            allowed["assigned_to"] = str(allowed["assigned_to"]).strip()[:256] or None
         if not allowed:
             return draft
         by = self._actor("edit")

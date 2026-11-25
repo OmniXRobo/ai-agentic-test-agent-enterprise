@@ -1,8 +1,40 @@
-r"""SkyGuard QA 23.11.1 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
-23.8.0, 23.9.0, 23.10.0 and 23.11.0). 23.11.1 repairs the AI Agent: the intent of a command is decided first (a navigation
+r"""SkyGuard QA 23.15.0 cumulative upgrade from 23.3.35 (includes 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2,
+23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, 23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3, 23.14.0 and 23.14.1).
+23.15.0 makes "Create TFS Defect" work from every result (a severity sent as a number was refused with "Request
+validation failed"), with readable steps, expected and actual, the run's screenshots and report files attached, and a
+defect that really reaches TFS after approval; performance results create a defect whether they passed or failed. The
+agent (now the Workflow Operator, extension 1.5.0) shows one preview and runs it on "yes" instead of waiting, fills what
+a request leaves unsaid from what you typed while teaching and from your own usual values, turns one request into many
+records ("10 trips, one per day, these drivers"), and keeps the sign-in password and authorization code typed while
+teaching in the credential store, masked (a one-time code is never kept). Arabic that speech recognition misspells is
+understood and answered in Arabic, and the voice popup can listen always, with no button between requests.
+23.14.1 makes TFS
+fast again with personal PATs and projects (connections reused, one credential lookup instead of one per call, shared
+queries, a Dashboard that never waits forever for TFS, a quicker Connection Test) and keeps the signed-in person's PAT and
+project in background work. 23.14.0 adds Security
+Testing (eight screens, OWASP checks, read-only discovery, offline OWASP ZAP integration, bounded fuzzing), Red Hat Fuse
+Integration Testing (Karaf / Spring Boot / EAP through Jolokia or actuator, or black box; read-only), ActiveMQ Classic and
+Artemis testing (test destinations only), the same result actions everywhere (Analyze with AI, Create TFS Defect,
+Generate PDF Report, Email Developer, View Evidence, Retest), intranet SMTP settings with send history, dashboard
+figures, the new agents in Agent Workflow and voice commands for the new modules; the installed Arabic voice and speech
+model are detected and kept, never replaced or downloaded. 23.13.3 translates spoken Arabic literally ("open page") and asks a clean question with page buttons. 23.13.2 speaks the AI Agent replies (English or Arabic, page and extension 1.4.2). 23.13.1 adds offline Arabic voice replies (male or female) and the speech model / Arabic voice install helpers. 23.13.0 runs AI-Driven Automation, Application
+Discovery and Hybrid Test Automation in Microsoft Edge when Edge is preferred (no Chromium needed), keeps the element a
+tester picked during self-healing so later runs do not ask again, repairs the AI Agent (lifecycle list, public sites
+without sign-in, changing addresses, one browser for a chat, Arabic commands), the API Testing Open button and its
+offline TLS check, Arabic voice commands with Arabic replies and the male / female voice choice, adds the TFS
+"Assign to" list in Defect Review, a personal TFS project and PAT per account with a welcome email and user manual,
+HTTPS with a friendly name, clickable dashboard charts, and "Generate AI result", "Create TFS defect" and "Send email"
+on every testing module. From 23.12.0: API Testing (Automation Studio > API Testing:
+authorized targets, Test Connection diagnostics, offline OpenAPI / Swagger import, generated tests, chains, pytest + httpx
+scripts, failure classification and Defect Review drafts), API tests and Integration Comparisons in Scheduled Runs with
+Visible / Headless / Smart Auto execution modes, the new Agent Workflow agents with real availability, and a larger
+Python editor (full screen, adjustable height). From 23.11.2, which fixes the AI Agent's missing-information follow-up: an answer
+such as "First Name; muhammad" is read field by field, kept across turns, and only what is still missing is asked
+again; a postal code is no longer taken for a secret code; an application that never shows the signed-in user name
+can run operations that no role restricts after it accepts the account's own sign-in. From 23.11.1, which repairs the AI Agent: the intent of a command is decided first (a navigation
 opens a page and never runs a task), a plan is tied to its request and application, the confirmation is checked by
 the server, learning covers multi-step and multi-role record flows and is tested after Stop & save, suggestions come
-from what was learned, and the browser extension 1.3.0 files (Start/Stop learning, reconnect). From 23.11.0: editable Python tests in Guided Browser Automation (versions, validation, the saved
+from what was learned, and the browser extension files (now 1.3.1; Start/Stop learning, reconnect). From 23.11.0: editable Python tests in Guided Browser Automation (versions, validation, the saved
 version is the one run and downloaded), the Smart Wait service shared by the runner and the exported Python (Wait
 settings, Insert waits, + Wait), one Defect Review for every failure (drafts that need approval before anything is sent
 to TFS; publishing confirmed by reading the work item back, with retry and reconciliation), Integration Comparison
@@ -20,25 +52,30 @@ Every step is printed; nothing is downloaded.
     python install_patch.py rollback --app <app folder> [--backup <backup folder>] [--restore-database]
 
 apply:
-  1. detects the installation and its version (23.3.35 to 23.11.0; 23.11.1 to apply again); any other version is
+  1. detects the installation and its version (23.3.35 to 23.14.1; 23.15.0 to apply again); any other version is
      refused before anything is changed (``detect`` prints what was found as JSON, for the Setup wizard),
   2. checks every file of the patch against PATCH_MANIFEST.json (SHA-256), the OCR wheels included,
   3. checks free disk space and that the application and data folders can be written. A protected application folder
      (for example a machine-wide programs folder, which a standard user cannot change) is never forced: the installer stops and
      explains, or with --side-by-side <folder> copies the application to a folder of the user (by default
-     %LOCALAPPDATA%\SkyGuardQA\app-23.11.1), patches that copy and writes START_SKYGUARD_23.11.1.cmd next to it; the
+     %LOCALAPPDATA%\SkyGuardQA\app-23.15.0), patches that copy and writes START_SKYGUARD_23.15.0.cmd next to it; the
      original folder and the data are not changed,
   4. checks the application is not running (its port does not answer),
   5. backs up every application file it replaces, the database and the agent's knowledge database (SQLite online
-     backup) and settings.json,
+     backup) and settings.json, and records the installed voice setup (Faster-Whisper runtime and models, Piper and
+     its Arabic voices, the voice settings) to prove afterwards that none of it was changed,
   6. copies the new files (each written to a temporary name, then renamed),
   7. installs the offline OCR runtime (RapidOCR, ONNX Runtime, OpenCV, NumPy, Pillow: wheels for 64-bit Windows and
      Python 3.13, carried in the patch) into runtime\ocr\site-packages, or into %LOCALAPPDATA%\SkyGuardQA\ocr when
      the application folder cannot be written. The wheels are unpacked into a staging folder first; the folder in use
      is replaced only when the staging folder is complete, and the previous runtime is kept for rollback. Nothing is
      installed into the system Python and no registry key or PATH is changed,
-  8. migrates: the main database is brought to 20 migrations (23.11.0 adds migration 20: review columns on
-     defect_drafts, defect_events, script_python and script_python_state; 23.9.0, 23.10.0 and 23.11.1 add none); the Operations Agent's knowledge database is created or
+  8. migrates: the main database is brought to 23 migrations (23.14.0 adds migration 23: itest_targets, itest_runs,
+     itest_results, itest_cases, itest_audit, sec_findings, sec_app_maps, ai_analyses and email_outbox; 23.13.0 adds migration 22: defect_drafts.assigned_to;
+     the accounts table gets email and tfs_project when the application starts; 23.12.0 adds migration 21: the API Testing tables
+     api_apps, api_tests, api_test_versions, api_suites, api_runs, api_results, api_scripts and api_audit; 23.11.0 adds
+     migration 20: review columns on defect_drafts, defect_events, script_python and script_python_state; 23.9.0,
+     23.10.0, 23.11.1 and 23.11.2 add none); the Operations Agent's knowledge database is created or
      migrated to schema 2 and gets the simple agent's conversation_state table (23.10.0),
   9. verifies: the new version loads, the agent core, the comparison workspace with filters and semantics, the OCR
      engine probe (on Windows with Python 3.13), every migration, PRAGMA integrity_check for both databases and no
@@ -48,7 +85,7 @@ apply:
 
 rollback (after a successful apply): restores the previous application files, removes the files the patch added and
 puts back the OCR runtime that was there before (or removes the one the patch installed). The databases are kept as
-they are by default (23.10.0 and 23.11.0 only add tables and columns that earlier versions ignore); --restore-database puts back the copy taken before the
+they are by default (23.10.0, 23.11.0, 23.12.0 and 23.13.0 only add tables and columns that earlier versions ignore); --restore-database puts back the copy taken before the
 upgrade instead (the current database is kept next to it, renamed).
 """
 
@@ -67,15 +104,16 @@ import time
 import zipfile
 from pathlib import Path
 
-PATCH_VERSION = "23.11.1"
-BASELINE = "23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0 or 23.11.0"
+PATCH_VERSION = "23.15.0"
+BASELINE = ("23.3.35, 23.4.0, 23.5.0, 23.6.0, 23.6.1, 23.7.0, 23.7.1, 23.7.2, 23.8.0, 23.9.0, 23.10.0, 23.11.0, 23.11.1, "
+            "23.11.2, 23.12.0, 23.13.0, 23.13.1, 23.13.2, 23.13.3, 23.14.0 or 23.14.1")
 RELEASES = ("23.3.35", "23.4.0", "23.5.0", "23.6.0", "23.6.1", "23.7.0", "23.7.1", "23.7.2", "23.8.0", "23.9.0", "23.10.0",
-            "23.11.0")
+            "23.11.0", "23.11.1", "23.11.2", "23.12.0", "23.13.0", "23.13.1", "23.13.2", "23.13.3", "23.14.0", "23.14.1")
 BASELINES = (*RELEASES, PATCH_VERSION)
 OCR_PACKAGES = ("rapidocr", "onnxruntime", "cv2", "numpy", "PIL")
 MSVC_DIR = "_msvc"  # Microsoft C++ runtime DLLs for the OCR worker (see ocr_worker._load_msvc)
-AGENT_SCHEMA = 2
-MIGRATION_COUNT = 20
+AGENT_SCHEMA = 3  # 23.15.0: app_secrets (an authorization code learned once, kept in the vault)
+MIGRATION_COUNT = 23
 MARGIN_MB = 300
 
 
@@ -89,6 +127,47 @@ def _copy(src, dst):
 
 class PatchError(Exception):
     pass
+
+
+# Waits between attempts when Windows reports a file or folder in use (about three minutes in all): Microsoft Defender or
+# a company antivirus scanning files that were just written, or the search indexer. Reported on a new Windows 11 PC as
+# "[WinError 5] Access is denied" when a folder of new files was renamed.
+RETRY_DELAYS = (1, 1, 2, 2, 3, 3, 5, 5, 8, 10, 10, 15, 15, 20, 20, 30, 30)
+_sleep = time.sleep
+
+
+def replace_retry(src, dst, delays=None) -> None:
+    """os.replace, retried while Windows reports the source or the target in use. Raises the last OSError."""
+    delays = RETRY_DELAYS if delays is None else delays
+    for attempt in range(len(delays) + 1):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError as exc:
+            if attempt == len(delays):
+                raise
+            if attempt == 0:
+                say(f"  {Path(src).name}: Windows reports it in use ({exc.strerror or exc}); waiting and trying again "
+                    "(usually antivirus scanning new files).")
+            _sleep(delays[attempt])
+
+
+def move_folder_into_place(staging: Path, live: Path) -> str:
+    """Rename a freshly written folder into place, retrying; if Windows still refuses, copy it (copying only reads the
+    files, which antivirus allows) and remove the staging folder when it can. Returns "renamed" or "copied"."""
+    try:
+        replace_retry(staging, live)
+        return "renamed"
+    except OSError as exc:
+        say(f"  {staging.name} could not be renamed ({exc}); copying its files into place instead.")
+    try:
+        shutil.copytree(staging, live)
+    except (OSError, shutil.Error) as exc:
+        shutil.rmtree(live, ignore_errors=True)
+        raise PatchError(f"Windows kept the new files in use, so they could not be put in place ({exc}). Wait two "
+                         "minutes and run Setup again; if it happens again, restart the PC first.") from exc
+    shutil.rmtree(staging, ignore_errors=True)
+    return "copied"
 
 
 def say(msg: str) -> None:
@@ -319,8 +398,13 @@ def install_ocr(patch_dir: Path, app: Path, python: str, stamp: str, force: bool
     previous = None
     if live.exists():
         previous = base / f"site-packages.before-{PATCH_VERSION}-{stamp}"
-        os.replace(live, previous)
-    os.replace(staging, live)
+        replace_retry(live, previous)
+    try:
+        move_folder_into_place(staging, live)
+    except PatchError:
+        if previous is not None and not live.exists():
+            replace_retry(previous, live)
+        raise
     say(f"OCR runtime installed: {live}" + (f" (previous runtime kept as {previous.name})" if previous else ""))
     return {"installed": True, "site": str(live), "previous": str(previous) if previous else None}
 
@@ -332,7 +416,7 @@ def restore_ocr(info: dict | None) -> None:
     if live.exists():
         shutil.rmtree(live, ignore_errors=True)
     if info.get("previous") and Path(info["previous"]).exists():
-        os.replace(info["previous"], live)
+        replace_retry(info["previous"], live)
         say(f"Previous OCR runtime restored: {live}")
     else:
         say(f"OCR runtime removed: {live}")
@@ -361,7 +445,11 @@ def side_by_side(app: Path, data: Path, target: Path, python: str) -> Path:
 MIGRATE = ("import sys; sys.path.insert(0, '.'); from qa_platform.config import Paths; "
            "from qa_platform.storage.db import Database; p = Paths().ensure(); d = Database(p.db_file); "
            "print(d.query_one('SELECT MAX(version) AS v FROM schema_version')['v']); d.close()")
-LOADS = "import sys; sys.path.insert(0, '.'); import qa_platform, qa_platform.main; print(qa_platform.__version__)"
+# Every API module is imported too: create_app imports them only when the server starts, so a route that needs a
+# package the runtime lacks (23.12.0 found python-multipart this way, in CI) would otherwise pass this check.
+LOADS = ("import sys; sys.path.insert(0, '.'); import importlib, pkgutil, qa_platform, qa_platform.main, qa_platform.api as p; "
+         "[importlib.import_module('qa_platform.api.' + m.name) for m in pkgutil.iter_modules(p.__path__)]; "
+         "print(qa_platform.__version__)")
 AGENT_LOADS = ("import sys; sys.path.insert(0, '.'); import skyguard_agent, skyguard_agent.agent, qa_platform.opsagent.service, "
                "qa_platform.api.opsagent; print(skyguard_agent.__version__)")
 COMPONENTS_LOAD = ("import sys; sys.path.insert(0, '.'); from qa_platform.automation import components, semantic, runner, site_diagnostic, live_check; "
@@ -430,7 +518,7 @@ RELEASE_2311_LOAD = ("import sys; sys.path.insert(0, '.'); from pathlib import P
                      "v = python_scripts.validate('import subprocess\\n'); "
                      "print('ok' if smart_wait.clean_policy({'enabled': True, 'mode': 'smart'})['enabled'] "
                      "and '# --- SMART WAIT BEGIN' in smart_wait.embedded_source() and not v['ok'] "
-                     "and 'publication_failed' in ds.OPEN_STATUSES and len(triage.CLASSES) == 6 "
+                     "and 'publication_failed' in ds.OPEN_STATUSES and {'application_defect', 'automation_script', 'test_data', 'environment', 'timing', 'inconclusive'} <= set(triage.CLASSES) "
                      "and any(r.path.endswith('/publish') for r in dapi.router.routes) "
                      "and Path('web/js/python-editor.js').is_file() and Path('web/js/smart-wait-ui.js').is_file() "
                      "else 'Python editor, Smart Wait or Defect Review incomplete')")
@@ -443,9 +531,242 @@ AGENT_REPAIR_231101_LOAD = ("import sys; sys.path.insert(0, '.'); "
                             "and hasattr(Autopilot, 'verify_retrieval') and hasattr(Autopilot, 'suggestions') "
                             "and any(p.endswith('/suggestions') for p in paths) and any(p.endswith('/verify/{app_id}') for p in paths) "
                             "else 'AI Agent repair incomplete')")
+MISSING_INFO_231102_LOAD = ("import sys; sys.path.insert(0, '.'); "
+                            "from skyguard_agent.autopilot import parse_answer; from skyguard_agent import secrets_guard, sessions; "
+                            "f = [{'label': 'First Name', 'name': 'firstName'}, {'label': 'Last Name', 'name': 'lastName'}, "
+                            "{'label': 'Zip/Postal Code', 'name': 'postalCode'}]; "
+                            "print('ok' if parse_answer('First Name; muhammad', f) == ({'First Name': 'muhammad'}, []) "
+                            "and parse_answer('pre pare it', f) == ({}, []) "
+                            "and not secrets_guard.inspect('Zip/Postal Code: 54000').contains_secret "
+                            "and secrets_guard.inspect('the code is 482913').contains_secret "
+                            "and 'sign_in_confirmed' in sessions.SessionState().to_dict() "
+                            "else 'Missing information follow-up incomplete')")
+API_TESTING_231200_LOAD = r"""
+import sys
+sys.path.insert(0, '.')
+from qa_platform.apitesting import importers, safety, scriptgen, service
+from qa_platform.agents.registry import AGENTS
+spec = importers.import_openapi({'a.yaml': 'openapi: 3.0.3\ninfo: {title: T, version: "1"}\npaths:\n  /x:\n    get:\n'
+                                           '      responses:\n        "200": {description: ok}\n'}, 'a.yaml')
+pol = safety.Policy(['10.1.1.1:8080'], own_port=8765, resolver=lambda h, p: [h])
+try:
+    pol.check_url('http://127.0.0.1:8765/api/users')
+    own_refused = False
+except Exception:
+    own_refused = True
+ids = [a.id for a in AGENTS]
+ok = (len(spec['endpoints']) == 1 and own_refused and pol.check_url('http://10.1.1.1:8080/x')
+      and scriptgen.validate('import httpx\n')['ok'] and ids.count('api_testing') == 1 and len(ids) == len(set(ids)))
+print('ok' if ok else 'API Testing incomplete')
+"""
+RELEASE_231300_LOAD = r"""
+import sys
+sys.path.insert(0, '.')
+from pathlib import Path
+from qa_platform.automation import browser
+from qa_platform.automation.runner import url_matches
+from qa_platform import https_setup, welcome
+from qa_platform.reports.ai_reports import MODULES
+from qa_platform.api import defects as dapi
+from skyguard_agent.translate import to_english
+from skyguard_agent.knowledge import same_site
+paths = {r.path for r in dapi.router.routes}
+ok = (browser.fallback_order('msedge')[0] == 'msedge'
+      and url_matches('https://www.emirates.com/99887abcdef12', 'https://www.emirates.com/3432432dffdsf')
+      and to_english('سجل الدخول كمدير')[0] == 'log in as manager'
+      and same_site('https://book.emirates.com/x', {'origins': ['https://www.emirates.com']})
+      and https_setup.check_hostname('SkyGuard-QA') == 'skyguard-qa'
+      and 'analytics' in MODULES and any(p.endswith('/assignees') for p in paths) and any(p.endswith('/manual') for p in paths)
+      and Path('web/js/module-actions.js').is_file() and Path('ENABLE_HTTPS.cmd').is_file())
+print('ok' if ok else '23.13.0 features incomplete')
+"""
+RELEASE_231301_LOAD = r"""
+from pathlib import Path
+from qa_platform.voice.piper import PiperVoice
+from qa_platform.voice.tts import SystemVoice, parse_voices
+from skyguard_agent.translate import strip_arabic_wake, by_words
+ok = (strip_arabic_wake('\u0643\u0627\u0628\u062f\u0627\u0646 \u0627\u0641\u062a\u0627 \u0635\u0641\u0627', ['Captain']) is not None
+      and by_words('\u0627\u0641\u062a\u0627 \u0635\u0641\u0627') == 'open page'
+      and hasattr(SystemVoice, 'arabic_choice') and hasattr(PiperVoice, 'arabic_voices')
+      and all(Path(f).is_file() for f in ('INSTALL_SPEECH_MODEL.cmd', 'INSTALL_SPEECH_MODEL.ps1', 'GET_FASTER_WHISPER_MODEL.ps1',
+                                          'INSTALL_ARABIC_VOICE.cmd', 'INSTALL_ARABIC_VOICE.ps1', 'GET_ARABIC_VOICE.ps1')))
+print('ok' if ok else '23.13.1 features incomplete')
+"""
+RELEASE_231302_LOAD = r"""
+from pathlib import Path
+from skyguard_agent.translate import spoken_reply
+from skyguard_agent import speech
+ok = (spoken_reply({'type': 'navigate', 'text': 'Opening the booking page https://x.ae/b'}, False) == {'speak': 'Opening the booking page', 'language': 'en'}
+      and spoken_reply({'type': 'navigate', 'text': 'Opening the booking page'}, True)['language'] == 'ar'
+      and hasattr(speech, 'render_arabic') and 'sayReply' in Path('web/js/pages/ai-agent.js').read_text(encoding='utf-8'))
+print('ok' if ok else '23.13.2 features incomplete')
+"""
+RELEASE_231303_LOAD = r"""
+from pathlib import Path
+from skyguard_agent.translate import to_english
+from skyguard_agent.autopilot import page_names
+ok = (to_english('\u0625\u0641\u062a\u0627\u062d\u0629 \u0635\u0641\u062d\u0629') == ('open page', True)
+      and page_names([{'name': 'Book Flights | Find Hotels | Emirates'}, {'name': '/ae/english/book'}, {'name': 'book flights'}], {'name': 'Emirates (Test)'}) == ['Book Flights']
+      and all(w in Path('web/js/pages/ai-agent.js').read_text(encoding='utf-8') for w in ('r.options', 'runLine')))
+print('ok' if ok else '23.13.3 features incomplete')
+"""
+
+RELEASE_231400_LOAD = r"""
+from pathlib import Path
+from qa_platform.agents.registry import AGENTS
+from qa_platform.amqtest.jolokia import JolokiaClient
+from qa_platform.fusetest.compare import compare
+from qa_platform.itest.common import ID_RE
+from qa_platform.voice.intents import parse
+from skyguard_agent.translate import to_english
+need = {'vulnerability_assessment', 'fuse_route_discovery', 'broker_discovery', 'ai_bug_analysis', 'email_developer', 'pdf_reporting'}
+web = Path('web/js')
+ok = (need <= {a.id for a in AGENTS}
+      and compare('{"a": 1.0}', '{"a": 1}', rules={'numeric_tolerance': 0.01})['match']
+      and not ID_RE.match('..') and hasattr(JolokiaClient, 'exec_read_only')
+      and parse(to_english('\u0627\u0628\u062f\u0623 \u0641\u062d\u0635 \u0623\u0645\u0646\u064a')[0]).params['route'] == 'sec-scanning'
+      and all((web / f).is_file() for f in ('result-actions.js', 'pages/security.js', 'pages/integration-testing.js', 'pages/itest-ui.js'))
+      and 'sec-assessment' in (web / 'app.js').read_text(encoding='utf-8'))
+print('ok' if ok else '23.14.0 features incomplete')
+"""
+
+RELEASE_231401_LOAD = r"""
+from qa_platform.auth import carry_user
+from qa_platform.reports.analytics import DASHBOARD_TFS_BUDGET
+from qa_platform.tfs.client import tls_context
+from qa_platform.tfs.service import TfsService, TTLCache
+from pathlib import Path
+ok = (callable(carry_user) and DASHBOARD_TFS_BUDGET > 0 and hasattr(TfsService, 'shared_client')
+      and hasattr(TfsService, '_shared_pat') and '_flights' in TTLCache(1).__dict__
+      and tls_context() is tls_context()
+      and 'pendingTries' in Path('web/js/pages/dashboard.js').read_text(encoding='utf-8'))
+print('ok' if ok else '23.14.1 TFS speed fixes incomplete')
+"""
+
+RELEASE_231500_LOAD = r"""
+import json
+from pathlib import Path
+from qa_platform.api.test_actions import DefectIn
+from qa_platform.itest.actions import ActionService
+from skyguard_agent.autopilot import CONFIRM_WORDS, Autopilot
+from skyguard_agent.knowledge import KnowledgeBase
+from skyguard_agent.translate import by_words, fuzzy_word
+from qa_platform.voice.intents import near_page, parse
+web = Path('web/js')
+ext = Path('web/js/wav-recorder.js').read_text(encoding='utf-8')
+ok = (DefectIn(severity=3, priority='2 - High').severity == 3           # the page's numbers are accepted again
+      and DefectIn(severity='2 - High').severity == 2
+      and all(hasattr(ActionService, m) for m in ('defect_text', 'text_to_html', '_attachments', '_facts_perf'))
+      and bool(CONFIRM_WORDS.match('yes')) and bool(CONFIRM_WORDS.match('\u0646\u0639\u0645'))
+      and 'reuse_values' in Autopilot.__init__.__code__.co_varnames
+      and all(hasattr(KnowledgeBase, m) for m in ('capture_secret', 'app_secrets', 'app_secret_value', 'forget_app_secret'))
+      and fuzzy_word('\u0625\u0641\u062a\u0627\u0621') == 'open'
+      and parse(by_words('\u0625\u0641\u062a\u0627\u0621 \u0627\u0644\u0625\u0634\u0627\u0631\u0627\u062a')).params['route'] == 'notifications'
+      and near_page('open the dashbord') == 'dashboard'
+      and parse('open workflow operator').params['route'] == 'ai-agent'
+      and 'silenceMs' in ext
+      and 'setHandsFree' in (web / 'voice.js').read_text(encoding='utf-8')
+      and 'Workflow Operator' in (web / 'app.js').read_text(encoding='utf-8'))
+print('ok' if ok else '23.15.0 features incomplete')
+"""
+
+ITEST_TABLES = {"itest_targets", "itest_runs", "itest_results", "itest_cases", "itest_audit", "sec_findings", "sec_app_maps",
+                "ai_analyses", "email_outbox"}
+VOICE_SECTION_KEYS = ("stt_engine", "stt_api", "language", "fw_model", "fw_port", "fw_compute_type", "radio_voice",
+                      "arabic_voice_gender", "tts_voice", "speak_replies")
 
 
-def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None) -> dict:
+def voice_inventory(app: Path, data: Path) -> dict:
+    """The installed voice setup, read from the folders and settings.json only (nothing is imported, started or
+    downloaded): Faster-Whisper runtime and models, Piper and its voices, and the voice settings. Used before and after
+    the upgrade to prove the working Arabic voice was kept, and by verify to say what is missing."""
+    homes_fw = [p for p in (app / "runtime" / "faster-whisper", app.parent / "runtime" / "faster-whisper",
+                            data / "faster-whisper") if p.is_dir()]
+    homes_pp = [p for p in (app / "runtime" / "piper", app.parent / "runtime" / "piper", data / "piper") if p.is_dir()]
+    env_fw, env_pp = os.environ.get("QA_FASTER_WHISPER_DIR"), os.environ.get("QA_PIPER_DIR")
+    homes_fw += [Path(env_fw)] if env_fw and Path(env_fw).is_dir() else []
+    homes_pp += [Path(env_pp)] if env_pp and Path(env_pp).is_dir() else []
+
+    def tree_sig(folder: Path) -> str:  # names, sizes and times: cheap, and any replacement changes it
+        h = hashlib.sha256()
+        for f in sorted(folder.rglob("*")):
+            if f.is_file():
+                st = f.stat()
+                h.update(f"{f.relative_to(folder).as_posix()}|{st.st_size}|{int(st.st_mtime)}".encode())
+        return h.hexdigest()[:16]
+
+    models = {}
+    for h in homes_fw:
+        if (h / "models").is_dir():
+            for m in sorted((h / "models").iterdir()):
+                if m.is_dir() and (m / "model.bin").is_file():
+                    models[m.name] = {"path": str(m), "signature": tree_sig(m), "multilingual": not m.name.endswith(".en")}
+    voices = {}
+    piper_exe = None
+    for h in homes_pp:
+        for base in (h, h / "piper"):
+            for n in ("piper.exe", "piper"):
+                if piper_exe is None and (base / n).is_file():
+                    piper_exe = str(base / n)
+        for folder in (h / "voices", h):
+            if folder.is_dir():
+                for onnx in sorted(folder.glob("*.onnx")):
+                    if onnx.with_suffix(".onnx.json").is_file():
+                        voices[onnx.stem] = {"path": str(onnx), "size": onnx.stat().st_size,
+                                             "arabic": onnx.stem.lower().startswith("ar")}
+    try:
+        settings = json.loads((data / "settings.json").read_text(encoding="utf-8")) if (data / "settings.json").is_file() else {}
+    except (OSError, ValueError):
+        settings = {}
+    v = settings.get("voice") or {}
+    section = {k: v.get(k) for k in VOICE_SECTION_KEYS if k in v}
+    fw_runtime = next((str(h) for h in homes_fw if (h / "lib" / "faster_whisper").is_dir()), None)
+    return {"faster_whisper_runtime": fw_runtime, "models": models, "piper": piper_exe, "voices": voices,
+            "settings": section, "settings_signature": hashlib.sha256(json.dumps(v, sort_keys=True).encode()).hexdigest()[:16]}
+
+
+def voice_findings(inv: dict) -> list[tuple[str, str]]:
+    """(status, text) lines for the voice report: what is installed and what is missing (with the helper to run)."""
+    out: list[tuple[str, str]] = []
+    lang = str((inv.get("settings") or {}).get("language") or "en")
+    multi = [m for m, d in inv["models"].items() if d["multilingual"]]
+    out.append(("PASS" if inv["faster_whisper_runtime"] else "WARN", f"Faster-Whisper runtime: {inv['faster_whisper_runtime']}"
+                if inv["faster_whisper_runtime"] else "Faster-Whisper runtime not found (the built-in recognizer is used). "
+                "Run INSTALL_SPEECH_MODEL.cmd with the offline package to add it."))
+    if lang.split("-")[0] in ("ar", "auto"):
+        out.append(("PASS" if multi else "WARN", f"Arabic-capable speech model: {', '.join(multi)}" if multi else
+                    "No Arabic-capable speech model (for example models\\small.ar). Run INSTALL_SPEECH_MODEL.cmd with the "
+                    "offline model folder; nothing is downloaded by this installer."))
+    else:
+        out.append(("PASS", f"Speech models: {', '.join(inv['models']) or 'none'} (speech language {lang})"))
+    ar = [n for n, d in inv["voices"].items() if d["arabic"]]
+    out.append(("PASS" if inv["piper"] and ar else "WARN", f"Offline Arabic voice: {', '.join(ar)} (Piper)" if inv["piper"] and ar
+                else "No offline Arabic voice (Piper with ar_JO-kareem). Windows Arabic voices (Hoda) are used when installed; "
+                "run INSTALL_ARABIC_VOICE.cmd with the offline voice files to add Kareem."))
+    return out
+
+
+def voice_preserved(before: dict, after: dict) -> tuple[bool, str]:
+    changed = []
+    for kind in ("models", "voices"):
+        for name, d in before[kind].items():
+            if name not in after[kind]:
+                changed.append(f"{name} removed")
+            elif d != after[kind][name]:
+                changed.append(f"{name} changed")
+    if before["settings_signature"] != after["settings_signature"]:
+        changed.append("voice settings changed")
+    if before["piper"] and not after["piper"]:
+        changed.append("Piper removed")
+    if before["faster_whisper_runtime"] and not after["faster_whisper_runtime"]:
+        changed.append("Faster-Whisper runtime removed")
+    n = len(before["models"]) + len(before["voices"])
+    return (not changed, f"{n} speech model(s) / voice(s) and the voice settings unchanged" if not changed
+            else "; ".join(changed[:6]))
+
+
+def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | None = None,
+           voice_before: dict | None = None) -> dict:
     report: dict = {"checks": []}
 
     def check(name: str, ok: bool, detail: str) -> None:
@@ -504,6 +825,62 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
     except PatchError as exc:
         check("AI Agent repair (23.11.1)", False, str(exc))
     try:
+        r112 = run_py(python, app, data, MISSING_INFO_231102_LOAD).splitlines()[-1]
+        check("Missing information follow-up (23.11.2)", r112 == "ok", r112)
+    except PatchError as exc:
+        check("Missing information follow-up (23.11.2)", False, str(exc))
+    try:
+        r120 = run_py(python, app, data, API_TESTING_231200_LOAD).splitlines()[-1]
+        check("API Testing and new agents (23.12.0)", r120 == "ok", r120)
+    except PatchError as exc:
+        check("API Testing and new agents (23.12.0)", False, str(exc))
+    try:
+        r130 = run_py(python, app, data, RELEASE_231300_LOAD).splitlines()[-1]
+        check("Edge, healing, AI Agent, HTTPS (23.13.0)", r130 == "ok", r130)
+    except PatchError as exc:
+        check("Edge, healing, AI Agent, HTTPS (23.13.0)", False, str(exc))
+    try:
+        r131 = run_py(python, app, data, RELEASE_231301_LOAD).splitlines()[-1]
+        check("Arabic voice replies and speech model helpers (23.13.1)", r131 == "ok", r131)
+    except PatchError as exc:
+        check("Arabic voice replies and speech model helpers (23.13.1)", False, str(exc))
+    try:
+        r132 = run_py(python, app, data, RELEASE_231302_LOAD).splitlines()[-1]
+        check("Spoken AI Agent replies in English and Arabic (23.13.2)", r132 == "ok", r132)
+    except PatchError as exc:
+        check("Spoken AI Agent replies in English and Arabic (23.13.2)", False, str(exc))
+    try:
+        r133 = run_py(python, app, data, RELEASE_231303_LOAD).splitlines()[-1]
+        check("Arabic commands translated literally, page choices (23.13.3)", r133 == "ok", r133)
+    except PatchError as exc:
+        check("Arabic commands translated literally, page choices (23.13.3)", False, str(exc))
+    try:
+        r140 = run_py(python, app, data, RELEASE_231400_LOAD).splitlines()[-1]
+        check("Security, Fuse, ActiveMQ, result actions, voice (23.14.0)", r140 == "ok", r140)
+    except PatchError as exc:
+        check("Security, Fuse, ActiveMQ, result actions, voice (23.14.0)", False, str(exc))
+    try:
+        r141 = run_py(python, app, data, RELEASE_231401_LOAD).splitlines()[-1]
+        check("TFS speed and personal PAT / project in background work (23.14.1)", r141 == "ok", r141)
+    except PatchError as exc:
+        check("TFS speed and personal PAT / project in background work (23.14.1)", False, str(exc))
+    try:
+        r150 = run_py(python, app, data, RELEASE_231500_LOAD).splitlines()[-1]
+        check("TFS defects from every result, Workflow Operator memory, Arabic voice (23.15.0)", r150 == "ok", r150)
+    except PatchError as exc:
+        check("TFS defects from every result, Workflow Operator memory, Arabic voice (23.15.0)", False, str(exc))
+    # 23.14.0: the Arabic voice and speech model are detected and reported, never installed or downloaded here
+    inv = voice_inventory(app, data)
+    report["voice"] = inv
+    for status, text in voice_findings(inv):
+        if status == "PASS":
+            check("Voice setup", True, text)
+        else:
+            warn("Voice setup", text)
+    if voice_before is not None:
+        ok, detail = voice_preserved(voice_before, inv)
+        check("Arabic voice kept", ok, detail)
+    try:
         bp = run_py(python, app, data, BROWSER_POLICY_LOAD).splitlines()[-1]
         check("Maximized browser policy", bp == "ok", bp)
     except PatchError as exc:
@@ -538,7 +915,9 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         finally:
             conn.close()
         want = {"applications", "accounts", "knowledge", "locators", "runs", "run_items", "audit", "observations",
-                "app_model", "conversation_state"}
+                "app_model", "conversation_state",
+                # 23.15.0: what the agent remembers so it stops asking twice, and the learned codes' references
+                "remembered_values", "remembered_prompts", "app_secrets"}
         check("Knowledge database", kver == AGENT_SCHEMA and kint == "ok" and want <= ktables,
               f"schema {kver}, integrity {kint}, tables {'present' if want <= ktables else 'missing'}")
     else:
@@ -560,6 +939,8 @@ def verify(app: Path, data: Path, python: str, before_counts: dict[str, int] | N
         cmp = {"cmp_projects", "cmp_records", "cmp_audit", "cmp_ws_screens", "cmp_ws_state", "cmp_ws_configs", "cmp_ws_decisions"}
         check("Comparison tables", cmp <= tables, "present" if cmp <= tables else "missing: " + ", ".join(sorted(cmp - tables)))
         check("Login sign-in method column", "auth_method" in cols, "present" if "auth_method" in cols else "missing")
+        check("Security, Fuse and ActiveMQ tables", ITEST_TABLES <= tables,
+              "present" if ITEST_TABLES <= tables else "missing: " + ", ".join(sorted(ITEST_TABLES - tables)))
         if before_counts is not None:
             after = row_counts(db)
             lost = {t: (n, after.get(t, 0)) for t, n in before_counts.items() if after.get(t, 0) < n}
@@ -600,7 +981,7 @@ def apply(args: argparse.Namespace) -> int:
     patch_dir = Path(__file__).resolve().parent
     python = args.python or sys.executable
     step(f"SkyGuard QA {PATCH_VERSION}: cumulative upgrade from 23.3.35 "
-         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1)")
+         "(23.4.0 + 23.5.0 + 23.6.0 + 23.6.1 + 23.7.0 + 23.7.1 + 23.7.2 + 23.8.0 + 23.9.0 + 23.10.0 + 23.11.0 + 23.11.1 + 23.11.2 + 23.12.0 + 23.13.0 + 23.13.1 + 23.13.2 + 23.13.3 + 23.14.0 + 23.14.1 + 23.15.0)")
     app, root, data = locate(args.app, args.data)
     before = version_of(app)
     if not writable(app):
@@ -662,6 +1043,8 @@ def apply(args: argparse.Namespace) -> int:
         sqlite_copy(kdb, backup / "knowledge.sqlite3")
     if (data / "settings.json").exists():
         _copy(data / "settings.json", backup / "settings.json")
+    voice_before = voice_inventory(app, data)
+    (backup / "VOICE_BEFORE.json").write_text(json.dumps(voice_before, indent=1), encoding="utf-8")
     info = {"from": before, "to": PATCH_VERSION, "created": stamp, "app": str(app), "data": str(data),
             "replaced": replaced, "added": added, "database": db.exists(), "row_counts": before_counts}
     (backup / "BACKUP.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
@@ -679,7 +1062,7 @@ def apply(args: argparse.Namespace) -> int:
             dst.parent.mkdir(parents=True, exist_ok=True)
             tmp = dst.with_name(dst.name + ".patch-tmp")
             _copy(src, tmp)
-            os.replace(tmp, dst)
+            replace_retry(tmp, dst)
         (app / f"PATCH_FILES_{PATCH_VERSION}.json").write_text(json.dumps({"version": PATCH_VERSION, "files": files}, indent=1),
                                                      encoding="utf-8")
         say(f"{len(files)} files copied.")
@@ -698,7 +1081,7 @@ def apply(args: argparse.Namespace) -> int:
         say(f"Operations Agent knowledge database schema version {kv} ({data / 'opsagent' / 'knowledge.sqlite3'}).")
 
         step("Verifying")
-        report = verify(app, data, python, before_counts)
+        report = verify(app, data, python, before_counts, voice_before)
         if not report["ok"]:
             raise PatchError("verification failed: " + "; ".join(c["name"] for c in report["checks"] if c["status"] == "FAIL"))
     except Exception as exc:  # noqa: BLE001 - every failure rolls back
@@ -733,6 +1116,9 @@ def apply(args: argparse.Namespace) -> int:
     (backup / "VERIFY.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     step("Result")
     say(f"Patched {before} -> {PATCH_VERSION}. Backup for rollback: {backup}")
+    missing = [t for st, t in voice_findings(report.get("voice") or voice_inventory(app, data)) if st != "PASS"]
+    if missing:
+        say("Voice: kept as it was. Not installed (optional, nothing was downloaded):\n  - " + "\n  - ".join(missing))
     return 0
 
 
@@ -818,11 +1204,11 @@ def detect(args: argparse.Namespace) -> int:
     python = args.python or find_python(app)
     can_write = writable(app)
     out.update(found=True, app=str(app), root=str(root), data=str(data), version=v, python=python,
-               supported=v in BASELINES, already_latest=v == PATCH_VERSION, writable=can_write,
+               supported=v in BASELINES or v == PATCH_VERSION, already_latest=v == PATCH_VERSION, writable=can_write,
                running=running(port_of(data)), port=port_of(data), free_mb=free_mb(root),
                database=(data / "qa_platform.sqlite3").exists(),
                backup_folder=str(root / "patch-backups"))
-    if v not in BASELINES:
+    if v not in BASELINES and v != PATCH_VERSION:
         out["message"] = (f"SkyGuard QA {v} was found. This upgrade installs on {BASELINE}. "
                           + ("Bring it to 23.3.35 with the earlier patches first." if _older(v) else
                              "This version is not supported; nothing will be changed."))
@@ -874,6 +1260,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if verify(app, data, args.python or sys.executable)["ok"] else 1
     except PatchError as exc:
         print(f"\nPATCH FAILED: {exc}", file=sys.stderr, flush=True)
+        return 1
+    except OSError as exc:  # never a bare traceback: say what happened and what to do
+        print(f"\nPATCH FAILED: {exc}. If Windows reported a file in use (Access is denied), wait two minutes and run "
+              "it again; if it happens again, restart the PC first. Nothing is lost: a failed upgrade restores the "
+              "previous version.", file=sys.stderr, flush=True)
         return 1
 
 

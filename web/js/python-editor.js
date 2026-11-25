@@ -8,6 +8,41 @@ import { esc, toast, dateTimeOf, openModal } from "./util.js";
 import { highlightPython } from "./pages/script-studio.js";
 
 function lines(n) { return Array.from({ length: n }, (_, i) => i + 1).join("\n"); }
+// 23.12.0: line numbers with the lines that have an error marked; full screen; adjustable height (drag the corner,
+// or the Taller / Shorter buttons; remembered on this PC). Shared by the API Testing script editor.
+export function gutterHtml(n, errors = []) {
+  const bad = new Map((errors || []).map((e) => [Number(e.line), e.message]));
+  return Array.from({ length: n }, (_, i) => bad.has(i + 1) ? `<span class="err" title="${esc(bad.get(i + 1))}">${i + 1}</span>` : `${i + 1}`).join("\n");
+}
+const HKEY = "skyguard.pyed.height";
+export function editorHeight() { try { return Number(localStorage.getItem(HKEY)) || 720; } catch { return 720; } }
+export function sizeButtons() {
+  return '<button class="btn small" data-size="-160" title="Make the editor shorter">Shorter</button><button class="btn small" data-size="160" title="Make the editor taller (or drag its bottom-right corner)">Taller</button><button class="btn small" data-full title="Full screen (Esc to leave)">Full screen</button>';
+}
+export function wireSize(card) {
+  const box = () => card.querySelector(".pyed");
+  const apply = (h) => { const b = box(); if (b) b.style.height = `${h}px`; };
+  apply(editorHeight());
+  card.querySelectorAll("[data-size]").forEach((b) => b.addEventListener("click", (e) => {
+    e.preventDefault();
+    const h = Math.max(200, Math.min(4000, (box()?.clientHeight || editorHeight()) + Number(b.dataset.size)));
+    try { localStorage.setItem(HKEY, String(h)); } catch { /* per-PC convenience only */ }
+    apply(h);
+  }));
+  const ro = typeof ResizeObserver === "function" && box() ? new ResizeObserver(() => {
+    const h = box()?.clientHeight; if (h && !card.classList.contains("pyed-full")) { try { localStorage.setItem(HKEY, String(h)); } catch { /* ignore */ } }
+  }) : null;
+  if (ro) ro.observe(box());
+  card.querySelectorAll("[data-full]").forEach((b) => b.addEventListener("click", (e) => {
+    e.preventDefault();
+    const on = card.classList.toggle("pyed-full");
+    b.textContent = on ? "Exit full screen" : "Full screen";
+    if (on) {
+      const esc_ = (ev) => { if (ev.key === "Escape") { card.classList.remove("pyed-full"); b.textContent = "Full screen"; document.removeEventListener("keydown", esc_); } };
+      document.addEventListener("keydown", esc_);
+    }
+  }));
+}
 
 export function mountPythonEditor(card, data, { onRun } = {}) {
   const sid = encodeURIComponent(data.script.id);
@@ -29,6 +64,7 @@ export function mountPythonEditor(card, data, { onRun } = {}) {
         ${state.edited ? '<button class="btn" data-a="revert" title="Use the Python generated from the recorded steps again (your edits stay in Version History)">Revert</button>' : ""}
         <button class="btn" data-a="regen" title="Write the Python again from the recorded steps">Regenerate</button>
         <button class="btn" data-a="history">Version History (${versions.length})</button>
+        ${sizeButtons()}
         <a class="btn" href="/api/automation/scripts/${sid}/export">Download ${esc(data.python_file)}</a>
         <button class="btn" data-a="zip" title="With pytest.ini, requirements.txt, README.txt and RUN_TESTS.cmd">Download ready-to-run .zip</button></div>
       ${state.steps_changed ? `<p class="pill WARN" style="white-space:normal">The recorded steps changed after this Python was edited (steps v${esc(state.steps_version)} → v${esc(data.script.version)}). The saved Python still runs; Regenerate to include the new steps (it replaces your edits, which stay in Version History).</p>` : ""}
@@ -41,7 +77,7 @@ export function mountPythonEditor(card, data, { onRun } = {}) {
           <input id="pyNote" placeholder="What changed (optional)" style="width:220px"></div>` : ""}
       <div id="pyErrors">${errorsHtml()}</div>
       <div class="pyed" id="pyed">
-        <pre class="gutter" aria-hidden="true" id="pyGutter">${lines(source.split("\n").length)}</pre>
+        <pre class="gutter" aria-hidden="true" id="pyGutter">${gutterHtml(source.split("\n").length, errors)}</pre>
         <div class="pyed-stack"><pre class="code py pyed-hl" aria-hidden="true" id="pyHl">${highlightPython(source)}\n</pre>
           ${editing ? `<textarea id="pySrc" class="pyed-ta" spellcheck="false" wrap="off" aria-label="Python test">${esc(source)}</textarea>` : ""}</div></div>`;
     bind();
@@ -55,7 +91,7 @@ export function mountPythonEditor(card, data, { onRun } = {}) {
     if (!t) return;
     source = t.value;
     card.querySelector("#pyHl").innerHTML = highlightPython(source) + "\n";
-    card.querySelector("#pyGutter").textContent = lines(source.split("\n").length);
+    card.querySelector("#pyGutter").innerHTML = gutterHtml(source.split("\n").length, errors);
     t.style.height = "0px"; t.style.height = `${t.scrollHeight}px`;
     t.style.width = "100%"; t.style.width = `${Math.max(t.scrollWidth, t.parentElement.clientWidth)}px`;
   };
@@ -69,7 +105,10 @@ export function mountPythonEditor(card, data, { onRun } = {}) {
     const lh = parseFloat(getComputedStyle(t).lineHeight) || 18;
     card.querySelector("#pyed").scrollTop = Math.max(0, (n - 4) * lh);
   };
-  const showErrors = (errs) => { errors = errs || []; card.querySelector("#pyErrors").innerHTML = errorsHtml(); bindErrors(); };
+  const showErrors = (errs) => {
+    errors = errs || []; card.querySelector("#pyErrors").innerHTML = errorsHtml(); bindErrors();
+    card.querySelector("#pyGutter").innerHTML = gutterHtml((ta() ? ta().value : source).split("\n").length, errors);
+  };
   const bindErrors = () => card.querySelectorAll("[data-line]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); goLine(Number(a.dataset.line)); }));
 
   const findNext = () => {
@@ -169,6 +208,7 @@ export function mountPythonEditor(card, data, { onRun } = {}) {
       try { await actions[b.dataset.a](); } catch (err) { toast(err.message, "error"); } finally { b.disabled = false; }
     }));
     bindErrors();
+    wireSize(card);
     const t = ta();
     if (!t) return;
     t.addEventListener("input", refresh);

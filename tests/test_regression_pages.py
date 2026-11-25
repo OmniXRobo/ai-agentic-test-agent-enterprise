@@ -85,6 +85,11 @@ def test_every_page_loads_like_before(tmp_path):
     added |= {"integration-comparison"}
     # 23.10.0: the simple AI Agent page replaces the Operations Agent nav entry (which stays for admins only)
     added |= {"ai-agent"}
+    # 23.12.0: API Testing under Automation Studio
+    added |= {"api-testing"}
+    # 23.14.0: Security Testing (eight screens) and Integration Testing (Red Hat Fuse, ActiveMQ)
+    added |= {"sec-assessment", "sec-discovery", "sec-scanning", "sec-scenarios", "sec-findings", "sec-regression",
+              "sec-reports", "sec-preferences", "fuse-testing", "activemq-testing"}
     assert set(old) == set(new) - added and len(new) >= 30
     for r in added & set(new):
         assert not new[r]["failed"] and not new[r]["errors"], (r, new[r])

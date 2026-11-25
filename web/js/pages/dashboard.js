@@ -12,6 +12,7 @@ import { mountAiReport } from "../ai-report.js";
 let unsub = null;
 let stopTick = null;
 let refreshTimer = null;
+let pendingTries = 0;  // 23.14.1: re-reads while TFS figures are still loading
 
 const C = {
   ok: "var(--ok)", fail: "var(--fail)", warn: "var(--warn)", run: "var(--run)", accent: "var(--accent)",
@@ -52,9 +53,17 @@ function agentsDonut() {
 
 async function render(view) {
   const area = view.querySelector("#kpiArea");
-  let summary, a;
+  if (!area) return;  // the page was left before a refresh started
+  let summary, a, itest = null;
   try {
-    [summary, a] = await Promise.all([api("/api/dashboard/summary"), api("/api/analytics/summary")]);
+    // 23.14.1: the three requests go out together (the Security / integration figures waited for the others)
+    [summary, a, itest] = await Promise.all([api("/api/dashboard/summary"), api("/api/analytics/summary"),
+      api("/api/itest/summary").catch(() => null)]);  // 23.14.0: optional; never breaks the dashboard
+    if (!area.isConnected) return;
+    // 23.14.1: TFS answering slowly: everything else is shown now and the TFS figures follow when they arrive
+    if (summary.tfs?.pending || a.tfs?.pending || a.acceptance_criteria?.pending) {
+      if (pendingTries++ < 20) { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => render(view), 5000); }
+    } else pendingTries = 0;
   } catch (err) {
     area.innerHTML = `<div class="card"><h2>Dashboard unavailable</h2><p class="muted">${esc(err.message)}</p></div>`;
     return;
@@ -67,7 +76,7 @@ async function render(view) {
   const ex = ins.executions || null;
   const def = ins.defects || null;
   const drafts = ins.defect_drafts || {};
-  const notConnected = "TFS not connected";
+  const notConnected = tfs.pending ? "TFS figures loading…" : "TFS not connected";
   const tfsNote = tfs.connected ? tfs.project : notConnected;
   const tcTotal = "tfs_test_cases" in cov ? cov.tfs_test_cases : (t.testcase ?? null);
 
@@ -151,7 +160,8 @@ async function render(view) {
   const trendCard = chartCard("Executions · last 7 days",
     ex ? ms(ex.trend.reduce((n, d) => n + d.passed + d.failed, 0), "This week") + ms(ex.trend.reduce((n, d) => n + d.passed, 0), "Passed")
       + ms(ex.trend.reduce((n, d) => n + d.failed, 0), "Failed") : "",
-    ex ? dayColumns(ex.trend, [{ key: "passed", label: "Passed", color: C.ok }, { key: "failed", label: "Failed", color: C.fail }])
+    ex ? dayColumns(ex.trend, [{ key: "passed", label: "Passed", color: C.ok }, { key: "failed", label: "Failed", color: C.fail }],
+      { hrefFor: (date, key) => `#/history?date=${date}${key === "failed" ? "&status=FAILED" : ""}` })
       : `<p class="muted small">Not available.</p>`, "wide");
 
   const kinds = ins.runs_by_kind || [];
@@ -159,7 +169,7 @@ async function render(view) {
     ms(kinds.reduce((n, k) => n + k.passed + k.failed + k.other, 0), "Runs") + ms(kinds.reduce((n, k) => n + k.passed, 0), "Passed")
       + ms(kinds.reduce((n, k) => n + k.failed, 0), "Failed"),
     hbars(kinds.slice(0, 8).map((k) => ({
-      label: kindLabel(k.kind), href: "#/history",
+      label: kindLabel(k.kind), href: `#/history?kind=${encodeURIComponent(k.kind)}`,
       parts: [{ value: k.passed, color: C.ok, label: "Passed" }, { value: k.failed, color: C.fail, label: "Failed" },
         { value: k.other, color: C.muted, label: "Running or other" }],
     })), { empty: "No runs yet" })
@@ -172,25 +182,84 @@ async function render(view) {
     { label: "SLA failed", value: perf.sla_fail, color: C.fail, href: "#/perf-results" },
   ], { center: pct(perf.sla_pass_rate), sub: "SLA PASS" })) : "";
 
+  // 23.13.0: more charts, each slice / bar opens the matching items
+  const MODULE = { framework: "AI-Driven Automation", functional: "Guided Browser", python: "Guided Browser (Python)",
+    comparison: "Integration Comparison", api: "API Testing", performance: "Performance" };
+  const MODULE_COLOR = [C.run, C.accent, C.violet, C.warn, C.pink, C.fail, C.ok, C.muted];
+  const byModule = Object.entries(ins.defects_by_module || {});
+  const modulesCard = chartCard("Defect drafts by module", ms(byModule.reduce((n, [, v]) => n + v, 0), "Drafts"),
+    donut(byModule.map(([k, v], i) => ({ label: MODULE[k] || k, value: v, color: MODULE_COLOR[i % MODULE_COLOR.length],
+      href: `#/defect-review?source=${encodeURIComponent(k)}&status=all` })), { sub: "DRAFTS", empty: "No defect drafts yet" }));
+  const apiR = ins.api_results || null;
+  const apiCard = chartCard("API Testing results",
+    apiR ? ms(apiR.passed + apiR.failed + apiR.other, "Checks") + ms(apiR.passed, "Passed") + ms(apiR.failed, "Failed") : "",
+    apiR ? donut([
+      { label: "Passed", value: apiR.passed, color: C.ok, href: "#/api-testing" },
+      { label: "Failed", value: apiR.failed, color: C.fail, href: "#/api-testing" },
+      { label: "Other (skipped, error)", value: apiR.other, color: C.muted, href: "#/api-testing" },
+    ], { sub: "API CHECKS", empty: "No API tests run yet" }) : '<p class="muted small">Not available.</p>');
+  const heal = ins.healing || null;
+  const healCard = chartCard("Self-healing",
+    heal ? ms(heal.events, "Locator fixes") + ms(heal.applied, "Kept in the scripts") : "",
+    heal ? donut(Object.entries(heal.by_result || {}).map(([k, v], i) => ({ label: k.replace(/_/g, " "), value: v,
+      color: { validated: C.ok, taught: C.accent, healed: C.run, failed: C.fail, rejected: C.muted }[k] || MODULE_COLOR[i % MODULE_COLOR.length],
+      href: "#/history" })), { sub: "FIXES", empty: "No fixes yet" }) : '<p class="muted small">Not available.</p>');
   area.innerHTML = `
     <h3 style="margin:0 0 10px">${esc(tfs.label)}${tfs.project ? " · " + esc(tfs.project) : ""}</h3>
     ${tfs.connected ? "" : `<p class="muted">${esc(tfs.reason)} <a href="#/tfs-settings">TFS connection settings</a>. Figures come only from your configured project; nothing is estimated.</p>`}
+    <p class="muted small" style="margin:0 0 8px">Click a slice, a bar or a day to see the items behind it.</p>
+    <div class="dash-charts">
+      ${passCard}${trendCard}${defectsCard}${modulesCard}${casesCard}${storiesCard}${apiCard}${healCard}${dataCard}${runsCard}${agentsCard}${slaCard}
+    </div>
+    ${itestSection(itest)}
+    <h3 style="margin:22px 0 10px">Key figures</h3>
     <div class="grid kpis">${quality.join("")}</div>
     <h3 style="margin:22px 0 10px">QA progress</h3>
     <section class="card qa-progress">${progress}</section>
-    <h3 style="margin:22px 0 10px">Statistics</h3>
-    <div class="dash-charts">
-      ${passCard}${trendCard}${storiesCard}${casesCard}${dataCard}${defectsCard}${runsCard}${agentsCard}
-    </div>
     <h3 style="margin:22px 0 10px">Performance</h3>
-    <div class="grid kpis">${performance.join("")}</div>
-    ${slaCard ? `<div class="dash-charts" style="margin-top:14px">${slaCard}</div>` : ""}`;
+    <div class="grid kpis">${performance.join("")}</div>`;
+}
+
+// 23.14.0: Security Testing, Red Hat Fuse, ActiveMQ and the shared result actions, from recorded results only. Every
+// slice and figure opens the screen with the items behind it.
+function itestSection(d) {
+  if (!d) return "";
+  const sec = d.security || {}, fuse = d.fuse || {}, amq = d.activemq || {}, sh = d.shared || {};
+  const na = (m) => `<p class="muted small">${esc(m.error || "This module is not available.")}</p>`;
+  const sevColor = { critical: C.fail, high: C.pink, medium: C.warn, low: C.accent, info: C.muted };
+  const secCard = chartCard("Security findings", sec.unavailable ? "" : link("#/sec-findings", ms(sec.open, "Open")) + link("#/sec-scanning", ms(sec.assessments, "Assessments")) + link("#/sec-findings?status=open", ms(sec.pending_review, "To review")) + link("#/sec-regression", ms(sec.retests, "Retests")),
+    sec.unavailable ? na(sec) : donut(["critical", "high", "medium", "low", "info"].map((k) => ({ label: k[0].toUpperCase() + k.slice(1), value: (sec.by_severity || {})[k] || 0,
+      color: sevColor[k], href: `#/sec-findings?severity=${k}` })), { sub: "OPEN", empty: "No open finding" }));
+  const fuseCard = chartCard("Red Hat Fuse integration", fuse.unavailable ? "" : link("#/fuse-testing?tab=connections", ms(fuse.connections, "Connections")) + link("#/fuse-testing?tab=monitoring", ms(fuse.routes_down, "Routes down")) + link("#/fuse-testing?tab=results", ms(fuse.unverified, "Unverified")),
+    fuse.unavailable ? na(fuse) : donut([
+      { label: "Passed", value: fuse.passed || 0, color: C.ok, href: "#/fuse-testing?tab=results" },
+      { label: "Transformation failed", value: fuse.transformation_failed || 0, color: C.fail, href: "#/fuse-testing?tab=results" },
+      { label: "Routing failed", value: fuse.routing_failed || 0, color: C.pink, href: "#/fuse-testing?tab=results" },
+      { label: "Reliability failed", value: fuse.reliability_failed || 0, color: C.warn, href: "#/fuse-testing?tab=results" },
+      { label: "End-to-end failed", value: fuse.e2e_failed || 0, color: C.violet, href: "#/fuse-testing?tab=results" },
+    ], { sub: "RESULTS", empty: "No Fuse test run yet" }));
+  const amqCard = chartCard("ActiveMQ messaging", amq.unavailable ? "" : link("#/activemq-testing?tab=connections", ms(amq.brokers, "Brokers")) + link("#/activemq-testing?tab=monitoring", ms(amq.health_alerts, "Health alerts")) + link("#/activemq-testing?tab=dlq", ms(amq.dlq_tests, "DLQ tests")),
+    amq.unavailable ? na(amq) : donut([
+      { label: "Published and verified", value: amq.published_verified || 0, color: C.ok, href: "#/activemq-testing?tab=results" },
+      { label: "Other passed", value: Math.max(0, (amq.passed || 0) - (amq.published_verified || 0)), color: C.accent, href: "#/activemq-testing?tab=results" },
+      { label: "Publish failed", value: amq.publish_failed || 0, color: C.fail, href: "#/activemq-testing?tab=results" },
+      { label: "Consumer failed", value: amq.consumer_failed || 0, color: C.pink, href: "#/activemq-testing?tab=consumer" },
+      { label: "Dead-letter failed", value: amq.dlq_failed || 0, color: C.warn, href: "#/activemq-testing?tab=dlq" },
+      { label: "Other failed", value: Math.max(0, (amq.failed || 0) - (amq.publish_failed || 0) - (amq.consumer_failed || 0) - (amq.dlq_failed || 0)), color: C.violet, href: "#/activemq-testing?tab=results" },
+    ], { sub: "RESULTS", empty: "No broker test run yet" }));
+  const sharedCard = chartCard("Analysis, defects, reports and email",
+    ms(sh.ai_analyses, "AI analyses") + ms(sh.pending_analyses, "Failures not analyzed") + ms(sh.defect_drafts, "Defect drafts"),
+    `<div class="ms-row">${link("#/sec-reports", ms(sh.reports, "PDF reports"))}${link("#/email-settings", ms(sh.emails_accepted, "Emails accepted"))}${link("#/email-settings", ms(sh.emails_failed, "Emails failed"))}${link("#/email-settings", ms(sh.emails_draft, "Email drafts"))}${ms(sh.retests, "Retests")}</div>
+     <p class="muted small" style="margin:8px 0 0">"Accepted" means the SMTP server took the email; delivery is not confirmed by SMTP.</p>`);
+  return `<h3 style="margin:22px 0 10px">Security and integration testing</h3><div class="dash-charts-itest">${secCard}${fuseCard}${amqCard}${sharedCard}</div>`;
 }
 
 export async function mount(view) {
+  pendingTries = 0;
   // 23.3.31: AI dashboard analysis (kept outside the figures, which reload when work finishes, so edits are not lost)
-  view.innerHTML = `<section class="card ai-dash" style="margin-bottom:18px"><h3 style="margin:0 0 8px">AI dashboard analysis</h3><div id="aiDash"></div></section>
-    <div id="kpiArea" class="dash"><p class="muted">Loading…</p></div>`;
+  // 23.13.0: the charts come first; the AI analysis report is at the bottom
+  view.innerHTML = `<div id="kpiArea" class="dash"><p class="muted">Loading…</p></div>
+    <section class="card ai-dash" style="margin-top:22px"><h3 style="margin:0 0 8px">AI dashboard analysis</h3><div id="aiDash"></div></section>`;
   mountAiReport(view.querySelector("#aiDash"), { kind: "dashboard", id: "current", analyzeLabel: "Generate AI analysis",
     intro: "The On-Premise AI reads the figures on this dashboard (TFS counts, acceptance criteria, coverage, test data, pass / fail, defects and performance) and writes what they show, the gaps and risks, and the next steps. Read it, edit it or ask again; when you are satisfied, generate the PDF, download it or email it." });
   await render(view);

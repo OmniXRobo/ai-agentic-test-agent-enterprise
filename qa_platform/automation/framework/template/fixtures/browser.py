@@ -48,7 +48,26 @@ def browser(playwright_runtime: Any) -> Iterator[Any]:
     if kind == "chromium":
         options["args"] = ["--autoplay-policy=no-user-gesture-required"]  # the cursor's quiet click sound
         options["args"] += [a for a in config.WINDOW_ARGS if a not in options["args"]]
-    instance = getattr(playwright_runtime, kind).launch(**options)
+    try:
+        instance = getattr(playwright_runtime, kind).launch(**options)
+    except Exception as exc:  # 23.13.0: a browser that is not installed here -> Edge, then Chrome, then Chromium
+        if "executable doesn't exist" not in str(exc).lower() and "is not found at" not in str(exc).lower() \
+                and "not found" not in str(exc).lower():
+            raise
+        instance = None
+        for alt in ("msedge", "chrome", "chromium"):
+            if alt == name:
+                continue
+            alt_opts = {**options, "channel": alt} if alt != "chromium" else \
+                {k: v for k, v in options.items() if k != "channel"}
+            try:
+                instance = playwright_runtime.chromium.launch(**alt_opts)
+                print(f"{name} is not installed on this PC; using {alt} instead")
+                break
+            except Exception:
+                continue
+        if instance is None:
+            raise
     yield instance
     instance.close()
 

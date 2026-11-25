@@ -544,6 +544,53 @@ function healingHtml(items) {
     <p class="muted">A healed locator only updates the script after a run using it passed, and only when you choose to apply it. When confidence is low the run stops and asks: pick the right element under Candidates, or choose "None of these". The previous version is kept.</p>`;
 }
 
+// 23.13.0: the AI-Driven tabs on a Guided Browser script. "All" shows every section (version history at the bottom);
+// a tab shows only its sections. The Python test has the full width and a taller editor.
+const GUIDED_TABS = [["all", "All"], ["view", "View Script"], ["edit", "Edit Script"], ["flow", "Flow Logic"], ["data", "Test Data"],
+  ["credentials", "Credentials"], ["components", "Components"], ["history", "History"], ["result", "Result"], ["evidence", "Evidence"], ["logs", "Logs"]];
+const TAB_SECTIONS = { view: ["script"], edit: ["script"], flow: ["flow"], data: ["data"], credentials: ["credentials"],
+  components: ["components"], history: ["history"], result: ["result"], evidence: ["evidence"], logs: ["logs", "logs-empty"] };
+const ALL_HIDDEN = new Set(["credentials", "evidence", "logs-empty"]);  // only on their own tab (shown elsewhere in "All")
+
+function componentsHtml(steps) {
+  const seen = new Map();
+  steps.forEach((st, i) => {
+    const t = st.target && (typeof st.target === "string" ? st.target : st.target.selector || st.target.css || st.target.text || JSON.stringify(st.target));
+    if (!t) return;
+    const row = seen.get(t) || { target: t, actions: new Set(), steps: [] };
+    row.actions.add(st.action); row.steps.push(i + 1); seen.set(t, row);
+  });
+  if (!seen.size) return '<p class="muted">No page elements yet.</p>';
+  return `<div style="overflow-x:auto"><table class="data"><thead><tr><th>Element (locator)</th><th>Actions</th><th>Steps</th></tr></thead><tbody>
+    ${[...seen.values()].map((r) => `<tr><td><code>${esc(String(r.target).slice(0, 160))}</code></td><td>${esc([...r.actions].join(", "))}</td><td>${r.steps.join(", ")}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function wireGuidedTabs(view, source) {
+  const tabs = view.querySelector("#scriptTabs");
+  if (!tabs) return;
+  const show = (tab) => {
+    tabs.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+    const keep = TAB_SECTIONS[tab];
+    view.querySelectorAll("[data-sec]").forEach((el) => {
+      const sec = el.dataset.sec;
+      if (sec === "logs") { el.hidden = !(el.dataset.live === "1" && (!keep || keep.includes("logs"))); return; }
+      if (sec === "logs-empty") { el.hidden = !(keep && keep.includes("logs") && view.querySelector("#runBox")?.dataset.live !== "1"); return; }
+      el.hidden = keep ? !keep.includes(sec) : ALL_HIDDEN.has(sec);
+    });
+    if (tab === "edit") view.querySelector('#pyCard [data-a="edit"]')?.click();
+    try { sessionStorage.setItem("skyguard.guided.tab", tab); } catch { /* convenience only */ }
+  };
+  tabs.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset.tab)));
+  view.querySelector("#copyScript")?.addEventListener("click", async () => {
+    const text = view.querySelector("#pySrc")?.value || source() || "";
+    try { await navigator.clipboard.writeText(text); toast("Python test copied.", "success"); }
+    catch { const ta = document.createElement("textarea"); ta.value = text; document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("Python test copied.", "success"); }
+  });
+  let first = "all";
+  try { first = sessionStorage.getItem("skyguard.guided.tab") || "all"; } catch { /* ignore */ }
+  show(first === "edit" ? "view" : first);
+}
+
 async function renderEditor(view, scriptId) {
   dataCtx.columns = []; dataCtx.row = {};
   const sid = encodeURIComponent(scriptId);
@@ -576,8 +623,14 @@ async function renderEditor(view, scriptId) {
       </form>
       ${script.notes ? `<p class="pill WARN" style="white-space:pre-wrap">${esc(script.notes)}</p>` : ""}
     </div>
-    <div class="card" id="runBox" style="margin-top:12px" hidden><h3>Live run</h3><div id="helpBox" class="card ops-attention" hidden></div><div class="feed" id="feed"></div></div>
-    <div class="card" style="margin-top:12px">
+    <nav class="tabs script-tabs" id="scriptTabs" role="tablist" aria-label="Script views" style="margin-top:12px">
+      ${GUIDED_TABS.map(([k, label]) => `<button type="button" class="tab ${k === "all" ? "active" : ""}" role="tab" data-tab="${k}">${esc(label)}</button>`).join("")}
+      <span class="spacer"></span><button type="button" class="btn small" id="copyScript" title="Copy the Python test to the clipboard">Copy script</button>
+    </nav>
+    <div class="card" id="runBox" data-sec="logs" style="margin-top:12px" hidden><h3>Live run</h3><div id="helpBox" class="card ops-attention" hidden></div><div class="feed" id="feed"></div></div>
+    <div class="card" data-sec="logs-empty" style="margin-top:12px" hidden><h3>Logs</h3><p class="muted">Run the script: its live log appears here. Earlier runs are under History and Result.</p></div>
+    <div class="card" id="pyCard" data-sec="script" style="margin-top:12px"></div>
+    <div class="card" data-sec="flow" style="margin-top:12px">
       <div class="row"><h3 style="margin:0">Steps</h3><span class="spacer"></span>
         <button class="btn" id="addStep">Add step</button>
         <button class="btn" id="waitSettings" title="Wait automatically after each step (Smart, Fixed or Smart + Minimum), saved with the script">Wait settings${script.wait_policy?.enabled ? " (on)" : ""}</button>
@@ -593,25 +646,29 @@ async function renderEditor(view, scriptId) {
         <tbody>${steps.map((st, i) => stepRow(st, i, suggestions, calendarPairs(steps))).join("")}</tbody></table></div>
     </div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(360px,1fr));margin-top:12px">
-      <div class="card" id="dataCard"></div>
-      <div class="card" id="filesCard"></div>
+      <div class="card" id="dataCard" data-sec="data"></div>
+      <div class="card" id="filesCard" data-sec="components"></div>
     </div>
+    <div class="card" data-sec="credentials" style="margin-top:12px" hidden><h3>Credentials</h3>
+      <p>Credential role of this script: <b>${esc(script.credential_role || "none")}</b>. Steps use <code>{{CRED:role.username}}</code> and <code>{{CRED:role.password}}</code>; the values come from <a href="#/app-credentials">Application Credentials</a> (Windows Credential Manager) when the test runs and are never stored in the script.</p>
+      <p class="muted">Steps that use credentials: ${steps.map((st, i) => /\{\{CRED:/.test(String(st.value || "")) ? `${i + 1}` : null).filter(Boolean).join(", ") || "none"}.</p></div>
+    <div class="card" data-sec="components" style="margin-top:12px" hidden><h3>Components (page elements this script uses)</h3>${componentsHtml(steps)}</div>
+    <div class="card" data-sec="evidence" style="margin-top:12px" hidden><h3>Evidence of the latest run</h3>${results.length ? executionStepsHtml(results[0]) : '<p class="muted">This script has not run yet.</p>'}</div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(360px,1fr));margin-top:12px">
-      <div class="card"><h3>Recent runs</h3><div id="results">${resultsHtml(results)}</div></div>
-      <div class="card"><h3>Self-healing</h3><div id="healing">${healingHtml(healing)}</div></div>
+      <div class="card" data-sec="history"><h3>Recent runs</h3><div id="results">${resultsHtml(results)}</div></div>
+      <div class="card" data-sec="result"><h3>Self-healing</h3><div id="healing">${healingHtml(healing)}</div></div>
     </div>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(360px,1fr));margin-top:12px">
-      <div class="card" id="pyCard"></div>
-      <div class="card"><h3>Version history</h3>
+    <div class="card" data-sec="result" style="margin-top:12px" hidden><h3>Latest result</h3>${results.length ? `<p><span class="pill ${esc(results[0].status)}">${esc(results[0].status)}</span> <a href="#/history?run=${esc(results[0].run_id)}">${esc(results[0].run_id)}</a> <span class="muted">${esc(dateTimeOf(results[0].started_at))}</span></p>${results[0].error ? `<p class="pill FAIL" style="white-space:normal">${esc(results[0].error)}</p>` : ""}` : '<p class="muted">This script has not run yet.</p>'}</div>
+    <div class="card" data-sec="history" style="margin-top:12px"><h3>Version history</h3>
         <table class="data"><tbody>${versions.slice().reverse().map((v) => `<tr><td>v${v.version}</td><td>${esc(v.reason)}</td><td>${esc(dateTimeOf(v.timestamp))}</td>
           <td>${v.version < script.version ? `<button class="link-btn" data-restore="${v.version}">Restore</button>` : '<span class="muted">current</span>'}</td></tr>`).join("")}</tbody></table>
-        <p><button class="btn danger" id="archive">Delete this script</button></p></div>
-    </div>`;
+        <p><button class="btn danger" id="archive">Delete this script</button></p></div>`;
 
   // 23.11.0: the editable Python test (Edit Script, Save, Validate, Run, Format, Revert, Version History, Download)
   mountPythonEditor(view.querySelector("#pyCard"), { script, python, python_state, python_versions, python_file,
     downloadZip: () => downloadTests({ script_ids: [script.id] }, python_file.replace(/\.py$/, ".zip")) }, {
-    onRun: (id) => { runId = id; view.querySelector("#runBox").hidden = false; view.querySelector("#feed").innerHTML = ""; } });
+    onRun: (id) => { runId = id; view.querySelector("#runBox").hidden = false; view.querySelector("#runBox").dataset.live = "1"; view.querySelector("#feed").innerHTML = ""; } });
+  wireGuidedTabs(view, () => python);
   const table = view.querySelector("#steps");
   const dataCard = view.querySelector("#dataCard");
   renderFiles(view.querySelector("#filesCard"), script, attached);
@@ -718,7 +775,7 @@ async function renderEditor(view, scriptId) {
       const r = await api(`/api/automation/scripts/${encodeURIComponent(script.id)}/run`, { method: "POST", body: {
         test_data_id: ds ? Number(ds) : null, headless: view.querySelector("#headless").checked ? true : null } });
       runId = r.run_id;
-      view.querySelector("#runBox").hidden = false;
+      view.querySelector("#runBox").hidden = false; view.querySelector("#runBox").dataset.live = "1";
       view.querySelector("#feed").innerHTML = "";
       runBtn.disabled = true; stopBtn.hidden = false;
     } catch (err) { toast(err.message, "error"); }

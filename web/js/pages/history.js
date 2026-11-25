@@ -3,6 +3,7 @@ import { esc, dateTimeOf, elapsed, timeOf, toast } from "../util.js";
 import { executionStepsHtml } from "./automation.js";
 import { analyzeRun } from "./defect-review.js";
 import { mountAiReport } from "../ai-report.js";
+import { actionButtons, wireActions } from "../result-actions.js";
 
 // 23.6.0: AI-Driven framework scripts (FWS-...) open in the AI-Driven Automation Script Inventory; recorded, guided and
 // hybrid scripts (SCR-...) in the script editor. Before, every run linked to the guided page ("Invalid script id").
@@ -27,6 +28,7 @@ async function renderDetail(view, runId) {
       <div class="row"><h2 style="margin:0">${esc(run.title || run.run_id)}</h2><span class="pill ${esc(run.status)}">${esc(run.status)}</span></div>
       <p class="muted">${esc(run.run_id)} · ${esc(run.kind)} · started ${esc(dateTimeOf(run.started_at))}${run.finished_at ? " · took " + esc(elapsed(run.started_at, run.finished_at)) : ""}</p>
       ${run.summary?.error ? `<p class="pill FAIL">${esc(run.summary.error)}</p>` : ""}
+      ${["RUNNING", "QUEUED"].includes(run.status) ? "" : `<div class="row" style="gap:6px;margin:6px 0">${actionButtons("exec", run.run_id, run.status === "PASSED" ? "PASSED" : "FAILED", { retest: false, defectAlways: run.kind === "performance" })}</div>`}
       ${run.kind === "performance" ? `<p><a class="btn" href="#/perf-results?run=${esc(run.run_id)}">Open performance results</a></p>` : ""}
       ${checks.length ? `<table class="data"><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>
         ${checks.map((c) => `<tr><td>${esc(c.name)}</td><td><span class="pill ${esc(c.status)}">${esc(c.status)}</span></td><td>${esc(c.detail)}</td></tr>`).join("")}
@@ -39,6 +41,7 @@ async function renderDetail(view, runId) {
     <div class="card" style="margin-top:14px"><h3>Event log</h3>
       <div class="feed">${events.map((e) => `<div class="feed-item"><span class="feed-time">${esc(timeOf(e.timestamp))}</span><span>${esc((e.agent_name ? e.agent_name + " · " : "") + (e.activity || e.name))}</span></div>`).join("")}</div>
     </div>`;
+  wireActions(view.querySelector(".card"), {});  // 23.14.0: Analyze with AI, TFS defect, PDF, Email Developer, evidence (passed: evidence, PDF, email)
   const aiBox = view.querySelector("#aiRunReport");
   if (aiBox) mountAiReport(aiBox, { kind: "run", id: runId, analyzeLabel: "Generate AI analysis report",
     intro: "The On-Premise AI reviews this run's steps, results, times, errors and self-healing. When you are satisfied, generate the PDF, download it or email it." });
@@ -49,15 +52,21 @@ async function renderDetail(view, runId) {
 }
 
 async function renderList(view) {
-  const status = new URLSearchParams(location.hash.split("?")[1] || "").get("status");
-  let { runs } = await api("/api/runs?limit=200");
+  const q = new URLSearchParams(location.hash.split("?")[1] || "");
+  const status = q.get("status"), day = q.get("date"), kind = q.get("kind");
+  let { runs } = await api(`/api/runs?limit=${day || kind ? 1000 : 200}`);
   if (status) runs = runs.filter((r) => r.status === status && (status !== "FAILED" || ["functional", "performance"].includes(r.kind)));
-  view.innerHTML = `${status ? `<p class="row"><span>Showing ${status === "FAILED" ? "failed tests" : esc(status.toLowerCase()) + " runs"}.</span><a href="#/history">Show all runs</a></p>` : ""}<div class="card">${runs.length ? `
+  // 23.13.0: dashboard drill-down by day and by run type
+  const localDay = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  if (day) runs = runs.filter((r) => localDay(r.started_at) === day);
+  if (kind) runs = runs.filter((r) => String(r.run_id || "").split("-", 1)[0] === kind || r.kind === kind);
+  const what = [status ? (status === "FAILED" ? "failed tests" : `${status.toLowerCase()} runs`) : "", day ? `on ${day}` : "", kind ? `of type ${kind}` : ""].filter(Boolean).join(" ");
+  view.innerHTML = `${what ? `<p class="row"><span>Showing ${esc(what)}.</span><a href="#/history">Show all runs</a></p>` : ""}<div class="card">${runs.length ? `
     <table class="data"><thead><tr><th>Run ID</th><th>Type</th><th>Title</th><th>Status</th><th>Started</th><th>Duration</th></tr></thead><tbody>
     ${runs.map((r) => `<tr class="clickable" data-run="${esc(r.run_id)}"><td>${esc(r.run_id)}</td><td>${esc(r.kind)}</td><td>${esc(r.title || "")}</td>
       <td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td><td>${esc(dateTimeOf(r.started_at))}</td>
       <td>${r.finished_at ? esc(elapsed(r.started_at, r.finished_at)) : ""}</td></tr>`).join("")}
-    </tbody></table>` : `<p class="muted">${status ? "No matching runs." : "No runs recorded yet."}</p>`}</div>`;
+    </tbody></table>` : `<p class="muted">${what ? "No matching runs." : "No runs recorded yet."}</p>`}</div>`;
   view.querySelectorAll("tr[data-run]").forEach((tr) => tr.addEventListener("click", () => { location.hash = `#/history?run=${encodeURIComponent(tr.dataset.run)}`; }));
 }
 

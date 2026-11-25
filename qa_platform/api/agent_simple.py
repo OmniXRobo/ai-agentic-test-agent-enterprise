@@ -88,25 +88,82 @@ class CommandIn(BaseModel):
     conversation: str | None = Field(default=None, max_length=80)
     app_id: str | None = Field(default=None, max_length=80)
     source: Literal["typed", "voice"] = "typed"
+    # 23.13.3: a button under a spoken question answers in the language of that question
+    reply_language: Literal["en", "ar"] | None = None
 
 
 @router.post("/command")
 async def command(body: CommandIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
-    out = await run_in_threadpool(svc.pilot.command, body.text, conversation=body.conversation,
+    # 23.13.0: Arabic (including UAE Arabic) is translated to English by the local AI first; the English command is
+    # what the agent plans with, and both are shown
+    text, translated = await run_in_threadpool(svc.to_english, body.text)
+    out = await run_in_threadpool(svc.pilot.command, text, conversation=body.conversation,
                                   user=actor(request), interface="skyguard", app_id=body.app_id, source=body.source)
     reply = out["reply"]
+    if translated:
+        reply["translated_from"] = body.text
+        reply["translated_to"] = text
+    # 23.13.2: the reply is also spoken, in English for an English request and in Arabic for an Arabic one
+    reply.update(await run_in_threadpool(svc.spoken_reply, reply, translated or body.reply_language == "ar"))
     if reply.get("type") == "run" and reply.get("run_id") and not reply.get("duplicate"):
-        # the browser opens to check the application read-only and prepare the one preview
+        # the chat browser checks the application read-only and prepares the one preview (23.13.0: the same window
+        # for every request of this chat)
         try:
-            svc.start_run(reply["run_id"])
+            svc.start_run(reply["run_id"], chat=True)
         except AgentError:
             pass
+    if reply.get("type") == "confirmed" and reply.get("run_id"):
+        # 23.15.0: "yes" / "confirm" / "نفذ" confirmed the preview: it runs in the chat browser
+        rid = reply["run_id"]
+        if rid not in svc.jobs and rid not in svc.hosted:
+            try:
+                svc.start_run(rid, chat=True)
+            except AgentError as exc:
+                reply.update(type="error", text=exc.message)
     if reply.get("type") == "navigate" and reply.get("url"):
+        # 23.13.3: a learned page on a site whose addresses change on every visit: its changing parts are taken from
+        # the page open now; a page that cannot be rebuilt opens the start page (never "unknown address")
+        from skyguard_agent.understanding import rebase_url
+
         try:
-            reply["opened"] = await run_in_threadpool(svc.open_page, reply["app_id"], reply["url"], actor(request))
+            app_row = svc.agent.kb.application(reply.get("app_id") or body.app_id)
+            reply["url"] = rebase_url(reply["url"], svc.current_url(app_row["id"])) or app_row["base_url"]
+        except AgentError:
+            pass
+        try:
+            reply["opened"] = await run_in_threadpool(svc.open_page, reply["app_id"], reply["url"], actor(request),
+                                                      new_window=bool(reply.get("new_window")))
         except AgentError as exc:
             reply["opened"] = {"ok": False, "message": exc.message}
+    if reply.get("type") == "sign_in" and reply.get("account_id"):
+        try:
+            view = await run_in_threadpool(svc.sign_in, reply["app_id"], reply["account_id"], actor(request))
+            reply["run_id"] = view["run"]["id"]
+        except AgentError as exc:
+            reply.update(type="error", text=exc.message)
     return {"ok": True, **out}
+
+
+class NewAccountIn(BaseModel):
+    app_id: str = Field(max_length=80)
+    label: str = Field(min_length=1, max_length=80)
+    login_id: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=1, max_length=512)
+    consent: bool
+
+
+@router.post("/accounts", status_code=201)
+def new_account(body: NewAccountIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.13.0: "log in as manager" when no such account exists: the chat's secure form creates the account (label
+    and user name) and stores the password in Windows Credential Manager in one step. The password is never
+    returned, logged or stored in the chat."""
+    if not body.consent:
+        raise AgentError("CONSENT_REQUIRED", "Confirm that you may let SkyGuard sign in with this account.", 422)
+    kb = svc.agent.kb
+    acc = kb.add_account(body.app_id, label=body.label.strip(), login_id=body.login_id.strip(),
+                         role_key=body.label.strip().lower(), by=actor(request))
+    kb.set_credential(acc["id"], body.password, by=actor(request), consent=True)
+    return {"ok": True, "account": kb.account(acc["id"])}
 
 
 @router.get("/suggestions")
@@ -120,6 +177,42 @@ def suggestions(request: Request, app_id: str, conversation: str | None = None,
     items = svc.pilot.suggestions(app_id, page_url=page, can_act=can_act, conversation=conversation)
     return {"ok": True, "suggestions": items, "page": page,
             "learned": bool(svc.agent.understanding.model(app_id))}
+
+
+@router.get("/usual/{app_id}")
+def usual(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.15.0: the data and requests the AI Agent remembers for this application (never passwords or codes)."""
+    svc.agent.kb.application(app_id)
+    return {"ok": True, "values": svc.pilot.usual_data(app_id), "prompts": svc.pilot.usual_prompts(app_id, 20)}
+
+
+class ForgetSecretIn(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+
+
+class ForgetUsualIn(BaseModel):
+    workflow: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/usual/{app_id}/forget")
+def forget_usual(app_id: str, body: ForgetUsualIn, svc: Any = Depends(ops)) -> dict[str, Any]:
+    svc.agent.kb.application(app_id)
+    return {"ok": True, "removed": svc.pilot.forget_usual(app_id, body.workflow)}
+
+
+@router.get("/secrets/{app_id}")
+def secrets(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.15.0: the sign-in details and codes remembered for this application, always masked."""
+    accounts = [{"label": a["label"], "login_id": a["login_id"], "has_password": bool(a.get("has_credential")),
+                 "value": "********" if a.get("has_credential") else ""} for a in svc.agent.kb.accounts(app_id)]
+    return {"ok": True, "accounts": accounts, "codes": svc.agent.kb.app_secrets(app_id),
+            "store": svc.agent.vault.backend_name}
+
+
+@router.post("/secrets/{app_id}/forget")
+def forget_secret(app_id: str, body: ForgetSecretIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    removed = svc.agent.kb.forget_app_secret(app_id, body.label, by=actor(request))
+    return {"ok": True, "removed": removed}
 
 
 @router.get("/runs/{run_id}")
@@ -137,6 +230,20 @@ def cancel(run_id: str, request: Request, svc: Any = Depends(ops)) -> dict[str, 
 def verify(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
     """Test learned knowledge: every task and page is retrieved through the same router a command uses."""
     return {"ok": True, **svc.pilot.verify_retrieval(app_id)}
+
+
+class SayIn(BaseModel):
+    kind: Literal["preview", "completed", "partial", "failed", "stopped", "cancelled", "paused"]
+    text: str = Field(default="", max_length=600)
+    language: Literal["en", "ar"] = "en"
+
+
+@router.post("/say")
+async def say(body: SayIn, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.13.3: what to say when a task of a spoken request moves on (preview ready, done, failed, waiting for you),
+    in the language of the request. Only words: nothing is run or changed."""
+    return {"ok": True, **await run_in_threadpool(svc.spoken_reply, {"type": body.kind, "text": body.text},
+                                                  body.language == "ar")}
 
 
 @router.post("/voice")
@@ -191,6 +298,21 @@ def consequential(run: dict[str, Any]) -> bool:
 def confirm(run_id: str, body: ConfirmIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
     view = svc.pilot.confirm(run_id, body.preview_hash, acknowledge=body.acknowledge, by=actor(request),
                              interface="skyguard", app_id=body.app_id)
-    if run_id not in svc.jobs:
-        svc.start_run(run_id)
+    if run_id not in svc.jobs and run_id not in svc.hosted:  # 23.13.0: a chat task already waits in the chat browser
+        # 23.15.0: a preview that stepped aside for a newer request runs in the chat browser too (not a new window)
+        svc.start_run(run_id, chat=True)
     return {"ok": True, **view, "consequential": run_is_consequential(view)}
+
+
+class PublicIn(BaseModel):
+    public: bool
+
+
+@router.post("/applications/{app_id}/public")
+def set_public(app_id: str, body: PublicIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.13.0: "this website needs no sign-in": tasks run without an account and the chat never asks for one."""
+    kb = svc.agent.kb
+    app = kb.application(app_id)
+    profile = dict(app.get("profile") or {})
+    profile["public"] = bool(body.public)
+    return {"ok": True, "application": kb.set_profile(app["id"], profile, by=actor(request))}

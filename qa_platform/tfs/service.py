@@ -6,8 +6,10 @@ sample data: if TFS is unreachable the caller gets a structured error.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 import httpx
@@ -86,26 +88,79 @@ RELATION_NAMES = {
 }
 
 
+USER_NAMESPACE = "tfs-user"  # 23.13.0: personal PATs, one per account and mode, in the OS credential store
+PERSONAL_TTL = 30.0  # 23.14.1: seconds a person's PAT / project lookup is reused (cleared at once on any change)
+POOL_MAX = 24  # 23.14.1: open TFS clients kept (one per server, project and PAT)
+
+
+class _Flight:
+    """One computation of a cache entry that other threads asking for the same entry wait for."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.value: Any = None
+        self.error: BaseException | None = None
+
+
 class TTLCache:
-    def __init__(self, ttl: float) -> None:
+    """Values kept for ``ttl`` seconds.
+
+    23.14.1: concurrent requests for the same entry share one TFS call. Before, the Dashboard's two requests (and the
+    status strip, and every open tab) each made the same TFS queries at the same moment when the cache was empty, so
+    a page that needed 15 TFS calls made 30 to 60 of them at once and they queued behind each other.
+    """
+
+    def __init__(self, ttl: float, scope: Callable[[], Any] | None = None) -> None:
         self.ttl = ttl
+        self.scope = scope  # 23.13.0: keeps one person's project apart from another's
         self._data: dict[Any, tuple[float, Any]] = {}
+        self._flights: dict[Any, _Flight] = {}
+        self._generation = 0
         self._lock = threading.Lock()
 
     def get_or_set(self, key: Any, fn: Callable[[], Any]) -> Any:
+        if self.scope is not None:
+            key = (self.scope(), key)
         now = time.monotonic()
         with self._lock:
             hit = self._data.get(key)
             if hit and now - hit[0] < self.ttl:
                 return hit[1]
-        value = fn()
-        with self._lock:
-            self._data[key] = (now, value)
-        return value
+            flight = self._flights.get(key)
+            owner = flight is None
+            if owner:
+                flight = self._flights[key] = _Flight()
+            generation = self._generation
+        if not owner:
+            if flight.done.wait(timeout=180):
+                if flight.error is not None:
+                    raise flight.error
+                return flight.value
+            # the first caller is still waiting for TFS after 3 minutes: ask on our own
+        try:
+            value = fn()
+        except BaseException as exc:
+            if owner:
+                flight.error = exc
+            raise
+        else:
+            if owner:
+                flight.value = value
+            with self._lock:
+                if generation == self._generation:  # not stored when the profile changed meanwhile
+                    self._data[key] = (now, value)
+            return value
+        finally:
+            if owner:
+                with self._lock:
+                    if self._flights.get(key) is flight:
+                        del self._flights[key]
+                flight.done.set()
 
     def clear(self) -> None:
         with self._lock:
             self._data.clear()
+            self._generation += 1
 
 
 def _identity(value: Any) -> str | None:
@@ -157,21 +212,103 @@ class TfsService:
         self.secrets = secrets
         self.bus = bus
         self.transport = transport  # injectable for tests
-        self.cache = TTLCache(ttl=60)
-        self.meta_cache = TTLCache(ttl=600)
+        self.cache = TTLCache(ttl=60, scope=self._scope)
+        self.meta_cache = TTLCache(ttl=600, scope=self._scope)
         self._last_unavailable: tuple[str, float] | None = None
+        self.people: Any = None  # the account store (set by the app): personal TFS projects
+        # 23.14.1: the signed-in person's PAT and project, read once every PERSONAL_TTL seconds instead of on every
+        # call (each TFS call read the Windows Credential Manager and the database several times)
+        self._personal_memo: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+        # 23.14.1: one open HTTP client per server / project / PAT, so connections (and their TLS handshakes) are
+        # reused instead of made again for every TFS call
+        self._pool: dict[tuple[Any, ...], AzureDevOpsClient] = {}
+        self._lock = threading.Lock()
+
+    # ---- 23.13.0: personal PAT and project per signed-in account ----------------
+
+    @staticmethod
+    def _who() -> Any:
+        from ..auth import current_user
+        user = current_user()
+        return None if user is None or user.local else user
+
+    def personal(self, mode: str | None = None) -> dict[str, Any]:
+        """The signed-in person's own PAT / project, when they have one ({} for the shared profile)."""
+        user = self._who()
+        if user is None:
+            return {}
+        mode = mode or self.active_mode()
+        name = user.username.lower()
+        memo_key = (name, mode)
+        now = time.monotonic()
+        with self._lock:
+            hit = self._personal_memo.get(memo_key)
+        if hit and now - hit[0] < PERSONAL_TTL:
+            mine = hit[1]
+        else:
+            pat = self.secrets.get(USER_NAMESPACE, f"{name}:{mode}")
+            project = self.people.tfs_project_of(user.username) if self.people is not None else ""
+            mine = {"pat": pat or "", "project": project or ""}
+            with self._lock:
+                self._personal_memo[memo_key] = (now, mine)
+        if not mine["pat"] and not mine["project"]:
+            return {}
+        return {"user": user.username, "role": user.role, "pat": mine["pat"], "project": mine["project"]}
+
+    def _scope(self) -> Any:
+        mine = self.personal()
+        return (mine.get("user", "").lower(), mine.get("project", "")) if mine else ""
+
+    def save_personal(self, username: str, mode: str, *, pat: str | None = None,
+                      project: str | None = None) -> None:
+        if mode not in MODES:
+            raise QAError("TFS_MODE_INVALID", f"Unknown TFS mode '{mode}'.")
+        if pat:
+            self.secrets.set(USER_NAMESPACE, f"{username.lower()}:{mode}", pat.strip())
+        if project is not None and self.people is not None:
+            self.people.set_tfs_project(username, project)
+        self.invalidate()
+
+    def forget_personal(self, username: str) -> None:
+        for mode in MODES:
+            try:
+                self.secrets.delete(USER_NAMESPACE, f"{username.lower()}:{mode}")
+            except QAError:
+                pass
+        self.invalidate()
+
+    def check_pat(self, pat: str, project: str, mode: str | None = None) -> dict[str, Any]:
+        """Is this PAT valid for this project on the configured server? ({checked: False} when no server is set)."""
+        p = self.profile(mode, shared=True)
+        if not p["url"]:
+            return {"checked": False, "ok": None, "detail": "No TFS server is set up yet, so the PAT was not checked."}
+        client = AzureDevOpsClient(p["url"], project.strip(), pat.strip(), p["api_version"],
+                                   verify_tls=p["verify_tls"], transport=self.transport,
+                                   ca_bundle=p.get("ca_bundle") or None, timeout=15)
+        try:
+            proj = client.get_project()
+            client.wiql("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project", top=1)
+            return {"checked": True, "ok": True, "detail": f"The PAT can read project '{proj.get('name') or project}'."}
+        except QAError as exc:
+            if exc.error_code in ("TFS_UNREACHABLE", "TFS_TIMEOUT"):
+                return {"checked": False, "ok": None, "detail": exc.message}
+            raise QAError("TFS_PAT_INVALID", f"This PAT cannot open project '{project}': {exc.message}",
+                          status=422) from exc
+        finally:
+            client.close()
 
     # ---- profiles ----------------------------------------------------------
 
     def active_mode(self) -> str:
         return self.settings.section("tfs").get("active_mode", "online")
 
-    def profile(self, mode: str | None = None) -> dict[str, Any]:
+    def profile(self, mode: str | None = None, *, shared: bool = False) -> dict[str, Any]:
         mode = mode or self.active_mode()
         if mode not in MODES:
             raise QAError("TFS_MODE_INVALID", f"Unknown TFS mode '{mode}'.")
         p = self.settings.section("tfs").get(mode, {})
-        return {
+        mine = {} if shared else self.personal(mode)
+        out = {
             "mode": mode,
             "label": MODES[mode]["label"],
             "url": (p.get(MODES[mode]["url_key"]) or "").rstrip("/"),
@@ -179,8 +316,16 @@ class TfsService:
             "api_version": p.get("api_version") or ("7.1" if mode == "online" else "6.0"),
             "verify_tls": p.get("verify_tls", True),
             "ca_bundle": p.get("ca_bundle") or "",  # final patch: a company CA certificate file (PEM)
-            "has_pat": self.secrets.has(TFS_NAMESPACE, mode),
+            "has_pat": bool(self._shared_pat(mode)),
         }
+        if mine:
+            out["personal"] = True
+            out["shared_project"] = out["project"]
+            if mine.get("project"):
+                out["project"] = mine["project"]
+            out["has_pat"] = bool(mine.get("pat")) or out["has_pat"]
+            out["personal_pat"] = bool(mine.get("pat"))
+        return out
 
     def profiles(self) -> dict[str, Any]:
         return {
@@ -195,6 +340,16 @@ class TfsService:
                      ca_bundle: str | None = None) -> dict[str, Any]:
         if mode not in MODES:
             raise QAError("TFS_MODE_INVALID", f"Unknown TFS mode '{mode}'.")
+        user = self._who()
+        if user is not None and (user.role != "admin" or self.personal(mode)):
+            # 23.13.0: a person's project and PAT are their own; changing them never changes the admin's project
+            if project is not None or pat:
+                if pat and project is not None and project.strip():
+                    self.check_pat(pat, project, mode)
+                self.save_personal(user.username, mode, pat=pat or None, project=project)
+            if user.role != "admin":
+                return self.profiles()
+            project, pat = None, None
         patch: dict[str, Any] = {}
         if url is not None:
             url = url.strip().rstrip("/")
@@ -226,29 +381,80 @@ class TfsService:
     def invalidate(self) -> None:
         self.cache.clear()
         self.meta_cache.clear()
+        with self._lock:
+            self._personal_memo.clear()
+            # Requests still running on these clients finish; the clients are not handed out again.
+            self._pool.clear()
 
-    def client(self, mode: str | None = None) -> AzureDevOpsClient:
+    def _connection(self, mode: str | None = None) -> tuple[dict[str, Any], str]:
         p = self.profile(mode)
         if not p["url"]:
             raise QAError("TFS_NOT_CONFIGURED", f"{p['label']} has no server URL configured.", status=409)
         if not p["project"]:
             raise QAError("TFS_NOT_CONFIGURED", f"{p['label']} has no project configured.", status=409)
-        pat = self.secrets.get(TFS_NAMESPACE, p["mode"])
+        mine = self.personal(p["mode"])
+        pat = mine.get("pat") or self._shared_pat(p["mode"])
         if not pat:
             raise QAError("TFS_NOT_CONFIGURED", f"No PAT is saved for {p['label']}.", status=409)
+        return p, pat
+
+    def _shared_pat(self, mode: str) -> str:
+        """The administrator's (shared) PAT of a mode, read from the credential store once every PERSONAL_TTL s."""
+        key = ("", mode)
+        now = time.monotonic()
+        with self._lock:
+            hit = self._personal_memo.get(key)
+        if hit and now - hit[0] < PERSONAL_TTL:
+            return hit[1]["pat"]
+        pat = self.secrets.get(TFS_NAMESPACE, mode) or ""
+        with self._lock:
+            self._personal_memo[key] = (now, {"pat": pat, "project": ""})
+        return pat
+
+    def client(self, mode: str | None = None) -> AzureDevOpsClient:
+        """A new client of its own (the caller closes it). Connection Test uses one, so it checks a fresh connection."""
+        p, pat = self._connection(mode)
         return AzureDevOpsClient(p["url"], p["project"], pat, p["api_version"], verify_tls=p["verify_tls"],
                                  transport=self.transport, ca_bundle=p.get("ca_bundle") or None)
 
+    def shared_client(self, mode: str | None = None) -> AzureDevOpsClient:
+        """23.14.1: the open client for the signed-in person's server, project and PAT (never closed by callers)."""
+        p, pat = self._connection(mode)
+        key = (p["mode"], p["url"], p["project"], hashlib.sha256(pat.encode()).hexdigest(), p["api_version"],
+               p["verify_tls"], p.get("ca_bundle") or "")
+        with self._lock:
+            client = self._pool.get(key)
+            if client is not None and not client.closed:
+                return client
+        client = AzureDevOpsClient(p["url"], p["project"], pat, p["api_version"], verify_tls=p["verify_tls"],
+                                   transport=self.transport, ca_bundle=p.get("ca_bundle") or None)
+        with self._lock:
+            existing = self._pool.get(key)
+            if existing is not None and not existing.closed:
+                client.close()
+                return existing
+            if len(self._pool) >= POOL_MAX:
+                self._pool.pop(next(iter(self._pool)))
+            self._pool[key] = client
+        return client
+
+    def _drop(self, client: AzureDevOpsClient) -> None:
+        with self._lock:
+            for key, value in list(self._pool.items()):
+                if value is client:
+                    del self._pool[key]
+
     def _with_client(self, fn: Callable[[AzureDevOpsClient], Any]) -> Any:
-        client = self.client()
+        client = self.shared_client()
         try:
             return fn(client)
         except QAError as exc:
+            if exc.error_code in ("TFS_UNREACHABLE", "TFS_TIMEOUT", "TFS_AUTH_FAILED", "TFS_HTTP_ERROR",
+                                  "TFS_TLS_FAILED"):
+                self._drop(client)  # the next call starts with a new connection
             if exc.error_code in ("TFS_UNREACHABLE", "TFS_TIMEOUT", "TFS_AUTH_FAILED"):
                 self._unavailable(exc.message)
             raise
-        finally:
-            client.close()
 
     def _unavailable(self, reason: str) -> None:
         # Publish once per reason every 5 minutes so a dashboard refresh cannot flood notifications.
@@ -281,17 +487,28 @@ class TfsService:
             return self._test_result(p, checks)
 
         try:
-            # Reachability: any HTTP answer at all means the server is reachable.
-            try:
-                client._http.get(client.base_url, timeout=10)
-                add("Server Reachability", True, f"{client.base_url} responded.")
-            except httpx.HTTPError as exc:
-                add("Server Reachability", False, f"No response from {client.base_url}: {type(exc).__name__}: {exc}")
-                skip_rest("server reachability")
-                return self._test_result(p, checks)
-
+            # 23.14.1: reachability and authentication come from one call (connectionData). Before, the server's home
+            # page was fetched first (a sign-in page on Azure DevOps Online, slow and large) only to see that it
+            # answered. Any HTTP answer still counts as reachable.
             try:
                 data = client.connection_data()
+                reached, auth_error = True, None
+            except QAError as exc:
+                data = None
+                reached = exc.error_code not in ("TFS_UNREACHABLE", "TFS_TIMEOUT", "TFS_TLS_FAILED",
+                                                 "TFS_CA_BUNDLE_MISSING", "TFS_CA_BUNDLE_INVALID", "TFS_HTTP_ERROR")
+                auth_error = exc
+            if not reached:
+                exc = auth_error
+                add("Server Reachability", False, f"No response from {client.base_url}: {exc.message}"
+                    + (f" ({exc.details})" if exc.details and exc.error_code != "TFS_TIMEOUT" else ""))
+                skip_rest("server reachability")
+                return self._test_result(p, checks)
+            add("Server Reachability", True, f"{client.base_url} responded.")
+
+            try:
+                if auth_error is not None:
+                    raise auth_error
                 user = (data.get("authenticatedUser") or {}).get("providerDisplayName") or "unknown user"
                 if (data.get("authenticatedUser") or {}).get("descriptor", "").lower().find("anonymous") >= 0:
                     raise QAError("TFS_AUTH_FAILED", "The server treated the request as anonymous.", status=401)
@@ -301,34 +518,57 @@ class TfsService:
                 skip_rest("authentication")
                 return self._test_result(p, checks)
 
-            try:
-                projects = client.list_projects()
-                add("Organization/Collection", True, f"{len(projects)} project(s) visible in {client.base_url}.")
-            except QAError as exc:
-                add("Organization/Collection", False, exc.message + (f" ({exc.details})" if exc.details else ""))
-                skip_rest("organization/collection")
-                return self._test_result(p, checks)
+            # 23.14.1: the collection, project, work item and test checks are independent reads, made at the same
+            # time on the same connection pool (they took one round trip each, one after the other).
+            def org() -> Any:
+                return client.list_projects()
 
-            try:
-                proj = client.get_project()
-                add("Project", True, f"Project '{proj.get('name')}' found (state: {proj.get('state', 'unknown')}).")
-            except QAError as exc:
-                add("Project", False, f"Project '{p['project']}': {exc.message}")
-                skip_rest("project")
-                return self._test_result(p, checks)
+            def project() -> Any:
+                return client.get_project()
 
-            try:
+            def work_items() -> Any:
                 types = client.work_item_types()
                 client.wiql("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project", top=1)
-                add("Work Item API", True, f"{len(types)} work item types; WIQL queries work.")
-            except QAError as exc:
-                add("Work Item API", False, exc.message)
+                return types
 
-            try:
-                plans = client.test_plans()
-                add("Test Management API", True, f"{len(plans)} test plan(s) readable.")
-            except QAError as exc:
-                add("Test Management API", False, exc.message)
+            def plans() -> Any:
+                return client.test_plans()
+
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="tfs-test") as pool:
+                futures = {name: pool.submit(fn) for name, fn in
+                           (("org", org), ("project", project), ("wit", work_items), ("plans", plans))}
+
+            def outcome(name: str) -> tuple[Any, QAError | None]:
+                try:
+                    return futures[name].result(), None
+                except QAError as exc:
+                    return None, exc
+
+            projects, err = outcome("org")
+            if err is not None:
+                add("Organization/Collection", False, err.message + (f" ({err.details})" if err.details else ""))
+                skip_rest("organization/collection")
+                return self._test_result(p, checks)
+            add("Organization/Collection", True, f"{len(projects)} project(s) visible in {client.base_url}.")
+
+            proj, err = outcome("project")
+            if err is not None:
+                add("Project", False, f"Project '{p['project']}': {err.message}")
+                skip_rest("project")
+                return self._test_result(p, checks)
+            add("Project", True, f"Project '{proj.get('name')}' found (state: {proj.get('state', 'unknown')}).")
+
+            types, err = outcome("wit")
+            if err is not None:
+                add("Work Item API", False, err.message)
+            else:
+                add("Work Item API", True, f"{len(types)} work item types; WIQL queries work.")
+
+            plans_, err = outcome("plans")
+            if err is not None:
+                add("Test Management API", False, err.message)
+            else:
+                add("Test Management API", True, f"{len(plans_)} test plan(s) readable.")
         finally:
             client.close()
         return self._test_result(p, checks)
@@ -347,8 +587,11 @@ class TfsService:
 
     def meta(self) -> dict[str, Any]:
         def load(c: AzureDevOpsClient) -> dict[str, Any]:
-            types = c.work_item_types()
-            cats = c.work_item_type_categories()
+            # 23.14.1: the four reads are independent; they go out together on the shared connection pool
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="tfs-meta") as pool:
+                f_types, f_cats = pool.submit(c.work_item_types), pool.submit(c.work_item_type_categories)
+                f_iter, f_areas = pool.submit(c.iterations), pool.submit(c.areas)
+            types, cats = f_types.result(), f_cats.result()
             categories = {}
             for key, ref in CATEGORIES.items():
                 cat = next((x for x in cats if x.get("referenceName") == ref), None)
@@ -363,8 +606,8 @@ class TfsService:
                 states[t["name"]] = [s["name"] for s in t.get("states", []) or []]
                 closed.update(s["name"] for s in t.get("states", []) or []
                               if s.get("category") in ("Completed", "Removed", "Resolved"))
-            iterations = _flatten_nodes(c.iterations(), [])
-            areas = _flatten_nodes(c.areas(), [])
+            iterations = _flatten_nodes(f_iter.result(), [])
+            areas = _flatten_nodes(f_areas.result(), [])
             return {
                 "project": c.project,
                 "work_item_types": sorted(t["name"] for t in types if not t.get("isDisabled")),
@@ -559,6 +802,33 @@ class TfsService:
             return [(w.get("fields") or {}).get(field_ref) for w in c.work_items(ids, fields=[field_ref])] if ids else []
 
         return self.cache.get_or_set(("field_values", self.active_mode(), wiql, field_ref), lambda: self._with_client(run))
+
+    def assignees(self) -> list[dict[str, Any]]:
+        """23.13.0: names to assign work to: the project's team members, plus anyone work was recently assigned to."""
+        def run(c: AzureDevOpsClient) -> list[dict[str, Any]]:
+            people: dict[str, dict[str, Any]] = {}
+            try:
+                for m in c.team_members():
+                    people[(m["unique_name"] or m["name"]).lower()] = m
+            except QAError as exc:
+                if exc.error_code in ("TFS_UNREACHABLE", "TFS_TIMEOUT", "TFS_AUTH_FAILED"):
+                    raise
+            ids = c.wiql("SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND "
+                         "[System.AssignedTo] <> '' ORDER BY [System.ChangedDate] DESC", top=400)
+            if ids:
+                for w in c.work_items(ids, fields=["System.AssignedTo"]):
+                    v = (w.get("fields") or {}).get("System.AssignedTo")
+                    name = _identity(v)
+                    unique = v.get("uniqueName", "") if isinstance(v, dict) else ""
+                    if name and "<" in name and not unique:  # "Name <DOMAIN\\user>" on older servers
+                        unique = name[name.index("<") + 1:].rstrip(">").strip()
+                        name = name[:name.index("<")].strip()
+                    if name:
+                        people.setdefault((unique or name).lower(), {"name": name, "unique_name": unique})
+            return sorted(people.values(), key=lambda p: p["name"].lower())
+
+        return self.meta_cache.get_or_set(("assignees", self.active_mode(), self.profile()["project"]),
+                                          lambda: self._with_client(run))
 
     def acceptance_criteria_items(self, story_types: list[str], ac_types: list[str]) -> dict[str, Any]:
         """23.3.30: acceptance criteria written in the user stories' Acceptance Criteria field and kept as their own
@@ -909,13 +1179,22 @@ class TfsService:
     # ---- dashboard -------------------------------------------------------------------
 
     def kpis(self) -> dict[str, Any]:
-        out: dict[str, Any] = {}
+        """23.14.1: the counts are asked for at the same time (they were one WIQL query after another), and the total
+        number of defects comes with them (the Dashboard asked for it separately)."""
         meta = self.meta()
+        jobs: dict[str, Callable[[], int]] = {}
         for key in ("requirement", "testcase"):
             if key in meta["categories"]:
-                out[key] = self.count(key)
+                jobs[key] = lambda key=key: self.count(key)
         if "bug" in meta["categories"]:
             closed = meta.get("closed_states") or []
             extra = f" AND [System.State] NOT IN ({', '.join(wiql_quote(x) for x in closed)})" if closed else ""
-            out["open_defects"] = self.count("bug", extra)
-        return out
+            jobs["open_defects"] = lambda: self.count("bug", extra)
+            jobs["defects_total"] = lambda: self.count("bug")
+        if not jobs:
+            return {}
+        import contextvars
+
+        with ThreadPoolExecutor(max_workers=len(jobs), thread_name_prefix="tfs-kpi") as pool:
+            futures = {k: pool.submit(contextvars.copy_context().run, fn) for k, fn in jobs.items()}
+        return {k: f.result() for k, f in futures.items()}
