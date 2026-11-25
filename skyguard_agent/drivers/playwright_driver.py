@@ -32,6 +32,8 @@ class PlaywrightDriver:
         self._frames: list[Any] = []
         self.manual_events: list[dict[str, Any]] = []
         self._observing = False
+        # 23.15.0: hand the sign-in password / authorization code typed while teaching to the credential store
+        self._learn_secrets = False
         self._open("default")
 
     # ---- contexts ------------------------------------------------------------------------------------------------
@@ -40,6 +42,8 @@ class PlaywrightDriver:
         if name not in self.contexts:
             ctx = (self.context_factory or self.browser.new_context)(**self.context_options)
             ctx.add_init_script(JS)
+            if self._learn_secrets:
+                ctx.add_init_script("window.__sgLearnSecrets = true")
             ctx.expose_binding("__sgReport", lambda source, event: self._on_event(event))
             self.contexts[name] = ctx
             self.pages[name] = ctx.new_page()
@@ -53,6 +57,21 @@ class PlaywrightDriver:
     def _on_event(self, event: Any) -> None:
         if isinstance(event, dict) and self._observing:
             self.manual_events.append(event)
+
+    def learn_secrets(self, on: bool = True) -> None:
+        """23.15.0: while a learning session runs, the password or code the person types is handed over once and
+        goes straight into the credential store (Windows). Off at every other time."""
+        self._learn_secrets = bool(on)
+        for ctx in self.contexts.values():
+            try:
+                ctx.add_init_script(f"window.__sgLearnSecrets = {str(bool(on)).lower()}")
+            except Exception:
+                pass
+        for frame in self.page.frames:
+            try:
+                frame.evaluate("on => { window.__sgLearnSecrets = on; }", bool(on))
+            except Exception:
+                pass
 
     def observe_user(self, on: bool = True) -> None:
         """Record the person's own clicks and entries (guided learning, manual intervention)."""

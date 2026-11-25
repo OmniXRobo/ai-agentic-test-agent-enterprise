@@ -969,11 +969,27 @@ class Engine:
                 cp["step"] += 1
                 return {"action": {"type": "snapshot", "wait_ms": min(int(step.get("ms") or 1000), 15000)}}
             if act == "manual_secret":
-                # 23.11.1: a code only a person may enter (driver authentication, a one-time code on a form). The
-                # agent never asks for it in chat and never types or stores it: the person types it directly into
-                # the application, then presses Resume.
+                # 23.11.1: a code only a person may enter (driver authentication, a code on a form). The agent never
+                # asks for it in chat.
+                # 23.15.0: if the person typed that code while teaching and chose to have it remembered, it is in
+                # the credential vault (Windows) and is filled from there, never shown and never written anywhere
+                # else. Otherwise the run still pauses for the person, as before.
+                label = step.get("target") or "The code"
+                secret = None
+                try:
+                    secret = self.kb.app_secret_value(app["id"], str(label))
+                except Exception:  # noqa: BLE001 - a vault problem only means: ask the person
+                    secret = None
+                if secret:
+                    res = self._resolve(app["id"], step.get("screen") or "*", str(label), snap, "fill")
+                    if res.status == "found":
+                        cp["step"] += 1
+                        self._event(run["id"], "secret", f"'{label}' filled from the credential store (saved when you "
+                                                         "taught me this task; it is never shown or logged).")
+                        return {"action": {"type": "fill", "handle": res.element["h"], "value": secret,
+                                           "secret": True, "target": str(label)}}
                 cp["step"] += 1
-                return self._pause(run, "auth_secret_step", f"'{step.get('target') or 'The code'}' is required here. "
+                return self._pause(run, "auth_secret_step", f"'{label}' is required here. "
                                    "Type it yourself directly in the application window (I do not read, store or "
                                    "type it), then press Resume.", target=step.get("target"))
             if sessions.logged_out(snap, app.get("profile") or {}) and step.get("screen") != "login":

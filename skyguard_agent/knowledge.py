@@ -344,6 +344,79 @@ class KnowledgeBase:
             rows = self.store.query("SELECT * FROM accounts ORDER BY application_id, label")
         return [self._account_row(r) for r in rows]
 
+    # ---- 23.15.0: secrets the person typed while teaching ----------------------------------------------------
+
+    def capture_secret(self, app_id: str, *, kind: str, label: str, value: str, login_id: str | None = None,
+                       by: str | None = None) -> dict[str, Any] | None:
+        """A password or an authorization code the person typed while teaching. The value goes straight into the
+        credential vault (Windows Credential Manager / DPAPI); this database keeps only a reference, and the value
+        is never returned to a page, a chat, a log or a report. A one-time code is never captured (the browser does
+        not hand it over). Returns what was remembered, masked, or None when nothing was."""
+        value = str(value or "")
+        label = (label or "code").strip()[:120] or "code"
+        if not value or len(value) > 200 or not self.vault.available:
+            return None
+        app = self.application(app_id)
+        if kind == "password":
+            who = (login_id or "").strip()
+            acc = next((a for a in self.accounts(app["id"]) if norm(a["login_id"]) == norm(who)), None) if who else None
+            if acc is None and who:
+                try:
+                    acc = self.add_account(app["id"], who, who, by=by or "learning",
+                                           role_description="Seen signing in while teaching.")
+                except AgentError:
+                    acc = next((a for a in self.accounts(app["id"]) if norm(a["label"]) == norm(who)), None)
+            if acc is None:
+                return None
+            self.set_credential(acc["id"], value, consent=True, by=by or "learning")
+            return {"kind": "password", "account": acc["label"], "value": "********"}
+        row = self.store.query_one("SELECT * FROM app_secrets WHERE application_id = ? AND label = ?",
+                                   (app["id"], label))
+        ref = self.vault.save(value, consent=True, ref=(row or {}).get("secret_ref") or None)
+        self.vault.remember(value)
+        now = now_iso()
+        if row:
+            self.store.execute("UPDATE app_secrets SET secret_ref = ?, updated_at = ? WHERE id = ?", (ref, now, row["id"]))
+        else:
+            self.store.execute("INSERT INTO app_secrets (application_id, label, kind, secret_ref, learned_from, "
+                               "created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                               (app["id"], label, "code", ref, "learning", by, now, now))
+        self.audit.record("secret.learned", actor=by, target=app["id"],
+                          details={"label": label, "backend": self.vault.backend_name})
+        return {"kind": "code", "label": label, "value": "********"}
+
+    def app_secrets(self, app_id: str) -> list[dict[str, Any]]:
+        """What is remembered, masked: never the values."""
+        rows = self.store.query("SELECT label, kind, uses, created_at, updated_at FROM app_secrets WHERE "
+                                "application_id = ? ORDER BY label", (self.application(app_id)["id"],))
+        for r in rows:
+            r["value"] = "********"
+        return rows
+
+    def app_secret_value(self, app_id: str, label: str) -> str | None:
+        """For the executor only, at the moment the field is filled."""
+        row = self.store.query_one("SELECT * FROM app_secrets WHERE application_id = ? AND label = ?",
+                                   (app_id, (label or "").strip()[:120]))
+        if not row:
+            rows = self.store.query("SELECT * FROM app_secrets WHERE application_id = ?", (app_id,))
+            row = next((r for r in rows if norm(r["label"]) == norm(label or "")), None)
+        if not row:
+            return None
+        value = self.vault.reveal(row["secret_ref"])
+        if value:
+            self.store.execute("UPDATE app_secrets SET uses = uses + 1, updated_at = ? WHERE id = ?",
+                               (now_iso(), row["id"]))
+        return value
+
+    def forget_app_secret(self, app_id: str, label: str, by: str | None = None) -> bool:
+        row = self.store.query_one("SELECT * FROM app_secrets WHERE application_id = ? AND label = ?", (app_id, label))
+        if not row:
+            return False
+        self.vault.revoke(row["secret_ref"])
+        self.store.execute("DELETE FROM app_secrets WHERE id = ?", (row["id"],))
+        self.audit.record("secret.forgotten", actor=by, target=app_id, details={"label": label})
+        return True
+
     def credential_for(self, acc_id: str) -> str | None:
         """For the executor only: the password at the moment the login field is filled."""
         row = self._raw_account(acc_id)

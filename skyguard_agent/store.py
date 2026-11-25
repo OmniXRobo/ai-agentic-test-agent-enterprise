@@ -185,6 +185,24 @@ MIGRATIONS: list[str] = [
         updated_at TEXT NOT NULL
     );
     """,
+    # 3 (23.15.0): a secret the person typed while teaching (an authorization or driver code on a form, not a
+    # one-time code). Only a reference into the credential vault is kept here; the value itself is encrypted by
+    # Windows (Credential Manager / DPAPI) exactly like an account password, and is never shown, logged or sent.
+    """
+    CREATE TABLE IF NOT EXISTS app_secrets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        label TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'code',
+        secret_ref TEXT NOT NULL,
+        learned_from TEXT NOT NULL DEFAULT '',
+        uses INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (application_id, label)
+    );
+    """,
 ]
 
 

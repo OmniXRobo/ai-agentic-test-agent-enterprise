@@ -112,6 +112,14 @@ async def command(body: CommandIn, request: Request, svc: Any = Depends(ops)) ->
             svc.start_run(reply["run_id"], chat=True)
         except AgentError:
             pass
+    if reply.get("type") == "confirmed" and reply.get("run_id"):
+        # 23.15.0: "yes" / "confirm" / "نفذ" confirmed the preview: it runs in the chat browser
+        rid = reply["run_id"]
+        if rid not in svc.jobs and rid not in svc.hosted:
+            try:
+                svc.start_run(rid, chat=True)
+            except AgentError as exc:
+                reply.update(type="error", text=exc.message)
     if reply.get("type") == "navigate" and reply.get("url"):
         # 23.13.3: a learned page on a site whose addresses change on every visit: its changing parts are taken from
         # the page open now; a page that cannot be rebuilt opens the start page (never "unknown address")
@@ -169,6 +177,42 @@ def suggestions(request: Request, app_id: str, conversation: str | None = None,
     items = svc.pilot.suggestions(app_id, page_url=page, can_act=can_act, conversation=conversation)
     return {"ok": True, "suggestions": items, "page": page,
             "learned": bool(svc.agent.understanding.model(app_id))}
+
+
+@router.get("/usual/{app_id}")
+def usual(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.15.0: the data and requests the AI Agent remembers for this application (never passwords or codes)."""
+    svc.agent.kb.application(app_id)
+    return {"ok": True, "values": svc.pilot.usual_data(app_id), "prompts": svc.pilot.usual_prompts(app_id, 20)}
+
+
+class ForgetSecretIn(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+
+
+class ForgetUsualIn(BaseModel):
+    workflow: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/usual/{app_id}/forget")
+def forget_usual(app_id: str, body: ForgetUsualIn, svc: Any = Depends(ops)) -> dict[str, Any]:
+    svc.agent.kb.application(app_id)
+    return {"ok": True, "removed": svc.pilot.forget_usual(app_id, body.workflow)}
+
+
+@router.get("/secrets/{app_id}")
+def secrets(app_id: str, svc: Any = Depends(ops)) -> dict[str, Any]:
+    """23.15.0: the sign-in details and codes remembered for this application, always masked."""
+    accounts = [{"label": a["label"], "login_id": a["login_id"], "has_password": bool(a.get("has_credential")),
+                 "value": "********" if a.get("has_credential") else ""} for a in svc.agent.kb.accounts(app_id)]
+    return {"ok": True, "accounts": accounts, "codes": svc.agent.kb.app_secrets(app_id),
+            "store": svc.agent.vault.backend_name}
+
+
+@router.post("/secrets/{app_id}/forget")
+def forget_secret(app_id: str, body: ForgetSecretIn, request: Request, svc: Any = Depends(ops)) -> dict[str, Any]:
+    removed = svc.agent.kb.forget_app_secret(app_id, body.label, by=actor(request))
+    return {"ok": True, "removed": removed}
 
 
 @router.get("/runs/{run_id}")
@@ -255,7 +299,8 @@ def confirm(run_id: str, body: ConfirmIn, request: Request, svc: Any = Depends(o
     view = svc.pilot.confirm(run_id, body.preview_hash, acknowledge=body.acknowledge, by=actor(request),
                              interface="skyguard", app_id=body.app_id)
     if run_id not in svc.jobs and run_id not in svc.hosted:  # 23.13.0: a chat task already waits in the chat browser
-        svc.start_run(run_id)
+        # 23.15.0: a preview that stepped aside for a newer request runs in the chat browser too (not a new window)
+        svc.start_run(run_id, chat=True)
     return {"ok": True, **view, "consequential": run_is_consequential(view)}
 
 

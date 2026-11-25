@@ -27,7 +27,10 @@ from ..logging_setup import get_logger
 
 log = get_logger("opsagent")
 
-DEFAULTS = {"headless": False, "browser": None, "use_ai": True, "max_discovery_pages": 25, "auto_trust": True}
+DEFAULTS = {"headless": False, "browser": None, "use_ai": True, "max_discovery_pages": 25, "auto_trust": True,
+            # 23.15.0: reuse the values typed while teaching / said last time; keep the sign-in passwords and codes
+            # typed while teaching (encrypted in the credential store, never in the knowledge or the chat)
+            "reuse_values": True, "remember_secrets": True}
 
 
 class _BrowserJob:
@@ -115,7 +118,8 @@ class OpsAgentService:
         self._views = 0
         # 23.10.0: the simple agent (four tabs). Learning by watching is trusted automatically unless an admin turns
         # it off in Advanced settings ("auto_trust": false brings back one approval per learned task).
-        self.pilot = Autopilot(self.agent, auto_trust=bool(self.config().get("auto_trust", True)))
+        self.pilot = Autopilot(self.agent, auto_trust=bool(self.config().get("auto_trust", True)),
+                               reuse_values=bool(self.config().get("reuse_values", True)))
 
     # ---- reuse of SkyGuard components ------------------------------------------------------------------------
 
@@ -257,8 +261,16 @@ class OpsAgentService:
         events = list(job.driver.manual_events) if job and job.driver else []
         view = self.agent.engine.resume(run_id, by=by, manual_events=events, note=note, choice=choice)
         if not job:  # e.g. after a restart: open a browser again and continue from the checkpoint
-            self.start_run(run_id)
+            self.start_run(run_id, chat=self._is_chat_run(run_id))
         return view
+
+    def _is_chat_run(self, run_id: str) -> bool:
+        """23.15.0: a task asked for in the AI Agent chat continues in the chat browser (not a second window)."""
+        try:
+            run = self.agent.engine.run(run_id)
+        except Exception:
+            return False
+        return run.get("interface") in ("skyguard", None) and (run.get("plan") or {}).get("kind") != "discovery"
 
     def stop(self, run_id: str, by: str | None) -> dict[str, Any]:
         view = self.agent.engine.stop(run_id, by=by)
@@ -340,7 +352,22 @@ class OpsAgentService:
                 except Exception:
                     pass
             self.card.started(job, run_id)
-            job.driver.run(engine, run_id, stop=ev, isolated=False)
+            # 23.15.0: a task waiting for a person (an unconfirmed preview, a pause) no longer holds the chat window:
+            # when another request is queued behind it, it steps aside (it stays waiting and is confirmed or resumed
+            # later in the same window). Before, the next request stayed "Waiting" for ever behind the old preview.
+            step_aside = threading.Event()
+
+            class _Halt:
+                @staticmethod
+                def is_set() -> bool:
+                    return ev.is_set() or step_aside.is_set()
+
+            def on_wait(_drv: Any, run: dict[str, Any]) -> None:
+                if run.get("status") in ("awaiting_confirmation", "paused") and any(
+                        what == "run" for what, _arg in job.queue):
+                    step_aside.set()
+
+            job.driver.run(engine, run_id, stop=_Halt(), isolated=False, on_wait=on_wait)
             try:
                 sess = (engine.run(run_id).get("checkpoint") or {}).get("session") or {}
                 if sess.get("account_id"):
@@ -386,6 +413,8 @@ class OpsAgentService:
         def body(job: _BrowserJob) -> None:
             drv = job.driver
             drv.perform({"type": "navigate", "url": app["base_url"]})
+            if self.config().get("remember_secrets", True):
+                drv.learn_secrets(True)  # 23.15.0: the sign-in password / code typed here goes to the credential store
             drv.observe_user(True)
             while not job.finish.is_set() and not job.stop.is_set():
                 job.finish.wait(1.0)
@@ -425,6 +454,8 @@ class OpsAgentService:
         def body(job: _BrowserJob) -> None:
             drv = job.driver
             drv.perform({"type": "navigate", "url": app["base_url"]})
+            if self.config().get("remember_secrets", True):
+                drv.learn_secrets(True)
 
             def record(events: list[dict[str, Any]], snap: dict[str, Any] | None) -> None:
                 self.agent.observe(app["id"], sid, events, snap, by=by, interface="skyguard", use_ai=False)

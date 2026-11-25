@@ -57,7 +57,37 @@ CREATE TABLE IF NOT EXISTS conversation_state (
     data TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS remembered_values (
+    app_id TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    param TEXT NOT NULL,
+    value TEXT NOT NULL,
+    uses INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, workflow, param)
+);
+CREATE TABLE IF NOT EXISTS remembered_prompts (
+    app_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    workflow TEXT,
+    uses INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (app_id, text)
+);
 """
+
+# 23.15.0: "yes" / "confirm" / "run it" (typed or spoken, English or Arabic) confirms the preview of this chat, so a
+# learned task needs one preview and one word, not a second round of questions
+CONFIRM_WORDS = re.compile(r"^\W*(?:(?:ok|okay|yes|yeah|yep|sure|please|now)[\s,]+)*(?:yes|confirm(?:ed)?|go(?: ahead)?|"
+                           r"run(?: it| now)?|do it|execute(?: it)?|start(?: it)?|proceed|approve the preview|"
+                           r"نعم|أكد|اكد|تأكيد|نفذ|نفّذ|ابدأ|موافق|تمام)(?:\s+(?:it|now|please|the task|الآن|من فضلك))*\W*$",
+                           re.I)
+# "one per day", "each day", "daily", "every 2 days", "different date for each": the date moves on per record
+DAILY = re.compile(r"\b(?:one|a|1)\s+(?:trip|record|\w+)?\s*(?:per|a|each)\s+day\b|\beach\s+day\b|\bdaily\b|"
+                   r"\bevery\s+day\b|\bconsecutive\s+days\b|\bdifferent\s+(?:date|day)s?\b|\bchange\s+(?:the\s+)?date\b|"
+                   r"\bevery\s+(\d{1,2})\s+days\b", re.I)
+SECRET_FIELD = re.compile(r"pass(word|code|phrase)?|pin\b|otp|one.?time|secret|token|auth.?code|security.?code|cvv|"
+                          r"card.?number", re.I)
 
 
 # 23.13.0: the chat browser (one window, signed in once)
@@ -275,8 +305,10 @@ def parse_answer(text: str, fields: list[dict[str, Any]],
 class Autopilot:
     """Simple-mode front of the OperationsAgent (the four tabs of SkyGuard's AI Agent page and the extension panel)."""
 
-    def __init__(self, agent: Any, *, today: Any = None, auto_trust: bool = True) -> None:
+    def __init__(self, agent: Any, *, today: Any = None, auto_trust: bool = True, reuse_values: bool = False) -> None:
         self.agent = agent
+        # 23.15.0: values typed while teaching and the person's usual values fill what a request leaves unsaid
+        self.reuse_values = reuse_values
         self.kb = agent.kb
         self.store = agent.store
         self._today = today
@@ -392,6 +424,70 @@ class Autopilot:
                 except AgentError:
                     continue
         return made
+
+    # ---- 23.15.0: the person's usual data -------------------------------------------------------------------------
+
+    def remembered(self, app_id: str, workflow: str) -> dict[str, str]:
+        rows = self.store.query("SELECT param, value FROM remembered_values WHERE app_id = ? AND workflow = ?",
+                                (app_id, workflow))
+        return {r["param"]: r["value"] for r in rows}
+
+    def remember_values(self, app_id: str, wf: dict[str, Any], values: dict[str, Any]) -> None:
+        """Keeps what the person said for this task (never secrets, record keys, dates or times: those change)."""
+        params = {p["name"]: p for p in planner.workflow_params(wf)}
+        key_p = wf["data"].get("key_param") or (wf["data"].get("exists_check") or {}).get("param")
+        for name, value in (values or {}).items():
+            p = params.get(name)
+            v = str(value or "").strip()
+            if not p or not v or len(v) > 200 or name == key_p or p.get("type") in ("date", "time") or \
+                    SECRET_FIELD.search(f"{name} {p.get('field') or ''}") or \
+                    secrets_guard.inspect(v, self.agent._known_secrets()).contains_secret:
+                continue
+            self.store.execute(
+                "INSERT INTO remembered_values (app_id, workflow, param, value, uses, updated_at) VALUES (?,?,?,?,1,?) "
+                "ON CONFLICT(app_id, workflow, param) DO UPDATE SET value = excluded.value, uses = uses + 1, "
+                "updated_at = excluded.updated_at", (app_id, wf["key"], name, v, now_iso()))
+
+    def remember_prompt(self, app_id: str, text: str, workflow: str | None) -> None:
+        t = " ".join((text or "").split())[:300]
+        if not t or secrets_guard.inspect(t, self.agent._known_secrets()).contains_secret:
+            return
+        self.store.execute(
+            "INSERT INTO remembered_prompts (app_id, text, workflow, uses, updated_at) VALUES (?,?,?,1,?) "
+            "ON CONFLICT(app_id, text) DO UPDATE SET uses = uses + 1, workflow = excluded.workflow, "
+            "updated_at = excluded.updated_at", (app_id, t, workflow, now_iso()))
+
+    def usual_prompts(self, app_id: str, limit: int = 6) -> list[dict[str, Any]]:
+        return self.store.query("SELECT text, workflow, uses, updated_at FROM remembered_prompts WHERE app_id = ? "
+                                "ORDER BY uses DESC, updated_at DESC LIMIT ?", (app_id, limit))
+
+    def usual_data(self, app_id: str) -> list[dict[str, Any]]:
+        return self.store.query("SELECT workflow, param, value, uses, updated_at FROM remembered_values WHERE "
+                                "app_id = ? ORDER BY workflow, param", (app_id,))
+
+    def forget_usual(self, app_id: str, workflow: str | None = None) -> int:
+        if workflow:
+            cur = self.store.execute("DELETE FROM remembered_values WHERE app_id = ? AND workflow = ?", (app_id, workflow))
+        else:
+            cur = self.store.execute("DELETE FROM remembered_values WHERE app_id = ?", (app_id,))
+            self.store.execute("DELETE FROM remembered_prompts WHERE app_id = ?", (app_id,))
+        return int(getattr(cur, "rowcount", 0) or 0)
+
+    def _latest_preview(self, conv: str, app_id: str) -> dict[str, Any] | None:
+        """The newest run of this chat that waits for its confirmation."""
+        rows = self.store.query("SELECT data FROM chat WHERE conversation_id = ? AND speaker = 'agent' ORDER BY id "
+                                "DESC LIMIT 12", (conv,))
+        for r in rows:
+            rid = (loads(r["data"]) or {}).get("run_id") if r.get("data") else None
+            if not rid:
+                continue
+            try:
+                run = self.agent.engine.run(rid)
+            except AgentError:
+                continue
+            if run.get("status") == "awaiting_confirmation" and run.get("application_id") in (app_id, None):
+                return run
+        return None
 
     # ---- conversation state ----------------------------------------------------------------------------------------
 
@@ -519,6 +615,20 @@ class Autopilot:
             return done({"type": "public", "text": f"Understood: {app['name']} needs no sign-in, so I will not ask "
                                                    "for an account. Tell me what you want me to do."})
         waiting = self._fresh_pending(state, app)
+        if CONFIRM_WORDS.match(raw) and not (waiting and waiting.get("retry")):
+            # 23.15.0: "yes" / "confirm" / "run it" (or نعم / نفذ) confirms this chat's preview: one preview, one word
+            run = self._latest_preview(conv, app["id"])
+            if run:
+                try:
+                    self.confirm(run["id"], run["preview_hash"], acknowledge=True, by=user, interface=iface,
+                                 app_id=app["id"])
+                except AgentError as exc:
+                    return done({"type": "clarify", "run_id": run["id"], "text": exc.message})
+                return done({"type": "confirmed", "run_id": run["id"],
+                             "text": "Confirmed. Running it now in the browser; I will tell you when it is done."})
+            if not waiting:
+                return done({"type": "cleared", "text": "There is no preview waiting for confirmation. Tell me what "
+                                                        "you want me to do."})
         if waiting and waiting.get("retry") and LOGIN_RE.match(waiting.get("text") or "") and re.fullmatch(
                 r"\W*(again|retry|try again|done|ok|okay|saved|go|go ahead|continue|yes)\W*", raw, re.I):
             raw = waiting["text"]  # the password (or account) was saved: sign in now
@@ -647,6 +757,11 @@ class Autopilot:
             reply.update(consequential=bool(prepared.get("consequential")), workflow=wf["key"],
                          understood=prepared["text"] if prepared["text"] != raw else None,
                          filled=prepared.get("filled", []), intent=intent.as_dict())
+            try:  # 23.15.0: the person's usual data and requests, for next time (never secrets)
+                self.remember_values(app["id"], wf, planner.parse_structured(prepared["text"], wf).get("fixed") or {})
+                self.remember_prompt(app["id"], base if base != raw or not answers else raw, wf["key"])
+            except Exception:  # memory never breaks a request
+                pass
         return done(reply)
 
     # ---- 23.13.0: chat browser helpers --------------------------------------------------------------------------
@@ -962,6 +1077,40 @@ class Autopilot:
                 more.append(f"{label}: available")
                 filled.append(f"{label}: an available one that no learned rule rejects")
                 given.add(p["name"])
+        # 23.15.0: one value per record for a date that moves on ("one trip per day", "change the date for each")
+        dm = DAILY.search(t)
+        date_p = next((p for p in params if p.get("type") == "date"), None)
+        if dm and date_p and count > 1:
+            step = int(dm.group(1) or 1)
+            fixed_date = (parsed.get("fixed") or {}).get(date_p["name"])
+            start = None
+            if fixed_date:
+                from .rules import parse_date
+                start = parse_date(fixed_date, date_p.get("format"))
+            start = start or (self.today() + _dt.timedelta(days=1))
+            dates = [(start + _dt.timedelta(days=step * i)).isoformat() for i in range(count)]
+            label = date_p.get("field") or date_p["name"]
+            rewritten = re.sub(rf"\b{re.escape(label)}\s*:\s*[^;]+;?", "", rewritten, flags=re.I).rstrip("; ")
+            more.append(f"{label}: {', '.join(dates)}")
+            filled.append(f"{label}: {dates[0]} to {dates[-1]} (one per {'day' if step == 1 else f'{step} days'})")
+            given.add(date_p["name"])
+        # 23.15.0: what the request leaves unsaid comes from the person's usual values for this task (what they said
+        # last time) or the values they typed while teaching it; the preview lists each one, nothing is hidden
+        if self.reuse_values:
+            usual = self.remembered(app["id"], wf["key"])
+            for p in params:
+                if p["name"] in given or not p.get("required") or p["name"] == key_p or \
+                        p.get("type") in ("date", "time") or SECRET_FIELD.search(f"{p['name']} {p.get('field') or ''}"):
+                    continue
+                label = p.get("field") or p["name"]
+                value, why = usual.get(p["name"]), "your usual value"
+                if value in (None, ""):
+                    value, why = p.get("example"), "the value you used while teaching me"
+                if value in (None, "") or (p.get("options") and value not in p["options"]):
+                    continue
+                more.append(f"{label}: {value}")
+                filled.append(f"{label}: {value} ({why})")
+                given.add(p["name"])
         if more:
             rewritten += "; " + "; ".join(more)
         missing = [p for p in params if p.get("required") and p["name"] not in given]
@@ -1122,7 +1271,11 @@ class Autopilot:
         for wf in workflows:
             if permitted(wf) and workflow_category(wf) == "create":
                 add(self._task_phrase(wf, lcs), "task", "a learned task")
-        # 4. the person's recent requests in this application
+        # 4. 23.15.0: the person's usual requests (kept across conversations and restarts), then the recent ones
+        if can_act:
+            for u in self.usual_prompts(app["id"], 3):
+                if len(u["text"]) < 160:
+                    add(u["text"], "usual", f"you asked this {u['uses']} time(s)")
         if conversation:
             for h in reversed(self.agent.history(conversation, limit=40)):
                 if h["speaker"] == "user" and (h.get("data") or {}).get("app_id") == app["id"] and \

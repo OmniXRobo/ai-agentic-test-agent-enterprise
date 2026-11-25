@@ -99,6 +99,8 @@ class Learning:
         self.kb = kb
         self.engine = engine
         self.llm = llm
+        # 23.15.0: set by OperationsAgent; hands a password or code typed while teaching to the credential vault
+        self.on_secrets: Any = None
 
     # ---- automatic discovery: a read-only run in the engine --------------------------------------------------
 
@@ -284,6 +286,10 @@ class Learning:
             r["result"] = d.get("result")
         return rows
 
+    def agent_capture(self, app_id: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Set by OperationsAgent: hand the secrets typed while teaching to the credential vault."""
+        return self.on_secrets(app_id, events) if self.on_secrets else []
+
     def add_events(self, sid: str, events: list[dict[str, Any]], snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         s = self.session(sid)
         if s["status"] != "recording":
@@ -291,6 +297,15 @@ class Learning:
         _guided_only(s)
         app = self.kb.application(s["application_id"])
         data = s["data"]
+        # 23.15.0: a password or authorization code typed here goes into the credential vault and is stripped from
+        # the events before anything is stored
+        try:
+            data.setdefault("remembered_secrets", [])
+            for got in self.agent_capture(app["id"], events):
+                if got not in data["remembered_secrets"]:
+                    data["remembered_secrets"].append(got)
+        except Exception:  # learning never fails because of this
+            pass
         for e in events[:200]:
             if not isinstance(e, dict) or e.get("kind") not in ("click", "fill", "select", "check", "submit", "navigate"):
                 continue

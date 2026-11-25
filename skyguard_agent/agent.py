@@ -49,6 +49,7 @@ class OperationsAgent:
         self.engine = Engine(self.store, self.kb, self.audit)
         self.llm = llm or NoLLM()
         self.learning = Learning(self.kb, self.engine, None if isinstance(self.llm, NoLLM) else self.llm)
+        self.learning.on_secrets = self.capture_secrets
         self.engine.learning = self.learning
         # 23.7.0: passive learning (journal -> understanding) and chat that answers from what was understood
         self.journal = Journal(self.kb, known_secrets=vault.known_values)
@@ -81,8 +82,10 @@ class OperationsAgent:
         """Record what the person did and saw; rebuild the understanding every few observations."""
         app = self.kb.application(app_id)
         sid = self.journal.ensure_session(app["id"], session_id, interface=interface or self.interface, by=by)
+        remembered = self.capture_secrets(app["id"], events or [], by=by)
         stored = self.journal.record(app["id"], sid, events or [], snapshot)
-        out: dict[str, Any] = {"session_id": sid, **stored, "digested": False}
+        out: dict[str, Any] = {"session_id": sid, **stored, "digested": False,
+                               "remembered_secrets": remembered}
         if final:
             self.journal.end_session(sid, by=by)
         if final or self.understanding.pending(app["id"]) >= self.DIGEST_EVERY:
@@ -90,6 +93,36 @@ class OperationsAgent:
             out.update(digested=True, changes=res["changes"])
             if self.after_digest:
                 out["trusted"] = self.after_digest(app["id"])
+        return out
+
+    def capture_secrets(self, app_id: str, events: list[dict[str, Any]], by: str | None = None) -> list[dict[str, Any]]:
+        """23.15.0: the password or authorization code the person typed while teaching goes into the credential
+        vault (never into the knowledge, the chat, a log or a snapshot) and is removed from the events here, so
+        nothing downstream can ever see it. A one-time code is never handed over by the browser."""
+        out: list[dict[str, Any]] = []
+        for ev in events or []:
+            if not isinstance(ev, dict):
+                continue
+            value = ev.pop("secret_value", None)
+            kind = str(ev.pop("secret_kind", "") or "code")
+            if not value:
+                continue
+            el = ev.get("element") or {}
+            label = (el.get("label") or el.get("name") or el.get("placeholder") or el.get("name_attr")
+                     or ("Password" if kind == "password" else "Code"))
+            login_id = None
+            if kind == "password":
+                login_id = next((str(e.get("value") or "") for e in events
+                                 if isinstance(e, dict) and e.get("kind") == "fill" and not e.get("secret")
+                                 and (e.get("element") or {}).get("type") in (None, "text", "email")
+                                 and str(e.get("url") or "") == str(ev.get("url") or "")), None)
+            try:
+                got = self.kb.capture_secret(app_id, kind=kind, label=str(label), value=str(value),
+                                             login_id=login_id, by=by)
+            except AgentError:
+                got = None
+            if got:
+                out.append(got)
         return out
 
     def understanding_view(self, app_id: str) -> dict[str, Any]:
